@@ -52,7 +52,6 @@ def calibrate_arm(motors_bus, calib_dir_str):
         print(f"[WARNING] Could not apply calibration: {e}")
 
 
-
 @dataclass
 class RobotConfig(abc.ABC):
     @property
@@ -108,26 +107,26 @@ class LeKiwiWithKochRobotConfig(RobotConfig):
 
 
 class MobileManipulator:
-    def __init__(self, robot_ip, robot_config):
-        self.robot_ip = robot_ip
+    def __init__(self, relay_server_ip, robot_config):
+        self.relay_server_ip = relay_server_ip
         self.context = zmq.Context()
         
         # Command socket
         self.command_socket = self.context.socket(zmq.PUSH)
-        self.command_socket.setsockopt(zmq.SNDHWM, 1)
-        self.command_socket.connect(f"tcp://{self.robot_ip}:5555")
+        self.command_socket.setsockopt(zmq.CONFLATE, 1)
+        self.command_socket.connect(f"tcp://{self.relay_server_ip}:5560")
         
         # State subscription
         self.state_socket = self.context.socket(zmq.SUB)
         self.state_socket.setsockopt(zmq.RCVHWM, 1)
         self.state_socket.setsockopt(zmq.SUBSCRIBE, b"")
-        self.state_socket.connect(f"tcp://{self.robot_ip}:5556")
+        self.state_socket.connect(f"tcp://{self.relay_server_ip}:5561")
         
         # Image subscription
         self.image_socket = self.context.socket(zmq.SUB)
-        self.image_socket.setsockopt(zmq.RCVHWM, 1)
+        self.command_socket.setsockopt(zmq.CONFLATE, 1)
         self.image_socket.setsockopt(zmq.SUBSCRIBE, b"")
-        self.image_socket.connect(f"tcp://{self.robot_ip}:5557")
+        self.image_socket.connect(f"tcp://{self.relay_server_ip}:5562")
         
         self.latest_state = None
         self.latest_images = None
@@ -484,13 +483,13 @@ class MobileManipulator:
         x_cmd = 0.0  # m/s lateral
         theta_cmd = 0.0  # deg/s rotation
         if self.pressed_keys["forward"]:
-            y_cmd += xy_speed
-        if self.pressed_keys["backward"]:
             y_cmd -= xy_speed
+        if self.pressed_keys["backward"]:
+            y_cmd += xy_speed
         if self.pressed_keys["left"]:
-            x_cmd += xy_speed
-        if self.pressed_keys["right"]:
             x_cmd -= xy_speed
+        if self.pressed_keys["right"]:
+            x_cmd += xy_speed
         if self.pressed_keys["rotate_left"]:
             theta_cmd += theta_speed
         if self.pressed_keys["rotate_right"]:
@@ -524,8 +523,11 @@ class MobileManipulator:
 # Usage with Video Display #####################
 if __name__ == "__main__":
 
+    RELAY_SERVER_IP = "127.0.0.1"
+    RELAY_SERVER_IP = "raul-macbook1.local"
+
     robot_config = LeKiwiWithKochRobotConfig()
-    client = MobileManipulator(robot_ip="127.0.0.1", robot_config=robot_config)
+    client = MobileManipulator(relay_server_ip=RELAY_SERVER_IP, robot_config=robot_config)
     client.start()
     
     try:
@@ -540,6 +542,9 @@ if __name__ == "__main__":
 
             for name, image in images.items():
 
+                if not image:
+                    print(f"No image received for {name}. Skipping...")
+                    continue
                 # Decode JPEG images
                 frame1 = cv2.imdecode(
                     np.frombuffer(image, dtype=np.uint8),
@@ -555,7 +560,7 @@ if __name__ == "__main__":
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
                 # Show frames
-                cv2.imshow(name, frame1)
+                cv2.imshow(name, cv2.cvtColor(frame1, cv2.COLOR_RGB2BGR))
                 
                 # Exit on 'q' key
                 if cv2.waitKey(1) & 0xFF == ord('q'):

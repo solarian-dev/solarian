@@ -70,9 +70,11 @@ class LeKiwiWithKochRobotConfig(RobotConfig):
         default_factory=lambda: {
             "front": OpenCVCameraConfig(
                 camera_index=0, fps=30, width=640, height=480, rotation=None
+                #camera_index="/dev/video0", fps=30, width=640, height=480, rotation=None
             ),
             "wrist": OpenCVCameraConfig(
                 camera_index=1, fps=30, width=640, height=480, rotation=None
+                #camera_index="/dev/video2", fps=30, width=640, height=480, rotation=None
             ),
         }
     )
@@ -83,6 +85,8 @@ class LeKiwiWithKochRobotConfig(RobotConfig):
         default_factory=lambda: {
             "main": FeetechMotorsBusConfig(
                 port="/dev/tty.usbmodem58FD0167571",
+
+                # port="/dev/ttyACM0",
 
                 
                 motors={
@@ -111,18 +115,18 @@ class RobotController:
         
         # Command receiver (PULL)
         self.command_socket = self.context.socket(zmq.PULL)
-        self.command_socket.setsockopt(zmq.RCVHWM, 1)
-        self.command_socket.bind("tcp://*:5555")
+        self.command_socket.setsockopt(zmq.CONFLATE, 1)
+        self.command_socket.connect(f"tcp://{relay_server_ip}:5555")
         
         # State publisher (PUB)
         self.state_socket = self.context.socket(zmq.PUB)
         self.state_socket.setsockopt(zmq.SNDHWM, 1)
-        self.state_socket.bind("tcp://*:5556")
+        self.state_socket.connect(f"tcp://{relay_server_ip}:5556")
         
         # Image publisher (PUB)
         self.image_socket = self.context.socket(zmq.PUB)
-        self.image_socket.setsockopt(zmq.SNDHWM, 1)
-        self.image_socket.bind("tcp://*:5557")
+        self.image_socket.setsockopt(zmq.CONFLATE, 1)
+        self.image_socket.connect(f"tcp://{relay_server_ip}:5557")
         
         self.current_command = None
         self.current_velocity = None
@@ -377,12 +381,10 @@ class RobotController:
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    # robot = RobotController(cam_ids=[0])
-
     robot_config = LeKiwiWithKochRobotConfig()
-    
-    robot = RobotController(robot_config)
-
+    RELAY_SERVER_IP = "127.0.0.1"
+    RELAY_SERVER_IP = "raul-macbook1.local"
+    robot = RobotController(robot_config, relay_server_ip=RELAY_SERVER_IP)
     robot.start()
     try:
         while True:  # Keep main thread alive
