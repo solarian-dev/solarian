@@ -107,7 +107,7 @@ class LeKiwiWithKochRobotConfig(RobotConfig):
 
 
 class RobotController:
-    def __init__(self, robot_config):
+    def __init__(self, robot_config, relay_server_ip):
         self.context = zmq.Context()
         
         # Command receiver (PULL)
