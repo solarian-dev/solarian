@@ -69,12 +69,12 @@ class LeKiwiWithKochRobotConfig(RobotConfig):
     cameras: dict[str, CameraConfig] = field(
         default_factory=lambda: {
             "front": OpenCVCameraConfig(
-                camera_index=0, fps=30, width=640, height=480, rotation=None
-                #camera_index="/dev/video0", fps=30, width=640, height=480, rotation=None
+                #camera_index=0, fps=30, width=640, height=480, rotation=None
+                camera_index="/dev/video0", fps=30, width=640, height=480, rotation=None
             ),
             "wrist": OpenCVCameraConfig(
-                camera_index=1, fps=30, width=640, height=480, rotation=None
-                #camera_index="/dev/video2", fps=30, width=640, height=480, rotation=None
+                #camera_index=1, fps=30, width=640, height=480, rotation=None
+                camera_index="/dev/video2", fps=30, width=640, height=480, rotation=None
             ),
         }
     )
@@ -84,11 +84,8 @@ class LeKiwiWithKochRobotConfig(RobotConfig):
     follower_arms: dict[str, MotorsBusConfig] = field(
         default_factory=lambda: {
             "main": FeetechMotorsBusConfig(
-                port="/dev/tty.usbmodem58FD0167571",
-
-                # port="/dev/ttyACM0",
-
-                
+                #port="/dev/tty.usbmodem58FD0167571",
+                port="/dev/ttyACM0",
                 motors={
                     # name: (index, model)
                     "shoulder_pan": [1, "sts3215"],
