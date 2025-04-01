@@ -115,19 +115,25 @@ class MobileManipulator:
         # Command socket
         self.command_socket = self.context.socket(zmq.PUSH)
         self.command_socket.setsockopt(zmq.CONFLATE, 1)
+        self.command_socket.setsockopt(zmq.LINGER, 0)
         self.command_socket.connect(f"tcp://{self.relay_server_ip}:5560")
         
         # State subscription
         self.state_socket = self.context.socket(zmq.SUB)
         self.state_socket.setsockopt(zmq.RCVHWM, 1)
         self.state_socket.setsockopt(zmq.SUBSCRIBE, b"")
+        self.state_socket.setsockopt(zmq.LINGER, 0)
         self.state_socket.connect(f"tcp://{self.relay_server_ip}:5561")
         
         # Image subscription
         self.image_socket = self.context.socket(zmq.SUB)
-        self.command_socket.setsockopt(zmq.CONFLATE, 1)
+        self.image_socket.setsockopt(zmq.CONFLATE, 1)
         self.image_socket.setsockopt(zmq.SUBSCRIBE, b"")
+        self.image_socket.setsockopt(zmq.LINGER, 0)
         self.image_socket.connect(f"tcp://{self.relay_server_ip}:5562")
+
+        # Verify connection
+        self._verify_connection()
         
         self.latest_state = None
         self.latest_images = None
@@ -194,6 +200,33 @@ class MobileManipulator:
             on_release=self.on_release,
         )
         self.listener.start()
+
+    def _verify_connection(self, timeout=5000):
+        """Verify that we can connect to the relay server"""
+        print(f"Verifying connection to relay server at {self.relay_server_ip}...")
+        
+        # Create a temporary PUSH socket to test connection
+        test_socket = self.context.socket(zmq.PUSH)
+        test_socket.setsockopt(zmq.LINGER, 0)
+        print(f"Attempting to connect to tcp://{self.relay_server_ip}:5560...")
+        test_socket.connect(f"tcp://{self.relay_server_ip}:5560")
+        
+        try:
+            # Try to send a message
+            print("Attempting to send test message...")
+            test_socket.send_string("test", zmq.NOBLOCK)
+            print("Test message sent successfully")
+            time.sleep(1)  # Give it a moment to ensure the message was sent
+            return True
+        except zmq.ZMQError as e:
+            print(f"ZMQ error occurred: {e}")
+            raise ConnectionError(f"ZMQ error while connecting to relay server: {e}")
+        finally:
+            print("Cleaning up test socket...")
+            test_socket.close()
+        
+        print("Successfully connected to relay server")
+
 
     def setup_motors_bus(self, motor_config):
         # Initialize the motors bus using the leader arm configuration.

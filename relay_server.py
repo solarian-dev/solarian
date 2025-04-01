@@ -36,6 +36,7 @@ class RelayServer:
         while self.running:
             try:
                 cmd = self.client_cmd_receiver.recv(zmq.NOBLOCK)
+                print(f"Received command: {cmd}")  # Debug print
                 self.robot_cmd_sender.send(cmd)
             except zmq.Again:
                 time.sleep(0.001)
