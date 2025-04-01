@@ -6,6 +6,7 @@ import threading
 import numpy as np
 import abc
 import json
+import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,7 +54,6 @@ def calibrate_follower_arm(motors_bus, calib_dir_str):
         print("[INFO] Applied calibration for follower arm.")
     except Exception as e:
         print(f"[WARNING] Could not apply calibration: {e}")
-
 
 
 @dataclass
@@ -378,13 +378,17 @@ class RobotController:
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Robot controller that connects to a relay server')
+    parser.add_argument('--server-ip', type=str, default="127.0.0.1",
+                      help='IP address of the relay server (default: 127.0.0.1)')
+    args = parser.parse_args()
+
     robot_config = LeKiwiWithKochRobotConfig()
-    RELAY_SERVER_IP = "127.0.0.1"
-    RELAY_SERVER_IP = "raul-macbook1.local"
-    robot = RobotController(robot_config, relay_server_ip=RELAY_SERVER_IP)
+    robot = RobotController(robot_config, relay_server_ip=args.server_ip)
     robot.start()
     try:
         while True:  # Keep main thread alive
             time.sleep(1)
     except KeyboardInterrupt:
+        print("\nShutting down robot controller...")
         robot.stop()

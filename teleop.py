@@ -8,6 +8,7 @@ import threading
 from pynput import keyboard
 import abc
 import json
+import argparse
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -522,12 +523,13 @@ class MobileManipulator:
 
 # Usage with Video Display #####################
 if __name__ == "__main__":
-
-    RELAY_SERVER_IP = "127.0.0.1"
-    RELAY_SERVER_IP = "raul-macbook1.local"
+    parser = argparse.ArgumentParser(description='Teleop client that connects to a relay server')
+    parser.add_argument('--server-ip', type=str, default="127.0.0.1",
+                      help='IP address of the relay server (default: 127.0.0.1)')
+    args = parser.parse_args()
 
     robot_config = LeKiwiWithKochRobotConfig()
-    client = MobileManipulator(relay_server_ip=RELAY_SERVER_IP, robot_config=robot_config)
+    client = MobileManipulator(relay_server_ip=args.server_ip, robot_config=robot_config)
     client.start()
     
     try:
@@ -541,7 +543,6 @@ if __name__ == "__main__":
             # print(f"Arm state: {arm_state}")
 
             for name, image in images.items():
-
                 if not image:
                     print(f"No image received for {name}. Skipping...")
                     continue
@@ -570,7 +571,7 @@ if __name__ == "__main__":
             time.sleep(0.01)
             
     except KeyboardInterrupt:
-        pass
+        print("\nShutting down teleop client...")
     finally:
         client.stop()
         cv2.destroyAllWindows()
