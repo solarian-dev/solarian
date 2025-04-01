@@ -70,11 +70,11 @@ class LeKiwiWithKochRobotConfig(RobotConfig):
         default_factory=lambda: {
             "front": OpenCVCameraConfig(
                 #camera_index=0, fps=30, width=640, height=480, rotation=None
-                camera_index="/dev/video0", fps=30, width=640, height=480, rotation=None
+                camera_index="/dev/video2", fps=30, width=640, height=480, rotation=180
             ),
             "wrist": OpenCVCameraConfig(
                 #camera_index=1, fps=30, width=640, height=480, rotation=None
-                camera_index="/dev/video2", fps=30, width=640, height=480, rotation=None
+                camera_index="/dev/video0", fps=30, width=640, height=480, rotation=None
             ),
         }
     )
