@@ -9,6 +9,7 @@ from pynput import keyboard
 import abc
 import json
 import argparse
+
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -19,6 +20,10 @@ from lerobot.common.robot_devices.motors.configs import (
     FeetechMotorsBusConfig,
     MotorsBusConfig,
 )
+
+
+import ultralytics
+from ultralytics import YOLO
 
 
 def calibrate_arm(motors_bus, calib_dir_str):
@@ -58,6 +63,67 @@ class RobotConfig(abc.ABC):
     @property
     def type(self) -> str:
         return self.get_choice_name(self.__class__)
+
+
+@dataclass
+class So100WithKochRobotConfig(RobotConfig):
+    calibration_dir: str = ".cache/calibration/so100_with_koch"
+    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
+    # Set this to a positive scalar to have the same value for all motors, or a list that is the same length as
+    # the number of motors in your follower arms.
+    max_relative_target: int | None = None
+
+    leader_arms: dict[str, MotorsBusConfig] = field(
+        default_factory=lambda: {
+            "main": DynamixelMotorsBusConfig(
+                port="/dev/tty.usbmodem58FD0167771",
+                motors={
+                    # name: (index, model)
+                    "shoulder_pan": [1, "xl330-m077"],
+                    "shoulder_lift": [2, "xl330-m077"],
+                    "elbow_flex": [3, "xl330-m077"],
+                    "wrist_flex": [4, "xl330-m077"],
+                    "wrist_roll": [5, "xl330-m077"],
+                    "gripper": [6, "xl330-m077"],
+                },
+            ),
+        }
+    )
+
+    follower_arms: dict[str, MotorsBusConfig] = field(
+        default_factory=lambda: {
+            "main": FeetechMotorsBusConfig(
+                port="/dev/tty.usbmodem58FD0167571",
+                motors={
+                    # name: (index, model)
+                    "shoulder_pan": [1, "sts3215"],
+                    "shoulder_lift": [2, "sts3215"],
+                    "elbow_flex": [3, "sts3215"],
+                    "wrist_flex": [4, "sts3215"],
+                    "wrist_roll": [5, "sts3215"],
+                    "gripper": [6, "sts3215"],
+                },
+            ),
+        }
+    )
+
+    # cameras: dict[str, CameraConfig] = field(
+    #     default_factory=lambda: {
+    #         "front": OpenCVCameraConfig(
+    #             camera_index=1, fps=30, width=640, height=480, rotation=90
+    #         ),
+    #         "wrist": OpenCVCameraConfig(
+    #             camera_index=0, fps=30, width=640, height=480, rotation=None
+    #         ),
+    #     }
+    # )
+
+    # ~ Koch specific settings ~
+    # Sets the leader arm in torque mode with the gripper motor set to this angle. This makes it possible
+    # to squeeze the gripper and have it spring back to an open position on its own.
+    gripper_open_degree: float = 35.156
+
+    mock: bool = False
 
 
 @dataclass
@@ -119,11 +185,11 @@ class MobileManipulator:
         self.command_socket.connect(f"tcp://{self.relay_server_ip}:5560")
         
         # State subscription
-        self.state_socket = self.context.socket(zmq.SUB)
-        self.state_socket.setsockopt(zmq.RCVHWM, 1)
-        self.state_socket.setsockopt(zmq.SUBSCRIBE, b"")
-        self.state_socket.setsockopt(zmq.LINGER, 0)
-        self.state_socket.connect(f"tcp://{self.relay_server_ip}:5561")
+        # self.state_socket = self.context.socket(zmq.SUB)
+        # self.state_socket.setsockopt(zmq.RCVHWM, 1)
+        # self.state_socket.setsockopt(zmq.SUBSCRIBE, b"")
+        # self.state_socket.setsockopt(zmq.LINGER, 0)
+        # self.state_socket.connect(f"tcp://{self.relay_server_ip}:5561")
         
         # Image subscription
         self.image_socket = self.context.socket(zmq.SUB)
@@ -199,6 +265,7 @@ class MobileManipulator:
             on_press=self.on_press,
             on_release=self.on_release,
         )
+
         self.listener.start()
 
     def _verify_connection(self, timeout=5000):
@@ -291,14 +358,14 @@ class MobileManipulator:
         except AttributeError:
             pass
     
-    def _state_receiver(self):
-        """Receive state updates"""
-        while self.running:
-            try:
-                msg = self.state_socket.recv(zmq.NOBLOCK)
-                self.latest_state = msgpack.unpackb(msg)
-            except zmq.Again:
-                time.sleep(0.001)
+    # def _state_receiver(self):
+    #     """Receive state updates"""
+    #     while self.running:
+    #         try:
+    #             msg = self.state_socket.recv(zmq.NOBLOCK)
+    #             self.latest_state = msgpack.unpackb(msg)
+    #         except zmq.Again:
+    #             time.sleep(0.001)
 
     def _image_receiver(self):
         """Receive and decode image streams"""
@@ -371,7 +438,7 @@ class MobileManipulator:
         """Clean shutdown"""
         self.running = False
         self.command_socket.close()
-        self.state_socket.close()
+        # self.state_socket.close()
         self.image_socket.close()
         self.context.term()
 
@@ -562,8 +629,21 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     robot_config = LeKiwiWithKochRobotConfig()
+    # robot_config = So100WithKochRobotConfig()
     client = MobileManipulator(relay_server_ip=args.server_ip, robot_config=robot_config)
+    
+    
+    object_det_model = YOLO("yolov8x-worldv2.pt")
+
+    # Define custom classes
+    # classes = ["bin"]
+    # classes = ["black and white box", "toy lego block"]
+    classes = ["toy lego block"]
+    object_det_model.set_classes(classes)
+    
     client.start()
+
+
     
     try:
         while True:
@@ -572,6 +652,10 @@ if __name__ == "__main__":
             # Get robot state
             images, speed, arm_state, timestamp = client.get_robot_state()
 
+            # Calculate latency
+            if timestamp:
+                latency = (time.time_ns() - timestamp)/1e6
+
             # print(f"Speed: {speed}")
             # print(f"Arm state: {arm_state}")
 
@@ -579,6 +663,7 @@ if __name__ == "__main__":
                 if not image:
                     print(f"No image received for {name}. Skipping...")
                     continue
+
                 # Decode JPEG images
                 frame1 = cv2.imdecode(
                     np.frombuffer(image, dtype=np.uint8),
@@ -586,10 +671,17 @@ if __name__ == "__main__":
                 )
 
                 # Resize if needed
-                frame1 = cv2.resize(frame1, (640, 480))
+                # frame1 = cv2.resize(frame1, (640, 480))
                 
-                # Calculate FPS
-                latency = (time.time_ns() - timestamp)/1e6
+                if name == "None":
+                    det_timestamp = time.time_ns()
+                    results = object_det_model.track(frame1, device='mps', conf=0.01, max_det=1, persist=True)
+                    det_latency = (time.time_ns() - det_timestamp)/1e6
+                    print("det lantency", det_latency)
+
+                    # Visualize the results on the frame
+                    frame1 = results[0].plot(labels=False)
+
                 cv2.putText(frame1, f"Latency: {latency:.1f}ms", 
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
@@ -601,7 +693,8 @@ if __name__ == "__main__":
                     break
             
             # Control loop rate
-            time.sleep(0.01)
+            time.sleep(0.001)
+            # time.sleep(0.066)
             
     except KeyboardInterrupt:
         print("\nShutting down teleop client...")

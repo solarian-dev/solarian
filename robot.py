@@ -69,12 +69,13 @@ class LeKiwiWithKochRobotConfig(RobotConfig):
     cameras: dict[str, CameraConfig] = field(
         default_factory=lambda: {
             "front": OpenCVCameraConfig(
-                #camera_index=0, fps=30, width=640, height=480, rotation=None
-                camera_index="/dev/video2", fps=30, width=640, height=480, rotation=180
+                # camera_index=1, fps=30, width=640, height=480, rotation=90
+                camera_index=1, fps=30, width=320, height=240, rotation=90
+                # camera_index="/dev/video2", fps=30, width=640, height=480, rotation=180
             ),
             "wrist": OpenCVCameraConfig(
-                #camera_index=1, fps=30, width=640, height=480, rotation=None
-                camera_index="/dev/video0", fps=30, width=640, height=480, rotation=None
+                camera_index=0, fps=30, width=640, height=480, rotation=None
+                # camera_index="/dev/video0", fps=30, width=640, height=480, rotation=None
             ),
         }
     )
@@ -84,8 +85,8 @@ class LeKiwiWithKochRobotConfig(RobotConfig):
     follower_arms: dict[str, MotorsBusConfig] = field(
         default_factory=lambda: {
             "main": FeetechMotorsBusConfig(
-                #port="/dev/tty.usbmodem58FD0167571",
-                port="/dev/ttyACM0",
+                port="/dev/tty.usbmodem58FD0167571",
+                # port="/dev/ttyACM0",
                 motors={
                     # name: (index, model)
                     "shoulder_pan": [1, "sts3215"],
@@ -115,10 +116,10 @@ class RobotController:
         self.command_socket.setsockopt(zmq.CONFLATE, 1)
         self.command_socket.connect(f"tcp://{relay_server_ip}:5555")
         
-        # State publisher (PUB)
-        self.state_socket = self.context.socket(zmq.PUB)
-        self.state_socket.setsockopt(zmq.SNDHWM, 1)
-        self.state_socket.connect(f"tcp://{relay_server_ip}:5556")
+        # # State publisher (PUB)
+        # self.state_socket = self.context.socket(zmq.PUB)
+        # self.state_socket.setsockopt(zmq.SNDHWM, 1)
+        # self.state_socket.connect(f"tcp://{relay_server_ip}:5556")
         
         # Image publisher (PUB)
         self.image_socket = self.context.socket(zmq.PUB)
@@ -244,17 +245,17 @@ class RobotController:
             except zmq.Again:
                 time.sleep(0.001)
 
-    def _state_publisher(self):
-        """Thread for publishing robot state"""
-        while self.running:
-            # Read actual joint positions from sensors (simulated here)
-            state = {
-                "timestamp": time.time_ns(),
+    # def _state_publisher(self):
+    #     """Thread for publishing robot state"""
+    #     while self.running:
+    #         # Read actual joint positions from sensors (simulated here)
+    #         state = {
+    #             "timestamp": time.time_ns(),
                 
-                # Add other sensor data here
-            }
-            self.state_socket.send(msgpack.packb(state))
-            time.sleep(0.01)  # 100Hz update rate
+    #             # Add other sensor data here
+    #         }
+    #         self.state_socket.send(msgpack.packb(state))
+    #         time.sleep(0.01)  # 100Hz update rate
 
     def read_velocity(self):
         """
@@ -372,7 +373,7 @@ class RobotController:
         print("Motors stopped.")
 
         self.command_socket.close()
-        self.state_socket.close()
+        # self.state_socket.close()
         self.image_socket.close()
         self.context.term()
         cv2.destroyAllWindows()
