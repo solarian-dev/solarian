@@ -1,25 +1,30 @@
-# relay_server.py
 import zmq
 import threading
 import time
 import msgpack
-import cv2
-import numpy as np
+from image_processor import ImageProcessor
 
-import ultralytics
-from ultralytics import YOLO
+
+from config import (
+    LeKiwiWithKochRobotConfig,
+    DummyRobotConfig
+)
 
 class RelayServer:
-    def __init__(self, do_image_processing=True):
+    def __init__(self, robot_config, image_processor_model=None):
         self.context = zmq.Context()
         self.running = False
-        self.do_image_processing = do_image_processing
-
+        self.robot_config = robot_config
+        
         # Setup command relay (Client → Relay → Robot)
         self.client_cmd_receiver = self.context.socket(zmq.PULL)
+        self.client_cmd_receiver.setsockopt(zmq.CONFLATE, 1)
+        self.client_cmd_receiver.setsockopt(zmq.LINGER, 0)
         self.client_cmd_receiver.bind("tcp://*:5560")  # Clients send here
         
         self.robot_cmd_sender = self.context.socket(zmq.PUSH)
+        self.robot_cmd_sender.setsockopt(zmq.CONFLATE, 1)
+        self.robot_cmd_sender.setsockopt(zmq.LINGER, 0)
         self.robot_cmd_sender.bind("tcp://*:5555")  # Robot connects here
 
         # Setup state relay (Robot → Relay → Client)
@@ -32,16 +37,18 @@ class RelayServer:
 
         # Setup image relay (Robot → Relay → Client)
         self.robot_image_receiver = self.context.socket(zmq.SUB)
+        self.robot_image_receiver.setsockopt(zmq.CONFLATE, 1)
+        self.robot_image_receiver.setsockopt(zmq.LINGER, 0)
         self.robot_image_receiver.bind("tcp://*:5557")  # Robot publishes here
         self.robot_image_receiver.setsockopt(zmq.SUBSCRIBE, b"")
         
         self.client_image_sender = self.context.socket(zmq.PUB)
+        self.client_image_sender.setsockopt(zmq.CONFLATE, 1)
+        self.client_image_sender.setsockopt(zmq.LINGER, 0)
         self.client_image_sender.bind("tcp://*:5562")  # Clients subscribe here
 
-        if self.do_image_processing:
-            self.object_det_model = YOLO("yolov8x-worldv2.pt")
-            classes = ["toy lego block"]
-            self.object_det_model.set_classes(classes)
+        if self.robot_config.image_processing and image_processor_model:
+            self.image_processor = ImageProcessor(image_processor_model)
 
     def _command_relay(self):
         """Forward commands from clients to robot"""
@@ -67,46 +74,27 @@ class RelayServer:
         while self.running:
             try:
                 msg = self.robot_image_receiver.recv(zmq.NOBLOCK)
-                if self.do_image_processing:
-                    msg = self.process_image(msg, ["front"])
+                if self.robot_config.image_processing:
+                    msg = self.process_image(msg, self.robot_config.image_processing)
                 self.client_image_sender.send(msg)
             except zmq.Again:
+                time.sleep(0.001)
+            except Exception as e:
+                print(f"Error in image relay: {e}")
                 time.sleep(0.001)
 
 
     def process_image(self, msg, cams_to_process):
-        unpacked = msgpack.unpackb(msg)
-
-        observation = unpacked
-        # print("Speed: ", observation.get("present_speed", {}))
-        # print("Arm state: ", observation.get("follower_arm_state", None))
+        observation = msgpack.unpackb(msg)
         images_dict = observation.get("images", {})
-        # new_speed = observation.get("present_speed", {})
-        # new_arm_state = observation.get("follower_arm_state", None)
-        timestamp = observation.get("timestamp", None)
-
         frames = {}
         for cam_name, image in images_dict.items():
             if image:
                 if cam_name in cams_to_process:
-                    # Decode JPEG images
-                    image = cv2.imdecode(
-                        np.frombuffer(image, dtype=np.uint8),
-                        cv2.IMREAD_COLOR
-                    )
-                    results = self.object_det_model.track(image, device='mps', conf=0.01, max_det=1, persist=True)
-                    # Visualize the results on the frame
-                    image = results[0].plot(labels=False)
-                    # Compress image (adjust quality as needed)
-                    _, jpeg = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    image = jpeg.tobytes()
-
+                    image = self.image_processor.process_image(image)
             frames[cam_name] = image
-        
         observation["images"] = frames
-
         return msgpack.packb(observation)
-
        
 
     def start(self):
@@ -120,7 +108,10 @@ class RelayServer:
         self.context.destroy()
 
 if __name__ == "__main__":
-    relay = RelayServer()  
+    # robot_config = LeKiwiWithKochRobotConfig()
+    robot_config = DummyRobotConfig()
+    relay = RelayServer(robot_config=robot_config, image_processor_model="yoloe-11s-seg.pt")
+    # relay = RelayServer(robot_config=robot_config, image_processor_model="yolov8s-world.pt")
     relay.start()
     print("Relay server started. Press Ctrl+C to stop.")
     try:

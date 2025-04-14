@@ -6,7 +6,6 @@ import msgpack
 import time
 import threading
 from pynput import keyboard
-import abc
 import json
 import argparse
 
@@ -15,15 +14,10 @@ from dataclasses import dataclass, field
 
 from lerobot.common.robot_devices.motors.dynamixel import DynamixelMotorsBus, TorqueMode
 
-from lerobot.common.robot_devices.motors.configs import (
-    DynamixelMotorsBusConfig,
-    FeetechMotorsBusConfig,
-    MotorsBusConfig,
+from config import (
+    LeKiwiWithKochRobotConfig,
+    DummyRobotConfig
 )
-
-
-import ultralytics
-from ultralytics import YOLO
 
 
 def calibrate_arm(motors_bus, calib_dir_str):
@@ -56,127 +50,13 @@ def calibrate_arm(motors_bus, calib_dir_str):
         print("[INFO] Applied calibration for leader arm.")
     except Exception as e:
         print(f"[WARNING] Could not apply calibration: {e}")
-
-
-@dataclass
-class RobotConfig(abc.ABC):
-    @property
-    def type(self) -> str:
-        return self.get_choice_name(self.__class__)
-
-
-@dataclass
-class So100WithKochRobotConfig(RobotConfig):
-    calibration_dir: str = ".cache/calibration/so100_with_koch"
-    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
-    # Set this to a positive scalar to have the same value for all motors, or a list that is the same length as
-    # the number of motors in your follower arms.
-    max_relative_target: int | None = None
-
-    leader_arms: dict[str, MotorsBusConfig] = field(
-        default_factory=lambda: {
-            "main": DynamixelMotorsBusConfig(
-                port="/dev/tty.usbmodem58FD0167771",
-                motors={
-                    # name: (index, model)
-                    "shoulder_pan": [1, "xl330-m077"],
-                    "shoulder_lift": [2, "xl330-m077"],
-                    "elbow_flex": [3, "xl330-m077"],
-                    "wrist_flex": [4, "xl330-m077"],
-                    "wrist_roll": [5, "xl330-m077"],
-                    "gripper": [6, "xl330-m077"],
-                },
-            ),
-        }
-    )
-
-    follower_arms: dict[str, MotorsBusConfig] = field(
-        default_factory=lambda: {
-            "main": FeetechMotorsBusConfig(
-                port="/dev/tty.usbmodem58FD0167571",
-                motors={
-                    # name: (index, model)
-                    "shoulder_pan": [1, "sts3215"],
-                    "shoulder_lift": [2, "sts3215"],
-                    "elbow_flex": [3, "sts3215"],
-                    "wrist_flex": [4, "sts3215"],
-                    "wrist_roll": [5, "sts3215"],
-                    "gripper": [6, "sts3215"],
-                },
-            ),
-        }
-    )
-
-    # cameras: dict[str, CameraConfig] = field(
-    #     default_factory=lambda: {
-    #         "front": OpenCVCameraConfig(
-    #             camera_index=1, fps=30, width=640, height=480, rotation=90
-    #         ),
-    #         "wrist": OpenCVCameraConfig(
-    #             camera_index=0, fps=30, width=640, height=480, rotation=None
-    #         ),
-    #     }
-    # )
-
-    # ~ Koch specific settings ~
-    # Sets the leader arm in torque mode with the gripper motor set to this angle. This makes it possible
-    # to squeeze the gripper and have it spring back to an open position on its own.
-    gripper_open_degree: float = 35.156
-
-    mock: bool = False
-
-
-@dataclass
-class LeKiwiWithKochRobotConfig(RobotConfig):
     
-    calibration_dir: str = ".cache/calibration/lekiwi_with_koch"
-
-    leader_arms: dict[str, MotorsBusConfig] = field(
-        default_factory=lambda: {
-            "main": DynamixelMotorsBusConfig(
-                port="/dev/tty.usbmodem58FD0167771",
-                motors={
-                    # name: (index, model)
-                    "shoulder_pan": [1, "xl330-m077"],
-                    "shoulder_lift": [2, "xl330-m077"],
-                    "elbow_flex": [3, "xl330-m077"],
-                    "wrist_flex": [4, "xl330-m077"],
-                    "wrist_roll": [5, "xl330-m077"],
-                    "gripper": [6, "xl330-m077"],
-                },
-            ),
-        }
-    )
-
-    teleop_keys: dict[str, str] = field(
-        default_factory=lambda: {
-            # Movement
-            "forward": "w",
-            "backward": "s",
-            "left": "a",
-            "right": "d",
-            "rotate_left": "z",
-            "rotate_right": "x",
-            # Speed control
-            "speed_up": "r",
-            "speed_down": "f",
-            # quit teleop
-            "quit": "q",
-        }
-    )
-
-    # ~ Koch specific settings ~
-    # Sets the leader arm in torque mode with the gripper motor set to this angle. This makes it possible
-    # to squeeze the gripper and have it spring back to an open position on its own.
-    gripper_open_degree: float = 35.156
-
-    mock: bool = False
-
 
 class MobileManipulator:
     def __init__(self, relay_server_ip, robot_config):
         self.relay_server_ip = relay_server_ip
         self.context = zmq.Context()
+        self.robot_config = robot_config
         
         # Command socket
         self.command_socket = self.context.socket(zmq.PUSH)
@@ -243,23 +123,24 @@ class MobileManipulator:
         ]
         self.speed_index = 0  # Start at slow
 
+        
+        if not isinstance(robot_config, DummyRobotConfig):
+            # Motors setup
+            motors_bus_config = robot_config.leader_arms.get("main")
+            self.motors_bus = self.setup_motors_bus(motors_bus_config)
 
-        # Motors setup
-        motors_bus_config = robot_config.leader_arms.get("main")
-        self.motors_bus = self.setup_motors_bus(motors_bus_config)
+            # # Disable torque for each arm motor.
+            for motor in self.motors_bus.motor_names:
+                self.motors_bus.write("Torque_Enable", TorqueMode.DISABLED.value, motor)
 
-        # # Disable torque for each arm motor.
-        for motor in self.motors_bus.motor_names:
-            self.motors_bus.write("Torque_Enable", TorqueMode.DISABLED.value, motor)
+            # Calibrate the leader arm.
+            calibrate_arm(self.motors_bus, robot_config.calibration_dir)
 
-        # Calibrate the leader arm.
-        calibrate_arm(self.motors_bus, robot_config.calibration_dir)
-
-        # Apply Koch preset to leader arms
-        if robot_config.gripper_open_degree is not None:
-            print(f"Applying Koch preset to leader arm.")
-            self.motors_bus.write("Torque_Enable", 1, "gripper")
-            self.motors_bus.write("Goal_Position", robot_config.gripper_open_degree, "gripper")
+            # Apply Koch preset to leader arms
+            if robot_config.gripper_open_degree is not None:
+                print(f"Applying Koch preset to leader arm.")
+                self.motors_bus.write("Torque_Enable", 1, "gripper")
+                self.motors_bus.write("Goal_Position", robot_config.gripper_open_degree, "gripper")
 
         self.listener = keyboard.Listener(
             on_press=self.on_press,
@@ -379,13 +260,14 @@ class MobileManipulator:
                 msg = self.image_socket.recv(zmq.NOBLOCK)
                 unpacked = msgpack.unpackb(msg)
 
-                print("Received image message")
+                # print("Received image message")
                 
                 # Thread-safe update of images
                 with self.image_lock:
                     observation = unpacked
-                    print("Speed: ", observation.get("present_speed", {}))
-                    print("Arm state: ", observation.get("follower_arm_state", None))
+                    # print("Observation: ", observation)
+                    # print("Speed: ", observation.get("present_speed", {}))
+                    # print("Arm state: ", observation.get("follower_arm_state", None))
                     images_dict = observation.get("images", {})
                     new_speed = observation.get("present_speed", {})
                     new_arm_state = observation.get("follower_arm_state", None)
@@ -411,6 +293,9 @@ class MobileManipulator:
 
             except zmq.Again:
                 time.sleep(0.001)
+
+            except Exception as e:
+                print(f"[ERROR] Image receiver failed: {e}")
 
     def send_command(self, cmd):
         """Send control commands to robot"""
@@ -576,9 +461,12 @@ class MobileManipulator:
         arm_positions = []
         # for name in self.leader_arms:
 
-        pos = self.motors_bus.read("Present_Position")
-        pos_tensor = torch.from_numpy(pos).float()
-        arm_positions.extend(pos_tensor.tolist())
+        if not isinstance(self.robot_config, DummyRobotConfig):
+            pos = self.motors_bus.read("Present_Position")
+            pos_tensor = torch.from_numpy(pos).float()
+            arm_positions.extend(pos_tensor.tolist())
+        else:
+            arm_positions.extend([0.0] * len(self.robot_config.arm_motor_ids))
 
         y_cmd = 0.0  # m/s forward/backward
         x_cmd = 0.0  # m/s lateral
@@ -628,22 +516,11 @@ if __name__ == "__main__":
                       help='IP address of the relay server (default: 127.0.0.1)')
     args = parser.parse_args()
 
-    robot_config = LeKiwiWithKochRobotConfig()
-    # robot_config = So100WithKochRobotConfig()
+    # robot_config = LeKiwiWithKochRobotConfig()
+    robot_config = DummyRobotConfig()
     client = MobileManipulator(relay_server_ip=args.server_ip, robot_config=robot_config)
     
-    
-    object_det_model = YOLO("yolov8x-worldv2.pt")
-
-    # Define custom classes
-    # classes = ["bin"]
-    # classes = ["black and white box", "toy lego block"]
-    classes = ["toy lego block"]
-    object_det_model.set_classes(classes)
-    
     client.start()
-
-
     
     try:
         while True:
@@ -651,15 +528,18 @@ if __name__ == "__main__":
             
             # Get robot state
             images, speed, arm_state, timestamp = client.get_robot_state()
+            # print("-------------------")
+            # print("Timestamp: ", timestamp)
+            # print(f"Images: {images}")
+            # print(f"Speed: {speed}")
+            # print(f"Arm state: {arm_state}")
 
             # Calculate latency
             if timestamp:
                 latency = (time.time_ns() - timestamp)/1e6
 
-            # print(f"Speed: {speed}")
-            # print(f"Arm state: {arm_state}")
-
             for name, image in images.items():
+                # print(f"Image received for {name}")
                 if not image:
                     print(f"No image received for {name}. Skipping...")
                     continue
@@ -673,15 +553,6 @@ if __name__ == "__main__":
                 # Resize if needed
                 # frame1 = cv2.resize(frame1, (640, 480))
                 
-                if name == "None":
-                    det_timestamp = time.time_ns()
-                    results = object_det_model.track(frame1, device='mps', conf=0.01, max_det=1, persist=True)
-                    det_latency = (time.time_ns() - det_timestamp)/1e6
-                    print("det lantency", det_latency)
-
-                    # Visualize the results on the frame
-                    frame1 = results[0].plot(labels=False)
-
                 cv2.putText(frame1, f"Latency: {latency:.1f}ms", 
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 

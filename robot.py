@@ -3,25 +3,16 @@ import zmq
 import msgpack
 import time
 import threading
-import numpy as np
-import abc
 import json
 import argparse
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from lerobot.common.robot_devices.cameras.utils import make_cameras_from_configs
 from lerobot.common.robot_devices.motors.feetech import FeetechMotorsBus, TorqueMode
 
-from lerobot.common.robot_devices.cameras.configs import (
-    CameraConfig,
-    IntelRealSenseCameraConfig,
-    OpenCVCameraConfig,
-)
-from lerobot.common.robot_devices.motors.configs import (
-    DynamixelMotorsBusConfig,
-    FeetechMotorsBusConfig,
-    MotorsBusConfig,
+from config import (
+    LeKiwiWithKochRobotConfig,
+    DummyRobotConfig
 )
 
 
@@ -56,60 +47,11 @@ def calibrate_follower_arm(motors_bus, calib_dir_str):
         print(f"[WARNING] Could not apply calibration: {e}")
 
 
-@dataclass
-class RobotConfig(abc.ABC):
-    @property
-    def type(self) -> str:
-        return self.get_choice_name(self.__class__)
-
-
-@dataclass
-class LeKiwiWithKochRobotConfig(RobotConfig):
-    
-    cameras: dict[str, CameraConfig] = field(
-        default_factory=lambda: {
-            "front": OpenCVCameraConfig(
-                # camera_index=1, fps=30, width=640, height=480, rotation=90
-                camera_index=1, fps=30, width=320, height=240, rotation=90
-                # camera_index="/dev/video2", fps=30, width=640, height=480, rotation=180
-            ),
-            "wrist": OpenCVCameraConfig(
-                camera_index=0, fps=30, width=640, height=480, rotation=None
-                # camera_index="/dev/video0", fps=30, width=640, height=480, rotation=None
-            ),
-        }
-    )
-
-    calibration_dir: str = ".cache/calibration/lekiwi_with_koch"
-
-    follower_arms: dict[str, MotorsBusConfig] = field(
-        default_factory=lambda: {
-            "main": FeetechMotorsBusConfig(
-                port="/dev/tty.usbmodem58FD0167571",
-                # port="/dev/ttyACM0",
-                motors={
-                    # name: (index, model)
-                    "shoulder_pan": [1, "sts3215"],
-                    "shoulder_lift": [2, "sts3215"],
-                    "elbow_flex": [3, "sts3215"],
-                    "wrist_flex": [4, "sts3215"],
-                    "wrist_roll": [5, "sts3215"],
-                    "gripper": [6, "sts3215"],
-                    "left_wheel": (7, "sts3215"),
-                    "back_wheel": (8, "sts3215"),
-                    "right_wheel": (9, "sts3215"),
-                },
-            ),
-        }
-    )
-
-    mock: bool = False
-
-
 
 class RobotController:
     def __init__(self, robot_config, relay_server_ip):
         self.context = zmq.Context()
+        self.robot_config = robot_config
         
         # Command receiver (PULL)
         self.command_socket = self.context.socket(zmq.PULL)
@@ -137,32 +79,24 @@ class RobotController:
         self.cameras = self.setup_cameras(robot_config.cameras)
         print("Cameras: ", self.cameras)
 
-        # Motors setup
-        motors_bus_config = robot_config.follower_arms.get("main")
-        self.motors_bus = self.setup_motors_bus(motors_bus_config)
+
+        if not isinstance(robot_config, DummyRobotConfig):
+            # Motors setup
+            motors_bus_config = robot_config.follower_arms.get("main")
+            self.motors_bus = self.setup_motors_bus(motors_bus_config)
 
 
-        # # Disable torque for each arm motor.
-        for motor in self.motors_bus.motor_names:
-            self.motors_bus.write("Torque_Enable", TorqueMode.DISABLED.value, motor)
-        
-        # # Calibrate the follower arm.
-        calibrate_follower_arm(self.motors_bus, robot_config.calibration_dir)
+            # # Disable torque for each arm motor.
+            for motor in self.motors_bus.motor_names:
+                self.motors_bus.write("Torque_Enable", TorqueMode.DISABLED.value, motor)
+            
+            # # Calibrate the follower arm.
+            calibrate_follower_arm(self.motors_bus, robot_config.calibration_dir)
 
-        self.base_motor_ids = ["left_wheel", "back_wheel", "right_wheel"]
-        self.arm_motor_ids = [
-            "shoulder_pan",
-            "shoulder_lift",
-            "elbow_flex",
-            "wrist_flex",
-            "wrist_roll",
-            "gripper"
-        ]
-
-        # Initialize motors in velocity mode.
-        self.motors_bus.write("Lock", 0)
-        self.motors_bus.write("Mode", [1, 1, 1], self.base_motor_ids)
-        self.motors_bus.write("Lock", 1)
+            # Initialize motors in velocity mode.
+            self.motors_bus.write("Lock", 0)
+            self.motors_bus.write("Mode", [1, 1, 1], robot_config.base_motor_ids)
+            self.motors_bus.write("Lock", 1)
 
         
     def setup_motors_bus(self, motor_config):
@@ -200,34 +134,43 @@ class RobotController:
 
     def process_arm_command(self, data):
         """Process arm-related commands"""
+
+        # if isinstance(self.robot_config, DummyRobotConfig):
+        #     self.current_arm_state = []
+        #     return
         
         if "arm_positions" in data:
             arm_positions = data["arm_positions"]
             if not isinstance(arm_positions, list):
                 print(f"[ERROR] Invalid arm_positions: {arm_positions}")
-            elif len(arm_positions) != len(self.arm_motor_ids):
+            elif len(arm_positions) != len(self.robot_config.arm_motor_ids):
                 print(
-                    f"[WARNING] Received {len(arm_positions)} arm positions, expected {len(self.arm_motor_ids)}"
+                    f"[WARNING] Received {len(arm_positions)} arm positions, expected {len(self.robot_config.arm_motor_ids)}"
                 )
             else:
-                for motor, pos in zip(self.arm_motor_ids, arm_positions, strict=False):
+                for motor, pos in zip(self.robot_config.arm_motor_ids, arm_positions, strict=False):
                     self.motors_bus.write("Goal_Position", pos, motor)
+        self.current_arm_state = self.read_follower_arm_state()
 
     def process_base_command(self, data):
         """Process base-related commands"""
+
+        # if isinstance(self.robot_config, DummyRobotConfig):
+        #     return
         
         if "raw_velocity" in data:
             raw_command = data["raw_velocity"]
             # Expect keys: "left_wheel", "back_wheel", "right_wheel".
-            command_speeds = [
-                int(raw_command.get("left_wheel", 0)),
-                int(raw_command.get("back_wheel", 0)),
-                int(raw_command.get("right_wheel", 0)),
-            ]
-            robot.set_velocity(command_speeds)
+            # command_speeds = [
+            #     int(raw_command.get("left_wheel", 0)),
+            #     int(raw_command.get("back_wheel", 0)),
+            #     int(raw_command.get("right_wheel", 0)),
+            # ]
+            command_speeds = [int(raw_command.get(motor, 0)) for motor in self.robot_config.base_motor_ids]
+            self.set_velocity(command_speeds)
             self.current_velocity = self.read_velocity()
-            self.current_arm_state = self.read_follower_arm_state()
-            last_cmd_time = time.time()
+            
+            
     
     def _command_handler(self):
         """Thread for receiving commands"""
@@ -238,8 +181,8 @@ class RobotController:
                 self.current_command = command
                 if self.verbose:
                     latency = (time.time_ns() - command["timestamp"])/1e6
-                    print(f"Received command: {command}")
-                    print(f"Command latency: {latency:.2f}ms")
+                    # print(f"Received command: {command}")
+                    # print(f"Command latency: {latency:.2f}ms")
                 self.process_arm_command(command)
                 self.process_base_command(command)
             except zmq.Again:
@@ -261,19 +204,26 @@ class RobotController:
         """
         Reads the raw speeds for all wheels. Returns a dictionary with motor names:
         """
-        raw_speeds = self.motors_bus.read("Present_Speed", self.base_motor_ids)
-        return {
-            "left_wheel": int(raw_speeds[0]),
-            "back_wheel": int(raw_speeds[1]),
-            "right_wheel": int(raw_speeds[2]),
-        }
+        if isinstance(self.robot_config, DummyRobotConfig):
+            return {motor: 0 for motor in self.robot_config.base_motor_ids}
+        
+        raw_speeds = self.motors_bus.read("Present_Speed", self.robot_config.base_motor_ids)
+        # return {
+        #     "left_wheel": int(raw_speeds[0]),
+        #     "back_wheel": int(raw_speeds[1]),
+        #     "right_wheel": int(raw_speeds[2]),
+        # }
+        return {motor: int(speed) for motor, speed in zip(self.robot_config.base_motor_ids, raw_speeds)}
 
     def set_velocity(self, command_speeds):
         """
         Sends raw velocity commands (16-bit encoded values) directly to the motor bus.
         The order of speeds must correspond to self.motor_ids.
         """
-        self.motors_bus.write("Goal_Speed", command_speeds, self.base_motor_ids)
+
+        if isinstance(self.robot_config, DummyRobotConfig):
+            return
+        self.motors_bus.write("Goal_Speed", command_speeds, self.robot_config.base_motor_ids)
         
     
     def read_follower_arm_state(self):
@@ -282,7 +232,7 @@ class RobotController:
         # Read the follower arm state from the motors bus.
         follower_arm_state = []
 
-        for motor in self.arm_motor_ids:
+        for motor in self.robot_config.arm_motor_ids:
             try:
                 pos = self.motors_bus.read("Present_Position", motor)
                 # Convert the position to a float (or use as is if already numeric).
@@ -292,34 +242,6 @@ class RobotController:
 
         return follower_arm_state
 
-    # def _image_publisher(self):
-    #     """Thread for capturing and sending images"""
-    #     while self.running:
-    #         frames = {}
-    #         for i, cam in enumerate(self.cameras):
-    #             ret, frame = cam.read()
-    #             if ret:
-    #                 # Compress image (adjust quality as needed)
-    #                 _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-    #                 frames[str(i)] = jpeg.tobytes()
-    #             else:
-    #                 frames[str(i)] = None
-    #                 print(f"Camera {i} read error")
-            
-    #         # Read current wheel speeds from the robot.
-    #         current_velocity = self.read_velocity()
-    #         follower_arm_state = self.read_follower_arm_state()
-                
-    #         observation = {
-    #             "images": frames,
-    #             "present_speed": current_velocity,
-    #             "follower_arm_state": follower_arm_state,
-    #             "timestamp": time.time_ns()
-    #         }
-                
-    #         self.image_socket.send(msgpack.packb(observation))
-            
-    #         time.sleep(0.033)  # ~30 FPS
 
     def _image_publisher(self):
         """Thread for capturing and sending images"""
@@ -330,7 +252,6 @@ class RobotController:
                 # Compress image (adjust quality as needed)
                 _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 frames[name] = jpeg.tobytes()
-                
             observation = {
                 "images": frames,
                 "present_speed": self.current_velocity,
@@ -339,6 +260,7 @@ class RobotController:
             }
                 
             self.image_socket.send(msgpack.packb(observation))
+            # print("Sent observation", observation)
             
             time.sleep(0.033)  # ~30 FPS
 
@@ -369,7 +291,7 @@ class RobotController:
             cam.release()
 
         # Stops the robot by setting all motor speeds to zero.
-        self.motor_bus.write("Goal_Speed", [0, 0, 0], self.motor_ids)
+        self.motor_bus.write("Goal_Speed", [0, 0, 0], self.robot_config.base_motor_ids)
         print("Motors stopped.")
 
         self.command_socket.close()
@@ -384,7 +306,8 @@ if __name__ == "__main__":
                       help='IP address of the relay server (default: 127.0.0.1)')
     args = parser.parse_args()
 
-    robot_config = LeKiwiWithKochRobotConfig()
+    # robot_config = LeKiwiWithKochRobotConfig()
+    robot_config = DummyRobotConfig() 
     robot = RobotController(robot_config, relay_server_ip=args.server_ip)
     robot.start()
     try:
