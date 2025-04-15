@@ -8,17 +8,14 @@ import threading
 from pynput import keyboard
 import json
 import argparse
-
+import random
+import string
 from pathlib import Path
-from dataclasses import dataclass, field
-
 from lerobot.common.robot_devices.motors.dynamixel import DynamixelMotorsBus, TorqueMode
-
 from config import (
     LeKiwiWithKochRobotConfig,
     DummyRobotConfig
 )
-
 
 def calibrate_arm(motors_bus, calib_dir_str):
     """
@@ -57,19 +54,15 @@ class MobileManipulator:
         self.relay_server_ip = relay_server_ip
         self.context = zmq.Context()
         self.robot_config = robot_config
+
+        self.clicked_point = None
+        self.clicked_id = None
         
         # Command socket
         self.command_socket = self.context.socket(zmq.PUSH)
         self.command_socket.setsockopt(zmq.CONFLATE, 1)
         self.command_socket.setsockopt(zmq.LINGER, 0)
         self.command_socket.connect(f"tcp://{self.relay_server_ip}:5560")
-        
-        # State subscription
-        # self.state_socket = self.context.socket(zmq.SUB)
-        # self.state_socket.setsockopt(zmq.RCVHWM, 1)
-        # self.state_socket.setsockopt(zmq.SUBSCRIBE, b"")
-        # self.state_socket.setsockopt(zmq.LINGER, 0)
-        # self.state_socket.connect(f"tcp://{self.relay_server_ip}:5561")
         
         # Image subscription
         self.image_socket = self.context.socket(zmq.SUB)
@@ -87,6 +80,7 @@ class MobileManipulator:
         self.running = False
 
         self.last_frames = {}
+        self.last_objects = {}
         self.last_present_speed = {}
         self.last_remote_arm_state = torch.zeros(6, dtype=torch.float32)
         self.last_timestamp = None
@@ -148,6 +142,14 @@ class MobileManipulator:
         )
 
         self.listener.start()
+
+    # Mouse callback function
+    def mouse_callback(self, event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            print(f"Clicked at (x={x}, y={y})")
+            self.clicked_point = (x, y)
+            # generate random alphanumeric id
+            self.clicked_id = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
 
     def _verify_connection(self, timeout=5000):
         """Verify that we can connect to the relay server"""
@@ -238,15 +240,6 @@ class MobileManipulator:
                     self.pressed_keys["rotate_right"] = False
         except AttributeError:
             pass
-    
-    # def _state_receiver(self):
-    #     """Receive state updates"""
-    #     while self.running:
-    #         try:
-    #             msg = self.state_socket.recv(zmq.NOBLOCK)
-    #             self.latest_state = msgpack.unpackb(msg)
-    #         except zmq.Again:
-    #             time.sleep(0.001)
 
     def _image_receiver(self):
         """Receive and decode image streams"""
@@ -261,6 +254,11 @@ class MobileManipulator:
                 unpacked = msgpack.unpackb(msg)
 
                 # print("Received image message")
+                if unpacked.get("click_ack", None) and unpacked["click_ack"] == self.clicked_id:
+                    print("Click acknowledged", self.clicked_id)
+                    self.clicked_id = None
+                    self.clicked_point = None
+                    
                 
                 # Thread-safe update of images
                 with self.image_lock:
@@ -269,6 +267,7 @@ class MobileManipulator:
                     # print("Speed: ", observation.get("present_speed", {}))
                     # print("Arm state: ", observation.get("follower_arm_state", None))
                     images_dict = observation.get("images", {})
+                    objects_dict = observation.get("objects", {})
                     new_speed = observation.get("present_speed", {})
                     new_arm_state = observation.get("follower_arm_state", None)
                     timestamp = observation.get("timestamp", None)
@@ -280,6 +279,7 @@ class MobileManipulator:
                     # If remote_arm_state is None and frames is None there is no message then use the previous message
                     if new_arm_state is not None and frames is not None:
                         self.last_frames = frames
+                        self.last_objects = objects_dict
 
                         remote_arm_state_tensor = torch.tensor(new_arm_state, dtype=torch.float32)
                         self.last_remote_arm_state = remote_arm_state_tensor
@@ -311,7 +311,7 @@ class MobileManipulator:
     def get_robot_state(self):
         """Get latest state"""
         with self.image_lock:
-            return self.last_frames, self.last_present_speed, self.last_remote_arm_state, self.last_timestamp
+            return self.last_frames, self.last_objects, self.last_present_speed, self.last_remote_arm_state, self.last_timestamp
 
     def start(self):
         """Start receiver threads"""
@@ -486,7 +486,16 @@ class MobileManipulator:
 
         wheel_commands = self.body_to_wheel_raw(x_cmd, y_cmd, theta_cmd)
 
-        message = {"raw_velocity": wheel_commands, "arm_positions": arm_positions}
+        message = {
+            "raw_velocity": wheel_commands, 
+            "arm_positions": arm_positions,
+        }
+
+        if self.clicked_point is not None:
+            message["click"] = {
+                "point": self.clicked_point,
+                "id": self.clicked_id
+            }
         
         self.send_command(message)
 
@@ -527,7 +536,7 @@ if __name__ == "__main__":
             client.teleop_step()
             
             # Get robot state
-            images, speed, arm_state, timestamp = client.get_robot_state()
+            images, objects, speed, arm_state, timestamp = client.get_robot_state()
             # print("-------------------")
             # print("Timestamp: ", timestamp)
             # print(f"Images: {images}")
@@ -556,8 +565,25 @@ if __name__ == "__main__":
                 cv2.putText(frame1, f"Latency: {latency:.1f}ms", 
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
+                if name in objects and objects[name] is not None:
+                    x1, y1, x2, y2 = objects[name]
+                    cv2.rectangle(frame1, 
+                                    (int(x1), int(y1)), 
+                                    (int(x2), int(y2)), 
+                                    (0, 255, 0), 2)
+                    
+                # cv2.putText(frame1, f"Tracking ID: {self.tracked_id}", 
+                #         (int(x1), int(y1) - 10), 
+                #         cv2.FONT_HERSHEY_SIMPLEX, 
+                #         0.9, (0, 255, 0), 2)
+
                 # Show frames
                 cv2.imshow(name, cv2.cvtColor(frame1, cv2.COLOR_RGB2BGR))
+
+                # Add this line to ensure window is ready
+                cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE)
+        
+                cv2.setMouseCallback(name, client.mouse_callback, {'frame': frame1})
                 
                 # Exit on 'q' key
                 if cv2.waitKey(1) & 0xFF == ord('q'):

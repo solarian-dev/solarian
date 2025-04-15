@@ -250,7 +250,7 @@ class RobotController:
             for name, cam in self.cameras.items():
                 frame = cam.read()    
                 # Compress image (adjust quality as needed)
-                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
                 frames[name] = jpeg.tobytes()
             observation = {
                 "images": frames,

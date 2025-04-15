@@ -9,6 +9,7 @@ outputs
 models
 videos
 images
+*.pt
 
 
 # Ignore WIP
