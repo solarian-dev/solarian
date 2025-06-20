@@ -1,0 +1,276 @@
+import zmq
+import time
+import threading
+import cv2
+import numpy as np
+from abc import ABC, abstractmethod
+
+from proto.common.configs import ValueName, RobotConfig
+from .observation import Observation
+from proto.control import Message
+from .action import Action
+from .module import Module
+from .component_bus import ComponentBus
+from proto.conf import settings
+from proto.common.utils import profile, manual_profile, get_class
+
+
+class Robot(ABC):
+    """Base class with common robot functionality"""
+    def __init__(self, cfg: RobotConfig):
+        self.cfg = cfg
+        self.context = zmq.Context()
+        
+        # action receiver (PULL)
+        self.action_socket = self.context.socket(zmq.PULL)
+        self.action_socket.setsockopt(zmq.CONFLATE, 1)
+        self.action_socket.connect(f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.action_sender_port}")
+        
+        # State publisher (PUB)
+        self.state_socket = self.context.socket(zmq.PUB)
+        self.state_socket.setsockopt(zmq.CONFLATE, 1)
+        self.state_socket.connect(f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_receiver_port}")
+
+        #self.control_lock = threading.Lock()
+        self.observation_lock = threading.Lock()
+        self.last_observation = None
+
+        # Verify connection
+        self._verify_connection()
+        
+        self.current_action = None
+        self.current_velocity = None
+        self.current_arm_state = None
+        
+        self.running = False
+        self.verbose = True
+        self.captured_start_pos = False        
+
+        self.modules = {}
+        self.component_bus = None
+        self.create_components()
+
+    def _verify_connection(self, timeout=5000):
+        """Verify that we can connect to the relay server"""
+        print(f"Verifying connection to relay server at {self.cfg.connection.ip}...")
+        
+        # Create a temporary PUSH socket to test connection
+        test_socket = self.context.socket(zmq.PUSH)
+        test_socket.setsockopt(zmq.LINGER, 0)
+        print(f"Attempting to connect to tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_receiver_port}...")
+        test_socket.connect(f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_receiver_port}")
+        
+        try:
+            # Try to send a message
+            print("Attempting to send test message...")
+            test_socket.send_string("test", zmq.NOBLOCK)
+            print("Test message sent successfully")
+            time.sleep(1)  # Give it a moment to ensure the message was sent
+            return True
+        except zmq.ZMQError as e:
+            print(f"ZMQ error occurred: {e}")
+            raise ConnectionError(f"ZMQ error while connecting to relay server: {e}")
+        finally:
+            print("Successfully connected to relay server")
+            print("Cleaning up test socket...")
+            test_socket.close()
+    
+    def create_components(self):
+        self.component_bus = ComponentBus()
+        for module_name, module_cfg in self.cfg.modules.items():
+            module = get_class(settings.MODULE_CLASSES[module_name])(module_cfg, module_name, self.component_bus)
+            self.modules[module_name] = module
+
+    @profile
+    def get_action(self):
+        try:
+            bytes = self.action_socket.recv(zmq.NOBLOCK)
+            msg = Message.deserialize(bytes)
+            action = Action.model_validate(msg.data["action"])
+            self.current_action = action
+            
+            latency = (time.time_ns() - msg.controller_timestamp)
+            manual_profile("process_action latency", latency)
+            with self.observation_lock:
+                self.process_action(action)
+        except zmq.Again:
+            pass
+
+    # def _action_receiver(self):
+    #     """Thread for receiving actions"""
+    #     while self.running:
+    #         try:
+    #             bytes = self.action_socket.recv(zmq.NOBLOCK)
+    #             msg = Message.deserialize(bytes)
+    #             action = Action.model_validate(msg.data["action"])
+    #             self.current_action = action
+    #             if self.verbose:
+    #                 latency = (time.time_ns() - msg.controller_timestamp)/1e6
+    #                 # print(f"Received action: {action}")
+    #                 print(f"action latency: {latency:.2f}ms")
+    #             with self.observation_lock:
+    #                 self.process_action(action)
+    #             # print("Action processed")
+    #         except zmq.Again:
+    #         # except Exception as e:
+    #             # print(f"Error in action receiver: {e}")
+    #             time.sleep(0.001)
+
+    @profile
+    def send_observation(self, observation: Observation):
+        msg = Message()
+        msg.robot_timestamp = time.time_ns()
+
+        # Encode images as JPEG
+        for module_name in observation.data.keys():
+            for sensor_name in observation.data[module_name].keys():
+                if observation.data[module_name][sensor_name].get(ValueName.IMAGE) is not None:
+                    img = observation.data[module_name][sensor_name][ValueName.IMAGE]
+
+                    if not isinstance(img, np.ndarray):
+                        # image was already encoded
+                        continue
+                    
+                    start_time = time.time()
+                    # encode_params = [cv2.IMWRITE_WEBP_QUALITY, self.cfg.img_compression_quality]
+                    # encoded_img = cv2.imencode('.webp', img, encode_params)[1].tobytes()
+                    encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.cfg.img_compression_quality]
+                    encoded_img = cv2.imencode('.jpeg', img, encode_params)[1].tobytes()
+                    # encoded_img = img.tobytes()
+
+                    # print image size
+                    # print("-----------------------------------------------")
+                    # print(f"Image size: {len(encoded_img)/1024:.2f} kb")
+                    # print("Compression time: ", time.time() - start_time)
+                    # print("-----------------------------------------------")
+
+                    observation.data[module_name][sensor_name][ValueName.IMAGE] = encoded_img
+                    # observation.data[module_name][sensor_name][ValueName.IMAGE] = img
+
+        msg.data = {"observation": observation.model_dump()}
+        self.state_socket.send(msg.serialize())
+
+    # def _state_publisher(self):
+    #     """Thread for capturing and sending state observation"""
+    #     print("State publisher started")
+    #     while self.running:
+    #         # Get and send observation
+            
+
+    #         self.get_action()
+
+    #         # print("Getting observation in robot.py")
+    #         with self.observation_lock:
+    #             observation = self.get_observation()
+    #         # print("Observation:", observation)
+
+    #         self.send_observation(observation)
+
+    #         # print("Observation sent", observation)
+    #         time.sleep(0.01)
+
+    def control_loop(self):
+        print("Control loop started")
+        while self.running:
+            # Get and send observation
+
+            self.update()
+            self.get_action()
+
+            observation = self.get_observation()
+            # print("Observation:", observation)
+
+            if observation is not None:
+                print("Sending observation:", observation)
+                self.send_observation(observation)
+
+            # print("Observation sent", observation)
+            # time.sleep(0.01)
+
+    def connect(self):
+        self.calibration = {}
+        for module_name, module in self.modules.items():
+            self.calibration.update(module.get_calibration())
+
+        if self.component_bus is not None:
+            self.component_bus.connect(self.calibration)
+        print("Robot connected")
+
+    def setup(self):
+        # setup modules
+        for module_name, module in self.modules.items():
+            module.setup()
+
+        self.running = True
+        # threading.Thread(target=self._action_receiver, daemon=True).start()
+        # threading.Thread(target=self._state_publisher, daemon=True).start()
+        
+        for module_name, module_sensors in settings.OBSERVATION.items():
+            threading.Thread(target=self.get_module_observation, args=(module_name,), daemon=True).start()
+
+        print("Robot setup")
+        
+    def is_calibrated(self):
+        for module_name, module in self.modules.items():
+            if not module.is_calibrated():
+                return False
+        return True
+        # return self.component_bus.is_calibrated()
+
+    def disconnect(self):
+        """Clean shutdown, you can extend this method to do other cleanup"""
+        self.action_socket.close()
+        self.state_socket.close()
+        if self.component_bus is not None:
+            self.component_bus.disconnect()
+        self.context.term()
+        self.running = False
+
+    def get_module_observation(self, module_name: str) -> Observation:
+        """Thread for capturing and sending module observation"""
+        print(f"Getting observation for module: {module_name}")
+        while self.running:
+            with self.observation_lock:
+                module_observation = self.modules[module_name].get_observation()
+                if self.last_observation is None:
+                    self.last_observation = module_observation
+                else:
+                    data = self.last_observation.data.copy()
+                    data.update(module_observation.data)
+                    self.last_observation = Observation(data=data)
+            time.sleep(0.01)
+        
+    @profile
+    def get_observation(self) -> Observation:
+        """Create an observation with current robot state.
+        Returns:
+            Observation: Contains camera images and actuator readings organized by groups
+        """
+        if self.last_observation is None:
+            return None
+        # return a copy of the observation
+        return self.last_observation.model_copy()       
+                    
+    # @profile
+    @abstractmethod
+    def process_action(self, action: Action):
+        """Process received action
+        Args:
+            action (Action): Action to process
+        """
+
+    def update(self):
+        """Update robot state"""
+        pass
+
+    def __str__(self):
+        return f"{self.__class__.__name__}"
+
+    def calibrate(self):
+        for module_name, module in self.modules.items():
+            module.calibrate()
+
+    def write_calibration(self):
+        for module_name, module in self.modules.items():
+            module.write_calibration()
+        

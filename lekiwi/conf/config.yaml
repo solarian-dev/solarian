@@ -1,0 +1,6 @@
+name: lekiwi
+defaults:
+    controller: controller
+    server: server
+    robot: robot
+    

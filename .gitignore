@@ -5,20 +5,27 @@ wandb
 
 # Data
 data
+dataset
 outputs
 models
 videos
 images
+policies
 *.pt
 
 
 # Ignore WIP
 examples
 notebooks
+test_code
+old_code
 webrtc
 commands.sh
 track.py
 gd.py
+.cache
+backups
+datasets
 
 # Apple
 .DS_Store

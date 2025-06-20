@@ -1,0 +1,10 @@
+defaults:
+    - connection: localhost
+    - _self_
+# image_processing:
+    # - front
+image_processor_model: ./models/FastSAM-s.pt
+image_processing: []
+# image_processor_model: null
+
+# extra server configs

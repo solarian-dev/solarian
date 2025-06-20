@@ -32,10 +32,11 @@ class ImageProcessor:
 
     def process_image(self, image):
         # Decode JPEG image
-        frame = cv2.imdecode(
-            np.frombuffer(image, dtype=np.uint8),
-            cv2.IMREAD_COLOR
-        )
+        # frame = cv2.imdecode(
+        #     np.frombuffer(image, dtype=np.uint8),
+        #     cv2.IMREAD_COLOR
+        # )
+        frame = image
 
 
         if "FastSAM" in self.model_name:
@@ -49,7 +50,7 @@ class ImageProcessor:
                 results = self.model.track(
                     frame,
                     device='mps',
-                    conf=0.10,  # Increased confidence threshold for more stable detections
+                    conf=0.60,  # Increased confidence threshold for more stable detections
                     # max_det=10,
                     persist=True,
                     iou=0.2,    # IOU threshold for tracking
@@ -65,13 +66,13 @@ class ImageProcessor:
                 results = self.model.track(
                     frame,
                     device='mps',
-                    conf=0.10,  # Increased confidence threshold for more stable detections
+                    conf=0.60,  # Increased confidence threshold for more stable detections
                     # max_det=10,
                     verbose=False,
                     # texts=names
                     persist=True,  # This is key for maintaining tracking
                     iou=0.2,
-                    tracker="bytetrack"
+                    
                 )
 
             tracked_box = None
