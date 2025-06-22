@@ -74,6 +74,7 @@ class LeKiwiController(Controller):
 
     @profile
     def display_state(self):
+        
 
         if self.last_action:
             print("Last action: ", self.last_action)
@@ -181,6 +182,19 @@ class LeKiwiController(Controller):
 
     def on_press(self, key):
         try:
+            # Handle recording-specific keys
+            if key == keyboard.Key.right:
+                print("Right arrow key pressed. Exiting loop...")
+                self.events["exit_early"] = True
+            elif key == keyboard.Key.left:
+                print("Left arrow key pressed. Exiting loop and rerecord the last episode...")
+                self.events["rerecord_episode"] = True
+                self.events["exit_early"] = True
+            elif key == keyboard.Key.esc:
+                print("Escape key pressed. Stopping data recording...")
+                self.events["stop_recording"] = True
+                self.events["exit_early"] = True
+                
             # Movement
             if key.char == self.teleop_keys["forward"]:
                 self.pressed_keys["forward"] = True

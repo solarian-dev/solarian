@@ -48,7 +48,6 @@ class ActuatorName(str, Enum):
     def __str__(self):
         return self.value
 
-
 class BodyName(str, Enum):
     BASE = "base"
     LEFT_WHEEL = "left_wheel"
@@ -65,7 +64,6 @@ class BodyName(str, Enum):
 
     def __str__(self):
         return self.value
-
 
 class SensorName(str, Enum):
     SHOULDER_PAN = "shoulder_pan"
@@ -84,8 +82,7 @@ class SensorName(str, Enum):
 
     def __str__(self):
         return self.value
-
-    
+   
 class ModuleName(str, Enum):
     BASE = "base"
     ARM = "arm"
@@ -93,7 +90,6 @@ class ModuleName(str, Enum):
     
     def __str__(self):
         return self.value
-
 
 class ProjectSettings(Settings):
     """

@@ -48,6 +48,18 @@ class Controller(ABC):
         self.component_bus = None
         self.create_components()
 
+        # Create events dictionary directly instead of using init_keyboard_listener
+        self.events = {
+            "exit_early": False,
+            "rerecord_episode": False, 
+            "stop_recording": False,
+            "track all": False,
+            "verbose": False,
+            "prompt": None,
+            "is_prompting": False,
+            "reset_policy": False
+        }
+
     def create_components(self):
         self.component_bus = ComponentBus()
         for module_name, module_cfg in self.cfg.modules.items():
@@ -174,18 +186,18 @@ class Controller(ABC):
         # "observation.images.wrist": nparray shape (480, 640, 3)
         # "task": string
         
-        frame = {**self.last_observation.to_lerobot_format(), **action.to_lerobot_format(), "task": task}
+        frame = {**self.last_observation.to_lerobot_format(), **action.to_lerobot_format()}
 
         # resize images if necessary
         for key in frame:
             if key.startswith("observation.images."):
                 img = frame[key]
                 if img.shape[0] != self.cfg.video_res[0] or img.shape[1] != self.cfg.video_res[1]:
-                    frame[key] = cv2.resize(img, (self.cfg.video_res[1], self.cfg.video_res[0]))
+                    frame[key] = cv2.resize(img, (self.cfg.video_res[1], self.cfg.video_res[0]), interpolation=cv2.INTER_AREA)
         
-        dataset.add_frame(frame)
+        dataset.add_frame(frame, task)
         
-    def display_state_loop(self, events, episode_time_s):
+    def display_state_loop(self, episode_time_s):
         timestamp = 0
         start_episode_t = time.perf_counter()
         while timestamp < episode_time_s:
@@ -195,13 +207,13 @@ class Controller(ABC):
             time.sleep(max(0, (1.0 / 45) - dt_s))
 
             timestamp = time.perf_counter() - start_episode_t
-            if events["exit_early"]:
+            if self.events["exit_early"]:
                 break
 
     def display_state(self):
         pass
 
-    def control_loop_steps(self, dataset=None, events=None, episode_time_s=None, single_task=None):
+    def control_loop_steps(self, dataset=None, episode_time_s=None, single_task=None):
         try:
             timestamp = 0
             start_episode_t = time.perf_counter()
@@ -226,7 +238,7 @@ class Controller(ABC):
                     self.record_frame(dataset, action, single_task)
 
                 timestamp = time.perf_counter() - start_episode_t
-                if events["exit_early"]:
+                if self.events["exit_early"]:
                     # events["exit_early"] = False
                     break
 
@@ -242,7 +254,7 @@ class Controller(ABC):
             print("\nShutting down teleop client...")
 
 
-    def control_loop(self, dataset=None, events=None, episode_time_s=None, single_task=None):
+    def control_loop(self, dataset=None, episode_time_s=None, single_task=None):
         """Implements the control loop
         
         Args:
@@ -252,21 +264,21 @@ class Controller(ABC):
             single_task (str, optional): Single task to run. Defaults to None.
         """
 
-        if events is None:
-            events = {"exit_early": False}
+        # if events is None:
+        #     events = {"exit_early": False}
 
         if episode_time_s is None:
             episode_time_s = float("inf")
 
         # spin control loop in a separate thread
-        t = threading.Thread(target=self.control_loop_steps, args=(dataset, events, episode_time_s, single_task), daemon=True)
+        t = threading.Thread(target=self.control_loop_steps, args=(dataset, episode_time_s + 1, single_task), daemon=True)
         t.start()
         
         # run display loop in main thread
-        self.display_state_loop(events, episode_time_s)
+        # self.display_state_loop(events, episode_time_s)
 
         t.join()
-        events["exit_early"] = False
+        self.events["exit_early"] = False
 
 
     @abstractmethod

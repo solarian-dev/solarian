@@ -1,0 +1,13 @@
+input_root: ./datasets/lekiwi_pick_lego_block9
+output_root: ./datasets/lekiwi_pick_lego_block9_lerobot
+repo_id: raulgarreta/lekiwi_pick_lego_block9
+push_to_hub: false
+fps: 30
+tags: null
+private: false
+num_image_writer_processes: 8
+num_image_writer_threads_per_camera: 4
+video: true
+video_res: [540, 960, 3]
+num_cameras: 2
+

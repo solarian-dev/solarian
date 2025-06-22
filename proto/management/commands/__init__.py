@@ -9,5 +9,6 @@ from . import (
     record,
     write_controller_calibration,
     write_robot_calibration,
-    calibrate_controller
+    calibrate_controller,
+    dataset2lerobot
 )

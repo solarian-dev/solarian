@@ -1,7 +1,7 @@
 import time
 import inspect
 import atexit
-from functools import wraps
+from functools import wraps, cache
 from collections import defaultdict
 import importlib
 from datetime import datetime, timezone
@@ -321,3 +321,22 @@ def log_say(text, play_sounds, blocking=False):
 
     if play_sounds:
         say(text, blocking)
+
+
+@cache
+def is_headless():
+    """Detects if python is running without a monitor."""
+    try:
+        import pynput  # noqa
+
+        return False
+    except Exception:
+        print(
+            "Error trying to import pynput. Switching to headless mode. "
+            "As a result, the video stream from the cameras won't be shown, "
+            "and you won't be able to change the control flow with keyboards. "
+            "For more info, see traceback below.\n"
+        )
+        traceback.print_exc()
+        print()
+        return True

@@ -27,9 +27,9 @@ class Observation(BaseModel):
         for module_name, module_data in settings.OBSERVATION.items():
             for sensor_name, (data_name, data_shape) in module_data.items():
                 if data_name in [ValueName.POS, ValueName.SPEED]:
-                    data["observation.state"].append(self.data[module_name][sensor_name][data_name])
+                    data["observation.state"].append(self.data[module_name.value][sensor_name.value][data_name.value])
                 elif data_name == ValueName.IMAGE:
-                    data["observation.images." + sensor_name] = np.array(self.data[module_name][sensor_name][data_name])
+                    data["observation.images." + sensor_name.value] = np.array(self.data[module_name.value][sensor_name.value][data_name.value])
                 else:
                     raise ValueError(f"Unknown data type: {data_name}")
 
