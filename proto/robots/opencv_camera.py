@@ -20,8 +20,13 @@ class OpenCVCamera(Camera):
     def __init__(self, cfg: CameraConfig, name: str):
         super().__init__(cfg, name)
 
+        if cfg.port.startswith('/dev/'):
+            port = cfg.port
+        else:
+            port = int(cfg.port)
+
         self.camera = OpenCVCameraImpl(OpenCVCameraConfig(
-            index_or_path=int(cfg.port),
+            index_or_path=port,
             fps=cfg.fps,
             width=cfg.width,
             height=cfg.height,

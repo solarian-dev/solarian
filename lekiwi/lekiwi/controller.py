@@ -7,18 +7,15 @@ from proto.control import Controller
 from proto.robots.action import Action
 from proto.robots.observation import Observation
 from proto.common.utils import body_to_wheel_raw
-from proto.common.configs import ValueName
-
-from .settings import ActuatorName, ModuleName, SensorName
-
-from proto.common.configs import ProjectConfig
-from proto.common.utils import profile
 
 from proto.conf import settings
 
+from proto.common.configs import ControllerConfig, ValueName
+from proto.common.utils import profile
+
 
 class LeKiwiController(Controller):
-    def __init__(self, cfg: ProjectConfig):
+    def __init__(self, cfg: ControllerConfig):
         super().__init__(cfg)
 
         self.last_action = None
@@ -76,17 +73,17 @@ class LeKiwiController(Controller):
     def display_state(self):
         
 
-        if self.last_action:
-            print("Last action: ", self.last_action)
+        # if self.last_action:
+        #     print("Last action: ", self.last_action)
 
         if self.last_observation is None:
             return
 
-        print("Last observation: ", self.last_observation)
+        # print("Last observation: ", self.last_observation)
 
         # Initialize windows once if not already done
         if not self.windows_initialized:
-            for name in [SensorName.FRONT, SensorName.WRIST]:
+            for name in [settings.SensorName.FRONT, settings.SensorName.WRIST]:
                 cv2.namedWindow(name, cv2.WINDOW_NORMAL)
                 cv2.setMouseCallback(name, self.mouse_callback)
             self.windows_initialized = True
@@ -102,6 +99,8 @@ class LeKiwiController(Controller):
 
         for name, image in images.items():
             img = image[ValueName.IMAGE]
+
+            # print("Image: ", image)
             
             # Only modify the image if bounding box exists
             if image.get(ValueName.BOUNDING_BOX, None) is not None:
@@ -133,12 +132,14 @@ class LeKiwiController(Controller):
         theta_speed = speed_setting["theta"]  # e.g. 30, 60, or 90
 
         action_data = {
-            ModuleName.ARM: {}, 
-            ModuleName.BASE: {}
+            settings.ModuleName.ARM: {}, 
+            settings.ModuleName.BASE: {}
         }
 
-        sensor_names = settings.ACTION[ModuleName.ARM].keys()
-        action_data[ModuleName.ARM] = self.modules[ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
+        sensor_names = settings.ACTION[settings.ModuleName.ARM].keys()
+
+        if settings.ModuleName.LEADER_ARM in self.modules:
+            action_data[settings.ModuleName.ARM] = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
         
         y_cmd = 0.0  # m/s forward/backward
         x_cmd = 0.0  # m/s lateral
@@ -160,7 +161,7 @@ class LeKiwiController(Controller):
         
         # TODO: this is not the best way to do it
         for actuator, speed in wheel_actions.items():
-            action_data[ModuleName.BASE][actuator] = {ValueName.SPEED: speed}
+            action_data[settings.ModuleName.BASE][actuator] = {ValueName.SPEED: speed}
     
 
         # if self.clicked_point is not None:

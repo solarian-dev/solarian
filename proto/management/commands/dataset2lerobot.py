@@ -14,6 +14,13 @@ class Dataset2LeRobotCommand(BaseCommand):
     def handle(self, cfg: DictConfig) -> None:
 
         features = pickle.load(open(os.path.join(cfg.input_root, "pickles", "features.pkl"), "rb"))
+
+
+        features['action']['shape'] = (6,)
+        features['action']['names'] = features['action']['names'][3:]
+
+
+        print(features)
         
         # create lerobot dataset
         dataset = LeRobotDataset.create(
@@ -31,6 +38,13 @@ class Dataset2LeRobotCommand(BaseCommand):
         for episode_file in os.listdir(os.path.join(cfg.input_root, "pickles")):
             if episode_file.endswith(".pkl") and not episode_file.startswith("features.pkl"):
                 episode = pickle.load(open(os.path.join(cfg.input_root, "pickles", episode_file), "rb"))
+                
+                for i, frame in enumerate(episode):
+                    episode[i]['frame']['action'] = frame['frame']['action'][3:]
+                # print(episode[0])
+
+                # print(episode[0].keys())
+                # break
                 for frame in episode:
                     dataset.add_frame(frame["frame"], frame["task"])
                 dataset.save_episode()

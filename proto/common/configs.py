@@ -66,8 +66,8 @@ class ModuleConfig(BaseModel):
     type: str
     calibration_file: str
     gripper_open_degree: Optional[float] = 30
-    bodies: dict[str, BodyConfig]
-    joints: dict[str, JointConfig]
+    bodies: dict[str, BodyConfig] = {}
+    joints: dict[str, JointConfig] = {}
 
 class ConnectionConfig(BaseModel):
     ip: str
@@ -87,6 +87,8 @@ class ControllerConfig(BaseModel):
     tps: int
     system2_model: str
     system2_prompt: str
+    policy_path: str
+    device: str
     connection: ConnectionConfig
     modules: dict[str, ModuleConfig]
 
@@ -103,13 +105,15 @@ class RecordConfig(ControllerConfig):
     private: bool
     num_image_writer_processes: int
     num_image_writer_threads_per_camera: int
+    start_episode: int
     video: bool
     video_res: list[int]
 
 class ServerConfig(BaseModel):
     connection: ConnectionConfig
     image_processing: list[str]
-    image_processor_model: str | None
+    tracking_model: str | None
+    depth_model: str | None
 
 # A project is composed by a robot, a server, a controller and a config
 # In its top level config it also points to the classes that implement the robot, server, controller and config

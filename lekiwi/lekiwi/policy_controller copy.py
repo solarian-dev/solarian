@@ -107,8 +107,7 @@ class PolicyController(Controller):
 
     @profile
     def display_state(self):
-        if self.last_observation is None:
-            return
+        
 
         # Initialize windows once if not already done
         if not self.windows_initialized:
@@ -156,8 +155,6 @@ class PolicyController(Controller):
 
     @profile
     def control_step(self, observation: Observation) -> Action:
-
-        # self.display_state()
         
         speed_setting = self.speed_levels[self.speed_index]
         xy_speed = speed_setting["xy"]  # e.g. 0.1, 0.25, or 0.4

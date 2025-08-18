@@ -1,0 +1,13 @@
+input_root: ./datasets/lekiwi_pick_lego_block
+output_root: ./datasets/so100_pick_lego_block_lerobot
+repo_id: rgarreta/so100_pick_lego_block
+push_to_hub: true
+fps: 30
+tags: null
+private: false
+num_image_writer_processes: 8
+num_image_writer_threads_per_camera: 4
+video: true
+video_res: [540, 960, 3]
+num_cameras: 2
+

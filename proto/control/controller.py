@@ -23,6 +23,8 @@ class Controller(ABC):
         self.context = zmq.Context()
         
         self.is_connected = False
+        self.clicked_point = None
+        self.clicked_id = None
         
         # action socket
         self.action_socket = self.context.socket(zmq.PUSH)
@@ -275,7 +277,7 @@ class Controller(ABC):
         t.start()
         
         # run display loop in main thread
-        # self.display_state_loop(events, episode_time_s)
+        self.display_state_loop(episode_time_s)
 
         t.join()
         self.events["exit_early"] = False

@@ -39,8 +39,8 @@ class RelayServer:
         self.client_state_sender.setsockopt(zmq.LINGER, 0)
         self.client_state_sender.bind(f"tcp://*:{self.cfg.connection.state_sender_port}")  # Clients subscribe here
 
-        if self.cfg.image_processing and self.cfg.image_processor_model:
-            self.image_processor = ImageProcessor(self.cfg.image_processor_model)
+        if self.cfg.image_processing and self.cfg.tracking_model:
+            self.image_processor = ImageProcessor(self.cfg.tracking_model, self.cfg.depth_model)
 
     def _action_relay(self):
         """Forward actions from clients to robot"""
@@ -100,6 +100,7 @@ class RelayServer:
                     frame = cv2.imdecode(np.frombuffer(observation.data[module_name][sensor_name][ValueName.IMAGE], dtype=np.uint8),
                         cv2.IMREAD_COLOR)
                     _, tracked_box = self.image_processor.process_image(frame)
+                    print("Tracked box: ", tracked_box)
                     observation.data[module_name][sensor_name][ValueName.BOUNDING_BOX] = tracked_box
 
 

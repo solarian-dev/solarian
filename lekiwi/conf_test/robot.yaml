@@ -1,0 +1,181 @@
+defaults:
+    - connection: localhost
+    - _self_
+img_compression_quality: 30
+modules:  
+    # base:
+    #     type: lekiwi
+    #     calibration_file: .cache/calibration/lekiwi/robot_base.json
+    #     bodies:
+    #         base:
+    #             mass: 1
+    #             inertia: 1
+    #             sensors:
+    #                 front:
+    #                     port: '1'
+    #                     # fps: 30
+    #                     # width: 640
+    #                     # height: 480
+
+    #                     # fps: 60
+    #                     # width: 1280
+    #                     # height: 720
+
+    #                     fps: 30
+    #                     width: 1920
+    #                     height: 1080
+
+    #                     rotation: 0
+    #                     channels: 3
+    #                     color_mode: rgb
+    #                     type: opencv
+    #         left_wheel:
+    #             mass: 1
+    #             inertia: 1
+    #         back_wheel:
+    #             mass: 1
+    #             inertia: 1
+    #         right_wheel:
+    #             mass: 1
+    #             inertia: 1
+    #     joints:
+    #         left_wheel:
+    #             parent_body: base
+    #             child_body: left_wheel
+    #             actuators:
+    #                 left_wheel:
+    #                     id: 7
+    #                     model: sts3215
+    #                     port: /dev/tty.usbmodem58FD0169131
+    #                     type: feetech
+    #                     mode: range_m100_100
+    #         back_wheel:
+    #             parent_body: base
+    #             child_body: back_wheel
+    #             actuators:
+    #                 back_wheel:
+    #                     id: 8
+    #                     model: sts3215
+    #                     port: /dev/tty.usbmodem58FD0169131
+    #                     type: feetech
+    #                     mode: range_m100_100
+    #         right_wheel:
+    #             parent_body: base
+    #             child_body: right_wheel
+    #             actuators:
+    #                 right_wheel:
+    #                     id: 9
+    #                     model: sts3215
+    #                     port: /dev/tty.usbmodem58FD0169131
+    #                     type: feetech
+    #                     mode: range_m100_100
+            
+    arm:
+        type: so100
+        # calibration_file: .cache/calibration/lekiwi/robot_arm.json
+        # calibration_file: .cache/calibration/lekiwi2/lekiwi_follower_arm.json
+        calibration_file: ""
+        bodies:
+            base:
+                mass: 1
+                inertia: 1
+            shoulder:
+                mass: 1
+                inertia: 1
+            upper_arm:
+                mass: 1
+                inertia: 1
+            lower_arm:
+                mass: 1
+                inertia: 1
+            wrist:
+                mass: 1
+                inertia: 1
+            fixed_jaw:
+                mass: 1
+                inertia: 1
+                sensors:
+                    wrist:
+                        # port: '0'
+                        port: '/dev/video0'
+                        # fps: 30
+                        # width: 640
+                        # height: 480
+
+                        # fps: 60
+                        # width: 1280
+                        # height: 720
+
+                        fps: 30
+                        width: 1920
+                        height: 1080
+
+                        rotation: 0
+                        channels: 3
+                        color_mode: rgb
+                        type: opencv
+            moving_jaw:
+                mass: 1
+                inertia: 1
+        joints: {}
+            # shoulder_pan:
+            #     parent_body: base
+            #     child_body: shoulder
+            #     actuators:
+            #         shoulder_pan:
+            #             id: 1
+            #             model: sts3215
+            #             port: /dev/tty.usbmodem58FD0169131
+            #             type: feetech
+            #             mode: range_m100_100
+                
+            # shoulder_lift:
+            #     parent_body: shoulder
+            #     child_body: upper_arm
+            #     actuators:
+            #         shoulder_lift:
+            #             id: 2
+            #             model: sts3215
+            #             port: /dev/tty.usbmodem58FD0169131
+            #             type: feetech
+            #             mode: range_m100_100
+            # elbow_flex:
+            #     parent_body: upper_arm
+            #     child_body: lower_arm
+            #     actuators:
+            #         elbow_flex:
+            #             id: 3
+            #             model: sts3215
+            #             port: /dev/tty.usbmodem58FD0169131
+            #             type: feetech
+            #             mode: range_m100_100
+            # wrist_flex:
+            #     parent_body: lower_arm
+            #     child_body: wrist
+            #     actuators:
+            #         wrist_flex:
+            #             id: 4
+            #             model: sts3215
+            #             port: /dev/tty.usbmodem58FD0169131
+            #             type: feetech
+            #             mode: range_m100_100
+            # wrist_roll: = {}
+            #     parent_body: wrist
+            #     child_body: fixed_jaw
+            #     actuators:
+            #         wrist_roll:
+            #             id: 5
+            #             model: sts3215
+            #             port: /dev/tty.usbmodem58FD0169131
+            #             type: feetech
+            #             mode: range_m100_100
+            # gripper:
+            #     parent_body: fixed_jaw
+            #     child_body: moving_jaw
+            #     actuators:
+            #         gripper:
+            #             id: 6
+            #             model: sts3215
+            #             port: /dev/tty.usbmodem58FD0169131
+            #             type: feetech
+            #             mode: range_m100_100

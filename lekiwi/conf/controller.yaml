@@ -5,6 +5,9 @@ fps: 30
 tps: 1
 system2_model: gemini/gemini-1.5-flash
 system2_prompt: Be a smart and helpful robot assistant.
+# policy_path: /Users/raul/workspace/lerobot/outputs/train/act_lekiwi_pick_lego_block/checkpoints/006000/pretrained_model
+policy_path: /Users/raul/workspace/lerobot/outputs/train/act_so100_5k/pretrained_model
+device: mps
 modules:
     leader_arm:
         type: koch

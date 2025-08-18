@@ -11,7 +11,7 @@ multiprocessing.set_start_method('fork')
 class Dataset:
 
 
-    def __init__(self, repo_id, fps, root, robot_type, features, use_videos, image_writer_processes, image_writer_threads):
+    def __init__(self, repo_id, fps, root, robot_type, features, use_videos, image_writer_processes, image_writer_threads, start_episode):
 
         self.repo_id = repo_id
         self.fps = fps
@@ -21,32 +21,38 @@ class Dataset:
         self.use_videos = use_videos
         self.image_writer_processes = image_writer_processes
         self.image_writer_threads = image_writer_threads
+        self.start_episode = start_episode
         
         self.episode = []
         self.data = []
-        self.episode_number = 0
+        self.episode_number = self.start_episode   
         self.incremental_store = True
 
-        self.dataset = LeRobotDataset.create(
-            self.repo_id,
-            self.fps,
-            root=self.root,
-            robot_type=self.robot_type,
-            features=self.features,
-            use_videos=self.use_videos,
-            image_writer_processes=self.image_writer_processes,
-            image_writer_threads=self.image_writer_threads,
-        )
+        # self.dataset = LeRobotDataset.create(
+        #     self.repo_id,
+        #     self.fps,
+        #     root=self.root,
+        #     robot_type=self.robot_type,
+        #     features=self.features,
+        #     use_videos=self.use_videos,
+        #     image_writer_processes=self.image_writer_processes,
+        #     image_writer_threads=self.image_writer_threads,
+        # )
 
-        # create pickles folder
-        os.makedirs(f"{self.root}/pickles", exist_ok=True)
+        if self.start_episode == 1:    
+            # create pickles folder
+            os.makedirs(f"{self.root}/pickles", exist_ok=True)
 
-        with open(f"{self.root}/pickles/features.pkl", "wb") as f:
-            pickle.dump(self.features, f)
+            with open(f"{self.root}/pickles/features.pkl", "wb") as f:
+                pickle.dump(self.features, f)
+        else:
+            # check that pickles folder and features.pkl exist
+            if not os.path.exists(f"{self.root}/pickles/features.pkl"):
+                raise ValueError("Features.pkl not found")
 
-        if self.incremental_store:
-            self.storing = multiprocessing.Manager().Event()
-            self.storing.clear()
+        # if self.incremental_store:
+        #     self.storing = multiprocessing.Manager().Event()
+        #     self.storing.clear()
 
 
     def add_frame(self, frame, task):

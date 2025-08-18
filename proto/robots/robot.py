@@ -78,8 +78,9 @@ class Robot(ABC):
     def create_components(self):
         self.component_bus = ComponentBus()
         for module_name, module_cfg in self.cfg.modules.items():
-            module = get_class(settings.MODULE_CLASSES[module_name])(module_cfg, module_name, self.component_bus)
-            self.modules[module_name] = module
+            if module_name in settings.MODULE_CLASSES:
+                module = get_class(settings.MODULE_CLASSES[module_name])(module_cfg, module_name, self.component_bus)
+                self.modules[module_name] = module
 
     @profile
     def get_action(self):

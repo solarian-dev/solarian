@@ -85,6 +85,7 @@ class RecordCommand(BaseCommand):
                 use_videos=cfg.video,
                 image_writer_processes=cfg.num_image_writer_processes,
                 image_writer_threads=num_cameras * cfg.num_image_writer_threads_per_camera,
+                start_episode=cfg.start_episode,
             )
             # datasets[task] = dataset
             # dataset = LeRobotDataset.create(
@@ -157,7 +158,7 @@ class RecordCommand(BaseCommand):
             time.sleep(0.1)
 
         save_threads = {}
-        i = 1
+        i = cfg.start_episode
         while True:
             if i > cfg.num_episodes:
                 break
@@ -170,7 +171,6 @@ class RecordCommand(BaseCommand):
                 if not controller.events["stop_recording"] and (
                     (i < cfg.num_episodes and j == len(cfg.tasks) - 1 and (i % cfg.reset_period == 0)) or controller.events["rerecord_episode"]
                 ):
-                    log_say("Reset the environment", cfg.play_sounds, blocking=True)
                     reset_time_s = cfg.reset_time_s
                     if (i % cfg.reset_period == 0):
                         reset_time_s = cfg.reset_time_s

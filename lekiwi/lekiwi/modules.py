@@ -4,7 +4,7 @@ from lerobot.common.motors import MotorCalibration
 from proto.robots.module import Module
 from proto.common.configs import ModuleConfig
 from proto.robots.component_bus import ComponentBus
-from .settings import ActuatorName
+from proto.conf import settings
 
 
 class BaseModule(Module):
@@ -117,7 +117,7 @@ class ArmModule(Module):
             homing_offsets.update(self.component_bus.component_bus_by_port[port].set_half_turn_homings(actuators))
 
         # actuators that can rotate 360 degrees
-        full_turn_motor = [ActuatorName.WRIST_ROLL]
+        full_turn_motor = [settings.ActuatorName.WRIST_ROLL]
 
         # actuators that can't rotate 360 degrees
         unknown_range_motors = [motor for motor in self.actuators.keys() if motor not in full_turn_motor]
@@ -197,21 +197,21 @@ class LeaderArmModule(Module):
 
         self.write_actuators("Operating_Mode", 
             {
-                ActuatorName.SHOULDER_PAN: EXTENDED_POSITION, 
-                ActuatorName.SHOULDER_LIFT: EXTENDED_POSITION, 
-                ActuatorName.ELBOW_FLEX: EXTENDED_POSITION, 
-                ActuatorName.WRIST_FLEX: EXTENDED_POSITION, 
-                ActuatorName.WRIST_ROLL: EXTENDED_POSITION
+                settings.ActuatorName.SHOULDER_PAN: EXTENDED_POSITION, 
+                settings.ActuatorName.SHOULDER_LIFT: EXTENDED_POSITION, 
+                settings.ActuatorName.ELBOW_FLEX: EXTENDED_POSITION, 
+                settings.ActuatorName.WRIST_FLEX: EXTENDED_POSITION, 
+                settings.ActuatorName.WRIST_ROLL: EXTENDED_POSITION
             })
 
         self.write_actuators("Return_Delay_Time", 0)
 
-        self.write_actuators("Operating_Mode", {ActuatorName.GRIPPER: CURRENT_POSITION})
+        self.write_actuators("Operating_Mode", {settings.ActuatorName.GRIPPER: CURRENT_POSITION})
 
         # Enable torque for the gripper and set position
         print(f"Setting gripper open angle...")
-        self.enable_actuators_torque([ActuatorName.GRIPPER])
-        self.write_actuators_pos({ActuatorName.GRIPPER: self.cfg.gripper_open_degree}, normalize=True)
+        self.enable_actuators_torque([settings.ActuatorName.GRIPPER])
+        self.write_actuators_pos({settings.ActuatorName.GRIPPER: self.cfg.gripper_open_degree}, normalize=True)
 
     def calibrate(self) -> None:
         print(f"\nRunning calibration of {self.name}")
@@ -231,7 +231,7 @@ class LeaderArmModule(Module):
 
         self.write_actuators("Drive_Mode", 0)
 
-        drive_modes = {motor: 1 if motor in [ActuatorName.SHOULDER_PAN.value, ActuatorName.WRIST_FLEX.value, ActuatorName.WRIST_ROLL.value] else 0 for motor in self.actuators.keys()}
+        drive_modes = {motor: 1 if motor in [settings.ActuatorName.SHOULDER_PAN.value, settings.ActuatorName.WRIST_FLEX.value, settings.ActuatorName.WRIST_ROLL.value] else 0 for motor in self.actuators.keys()}
 
         input(f"Move {self.name} to the middle of its range of motion and press ENTER....")
         homing_offsets = {}
@@ -239,7 +239,7 @@ class LeaderArmModule(Module):
             homing_offsets.update(self.component_bus.component_bus_by_port[port].set_half_turn_homings(actuators))
 
         # actuators that can rotate 360 degrees
-        full_turn_motor = [ActuatorName.WRIST_ROLL.value, ActuatorName.SHOULDER_PAN.value]
+        full_turn_motor = [settings.ActuatorName.WRIST_ROLL.value, settings.ActuatorName.SHOULDER_PAN.value]
 
         # actuators that can't rotate 360 degrees
         unknown_range_motors = [motor for motor in self.actuators.keys() if motor not in full_turn_motor]

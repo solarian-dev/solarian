@@ -131,7 +131,64 @@ class LeKiwiRobotSim(Robot):
 
 
     @profile
-    def process_action(self, action: Action):
+    def process_action(self, action: Action):# Visualization
+            # if results and len(results[0].boxes) > 0:
+            #     # Only show the tracked object
+            #     boxes = results[0].boxes
+            #     masks = results[0].masks
+                
+                
+            #     # Find our tracked object
+            #     for i, box in enumerate(boxes):
+            #         if hasattr(box, 'id') and box.id.item() == self.tracked_id:
+            #             tracked_box = box
+
+            #             if self.show_mask:
+            #                 tracked_mask = masks[i].data[0].cpu().numpy()
+            #                 # Resize mask to match frame dimensions
+            #                 tracked_mask = cv2.resize(
+            #                     tracked_mask,
+            #                     (frame.shape[1], frame.shape[0]),
+            #                     interpolation=cv2.INTER_NEAREST
+            #                 )
+            #                 print("mask shape", tracked_mask.shape)
+            #             break
+                
+            #     if tracked_box is not None:
+            #         # Create a copy of the frame for drawing
+            #         annotated_frame = frame.copy()
+            #         if self.show_mask:
+            #             # Create colored overlay for the mask
+            #             color_mask = np.zeros_like(annotated_frame)
+            #             color_mask[tracked_mask == 1] = [0, 255, 0]  # Green color for the mask
+                        
+            #             # Blend the mask with the frame
+            #             alpha = 0.5  # Transparency factor
+            #             mask_overlay = cv2.addWeighted(annotated_frame, 1, color_mask, alpha, 0)
+            #             annotated_frame = mask_overlay
+                    
+            #         # Draw just the tracked box
+            #         x1, y1, x2, y2 = tracked_box.xyxy[0].tolist()
+            #         tracked_box = [x1, y1, x2, y2]
+            #         # cv2.rectangle(annotated_frame, 
+            #         #             (int(x1), int(y1)), 
+            #         #             (int(x2), int(y2)), 
+            #         #             (0, 255, 0), 2)
+                    
+            #         # cv2.putText(annotated_frame, f"Tracking ID: {self.tracked_id}", 
+            #         #         (int(x1), int(y1) - 10), 
+            #         #         cv2.FONT_HERSHEY_SIMPLEX, 
+            #         #         0.9, (0, 255, 0), 2)
+            #     else:
+            #         print("Lost tracked object")
+            #         self.tracking_active = False
+            #         self.tracked_id = None
+            #         annotated_frame = frame
+            # else:
+            #     annotated_frame = frame
+
+
+            # frame = annotated_frame
         """Process received action"""
         
         action_list = [value[ValueName.POS] for value in action.data[ModuleName.ARM].values()]
