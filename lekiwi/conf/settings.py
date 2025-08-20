@@ -18,83 +18,85 @@ from proto.common.configs import ProjectConfig, ValueName
 from proto.conf.settings import Settings
 
 
-class JointName(str, Enum):
-    SHOULDER_PAN = "shoulder_pan"
-    SHOULDER_LIFT = "shoulder_lift"
-    ELBOW_FLEX = "elbow_flex"
-    WRIST_FLEX = "wrist_flex"
-    WRIST_ROLL = "wrist_roll"
-    GRIPPER = "gripper"
 
-    LEFT_WHEEL = "left_wheel"
-    RIGHT_WHEEL = "right_wheel"
-    BACK_WHEEL = "back_wheel"
-
-    def __str__(self):
-        return self.value
-
-class ActuatorName(str, Enum):
-    SHOULDER_PAN = "shoulder_pan"
-    SHOULDER_LIFT = "shoulder_lift"
-    ELBOW_FLEX = "elbow_flex"
-    WRIST_FLEX = "wrist_flex"
-    WRIST_ROLL = "wrist_roll"
-    GRIPPER = "gripper"
-
-    LEFT_WHEEL = "left_wheel"
-    RIGHT_WHEEL = "right_wheel"
-    BACK_WHEEL = "back_wheel"
-
-    def __str__(self):
-        return self.value
-
-class BodyName(str, Enum):
-    BASE = "base"
-    LEFT_WHEEL = "left_wheel"
-    RIGHT_WHEEL = "right_wheel"
-    BACK_WHEEL = "back_wheel"
-
-    ARM_BASE = "arm_base"
-    SHOULDER = "shoulder"
-    UPPER_ARM = "upper_arm"
-    LOWER_ARM = "lower_arm"
-    WRIST = "wrist"
-    FIXED_JAW = "fixed_jaw"
-    MOVING_JAW = "moving_jaw"
-
-    def __str__(self):
-        return self.value
-
-class SensorName(str, Enum):
-    SHOULDER_PAN = "shoulder_pan"
-    SHOULDER_LIFT = "shoulder_lift"
-    ELBOW_FLEX = "elbow_flex"
-    WRIST_FLEX = "wrist_flex"
-    WRIST_ROLL = "wrist_roll"
-    GRIPPER = "gripper"
-
-    LEFT_WHEEL = "left_wheel"
-    RIGHT_WHEEL = "right_wheel"
-    BACK_WHEEL = "back_wheel"
-
-    FRONT = "front"
-    WRIST = "wrist"
-
-    def __str__(self):
-        return self.value
-   
-class ModuleName(str, Enum):
-    BASE = "base"
-    ARM = "arm"
-    LEADER_ARM = "leader_arm"
-    
-    def __str__(self):
-        return self.value
 
 class ProjectSettings(Settings):
     """
     Project-specific settings that extend base framework settings
     """
+
+    class JointName(str, Enum):
+        SHOULDER_PAN = "shoulder_pan"
+        SHOULDER_LIFT = "shoulder_lift"
+        ELBOW_FLEX = "elbow_flex"
+        WRIST_FLEX = "wrist_flex"
+        WRIST_ROLL = "wrist_roll"
+        GRIPPER = "gripper"
+
+        LEFT_WHEEL = "left_wheel"
+        RIGHT_WHEEL = "right_wheel"
+        BACK_WHEEL = "back_wheel"
+
+        def __str__(self):
+            return self.value
+
+    class ActuatorName(str, Enum):
+        SHOULDER_PAN = "shoulder_pan"
+        SHOULDER_LIFT = "shoulder_lift"
+        ELBOW_FLEX = "elbow_flex"
+        WRIST_FLEX = "wrist_flex"
+        WRIST_ROLL = "wrist_roll"
+        GRIPPER = "gripper"
+
+        LEFT_WHEEL = "left_wheel"
+        RIGHT_WHEEL = "right_wheel"
+        BACK_WHEEL = "back_wheel"
+
+        def __str__(self):
+            return self.value
+
+    class BodyName(str, Enum):
+        BASE = "base"
+        LEFT_WHEEL = "left_wheel"
+        RIGHT_WHEEL = "right_wheel"
+        BACK_WHEEL = "back_wheel"
+
+        ARM_BASE = "arm_base"
+        SHOULDER = "shoulder"
+        UPPER_ARM = "upper_arm"
+        LOWER_ARM = "lower_arm"
+        WRIST = "wrist"
+        FIXED_JAW = "fixed_jaw"
+        MOVING_JAW = "moving_jaw"
+
+        def __str__(self):
+            return self.value
+
+    class SensorName(str, Enum):
+        SHOULDER_PAN = "shoulder_pan"
+        SHOULDER_LIFT = "shoulder_lift"
+        ELBOW_FLEX = "elbow_flex"
+        WRIST_FLEX = "wrist_flex"
+        WRIST_ROLL = "wrist_roll"
+        GRIPPER = "gripper"
+
+        LEFT_WHEEL = "left_wheel"
+        RIGHT_WHEEL = "right_wheel"
+        BACK_WHEEL = "back_wheel"
+
+        FRONT = "front"
+        WRIST = "wrist"
+
+        def __str__(self):
+            return self.value
+    
+    class ModuleName(str, Enum):
+        BASE = "base"
+        ARM = "arm"
+        LEADER_ARM = "leader_arm"
+        
+        def __str__(self):
+            return self.value
 
     ROBOT_NAME: str = "lekiwi"
 

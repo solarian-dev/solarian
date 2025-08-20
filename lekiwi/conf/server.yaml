@@ -2,10 +2,7 @@ defaults:
     - connection: localhost
     - _self_
 image_processing:
-    - front
+    - wrist
+# image_processing: []
 tracking_model: ./models/FastSAM-s.pt
 depth_model: ./models/depth_anything_v2_vits.pth
-# image_processing: []
-# image_processor_model: null
-
-# extra server configs

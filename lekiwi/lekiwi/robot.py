@@ -5,9 +5,7 @@ from proto.common.configs import ProjectConfig
 from proto.common.utils import profile
 
 
-from .settings import (
-    ModuleName
-)
+from proto.conf import settings
 
 
 # Must define robot
@@ -22,5 +20,5 @@ class LeKiwiRobot(Robot):
     def process_action(self, action: Action):
         """Process received action"""
         # print("Action object: ", action)
-        self.modules[ModuleName.ARM].write_actuators_pos({name: value[ValueName.POS] for name, value in action.data[ModuleName.ARM].items()})
-        self.modules[ModuleName.BASE].write_actuators_speed({name: value[ValueName.SPEED] for name, value in action.data[ModuleName.BASE].items()})
+        self.modules[settings.ModuleName.ARM].write_actuators_pos({name: value[ValueName.POS] for name, value in action.data[settings.ModuleName.ARM].items()})
+        self.modules[settings.ModuleName.BASE].write_actuators_speed({name: value[ValueName.SPEED] for name, value in action.data[settings.ModuleName.BASE].items()})

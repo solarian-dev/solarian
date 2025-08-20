@@ -1,13 +1,15 @@
 defaults:
     - connection: localhost
     - _self_
-fps: 60
+fps: 30
 tps: 1
 system2_model: gemini/gemini-1.5-flash
 system2_prompt: Be a smart and helpful robot assistant.
 # policy_path: /Users/raul/workspace/lerobot/outputs/train/act_lekiwi_pick_lego_block/checkpoints/006000/pretrained_model
 policy_path: /Users/raul/workspace/lerobot/outputs/train/act_so100_5k/pretrained_model
 device: mps
+actuator_port: /dev/ttyACM1
+# actuator_port: /dev/tty.usbmodem58FD0167771
 modules: {}
     # leader_arm:
     #     type: koch
@@ -46,7 +48,7 @@ modules: {}
     #                 shoulder_pan:
     #                     id: 1
     #                     model: xl330-m077
-    #                     port: /dev/tty.usbmodem58FD0167771
+    #                     port: ${actuator_port}
     #                     type: dynamixel
     #                     mode: range_m100_100
                 
@@ -59,7 +61,7 @@ modules: {}
     #                 shoulder_lift:
     #                     id: 2
     #                     model: xl330-m077
-    #                     port: /dev/tty.usbmodem58FD0167771
+    #                     port: ${actuator_port}
     #                     type: dynamixel
     #                     mode: range_m100_100
     #         elbow_flex:
@@ -71,7 +73,7 @@ modules: {}
     #                 elbow_flex:
     #                     id: 3
     #                     model: xl330-m077
-    #                     port: /dev/tty.usbmodem58FD0167771
+    #                     port: ${actuator_port}
     #                     type: dynamixel
     #                     mode: range_m100_100
     #         wrist_flex:
@@ -83,7 +85,7 @@ modules: {}
     #                 wrist_flex:
     #                     id: 4
     #                     model: xl330-m077
-    #                     port: /dev/tty.usbmodem58FD0167771
+    #                     port: ${actuator_port}
     #                     type: dynamixel
     #                     mode: range_m100_100
     #         wrist_roll:
@@ -95,7 +97,7 @@ modules: {}
     #                 wrist_roll:
     #                     id: 5
     #                     model: xl330-m077
-    #                     port: /dev/tty.usbmodem58FD0167771
+    #                     port: ${actuator_port}
     #                     type: dynamixel
     #                     mode: range_m100_100
     #         gripper:
@@ -107,6 +109,6 @@ modules: {}
     #                 gripper:
     #                     id: 6
     #                     model: xl330-m077
-    #                     port: /dev/tty.usbmodem58FD0167771
+    #                     port: ${actuator_port}
     #                     type: dynamixel
     #                     mode: range_m100_100

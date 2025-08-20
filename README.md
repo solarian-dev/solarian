@@ -53,7 +53,7 @@ python manage.py run-robot --conf conf_test
 Within your project directory, run the following command:
 
 ```bash
-python manage.py run-teleop --conf conf_test
+python manage.py run-controller --conf conf_test
 ```
 
 

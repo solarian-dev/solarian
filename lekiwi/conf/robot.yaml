@@ -2,6 +2,13 @@ defaults:
     - connection: localhost
     - _self_
 img_compression_quality: 30
+fps: 30
+actuator_port: /dev/ttyACM0
+# actuator_port: /dev/tty.usbmodem58FD0169131
+front_camera_port: /dev/video4
+wrist_camera_port: /dev/video6
+# front_camera_port: '1'
+# wrist_camera_port: '0'
 modules:  
     base:
         type: lekiwi
@@ -12,22 +19,16 @@ modules:
                 inertia: 1
                 sensors:
                     front:
-                        port: '1'
-                        # fps: 30
-                        # width: 640
-                        # height: 480
-
-                        # fps: 60
-                        # width: 1280
-                        # height: 720
-
+                        port: ${front_camera_port}
                         fps: 30
                         width: 1920
                         height: 1080
-
+                        resize_width: 960
+                        resize_height: 540
                         rotation: 0
                         channels: 3
                         color_mode: rgb
+                        video_format: MJPG
                         type: opencv
             left_wheel:
                 mass: 1
@@ -46,7 +47,7 @@ modules:
                     left_wheel:
                         id: 7
                         model: sts3215
-                        port: /dev/tty.usbmodem58FD0169131
+                        port: ${actuator_port}
                         type: feetech
                         mode: range_m100_100
             back_wheel:
@@ -56,7 +57,7 @@ modules:
                     back_wheel:
                         id: 8
                         model: sts3215
-                        port: /dev/tty.usbmodem58FD0169131
+                        port: ${actuator_port}
                         type: feetech
                         mode: range_m100_100
             right_wheel:
@@ -66,7 +67,7 @@ modules:
                     right_wheel:
                         id: 9
                         model: sts3215
-                        port: /dev/tty.usbmodem58FD0169131
+                        port: ${actuator_port}
                         type: feetech
                         mode: range_m100_100
             
@@ -95,22 +96,16 @@ modules:
                 inertia: 1
                 sensors:
                     wrist:
-                        port: '0'
-                        # fps: 30
-                        # width: 640
-                        # height: 480
-
-                        # fps: 60
-                        # width: 1280
-                        # height: 720
-
+                        port: ${wrist_camera_port}
                         fps: 30
                         width: 1920
                         height: 1080
-
+                        resize_width: 960
+                        resize_height: 540
                         rotation: 0
                         channels: 3
                         color_mode: rgb
+                        video_format: MJPG
                         type: opencv
             moving_jaw:
                 mass: 1
@@ -123,7 +118,7 @@ modules:
                     shoulder_pan:
                         id: 1
                         model: sts3215
-                        port: /dev/tty.usbmodem58FD0169131
+                        port: ${actuator_port}
                         type: feetech
                         mode: range_m100_100
                 
@@ -134,7 +129,7 @@ modules:
                     shoulder_lift:
                         id: 2
                         model: sts3215
-                        port: /dev/tty.usbmodem58FD0169131
+                        port: ${actuator_port}
                         type: feetech
                         mode: range_m100_100
             elbow_flex:
@@ -144,7 +139,7 @@ modules:
                     elbow_flex:
                         id: 3
                         model: sts3215
-                        port: /dev/tty.usbmodem58FD0169131
+                        port: ${actuator_port}
                         type: feetech
                         mode: range_m100_100
             wrist_flex:
@@ -154,7 +149,7 @@ modules:
                     wrist_flex:
                         id: 4
                         model: sts3215
-                        port: /dev/tty.usbmodem58FD0169131
+                        port: ${actuator_port}
                         type: feetech
                         mode: range_m100_100
             wrist_roll:
@@ -164,7 +159,7 @@ modules:
                     wrist_roll:
                         id: 5
                         model: sts3215
-                        port: /dev/tty.usbmodem58FD0169131
+                        port: ${actuator_port}
                         type: feetech
                         mode: range_m100_100
             gripper:
@@ -174,6 +169,6 @@ modules:
                     gripper:
                         id: 6
                         model: sts3215
-                        port: /dev/tty.usbmodem58FD0169131
+                        port: ${actuator_port}
                         type: feetech
                         mode: range_m100_100
