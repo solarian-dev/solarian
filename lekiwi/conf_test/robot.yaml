@@ -2,6 +2,7 @@ defaults:
     - connection: localhost
     - _self_
 img_compression_quality: 30
+fps: 30
 modules:  
     # base:
     #     type: lekiwi
@@ -110,9 +111,13 @@ modules:
                         width: 1920
                         height: 1080
 
+                        resize_width: 960
+                        resize_height: 540
+
                         rotation: 0
                         channels: 3
                         color_mode: rgb
+                        video_format: MJPG
                         type: opencv
             moving_jaw:
                 mass: 1

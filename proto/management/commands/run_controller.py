@@ -6,7 +6,7 @@ from proto.common.utils import get_class
 from proto.conf import settings
 
 
-@CommandRegistry.register('run-teleop', 'controller')
+@CommandRegistry.register('run-controller', 'controller')
 class RunTeleopCommand(BaseCommand):
     help = 'Teleop client that connects to a relay server'
 
@@ -21,4 +21,4 @@ class RunTeleopCommand(BaseCommand):
         controller = ControllerClass(cfg)
         controller.connect()
         controller.setup()
-        controller.control_loop()
+        controller.start()

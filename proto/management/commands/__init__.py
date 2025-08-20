@@ -5,7 +5,7 @@ from . import (
     run_policy,
     run_robot,
     run_server,
-    run_teleop,
+    run_controller,
     record,
     write_controller_calibration,
     write_robot_calibration,

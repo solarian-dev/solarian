@@ -7,6 +7,10 @@ from .depth_anything_v2.dpt import DepthAnythingV2
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
  
+class Coords:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
 
 
 class ImageProcessor:
@@ -21,7 +25,12 @@ class ImageProcessor:
         self.tracking_active = False
         self.tracked_id = None
         self.show_mask = False
-        self.tracking_confidence = 0.1
+        self.tracked_box = None
+        self.tracked_mask = None
+        self.tracking_confidence = 0.6
+        self.tracking_iou = 0.2
+        self.tracker = 'models/custom_tracker.yaml'
+        self.ref_coords = Coords(650, 535)
         classes = ["toy lego block"]
         if tracking_model_name and "yoloe" in tracking_model_name:
             self.tracking_model = YOLOE(tracking_model_name)
@@ -78,9 +87,10 @@ class ImageProcessor:
                     conf=self.tracking_confidence,  # Increased confidence threshold for more stable detections
                     # max_det=10,
                     persist=True,
-                    iou=0.2,    # IOU threshold for tracking
+                    iou=self.tracking_iou,    # IOU threshold for tracking
                     verbose=False,
-                    points=[self.clicked_point]
+                    points=[self.clicked_point],
+                    tracker=self.tracker,
                 )
                 if results and len(results[0].boxes) > 0:
                     self.clicked_point = None
@@ -96,12 +106,12 @@ class ImageProcessor:
                     verbose=False,
                     # texts=names
                     persist=True,  # This is key for maintaining tracking
-                    iou=0.2,
+                    iou=self.tracking_iou,
+                    tracker=self.tracker,
                     
                 )
 
-            tracked_box = None
-            tracked_mask = None
+            
 
             # # Visualization
             if results and len(results[0].boxes) > 0:
@@ -113,8 +123,8 @@ class ImageProcessor:
                 # Find our tracked object
                 for i, box in enumerate(boxes):
                     if hasattr(box, 'id') and box.id.item() == self.tracked_id:
-                        tracked_box = box.xyxy[0].tolist()
-                        print("Tracked box: ", box)
+                        self.tracked_box = box.xyxy[0].tolist()
+                        # print("Tracked box: ", box)
 
                         # if self.show_mask:
                         #     tracked_mask = masks[i].data[0].cpu().numpy()
@@ -169,10 +179,29 @@ class ImageProcessor:
                 # Visualize the results on the frame
                 frame = results[0].plot(labels=True)
         
+        # get depth
+        depth_diff = -1
+        if self.depth_model and self.tracking_active:
+            depth = self.depth_model.infer_image(frame)
+            ref_depth_value = depth[self.ref_coords.y, self.ref_coords.x]
+            object_coords = Coords(int((self.tracked_box[0] + self.tracked_box[2]) / 2), int((self.tracked_box[1] + self.tracked_box[3]) / 2))
+            # get depth of the tracked object
+            object_depth_value = np.mean(depth[object_coords.y - 10:object_coords.y + 10, object_coords.x - 10:object_coords.x + 10])
+            print("object_depth_value", object_depth_value)
+
+            tmp_depth_diff = (ref_depth_value - object_depth_value) * 100
+            if not np.isnan(tmp_depth_diff):
+                depth_diff = float(tmp_depth_diff)
+            
+
+
         # Compress image (adjust quality as needed)
         # _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         # return jpeg.tobytes(), tracked_box
-        return None, tracked_box
+        if self.tracked_box:
+            return self.tracked_box + [depth_diff]
+        else:
+            return None
 
 
     def set_classes(self, classes):

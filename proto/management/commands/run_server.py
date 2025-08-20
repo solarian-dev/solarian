@@ -23,9 +23,4 @@ class RunServerCommand(BaseCommand):
         ServerClass = get_class(settings.SERVER_CLASS)
         server = ServerClass(cfg)
         server.start()
-        try:
-            # Keep main thread alive
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            server.stop()
+        

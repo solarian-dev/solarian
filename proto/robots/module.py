@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from abc import ABC, abstractmethod
 import numpy as np
 from typing import Dict, List, Tuple, Any
@@ -14,7 +15,7 @@ from proto.common.configs import ModuleConfig
 from proto.robots.observation import Observation
 from proto.common.configs import ValueName
 from proto.conf import settings
-from proto.common.utils import profile
+from proto.common.utils import manual_profile, profile
 
 
 # TODO: remove speed from calibration required
@@ -192,9 +193,11 @@ class Module(ABC):
             self.component_bus.component_bus_by_port[port].write_calibration(port_calibration)
         print("Calibration written to:", self.name)
 
-    @profile
+    
     def get_observation(self) -> Observation:
         """Create an observation with current module state."""
+
+        point_0 = time.time_ns()
         
         # group sensors by data name, to optimize reading in batches
         sensors_by_data_name = {}
@@ -203,10 +206,18 @@ class Module(ABC):
                 sensors_by_data_name[data_name] = []
             sensors_by_data_name[data_name].append(sensor_name)
 
+        point_1 = time.time_ns()
+
         # read sensors in batches
         data = {}
         for data_name, sensor_names in sensors_by_data_name.items():
+            # print("Reading sensors:", sensor_names)
             data.update(self.read_sensors(data_name, sensor_names))
+
+        point_2 = time.time_ns()
+
+        manual_profile("get observation 1", (point_1 - point_0))
+        manual_profile("get observation 2", (point_2 - point_1))
         
         return Observation(data={self.name: data})
 

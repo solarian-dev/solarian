@@ -21,6 +21,6 @@ class RunRobotCommand(BaseCommand):
         robot = RobotClass(cfg)
         robot.connect()
         robot.setup()
-        robot.control_loop()
+        robot.start()
 
 

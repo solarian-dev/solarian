@@ -32,6 +32,9 @@ class SensorConfig(ComponentConfig):
     rotation: int | None
     channels: int
     color_mode: str
+    video_format: str
+    resize_width: int | None
+    resize_height: int | None
 
 class CameraConfig(SensorConfig):
     fps: int
@@ -40,6 +43,9 @@ class CameraConfig(SensorConfig):
     rotation: int | None
     channels: int
     color_mode: str
+    video_format: str
+    resize_width: int | None
+    resize_height: int | None
 
 class ActuatorConfig(ComponentConfig):
     id: int
@@ -80,6 +86,7 @@ class ConnectionConfig(BaseModel):
 class RobotConfig(BaseModel):
     img_compression_quality: int
     connection: ConnectionConfig
+    fps: int
     modules: dict[str, ModuleConfig]
 
 class ControllerConfig(BaseModel):
@@ -97,6 +104,7 @@ class RecordConfig(ControllerConfig):
     num_episodes: int
     episode_time_s: float
     reset_time_s: float
+    
     reset_period: int
     play_sounds: bool
     display_cameras: bool
@@ -107,6 +115,7 @@ class RecordConfig(ControllerConfig):
     num_image_writer_threads_per_camera: int
     start_episode: int
     video: bool
+    
     video_res: list[int]
 
 class ServerConfig(BaseModel):

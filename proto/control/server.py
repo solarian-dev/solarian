@@ -52,7 +52,7 @@ class RelayServer:
                     # print("Message received (relay): ", msg)
                     
                     if self.cfg.image_processing and "click" in msg.data:
-                        print(f"Tracking point (relay): {msg.data['click']['point']}")
+                        # print(f"Tracking point (relay): {msg.data['click']['point']}")
                         self.image_processor.track_object(msg.data["click"]["point"])
                         self.captured_click = msg.data["click"]["id"]
                     else:
@@ -99,9 +99,11 @@ class RelayServer:
                 if observation.data[module_name][sensor_name].get(ValueName.IMAGE) is not None and sensor_name in cams_to_process:
                     frame = cv2.imdecode(np.frombuffer(observation.data[module_name][sensor_name][ValueName.IMAGE], dtype=np.uint8),
                         cv2.IMREAD_COLOR)
-                    _, tracked_box = self.image_processor.process_image(frame)
+                    tracked_box = self.image_processor.process_image(frame)
                     print("Tracked box: ", tracked_box)
-                    observation.data[module_name][sensor_name][ValueName.BOUNDING_BOX] = tracked_box
+                    # print("Depth: ", depth)
+                    if tracked_box is not None:
+                        observation.data[module_name][sensor_name][ValueName.BOUNDING_BOX] = tracked_box
 
 
         # images_dict = observation['cameras']
@@ -129,6 +131,13 @@ class RelayServer:
         threading.Thread(target=self._action_relay, daemon=True).start()
         threading.Thread(target=self._state_relay, daemon=True).start()
         print("Relay server started")
+
+        try:
+            # Keep main thread alive
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            self.stop()
 
     def stop(self):
         self.running = False

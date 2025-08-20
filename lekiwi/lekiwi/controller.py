@@ -70,7 +70,7 @@ class LeKiwiController(Controller):
         self.listener.start()
 
     @profile
-    def display_state(self):
+    def display(self):
         
 
         # if self.last_action:
@@ -81,19 +81,19 @@ class LeKiwiController(Controller):
 
         # print("Last observation: ", self.last_observation)
 
-        # Initialize windows once if not already done
-        if not self.windows_initialized:
-            for name in [settings.SensorName.FRONT, settings.SensorName.WRIST]:
-                cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-                cv2.setMouseCallback(name, self.mouse_callback)
-            self.windows_initialized = True
-
         images = {}
         # add all images in observation
         for module_name, module_data in self.last_observation.data.items():
             for sensor_name, sensor_data in module_data.items():
                 if sensor_data.get(ValueName.IMAGE) is not None:
                     images[sensor_name] = sensor_data
+
+        # Initialize windows once if not already done
+        if not self.windows_initialized:
+            for name in images.keys():
+                cv2.namedWindow(name, cv2.WINDOW_NORMAL)
+                cv2.setMouseCallback(name, self.mouse_callback)
+            self.windows_initialized = True
 
         COLOR = (255, 0, 0)
 
@@ -106,11 +106,16 @@ class LeKiwiController(Controller):
             if image.get(ValueName.BOUNDING_BOX, None) is not None:
                 # Create a copy only when drawing on the image
                 display_img = img.copy()
-                x1, y1, x2, y2 = image[ValueName.BOUNDING_BOX]
+                print("bounding box", image[ValueName.BOUNDING_BOX])
+                x1, y1, x2, y2, depth = image[ValueName.BOUNDING_BOX]
                 cv2.rectangle(display_img,
                             (int(x1), int(y1)), 
                             (int(x2), int(y2)), 
                             COLOR, 2)
+                cv2.putText(display_img, f"Depth: {depth:.3f}", 
+                            (int(x1), int(y1) + 15), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 
+                            0.9, (0, 255, 0), 2)
             else:
                 display_img = img
                 

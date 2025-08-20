@@ -1,7 +1,7 @@
 defaults:
     - connection: localhost
     - _self_
-fps: 30
+fps: 60
 tps: 1
 system2_model: gemini/gemini-1.5-flash
 system2_prompt: Be a smart and helpful robot assistant.

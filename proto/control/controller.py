@@ -143,6 +143,8 @@ class Controller(ABC):
 
         if self.component_bus is not None:
             self.component_bus.connect(self.calibration)
+
+        self.is_connected = True
         print("Controller connected")
         
     def setup(self):
@@ -152,10 +154,7 @@ class Controller(ABC):
         # setup modules
         for module_name, module in self.modules.items():
             module.setup()
-
-        self.is_connected = True
-        self.running = True
-        threading.Thread(target=self._state_receiver, daemon=True).start()
+        
         print("Controller setup")
 
     def disconnect(self):
@@ -199,28 +198,35 @@ class Controller(ABC):
         
         dataset.add_frame(frame, task)
         
-    def display_state_loop(self, episode_time_s):
+    
+    def display_loop(self, episode_time_s):
         timestamp = 0
         start_episode_t = time.perf_counter()
         while timestamp < episode_time_s:
-            start_loop_t = time.perf_counter()
-            self.display_state()
-            dt_s = time.perf_counter() - start_loop_t
-            time.sleep(max(0, (1.0 / 45) - dt_s))
-
+            start_loop_t = time.time_ns()
+            self.display()
+            
             timestamp = time.perf_counter() - start_episode_t
             if self.events["exit_early"]:
                 break
 
-    def display_state(self):
+            # Wait for next frame
+            if self.cfg.fps is not None:
+                dt_s = (time.time_ns() - start_loop_t)/1e9
+                busy_wait((1.0 / self.cfg.fps) - dt_s)
+            
+            manual_profile("display loop latency", (time.time_ns() - start_loop_t))
+
+    def display(self):
         pass
 
-    def control_loop_steps(self, dataset=None, episode_time_s=None, single_task=None):
+    def control_loop(self, dataset=None, episode_time_s=None, single_task=None):
         try:
             timestamp = 0
             start_episode_t = time.perf_counter()
             while timestamp < episode_time_s:
                 start_loop_t = time.time_ns()
+                timestamp = time.perf_counter() - start_episode_t
 
                 # if "reset_policy" in events and events["reset_policy"]:
                 #     events["reset_policy"] = False
@@ -239,7 +245,6 @@ class Controller(ABC):
                 if dataset is not None:
                     self.record_frame(dataset, action, single_task)
 
-                timestamp = time.perf_counter() - start_episode_t
                 if self.events["exit_early"]:
                     # events["exit_early"] = False
                     break
@@ -256,7 +261,7 @@ class Controller(ABC):
             print("\nShutting down teleop client...")
 
 
-    def control_loop(self, dataset=None, episode_time_s=None, single_task=None):
+    def start(self, dataset=None, episode_time_s=None, single_task=None):
         """Implements the control loop
         
         Args:
@@ -272,12 +277,15 @@ class Controller(ABC):
         if episode_time_s is None:
             episode_time_s = float("inf")
 
+        self.running = True
+        threading.Thread(target=self._state_receiver, daemon=True).start()
+
         # spin control loop in a separate thread
-        t = threading.Thread(target=self.control_loop_steps, args=(dataset, episode_time_s + 1, single_task), daemon=True)
+        t = threading.Thread(target=self.control_loop, args=(dataset, episode_time_s + 1, single_task), daemon=True)
         t.start()
         
         # run display loop in main thread
-        self.display_state_loop(episode_time_s)
+        self.display_loop(episode_time_s)
 
         t.join()
         self.events["exit_early"] = False

@@ -12,7 +12,7 @@ from .action import Action
 from .module import Module
 from .component_bus import ComponentBus
 from proto.conf import settings
-from proto.common.utils import profile, manual_profile, get_class
+from proto.common.utils import profile, manual_profile, get_class, busy_wait
 
 
 class Robot(ABC):
@@ -34,6 +34,7 @@ class Robot(ABC):
         #self.control_lock = threading.Lock()
         self.observation_lock = threading.Lock()
         self.last_observation = None
+        self.windows_initialized = False
 
         # Verify connection
         self._verify_connection()
@@ -170,9 +171,11 @@ class Robot(ABC):
     #         # print("Observation sent", observation)
     #         time.sleep(0.01)
 
+    
     def control_loop(self):
         print("Control loop started")
         while self.running:
+            start_loop_t = time.time_ns()
             # Get and send observation
 
             self.update()
@@ -182,11 +185,16 @@ class Robot(ABC):
             # print("Observation:", observation)
 
             if observation is not None:
-                print("Sending observation:", observation)
+                # print("Sending observation:", observation)
                 self.send_observation(observation)
 
+            # # Wait for next frame
+            # if self.cfg.fps is not None:
+            #     dt_s = (time.time_ns() - start_loop_t)/1e9
+            #     busy_wait((1.0 / self.cfg.fps) - dt_s)
+
             # print("Observation sent", observation)
-            # time.sleep(0.01)
+            time.sleep(0.001)
 
     def connect(self):
         self.calibration = {}
@@ -201,7 +209,9 @@ class Robot(ABC):
         # setup modules
         for module_name, module in self.modules.items():
             module.setup()
+        print("Robot setup")
 
+    def start(self):
         self.running = True
         # threading.Thread(target=self._action_receiver, daemon=True).start()
         # threading.Thread(target=self._state_publisher, daemon=True).start()
@@ -209,7 +219,7 @@ class Robot(ABC):
         for module_name, module_sensors in settings.OBSERVATION.items():
             threading.Thread(target=self.get_module_observation, args=(module_name,), daemon=True).start()
 
-        print("Robot setup")
+        self.control_loop()
         
     def is_calibrated(self):
         for module_name, module in self.modules.items():
@@ -227,21 +237,75 @@ class Robot(ABC):
         self.context.term()
         self.running = False
 
+    def display(self):
+        images = {}
+        # add all images in observation
+        for module_name, module_data in self.last_observation.data.items():
+            for sensor_name, sensor_data in module_data.items():
+                if sensor_data.get(ValueName.IMAGE) is not None:
+                    images[sensor_name] = sensor_data
+
+        # Initialize windows once if not already done
+        if not self.windows_initialized:
+            for name in images.keys():
+                cv2.namedWindow(name, cv2.WINDOW_NORMAL)
+                
+            self.windows_initialized = True
+
+        COLOR = (255, 0, 0)
+
+        for name, image in images.items():
+            img = image[ValueName.IMAGE]
+            
+            # Check if the image is encoded (bytes) and decode it
+            if isinstance(img, bytes):
+                # Decode the JPEG image
+                print("Decoding image for", name)
+                img = cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR)
+                if img is None:
+                    print(f"Failed to decode image for {name}")
+                    continue
+            elif not isinstance(img, np.ndarray):
+                print(f"Unsupported image type for {name}: {type(img)}")
+                continue                
+            # Print debug info
+            # print(f"Image type: {type(img)}, shape: {img.shape if hasattr(img, 'shape') else 'unknown'}")
+            
+            # Convert color only once before display
+            display_img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+            # Show frames
+            cv2.imshow(name, display_img_bgr)
+            
+            # No need to call getWindowProperty every time since windows are created once
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                return False
+
     def get_module_observation(self, module_name: str) -> Observation:
         """Thread for capturing and sending module observation"""
         print(f"Getting observation for module: {module_name}")
         while self.running:
+            # point_0 = time.time_ns()
             with self.observation_lock:
                 module_observation = self.modules[module_name].get_observation()
+                point_1 = time.time_ns()
                 if self.last_observation is None:
                     self.last_observation = module_observation
                 else:
                     data = self.last_observation.data.copy()
                     data.update(module_observation.data)
                     self.last_observation = Observation(data=data)
-            time.sleep(0.01)
+                # print("Observation:", self.last_observation)
+                point_2 = time.time_ns()
+                # self.display()
+                # point_3 = time.time_ns()
+            time.sleep(0.001)
+            # manual_profile(f"get_module_observation {module_name} 1", (point_1 - point_0))
+            manual_profile(f"get_module_observation {module_name} 2", (point_2 - point_1))
+            # manual_profile(f"get_module_observation {module_name} 3", (point_3 - point_2))
         
-    @profile
+    
     def get_observation(self) -> Observation:
         """Create an observation with current robot state.
         Returns:

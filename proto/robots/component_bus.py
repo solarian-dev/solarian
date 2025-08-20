@@ -1,5 +1,6 @@
 from typing import Any, Dict
 from enum import Enum
+import time
 
 from lerobot.common.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.common.motors.dynamixel import (
@@ -16,6 +17,7 @@ from lerobot.common.motors.feetech import (
 from proto.robots.opencv_camera import OpenCVCamera
 from proto.robots.component import Component
 from proto.common.configs import ValueName, ComponentType
+from proto.common.utils import manual_profile
 
 
 class TorqueMode(int, Enum):
