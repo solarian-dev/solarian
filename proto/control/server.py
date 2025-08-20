@@ -105,25 +105,10 @@ class RelayServer:
                     if tracked_box is not None:
                         observation.data[module_name][sensor_name][ValueName.BOUNDING_BOX] = tracked_box
 
-
-        # images_dict = observation['cameras']
-        # observation["objects"] = {}
-        
-        # for cam_name, image in images_dict.items():
-        #     if image['img']:
-        #         if cam_name in cams_to_process:
-        #             # print(f"Processing image for {cam_name}")
-        #             frame = cv2.imdecode(np.frombuffer(image['img'], dtype=np.uint8),
-        #                 cv2.IMREAD_COLOR)
-        #             _, tracked_box = self.image_processor.process_image(frame)
-        #             observation["objects"][cam_name] = tracked_box
-        
-        
         if self.captured_click is not None:
             msg.data["click_ack"] = self.captured_click
 
         msg.data["observation"] = observation
-
         return msg
 
     def start(self):

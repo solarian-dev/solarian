@@ -13,56 +13,10 @@ args = parser.parse_args()
 
 os.environ["PROTO_SETTINGS"] = str(Path(__file__).parent / args.conf / "settings.py")
 
-
-# import hydra
 from hydra import initialize, compose
 from omegaconf import DictConfig
 
 from proto.management import CommandRegistry
-# from proto.conf import SettingsManager
-
-# SettingsManager.load_settings(project_root=__package__)
-
-# set environment variable with the path to the settings class file
-
-
-
-# cs = ConfigStore.instance()
-# cs.store(name="config", node=RobotConfig)
-
-# def get_subcommand() -> tuple[str, list[str]]:
-#     """Extract subcommand and return modified argv."""
-#     if len(sys.argv) > 1:
-#         subcommand = sys.argv[1]
-#         new_argv = [sys.argv[0]] + sys.argv[2:]
-#     else:
-#         subcommand = "help"
-#         new_argv = sys.argv
-#     return subcommand, new_argv
-
-# Store original argv and get subcommand before Hydra processes args
-# _subcommand: Optional[str] = None
-# if __name__ == "__main__":
-#     _subcommand, sys.argv = get_subcommand()
-
-# @hydra.main(version_base=None, config_path="conf", config_name="config")
-# def main(cfg: DictConfig) -> None:
-# def main() -> None:
-#     """
-#     Given the command-line arguments, figure out which subcommand is being
-#     run, create a parser appropriate to that command, and run it.
-#     """
-#     global _subcommand
-#     subcommand = _subcommand or "help"
-
-#     try:
-#         cmd = CommandRegistry.get_command(subcommand)
-#     except Exception as e:
-#         print(f"Unknown command: {subcommand}")
-#         sys.exit(1)
-    
-#     # cmd.handle(cfg)
-#     cmd.handle()
 
 
 def main() -> None:
@@ -71,9 +25,6 @@ def main() -> None:
     run, create a parser appropriate to that command, and run it.
     """
     subcommand = args.subcommand or "help"
-
-    
-
     try:
         cmd = CommandRegistry.get_command(subcommand)
     except Exception as e:
@@ -88,10 +39,18 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    
-    
     # clear sys.argv for hydra
-    sys.argv = []
-
+    
+    # sys.argv = [arg for arg in sys.argv if not arg.startswith("-") and not arg.startswith("run-")]
+    # remove arg names its corresponding values where the arg name starts with '-' or 'run-'
+    index_remove = []
+    for i, arg in enumerate(sys.argv):
+        if arg.startswith("-"):
+            index_remove.append(i)
+            index_remove.append(i + 1)
+        elif arg.startswith("run-"):
+            index_remove.append(i)
+            
+    sys.argv = [arg for i, arg in enumerate(sys.argv) if i not in index_remove]
     main()
 

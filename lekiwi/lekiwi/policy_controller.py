@@ -1,10 +1,6 @@
-import random
-import string
-
-import cv2
-from lerobot.common.policies.act.modeling_act import ACTPolicy
-from pynput import keyboard
 import torch
+from pynput import keyboard
+from lerobot.common.policies.act.modeling_act import ACTPolicy
 
 from proto.common.configs import ValueName
 from proto.common.configs import ControllerConfig
@@ -14,8 +10,7 @@ from proto.conf import settings
 from proto.control import Controller
 from proto.robots.action import Action
 from proto.robots.observation import Observation
-
-from .settings import ActuatorName, ModuleName, SensorName
+from proto.conf import settings
 
 
 class PolicyController(Controller):
@@ -24,87 +19,52 @@ class PolicyController(Controller):
 
         self.last_action = None
 
-        
-        
-        # Initialize OpenCV windows once
-        self.windows_initialized = False
-        self.last_display_time = 0
-        self.display_interval = 1/45  # Limit to 30 FPS
-
-
         self.policy = ACTPolicy.from_pretrained(cfg.policy_path)
         self.policy.config.n_action_steps = 100
         print(self.policy.config.input_features)
         self.policy.to(cfg.device)
-
         self.policy.reset()
 
-        
+        self.pressed_keys = {
+            "forward": False,
+            "backward": False,
+            "left": False,
+            "right": False,
+            "rotate_left": False,
+            "rotate_right": False,
+            "run_policy": False,
+        }
 
-    @profile
-    def display_state(self):
-        
+        self.teleop_keys = {
+            # Movement
+            "forward": "w",
+            "backward": "s",
+            "left": "a",
+            "right": "d",
+            "rotate_left": "z",
+            "rotate_right": "x",
+            # Speed control
+            "speed_up": "r",
+            "speed_down": "f",
+            # quit teleop
+            "quit": "q",
+            "run_policy": "p",
+        }
 
-        # if self.last_action:
-        #     print("Last action: ", self.last_action)
+        self.listener = keyboard.Listener(
+            on_press=self.on_press,
+            on_release=self.on_release,
+        )
 
-        if self.last_observation is None:
-            return
+        self.listener.start()
 
-        # print("Last observation: ", self.last_observation)
-
-        # Initialize windows once if not already done
-        if not self.windows_initialized:
-            for name in [SensorName.FRONT, SensorName.WRIST]:
-                cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-            self.windows_initialized = True
-
-        images = {}
-        # add all images in observation
-        for module_name, module_data in self.last_observation.data.items():
-            for sensor_name, sensor_data in module_data.items():
-                if sensor_data.get(ValueName.IMAGE) is not None:
-                    images[sensor_name] = sensor_data
-
-        COLOR = (255, 0, 0)
-
-        for name, image in images.items():
-            img = image[ValueName.IMAGE]
-            
-            # Only modify the image if bounding box exists
-            if image.get(ValueName.BOUNDING_BOX, None) is not None:
-                # Create a copy only when drawing on the image
-                display_img = img.copy()
-                x1, y1, x2, y2 = image[ValueName.BOUNDING_BOX]
-                cv2.rectangle(display_img,
-                            (int(x1), int(y1)), 
-                            (int(x2), int(y2)), 
-                            COLOR, 2)
-            else:
-                display_img = img
-                
-            # Convert color only once before display
-            display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
-            
-            # Show frames
-            cv2.imshow(name, display_img_bgr)
-            
-            # No need to call getWindowProperty every time since windows are created once
-            try:
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    return False
-            except KeyboardInterrupt:
-                return False
-
+    
     @profile
     def control_step(self, observation: Observation) -> Action:
-
-        
-        
+        print("Observation: ", observation)
         action_data = {
-            ModuleName.ARM: {}, 
-            ModuleName.BASE: {}
+            settings.ModuleName.ARM: {}, 
+            settings.ModuleName.BASE: {}
         }
 
         # print("PolicyController.control_step")
@@ -116,8 +76,18 @@ class PolicyController(Controller):
         # }
 
         if observation:
-
-            action_data = self.call_model(observation)
+            
+            if self.pressed_keys["run_policy"]:
+                # self.pressed_keys["run_policy"] = False
+                action_data = self.call_model(observation)
+            else:
+                action_data = {
+                    settings.ModuleName.ARM: {}, 
+                    settings.ModuleName.BASE: {}
+                }
+                # use observation as action
+                for i, name in enumerate(settings.ACTION[settings.ModuleName.ARM].keys()):
+                    action_data[settings.ModuleName.ARM][name] = observation.data[settings.ModuleName.ARM][name]
 
             # sensor_names = settings.ACTION[ModuleName.ARM].keys()
             # action_data[ModuleName.ARM] = self.modules[ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
@@ -130,32 +100,33 @@ class PolicyController(Controller):
     def call_model(self, observation):
 
         lerobot_obs = observation.to_lerobot_format()
+        print("LeroBot obs: ", lerobot_obs)
         policy_obs = {}
 
         # Prepare observation for the policy running in Pytorch
-        state = torch.from_numpy(lerobot_obs["observation.state"])
-        # Convert to float32
-        state = state.to(torch.float32)
-        # Send data tensors from CPU to GPU
-        state = state.to(self.cfg.device, non_blocking=True)
-        # Add extra (empty) batch dimension, required to forward the policy
-        state = state.unsqueeze(0)
-        policy_obs["observation.state"] = state
-
-
-        # Prepare images
         for key in lerobot_obs.keys():
-            if "image" in key:
-                image = torch.from_numpy(lerobot_obs[key])
-                image = image.to(torch.float32) / 255
-                image = image.permute(2, 0, 1)
-                image = image.to(self.cfg.device, non_blocking=True)
-                image = image.unsqueeze(0)
-                policy_obs[key] = image
+            if "state" in key:
+                state = torch.from_numpy(lerobot_obs[key])
+                # Convert to float32
+                state = state.to(torch.float32)
+                # Send data tensors from CPU to GPU
+                state = state.to(self.cfg.device, non_blocking=True)
+                # Add extra (empty) batch dimension, required to forward the policy
+                state = state.unsqueeze(0)
+                policy_obs[key] = state
+            # elif "image" in key:
+            #     image = torch.from_numpy(lerobot_obs[key])
+            #     image = image.to(torch.float32) / 255
+            #     image = image.permute(2, 0, 1)
+            #     image = image.to(self.cfg.device, non_blocking=True)
+            #     image = image.unsqueeze(0)
+            #     policy_obs[key] = image
+
+        print("Policy obs: ", policy_obs)
         
         action_data = {
-            ModuleName.ARM: {}, 
-            ModuleName.BASE: {}
+            settings.ModuleName.ARM: {}, 
+            settings.ModuleName.BASE: {}
         }
         
         # Predict the next action with respect to the current observation
@@ -164,13 +135,83 @@ class PolicyController(Controller):
             # print("Predicted action: ", action)
 
             numpy_action = action.squeeze(0).to("cpu").numpy().tolist()
-            print_list("Obs: ", lerobot_obs["observation.state"].tolist())
+            # print_list("Obs: ", lerobot_obs["observation.state"].tolist())
             print_list("Act: ", numpy_action)
-            for i, name in enumerate(settings.ACTION[ModuleName.ARM].keys()):
-                action_data[ModuleName.ARM][name] = {ValueName.POS: numpy_action[i]}
+            for i, name in enumerate(settings.ACTION[settings.ModuleName.ARM].keys()):
+                action_data[settings.ModuleName.ARM][name] = {ValueName.POS: numpy_action[i]}
         # print("Action data: ", action_data)
         return action_data
 
+    def on_press(self, key):
+        try:
+            # Handle recording-specific keys
+            if key == keyboard.Key.right:
+                print("Right arrow key pressed. Exiting loop...")
+                self.events["exit_early"] = True
+            elif key == keyboard.Key.left:
+                print("Left arrow key pressed. Exiting loop and rerecord the last episode...")
+                self.events["rerecord_episode"] = True
+                self.events["exit_early"] = True
+            elif key == keyboard.Key.esc:
+                print("Escape key pressed. Stopping data recording...")
+                self.events["stop_recording"] = True
+                self.events["exit_early"] = True
+                
+            # Movement
+            if key.char == self.teleop_keys["forward"]:
+                self.pressed_keys["forward"] = True
+            elif key.char == self.teleop_keys["backward"]:
+                self.pressed_keys["backward"] = True
+            elif key.char == self.teleop_keys["left"]:
+                self.pressed_keys["left"] = True
+            elif key.char == self.teleop_keys["right"]:
+                self.pressed_keys["right"] = True
+            elif key.char == self.teleop_keys["rotate_left"]:
+                self.pressed_keys["rotate_left"] = True
+            elif key.char == self.teleop_keys["rotate_right"]:
+                self.pressed_keys["rotate_right"] = True
+            elif key.char == self.teleop_keys["run_policy"]:
+                print("Run policy key pressed")
+                self.pressed_keys["run_policy"] = True
+
+            # Quit teleoperation
+            elif key.char == self.teleop_keys["quit"]:
+                self.running = False
+                return False
+
+            # Speed control
+            elif key.char == self.teleop_keys["speed_up"]:
+                self.speed_index = min(self.speed_index + 1, 2)
+                print(f"Speed index increased to {self.speed_index}")
+            elif key.char == self.teleop_keys["speed_down"]:
+                self.speed_index = max(self.speed_index - 1, 0)
+                print(f"Speed index decreased to {self.speed_index}")
+
+        except AttributeError:
+            # e.g., if key is special like Key.esc
+            if key == keyboard.Key.esc:
+                self.running = False
+                return False
+
+    def on_release(self, key):
+        try:
+            if hasattr(key, "char"):
+                if key.char == self.teleop_keys["forward"]:
+                    self.pressed_keys["forward"] = False
+                elif key.char == self.teleop_keys["backward"]:
+                    self.pressed_keys["backward"] = False
+                elif key.char == self.teleop_keys["left"]:
+                    self.pressed_keys["left"] = False
+                elif key.char == self.teleop_keys["right"]:
+                    self.pressed_keys["right"] = False
+                elif key.char == self.teleop_keys["rotate_left"]:
+                    self.pressed_keys["rotate_left"] = False
+                elif key.char == self.teleop_keys["rotate_right"]:
+                    self.pressed_keys["rotate_right"] = False
+                # elif key.char == self.teleop_keys["run_policy"]:
+                #     self.pressed_keys["run_policy"] = False
+        except AttributeError:
+            pass
 
 
 def print_list(name, l):

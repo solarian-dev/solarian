@@ -19,21 +19,29 @@ class Observation(BaseModel):
         # "observation.images.wrist": nparray shape (480, 640, 3)
         # "task": string
 
+    def flatten_keys(self):
+        pass
+
     def to_lerobot_format(self):
         data = {
             "observation.state": [],
+            "observation.environment_state": [],
         }
         
-        for module_name, module_data in settings.OBSERVATION.items():
-            for sensor_name, (data_name, data_shape) in module_data.items():
-                if data_name in [ValueName.POS, ValueName.SPEED]:
-                    data["observation.state"].append(self.data[module_name.value][sensor_name.value][data_name.value])
-                elif data_name == ValueName.IMAGE:
-                    data["observation.images." + sensor_name.value] = np.array(self.data[module_name.value][sensor_name.value][data_name.value])
-                else:
-                    raise ValueError(f"Unknown data type: {data_name}")
+        for module_name, module_data in self.data.items():
+            for sensor_name, sensor_data in module_data.items():
+                for data_name, data_value in sensor_data.items():
+                    if data_name in [ValueName.POS, ValueName.SPEED]:
+                        data[settings.OBS_LEROBOT_MAP[sensor_name].group].append(data_value)
+                    elif data_name == ValueName.BOUNDING_BOX:
+                        data[settings.OBS_LEROBOT_MAP[sensor_name].group].extend(data_value)
+                    elif data_name == ValueName.IMAGE:
+                        data["observation.images." + sensor_name] = np.array(data_value)
+                    else:
+                        raise ValueError(f"Unknown data type: {data_name}")
 
         data["observation.state"] = np.array(data["observation.state"]).astype(np.float32)
+        data["observation.environment_state"] = np.array(data["observation.environment_state"]).astype(np.float32)
         return data
 
     def __str__(self):

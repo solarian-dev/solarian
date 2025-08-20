@@ -2,6 +2,8 @@ import threading
 import time
 import zmq
 import cv2
+import random
+import string
 import numpy as np
 from abc import ABC, abstractmethod
 
@@ -25,6 +27,9 @@ class Controller(ABC):
         self.is_connected = False
         self.clicked_point = None
         self.clicked_id = None
+        
+        # Initialize OpenCV windows once
+        self.windows_initialized = False
         
         # action socket
         self.action_socket = self.context.socket(zmq.PUSH)
@@ -217,8 +222,68 @@ class Controller(ABC):
             
             manual_profile("display loop latency", (time.time_ns() - start_loop_t))
 
+    
+    # Mouse callback function
+    def mouse_callback(self, event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            print(f"Clicked at (x={x}, y={y})")
+            self.clicked_point = (x, y)
+            # generate random alphanumeric id
+            self.clicked_id = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    
+    @profile
     def display(self):
-        pass
+        if self.last_observation is None:
+            return
+
+        images = {}
+        # add all images in observation
+        for module_name, module_data in self.last_observation.data.items():
+            for sensor_name, sensor_data in module_data.items():
+                if sensor_data.get(ValueName.IMAGE) is not None:
+                    images[sensor_name] = sensor_data
+
+        # Initialize windows once if not already done
+        if not self.windows_initialized:
+            for name in images.keys():
+                cv2.namedWindow(name, cv2.WINDOW_NORMAL)
+                cv2.setMouseCallback(name, self.mouse_callback)
+            self.windows_initialized = True
+
+        COLOR = (255, 0, 0)
+
+        for name, image in images.items():
+            img = image[ValueName.IMAGE]
+
+            # print("Image: ", image)
+            
+            # Only modify the image if bounding box exists
+            if image.get(ValueName.BOUNDING_BOX, None) is not None:
+                # Create a copy only when drawing on the image
+                display_img = img.copy()
+                # print("bounding box", image[ValueName.BOUNDING_BOX])
+                x1, y1, x2, y2, depth = image[ValueName.BOUNDING_BOX]
+                cv2.rectangle(display_img,
+                            (int(x1), int(y1)), 
+                            (int(x2), int(y2)), 
+                            COLOR, 2)
+                cv2.putText(display_img, f"Depth: {depth:.3f}", 
+                            (int(x1), int(y1) + 15), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 
+                            0.9, (0, 255, 0), 2)
+            else:
+                display_img = img
+                
+            # Convert color only once before display
+            display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
+            
+            # Show frames
+            cv2.imshow(name, display_img_bgr)
+            
+            # No need to call getWindowProperty every time since windows are created once
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                return False
 
     def control_loop(self, dataset=None, episode_time_s=None, single_task=None):
         try:

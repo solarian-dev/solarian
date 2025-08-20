@@ -57,3 +57,8 @@ python manage.py run-controller --conf conf_test
 ```
 
 
+
+
+## Other commands
+
+sudo chmod 666 /dev/ttyACM0

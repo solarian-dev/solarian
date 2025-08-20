@@ -5,8 +5,9 @@ from ultralytics import YOLO, YOLOWorld, YOLOE, FastSAM
 
 from .depth_anything_v2.dpt import DepthAnythingV2
 
+
 DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
- 
+
 class Coords:
     def __init__(self, x, y):
         self.x = x
@@ -62,20 +63,11 @@ class ImageProcessor:
         self.clicked_point = clicked_point
 
     def process_image(self, image):
-        # Decode JPEG image
-        # frame = cv2.imdecode(
-        #     np.frombuffer(image, dtype=np.uint8),
-        #     cv2.IMREAD_COLOR
-        # )
         frame = image
-
         device = 0 if DEVICE == 'cuda' else DEVICE
-
 
         # track object
         if "FastSAM" in self.tracking_model_name:
-            # print("Processing FastSAM")
-            
             results = None
 
             # Run YOLO tracking with optimized parameters
@@ -92,7 +84,7 @@ class ImageProcessor:
                     points=[self.clicked_point],
                     tracker=self.tracker,
                 )
-                if results and len(results[0].boxes) > 0:
+                if results and len(results[0].boxes) > 0 and results[0].boxes[0].id is not None:
                     self.clicked_point = None
                     self.tracking_active = True
                     self.tracked_id = results[0].boxes[0].id.item() if hasattr(results[0].boxes[0], 'id') else None
@@ -107,22 +99,18 @@ class ImageProcessor:
                     # texts=names
                     persist=True,  # This is key for maintaining tracking
                     iou=self.tracking_iou,
-                    tracker=self.tracker,
-                    
+                    tracker=self.tracker,       
                 )
 
-            
-
-            # # Visualization
+            # Visualization
             if results and len(results[0].boxes) > 0:
                 # Only show the tracked object
                 boxes = results[0].boxes
                 masks = results[0].masks
                 
-                
                 # Find our tracked object
                 for i, box in enumerate(boxes):
-                    if hasattr(box, 'id') and box.id.item() == self.tracked_id:
+                    if hasattr(box, 'id') and box.id is not None and box.id.item() == self.tracked_id:
                         self.tracked_box = box.xyxy[0].tolist()
                         # print("Tracked box: ", box)
 
@@ -136,42 +124,6 @@ class ImageProcessor:
                         #     )
                         #     print("mask shape", tracked_mask.shape)
                         break
-                
-            #     if tracked_box is not None:
-            #         # Create a copy of the frame for drawing
-            #         annotated_frame = frame.copy()
-            #         if self.show_mask:
-            #             # Create colored overlay for the mask
-            #             color_mask = np.zeros_like(annotated_frame)
-            #             color_mask[tracked_mask == 1] = [0, 255, 0]  # Green color for the mask
-                        
-            #             # Blend the mask with the frame
-            #             alpha = 0.5  # Transparency factor
-            #             mask_overlay = cv2.addWeighted(annotated_frame, 1, color_mask, alpha, 0)
-            #             annotated_frame = mask_overlay
-                    
-            #         # Draw just the tracked box
-            #         x1, y1, x2, y2 = tracked_box.xyxy[0].tolist()
-            #         tracked_box = [x1, y1, x2, y2]
-            #         # cv2.rectangle(annotated_frame, 
-            #         #             (int(x1), int(y1)), 
-            #         #             (int(x2), int(y2)), 
-            #         #             (0, 255, 0), 2)
-                    
-            #         # cv2.putText(annotated_frame, f"Tracking ID: {self.tracked_id}", 
-            #         #         (int(x1), int(y1) - 10), 
-            #         #         cv2.FONT_HERSHEY_SIMPLEX, 
-            #         #         0.9, (0, 255, 0), 2)
-            #     else:
-            #         print("Lost tracked object")
-            #         self.tracking_active = False
-            #         self.tracked_id = None
-            #         annotated_frame = frame
-            # else:
-            #     annotated_frame = frame
-
-
-            # frame = annotated_frame
 
         else:
             results = self.tracking_model.track(frame, device=device, conf=0.01, persist=True)
@@ -193,11 +145,6 @@ class ImageProcessor:
             if not np.isnan(tmp_depth_diff):
                 depth_diff = float(tmp_depth_diff)
             
-
-
-        # Compress image (adjust quality as needed)
-        # _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        # return jpeg.tobytes(), tracked_box
         if self.tracked_box:
             return self.tracked_box + [depth_diff]
         else:

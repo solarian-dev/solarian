@@ -18,8 +18,6 @@ from proto.common.configs import ProjectConfig, ValueName
 from proto.conf.settings import Settings
 
 
-
-
 class ProjectSettings(Settings):
     """
     Project-specific settings that extend base framework settings
@@ -103,8 +101,8 @@ class ProjectSettings(Settings):
     # ROBOT_CLASS: str = "lekiwi.robot_sim.LeKiwiRobotSim"
     ROBOT_CLASS: str = "lekiwi.robot.LeKiwiRobot"
     SERVER_CLASS: str = "lekiwi.server.LeKiwiServer"
-    CONTROLLER_CLASS: str = "lekiwi.controller.LeKiwiController"
-    # CONTROLLER_CLASS: str = "lekiwi.policy_controller.PolicyController"
+    # CONTROLLER_CLASS: str = "lekiwi.controller.LeKiwiController"
+    CONTROLLER_CLASS: str = "lekiwi.policy_controller.PolicyController"
     MODULE_CLASSES: dict[str, str] = {
         ModuleName.BASE: "lekiwi.modules.BaseModule",
         ModuleName.ARM: "lekiwi.modules.ArmModule",
@@ -123,7 +121,7 @@ class ProjectSettings(Settings):
             # SensorName.LEFT_WHEEL: (ValueName.SPEED, (1,)),
             # SensorName.RIGHT_WHEEL: (ValueName.SPEED, (1,)),
             # SensorName.BACK_WHEEL: (ValueName.SPEED, (1,)),
-            SensorName.FRONT: (ValueName.IMAGE, (480, 640, 3)),
+            # SensorName.FRONT: (ValueName.IMAGE, (540, 960, 3)),
         },
         ModuleName.ARM: {
             SensorName.SHOULDER_PAN: (ValueName.POS, (1,)),
@@ -132,8 +130,24 @@ class ProjectSettings(Settings):
             SensorName.WRIST_FLEX: (ValueName.POS, (1,)),
             SensorName.WRIST_ROLL: (ValueName.POS, (1,)),
             SensorName.GRIPPER: (ValueName.POS, (1,)),
-            SensorName.WRIST: (ValueName.IMAGE, (480, 640, 3)),
+            SensorName.WRIST: (ValueName.IMAGE, (540, 960, 3)),
         }
+    }
+
+    class LerobotObs:
+        def __init__(self, group, name):
+            self.group = group
+            self.name = name
+
+    OBS_LEROBOT_MAP: ClassVar[Dict[str, LerobotObs]] = {
+        SensorName.SHOULDER_PAN: LerobotObs('observation.state', 'shoulder_pan'),
+        SensorName.SHOULDER_LIFT: LerobotObs('observation.state', 'shoulder_lift'),
+        SensorName.ELBOW_FLEX: LerobotObs('observation.state', 'elbow_flex'),
+        SensorName.WRIST_FLEX: LerobotObs('observation.state', 'wrist_flex'),
+        SensorName.WRIST_ROLL: LerobotObs('observation.state', 'wrist_roll'),
+        SensorName.GRIPPER: LerobotObs('observation.state', 'gripper'),
+
+        SensorName.WRIST: LerobotObs('observation.environment_state', 'wrist'),
     }
 
     # Define action space

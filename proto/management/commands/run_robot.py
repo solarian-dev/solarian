@@ -1,4 +1,3 @@
-import time
 from omegaconf import DictConfig, OmegaConf
 
 from proto.management import BaseCommand, CommandRegistry
