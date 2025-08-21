@@ -51,6 +51,15 @@ class PolicyController(Controller):
             "run_policy": "p",
         }
 
+        # Define three speed levels and a current index
+        self.speed_levels = [
+            {"xy": 0.1, "theta": 30},  # slow
+            {"xy": 0.2, "theta": 60},  # medium
+            {"xy": 0.3, "theta": 90},  # fast
+        ]
+
+        self.speed_index = 0  # Start at slow
+
         self.listener = keyboard.Listener(
             on_press=self.on_press,
             on_release=self.on_release,
@@ -61,6 +70,9 @@ class PolicyController(Controller):
     
     @profile
     def control_step(self, observation: Observation) -> Action:
+        speed_setting = self.speed_levels[self.speed_index]
+        xy_speed = speed_setting["xy"]  # e.g. 0.1, 0.25, or 0.4
+        theta_speed = speed_setting["theta"]  # e.g. 30, 60, or 90
         print("Observation: ", observation)
         action_data = {
             settings.ModuleName.ARM: {}, 
@@ -85,9 +97,36 @@ class PolicyController(Controller):
                     settings.ModuleName.ARM: {}, 
                     settings.ModuleName.BASE: {}
                 }
-                # use observation as action
-                for i, name in enumerate(settings.ACTION[settings.ModuleName.ARM].keys()):
-                    action_data[settings.ModuleName.ARM][name] = observation.data[settings.ModuleName.ARM][name]
+                # # use observation as action
+                # for i, name in enumerate(settings.ACTION[settings.ModuleName.ARM].keys()):
+                #     action_data[settings.ModuleName.ARM][name] = observation.data[settings.ModuleName.ARM][name]
+
+                if settings.ModuleName.LEADER_ARM in self.modules:
+                    sensor_names = settings.ACTION[settings.ModuleName.ARM].keys()
+                    action_data[settings.ModuleName.ARM] = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
+                
+                y_cmd = 0.0  # m/s forward/backward
+                x_cmd = 0.0  # m/s lateral
+                theta_cmd = 0.0  # deg/s rotation
+                if self.pressed_keys["forward"]:
+                    x_cmd += xy_speed
+                if self.pressed_keys["backward"]:
+                    x_cmd -= xy_speed
+                if self.pressed_keys["left"]:
+                    y_cmd += xy_speed
+                if self.pressed_keys["right"]:
+                    y_cmd -= xy_speed
+                if self.pressed_keys["rotate_left"]:
+                    theta_cmd += theta_speed
+                if self.pressed_keys["rotate_right"]:
+                    theta_cmd -= theta_speed
+
+                wheel_actions = body_to_wheel_raw(x_cmd, y_cmd, theta_cmd)
+                
+                # TODO: this is not the best way to do it
+                for actuator, speed in wheel_actions.items():
+                    action_data[settings.ModuleName.BASE][actuator] = {ValueName.SPEED: speed}
+            
 
             # sensor_names = settings.ACTION[ModuleName.ARM].keys()
             # action_data[ModuleName.ARM] = self.modules[ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
@@ -172,7 +211,7 @@ class PolicyController(Controller):
                 self.pressed_keys["rotate_right"] = True
             elif key.char == self.teleop_keys["run_policy"]:
                 print("Run policy key pressed")
-                self.pressed_keys["run_policy"] = True
+                self.pressed_keys["run_policy"] = not self.pressed_keys["run_policy"]
 
             # Quit teleoperation
             elif key.char == self.teleop_keys["quit"]:
