@@ -84,10 +84,39 @@ class ImageProcessor:
                     points=[self.clicked_point],
                     tracker=self.tracker,
                 )
-                if results and len(results[0].boxes) > 0 and results[0].boxes[0].id is not None:
-                    self.clicked_point = None
-                    self.tracking_active = True
-                    self.tracked_id = results[0].boxes[0].id.item() if hasattr(results[0].boxes[0], 'id') else None
+                # if results and len(results[0].boxes) > 0 and results[0].boxes[0].id is not None:
+                #     self.clicked_point = None
+                #     self.tracking_active = True
+                #     self.tracked_id = results[0].boxes[0].id.item() if hasattr(results[0].boxes[0], 'id') else None
+                # Filter out large boxes when clicking on a point
+                if results and len(results[0].boxes) > 0:
+                    # Iterate through all detected boxes and find the first one that meets our criteria
+                    found_valid_object = False
+                    for i, box in enumerate(results[0].boxes):
+                        if not hasattr(box, 'xyxy') or not hasattr(box, 'id'):
+                            continue
+                            
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        box_width = x2 - x1
+                        box_height = y2 - y1
+                        box_area = box_width * box_height
+                        frame_area = frame.shape[1] * frame.shape[0]
+                        area_ratio = box_area / frame_area
+                        
+                        # Only track the object if it's not too large
+                        if area_ratio < 0.5 and box.id is not None:
+                            self.clicked_point = None
+                            self.tracking_active = True
+                            self.tracked_id = box.id.item()
+                            print(f"Selected object with ID {self.tracked_id}, area ratio: {area_ratio:.2f}")
+                            found_valid_object = True
+                            break
+                            
+                    if not found_valid_object:
+                        print(f"No suitable objects found at the clicked point (all too large or invalid)")
+                else:
+                    print("No objects detected at the clicked point")
+            
             elif self.tracking_active:
                 print("Tracking pointed object id:", self.tracked_id)
                 results = self.tracking_model.track(
