@@ -1,7 +1,23 @@
 from pydantic import BaseModel
 from enum import Enum
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
+
+class DataComputer(str, Enum):
+    SERVER = "server"
+    ROBOT = "robot"
+    CONTROLLER = "controller"
+
+    def __str__(self):
+        return self.value
+
+class DataSpec:
+    def __init__(self, shape: Tuple[int], computer: DataComputer, lerobot_group: str, lerobot_names: List[str]):
+        self.shape = shape
+        self.computer = computer
+        self.lerobot_group = lerobot_group
+        self.lerobot_names = lerobot_names
+    
 
 class ValueName(str, Enum):
     POS = "pos"
@@ -123,6 +139,8 @@ class ServerConfig(BaseModel):
     image_processing: list[str]
     tracking_model: str | None
     depth_model: str | None
+    ref_x: int
+    ref_y: int
 
 # A project is composed by a robot, a server, a controller and a config
 # In its top level config it also points to the classes that implement the robot, server, controller and config

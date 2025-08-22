@@ -23,6 +23,11 @@ class RecordCommand(BaseCommand):
                 "names": [],
                 "dtype": "float32",
             },
+            "observation.environment_state": {
+                "shape": (0,),
+                "names": [],
+                "dtype": "float32",
+            },
             "action": {
                 "shape": (0,),
                 "names": [],
@@ -31,29 +36,34 @@ class RecordCommand(BaseCommand):
         }
         num_cameras = 0
 
-        for module_name, module_data in settings.OBSERVATION.items():
-            for sensor_name, (data_name, data_shape) in module_data.items():
-                if data_name in [ValueName.POS, ValueName.SPEED]:
-                    features[f"observation.state"]["shape"] = tuple(a + b for a, b in zip(features[f"observation.state"]["shape"], data_shape))
-                    features[f"observation.state"]["names"].append(sensor_name.value)
-                elif data_name == ValueName.IMAGE:
-                    features[f"observation.images.{sensor_name.value}"] = {
-                        "shape": self.cfg.video_res,
-                        "names": ["height", "width", "channels"],
-                        "info": None,
-                        "dtype": "video"
-                    }
-                    num_cameras += 1
-                else:
-                    raise ValueError(f"Unknown data type: {data_name}")
+        print("Observation:")
+        
+
+        for module_name, module_spec in settings.OBSERVATION.items():
+            for sensor_name, sensor_spec in module_spec.items():
+                for data_name, data_spec in sensor_spec.items():
+                    if data_name in [ValueName.POS, ValueName.SPEED, ValueName.BOUNDING_BOX]:
+                        features[data_spec.lerobot_group]["shape"] = tuple(a + b for a, b in zip(features[data_spec.lerobot_group]["shape"], data_spec.shape))
+                        features[data_spec.lerobot_group]["names"].extend(data_spec.lerobot_names)
+                    elif data_name == ValueName.IMAGE:
+                        features[f"observation.images.{''.join(data_spec.lerobot_names)}"] = {
+                            "shape": self.cfg.video_res,
+                            "names": ["height", "width", "channels"],
+                            "info": None,
+                            "dtype": "video"
+                        }
+                        num_cameras += 1
+                    else:
+                        raise ValueError(f"Unknown data type: {data_name}")
 
         for module_name, module_data in settings.ACTION.items():
-            for sensor_name, (data_name, data_shape) in module_data.items():
-                if data_name in [ValueName.POS, ValueName.SPEED]:
-                    features[f"action"]["shape"] = tuple(a + b for a, b in zip(features[f"action"]["shape"], data_shape))
-                    features[f"action"]["names"].append(sensor_name.value)
-                else:
-                    raise ValueError(f"Unknown data type: {data_name}")
+            for sensor_name, sensor_spec in module_data.items():
+                for data_name, data_spec in sensor_spec.items():
+                    if data_name in [ValueName.POS, ValueName.SPEED]:
+                        features[data_spec.lerobot_group]["shape"] = tuple(a + b for a, b in zip(features[data_spec.lerobot_group]["shape"], data_spec.shape))
+                        features[data_spec.lerobot_group]["names"].extend(data_spec.lerobot_names)
+                    else:
+                        raise ValueError(f"Unknown data type: {data_name}")
         return features, num_cameras
 
 
@@ -69,6 +79,7 @@ class RecordCommand(BaseCommand):
         controller = ControllerClass(cfg)
         controller.connect()
         controller.setup()
+        # controller.start()
 
         features, num_cameras = self.get_features_lerobot_format()
 
@@ -166,7 +177,7 @@ class RecordCommand(BaseCommand):
             while j < len(cfg.tasks):
                 log_say(f"Recording episode {i} task {cfg.tasks[j]}", cfg.play_sounds)
                 dataset = datasets[cfg.tasks[j]]
-                controller.control_loop(dataset=dataset, episode_time_s=cfg.episode_time_s, single_task=cfg.tasks[j])
+                controller.start(dataset=dataset, episode_time_s=cfg.episode_time_s, single_task=cfg.tasks[j])
 
                 if not controller.events["stop_recording"] and (
                     (i < cfg.num_episodes and j == len(cfg.tasks) - 1 and (i % cfg.reset_period == 0)) or controller.events["rerecord_episode"]

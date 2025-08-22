@@ -13,7 +13,7 @@ from proto.robots.sensor import Sensor
 from proto.robots.component_bus import ComponentBus
 from proto.common.configs import ModuleConfig
 from proto.robots.observation import Observation
-from proto.common.configs import ValueName
+from proto.common.configs import ValueName, DataComputer
 from proto.conf import settings
 from proto.common.utils import manual_profile, profile
 
@@ -201,10 +201,12 @@ class Module(ABC):
         
         # group sensors by data name, to optimize reading in batches
         sensors_by_data_name = {}
-        for sensor_name, (data_name, data_shape) in settings.OBSERVATION[self.name].items():
-            if data_name not in sensors_by_data_name:
-                sensors_by_data_name[data_name] = []
-            sensors_by_data_name[data_name].append(sensor_name)
+        for sensor_name, sensor_spec in settings.OBSERVATION[self.name].items():
+            for data_name, data_spec in sensor_spec.items():
+                if data_spec.computer == DataComputer.ROBOT:
+                    if data_name not in sensors_by_data_name:
+                        sensors_by_data_name[data_name] = []
+                    sensors_by_data_name[data_name].append(sensor_name)
 
         point_1 = time.time_ns()
 

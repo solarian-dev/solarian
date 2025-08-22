@@ -245,8 +245,12 @@ class Controller(ABC):
 
         # Initialize windows once if not already done
         if not self.windows_initialized:
-            for name in images.keys():
+            for name, image in images.items():
                 cv2.namedWindow(name, cv2.WINDOW_NORMAL)
+                # Get the resolution of the image
+                height, width, _ = image[ValueName.IMAGE].shape
+                # Set the size of the window to the resolution of the image
+                cv2.resizeWindow(name, width, height)
                 cv2.setMouseCallback(name, self.mouse_callback)
             self.windows_initialized = True
 
@@ -307,7 +311,7 @@ class Controller(ABC):
                 self.send_action(action)
 
                 # Add frame to dataset if recording
-                if dataset is not None:
+                if dataset is not None and self.last_observation is not None:
                     self.record_frame(dataset, action, single_task)
 
                 if self.events["exit_early"]:

@@ -25,12 +25,13 @@ class Action(BaseModel):
             "action": [],
         }
         
-        for module_name, module_data in settings.ACTION.items():
-            for actuator_name, (data_name, data_shape) in module_data.items():
-                if data_name in [ValueName.POS, ValueName.SPEED]:
-                    data["action"].append(self.data[module_name][actuator_name][data_name])
-                else:
-                    raise ValueError(f"Unsupported data type for actions: {data_name}")
+        for module_name, module_data in self.data.items():
+            for actuator_name, actuator_data in module_data.items():
+                for data_name, data_value in actuator_data.items():
+                    if data_name in [ValueName.POS, ValueName.SPEED]:
+                        data["action"].append(data_value)
+                    else:
+                        raise ValueError(f"Unsupported data type for actions: {data_name}")
 
         data["action"] = np.array(data["action"]).astype(np.float32)
         return data

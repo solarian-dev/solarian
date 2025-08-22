@@ -56,8 +56,20 @@ Within your project directory, run the following command:
 python manage.py run-controller --conf conf_test
 ```
 
+### Recording a dataset
 
+Within your project directory, run the following command:
 
+```bash
+python manage.py record --conf conf/record_eval
+```
+
+### Converting a dataset to Lerobot format
+
+Within your project directory, run the following command:
+
+```bash
+python manage.py dataset2lerobot
 
 ## Other commands
 

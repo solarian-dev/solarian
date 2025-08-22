@@ -16,6 +16,9 @@ class Dataset2LeRobotCommand(BaseCommand):
         features = pickle.load(open(os.path.join(cfg.input_root, "pickles", "features.pkl"), "rb"))
 
 
+        # TODO: remove this
+        features['observation.state']['shape'] = (6,)
+        features['observation.environment_state']['shape'] = (5,)
         features['action']['shape'] = (6,)
         features['action']['names'] = features['action']['names'][3:]
 
@@ -39,13 +42,16 @@ class Dataset2LeRobotCommand(BaseCommand):
             if episode_file.endswith(".pkl") and not episode_file.startswith("features.pkl"):
                 episode = pickle.load(open(os.path.join(cfg.input_root, "pickles", episode_file), "rb"))
                 
+                # TODO: remove this
                 for i, frame in enumerate(episode):
-                    episode[i]['frame']['action'] = frame['frame']['action'][3:]
+                    if len(frame['frame']['action']) != 6:
+                        episode[i]['frame']['action'] = frame['frame']['action'][3:]
                 # print(episode[0])
 
                 # print(episode[0].keys())
                 # break
                 for frame in episode:
+                    print("Frame action:", frame["frame"]["action"])
                     dataset.add_frame(frame["frame"], frame["task"])
                 dataset.save_episode()
 

@@ -289,6 +289,7 @@ class Robot(ABC):
             # point_0 = time.time_ns()
             with self.observation_lock:
                 module_observation = self.modules[module_name].get_observation()
+                print(f"Module observation for {module_name}:", module_observation)
                 point_1 = time.time_ns()
                 if self.last_observation is None:
                     self.last_observation = module_observation

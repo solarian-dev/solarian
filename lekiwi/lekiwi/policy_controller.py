@@ -138,8 +138,9 @@ class PolicyController(Controller):
     @profile
     def call_model(self, observation):
 
+        # print("Observation: ", observation)
         lerobot_obs = observation.to_lerobot_format()
-        print("LeroBot obs: ", lerobot_obs)
+        # print("LeroBot obs: ", lerobot_obs)
         policy_obs = {}
 
         # Prepare observation for the policy running in Pytorch
@@ -161,7 +162,7 @@ class PolicyController(Controller):
             #     image = image.unsqueeze(0)
             #     policy_obs[key] = image
 
-        print("Policy obs: ", policy_obs)
+        # print("Policy obs: ", policy_obs)
         
         action_data = {
             settings.ModuleName.ARM: {}, 
@@ -190,7 +191,7 @@ class PolicyController(Controller):
             elif key == keyboard.Key.left:
                 print("Left arrow key pressed. Exiting loop and rerecord the last episode...")
                 self.events["rerecord_episode"] = True
-                self.events["exit_early"] = True
+                self.events["exit_ea150rly"] = True
             elif key == keyboard.Key.esc:
                 print("Escape key pressed. Stopping data recording...")
                 self.events["stop_recording"] = True

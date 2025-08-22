@@ -17,7 +17,7 @@ class Coords:
 class ImageProcessor:
     """Class in charge of doing object detection, segmentation and tracking."""
     
-    def __init__(self, tracking_model_name, depth_model_name):
+    def __init__(self, tracking_model_name, depth_model_name, ref_x, ref_y):
         self.tracking_model_name = tracking_model_name
         self.depth_model_name = depth_model_name
         # Initialize outside the processing loop
@@ -31,7 +31,7 @@ class ImageProcessor:
         self.tracking_confidence = 0.6
         self.tracking_iou = 0.2
         self.tracker = 'models/custom_tracker.yaml'
-        self.ref_coords = Coords(650, 535)
+        self.ref_coords = Coords(ref_x, ref_y)
         classes = ["toy lego block"]
         if tracking_model_name and "yoloe" in tracking_model_name:
             self.tracking_model = YOLOE(tracking_model_name)

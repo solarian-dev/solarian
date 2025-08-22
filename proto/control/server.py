@@ -40,7 +40,7 @@ class RelayServer:
         self.client_state_sender.bind(f"tcp://*:{self.cfg.connection.state_sender_port}")  # Clients subscribe here
 
         if self.cfg.image_processing and self.cfg.tracking_model:
-            self.image_processor = ImageProcessor(self.cfg.tracking_model, self.cfg.depth_model)
+            self.image_processor = ImageProcessor(self.cfg.tracking_model, self.cfg.depth_model, self.cfg.ref_x, self.cfg.ref_y)
 
     def _action_relay(self):
         """Forward actions from clients to robot"""
@@ -101,8 +101,10 @@ class RelayServer:
                         cv2.IMREAD_COLOR)
                     tracked_box = self.image_processor.process_image(frame)
                     print("Tracked box: ", tracked_box)
+                    print("Tracked box type: ", type(tracked_box))
                     # print("Depth: ", depth)
                     if tracked_box is not None:
+                        # TODO: the observation name is a little bit hacked, also, bounding box should be under the camera name and value name
                         observation.data[module_name][sensor_name][ValueName.BOUNDING_BOX] = tracked_box
 
         if self.captured_click is not None:

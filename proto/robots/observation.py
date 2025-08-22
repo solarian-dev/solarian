@@ -32,9 +32,9 @@ class Observation(BaseModel):
             for sensor_name, sensor_data in module_data.items():
                 for data_name, data_value in sensor_data.items():
                     if data_name in [ValueName.POS, ValueName.SPEED]:
-                        data[settings.OBS_LEROBOT_MAP[sensor_name].group].append(data_value)
+                        data[settings.OBSERVATION[module_name][sensor_name][data_name].lerobot_group].append(data_value)
                     elif data_name == ValueName.BOUNDING_BOX:
-                        data[settings.OBS_LEROBOT_MAP[sensor_name].group].extend(data_value)
+                        data[settings.OBSERVATION[module_name][sensor_name][data_name].lerobot_group].extend(data_value)
                     elif data_name == ValueName.IMAGE:
                         data["observation.images." + sensor_name] = np.array(data_value)
                     else:

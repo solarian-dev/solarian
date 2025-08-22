@@ -11,7 +11,14 @@ parser.add_argument("subcommand", type=str, help="The subcommand to run.")
 parser.add_argument("--conf", type=str, default="conf", help="The conf directory with yaml config files to use.")
 args = parser.parse_args()
 
-os.environ["PROTO_SETTINGS"] = str(Path(__file__).parent / args.conf / "settings.py")
+if '/' in args.conf:
+    CONF_PATH = args.conf.split("/")[0]
+    CONF_NAME = args.conf.split("/")[1]
+else:
+    CONF_PATH = args.conf
+    CONF_NAME = "default"
+
+os.environ["PROTO_SETTINGS"] = str(Path(__file__).parent / CONF_PATH / "settings.py")
 
 from hydra import initialize, compose
 from omegaconf import DictConfig
@@ -31,9 +38,12 @@ def main() -> None:
         print(f"Unknown command: {subcommand}")
         sys.exit(1)
     
-    config_name = CommandRegistry.get_config_name(subcommand)
+    if CONF_NAME == "default":
+        config_name = CommandRegistry.get_config_name(subcommand)
+    else:
+        config_name = CONF_NAME
 
-    with initialize(version_base=None, config_path=args.conf, job_name='proto_app'):
+    with initialize(version_base=None, config_path=CONF_PATH, job_name='proto_app'):
         cfg = compose(config_name=config_name)
         cmd.handle(cfg)
 
