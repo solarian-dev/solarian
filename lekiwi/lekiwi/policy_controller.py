@@ -1,6 +1,7 @@
 import torch
 from pynput import keyboard
 from lerobot.common.policies.act.modeling_act import ACTPolicy
+from lerobot.configs.policies import PreTrainedConfig
 
 from proto.common.configs import ValueName
 from proto.common.configs import ControllerConfig
@@ -19,8 +20,15 @@ class PolicyController(Controller):
 
         self.last_action = None
 
-        self.policy = ACTPolicy.from_pretrained(cfg.policy_path)
-        self.policy.config.n_action_steps = 100
+        config = PreTrainedConfig.from_pretrained(
+            pretrained_name_or_path=cfg.policy_path
+        )
+        config.n_action_steps = 60
+        # config.n_action_steps = 1
+        # config.temporal_ensemble_coeff = 0.01
+        
+        self.policy = ACTPolicy.from_pretrained(cfg.policy_path, config=config)
+        
         print(self.policy.config.input_features)
         self.policy.to(cfg.device)
         self.policy.reset()
@@ -73,7 +81,7 @@ class PolicyController(Controller):
         speed_setting = self.speed_levels[self.speed_index]
         xy_speed = speed_setting["xy"]  # e.g. 0.1, 0.25, or 0.4
         theta_speed = speed_setting["theta"]  # e.g. 30, 60, or 90
-        print("Observation: ", observation)
+        # print("Observation: ", observation)
         action_data = {
             settings.ModuleName.ARM: {}, 
             settings.ModuleName.BASE: {}
@@ -213,6 +221,7 @@ class PolicyController(Controller):
             elif key.char == self.teleop_keys["run_policy"]:
                 print("Run policy key pressed")
                 self.pressed_keys["run_policy"] = not self.pressed_keys["run_policy"]
+                self.policy.reset()
 
             # Quit teleoperation
             elif key.char == self.teleop_keys["quit"]:

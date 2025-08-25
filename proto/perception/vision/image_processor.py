@@ -170,7 +170,7 @@ class ImageProcessor:
             object_depth_value = np.mean(depth[object_coords.y - 10:object_coords.y + 10, object_coords.x - 10:object_coords.x + 10])
             print("object_depth_value", object_depth_value)
 
-            tmp_depth_diff = (ref_depth_value - object_depth_value) * 100
+            tmp_depth_diff = (ref_depth_value - object_depth_value) * 100 + 100
             if not np.isnan(tmp_depth_diff):
                 depth_diff = float(tmp_depth_diff)
             

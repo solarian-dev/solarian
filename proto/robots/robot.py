@@ -178,11 +178,13 @@ class Robot(ABC):
             start_loop_t = time.time_ns()
             # Get and send observation
 
+            print("Updating")
             self.update()
+            print("Getting action")
             self.get_action()
-
+            print("Getting observation")
             observation = self.get_observation()
-            # print("Observation:", observation)
+            print("Observation:", observation)
 
             if observation is not None:
                 # print("Sending observation:", observation)
@@ -289,7 +291,7 @@ class Robot(ABC):
             # point_0 = time.time_ns()
             with self.observation_lock:
                 module_observation = self.modules[module_name].get_observation()
-                print(f"Module observation for {module_name}:", module_observation)
+                # print(f"Module observation for {module_name}:", module_observation)
                 point_1 = time.time_ns()
                 if self.last_observation is None:
                     self.last_observation = module_observation

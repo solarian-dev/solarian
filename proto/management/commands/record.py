@@ -9,7 +9,7 @@ from proto.conf import settings
 from proto.common.configs import RecordConfig, ValueName
 from proto.common.utils import log_say
 from proto.common.dataset import Dataset
-from pynput import keyboard
+
 
 
 @CommandRegistry.register('record', 'record')

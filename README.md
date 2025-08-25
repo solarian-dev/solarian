@@ -37,15 +37,17 @@ Within your project directory, run the following command:
 
 ```bashconda create -n proto python=3.10
 
-python manage.py run-server --conf conf_test
+python manage.py run-server
 ```
+
+You can configure to run the server in a different machine by setting the `ip` parameter in the `conf/connection/localhost.yaml` file.
 
 ### Running robot
 
 Within your project directory, run the following command:
 
 ```bash
-python manage.py run-robot --conf conf_test
+python manage.py run-robot
 ```
 
 ### Running controller
@@ -53,7 +55,7 @@ python manage.py run-robot --conf conf_test
 Within your project directory, run the following command:
 
 ```bash
-python manage.py run-controller --conf conf_test
+python manage.py run-controller
 ```
 
 ### Recording a dataset
@@ -73,4 +75,17 @@ python manage.py dataset2lerobot
 
 ## Other commands
 
-sudo chmod 666 /dev/ttyACM0
+sudo chmod 666 /dev/ttyACM1
+
+
+python lerobot/find_port.py
+
+
+# First, install v4l-utils if not already installed
+sudo apt install v4l-utils
+
+# List available cameras and their capabilities
+v4l2-ctl --list-devices
+
+# Check supported formats and frame rates for your camera (replace /dev/video0 with your device)
+v4l2-ctl -d /dev/video0 --list-formats-ext

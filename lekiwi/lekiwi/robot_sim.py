@@ -18,7 +18,7 @@ from proto.robots.action import Action
 from proto.common.configs import ProjectConfig
 from proto.common.utils import profile, manual_profile
 
-from .settings import ModuleName, SensorName, JointName
+from proto.conf import settings
 
 from queue import Queue
 
@@ -71,11 +71,13 @@ class LeKiwiRobotSim(Robot):
 
 
     def update(self):
-        """Worker thread that processes actions from queue"""
+        """Worker thread that processes actions from queue needs to run in main thread"""
 
         if self.last_action is not None:
             observation, reward, terminated, truncated, info = self.env.step(self.last_action)
             self.observation_queue.put(observation)
+        else:
+            self.observation_queue.put(None)
 
 
     def setup_actuators(self):
@@ -105,27 +107,30 @@ class LeKiwiRobotSim(Robot):
         
 
         data = {
-            ModuleName.ARM: {},
-            ModuleName.BASE: {}
+            settings.ModuleName.ARM: {},
+            settings.ModuleName.BASE: {}
         }
 
-        # print("Getting observation")
+        print("Getting observation from sim")
         observation = self.observation_queue.get()
         # print("Observation: ", observation)
         
+        if observation is None:
+            return None
+        
         # Get camera images
-        data[ModuleName.BASE][SensorName.FRONT] = {ValueName.IMAGE: observation["pixels"]["angle"]}
-        data[ModuleName.ARM][SensorName.WRIST] = {ValueName.IMAGE: observation["pixels"]["wrist"]}
+        data[settings.ModuleName.BASE][settings.SensorName.FRONT] = {ValueName.IMAGE: observation["pixels"]["angle"]}
+        data[settings.ModuleName.ARM][settings.SensorName.WRIST] = {ValueName.IMAGE: observation["pixels"]["wrist"]}
             
         # Get actuator readings
             
         # Get arm positions
         real_positions = self.sim2real(observation["agent_pos"])
 
-        data[ModuleName.ARM].update({joint_name: {ValueName.POS: pos} for joint_name, pos in zip(JointName, real_positions)})
+        data[settings.ModuleName.ARM].update({joint_name: {ValueName.POS: pos} for joint_name, pos in zip(settings.JointName, real_positions)})
 
         # Get base speeds
-        # data[ModuleName.BASE].update({joint_name: {ValueName.SPEED: speed} for joint_name, speed in zip(JointName, observation["agent_vel"])})
+        # data[settings.ModuleName.BASE].update({joint_name: {ValueName.SPEED: speed} for joint_name, speed in zip(settings.JointName, observation["agent_vel"])})
             
         return Observation(data=data)
 
@@ -191,7 +196,7 @@ class LeKiwiRobotSim(Robot):
             # frame = annotated_frame
         """Process received action"""
         
-        action_list = [value[ValueName.POS] for value in action.data[ModuleName.ARM].values()]
+        action_list = [value[ValueName.POS] for value in action.data[settings.ModuleName.ARM].values()]
         action = np.array(action_list)
         # print("Action processed")
         # print("Action: ", action_list)

@@ -48,6 +48,7 @@ class Controller(ABC):
         self._verify_connection()
         
         self.last_observation = None
+        self.obs_none_count = 0
         self.last_msg = None
         self.observation_lock = threading.Lock()  # Thread-safe image access
         self.running = False
@@ -305,14 +306,22 @@ class Controller(ABC):
                 #         time.sleep(0.033)
                 #     time.sleep(2)
                 #     log_say(f"Policy reset", True)
+
+                if True or self.last_observation is not None:
+                    
                 
-                action = self.control_step(self.last_observation)
+                    action = self.control_step(self.last_observation)
 
-                self.send_action(action)
+                    self.send_action(action)
 
-                # Add frame to dataset if recording
-                if dataset is not None and self.last_observation is not None:
-                    self.record_frame(dataset, action, single_task)
+                    # Add frame to dataset if recording
+                    if dataset is not None and self.last_observation is not None:
+                        self.record_frame(dataset, action, single_task)
+                else:
+                    # self.obs_none_count += 1
+                    # if self.obs_none_count > 1:
+                    #     raise ValueError("Last observation is None")
+                    print("Last observation is None")
 
                 if self.events["exit_early"]:
                     # events["exit_early"] = False
