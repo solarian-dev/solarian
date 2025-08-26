@@ -29,6 +29,12 @@ class ValueName(str, Enum):
     def __str__(self):
         return self.value
 
+
+class ActionValue(str, Enum):
+    STOP = "stop"
+    RESET = "reset"
+    REWIND = "rewind"
+
 class ComponentType(str, Enum):
     FEETECH = "feetech"
     DYNAMIXEL = "dynamixel"
@@ -134,6 +140,15 @@ class RecordConfig(ControllerConfig):
     
     video_res: list[int]
 
+class ReplayConfig(ControllerConfig):
+    repo_id: str
+    episodes: list[int]
+    reset_time_s: float
+    reset_period: int
+    play_sounds: bool
+    display_cameras: bool
+    batch_size: int
+    
 class ServerConfig(BaseModel):
     connection: ConnectionConfig
     image_processing: list[str]

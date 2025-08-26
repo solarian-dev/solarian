@@ -7,6 +7,7 @@ from . import (
     run_server,
     run_controller,
     record,
+    replay,
     write_controller_calibration,
     write_robot_calibration,
     calibrate_controller,

@@ -97,8 +97,8 @@ class ProjectSettings(Settings):
 
     ROBOT_NAME: str = "lekiwi"
 
-    ROBOT_CLASS: str = "lekiwi.robot_sim.LeKiwiRobotSim"
-    # ROBOT_CLASS: str = "lekiwi.robot.LeKiwiRobot"
+    # ROBOT_CLASS: str = "lekiwi.robot_sim.LeKiwiRobotSim"
+    ROBOT_CLASS: str = "lekiwi.robot.LeKiwiRobot"
     SERVER_CLASS: str = "lekiwi.server.LeKiwiServer"
     CONTROLLER_CLASS: str = "lekiwi.controller.LeKiwiController"
     # CONTROLLER_CLASS: str = "lekiwi.policy_controller.PolicyController"

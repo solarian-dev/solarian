@@ -1,4 +1,5 @@
 import threading
+import torch
 import time
 import zmq
 import cv2
@@ -9,7 +10,7 @@ from abc import ABC, abstractmethod
 
 from proto.common.utils import busy_wait
 from proto.robots import Action
-from proto.common.configs import ControllerConfig, ValueName
+from proto.common.configs import ControllerConfig, ValueName, ActionValue
 from proto.control import Message
 from proto.robots.observation import Observation
 from proto.robots.module import Module
@@ -27,6 +28,8 @@ class Controller(ABC):
         self.is_connected = False
         self.clicked_point = None
         self.clicked_id = None
+
+        self.device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
         
         # Initialize OpenCV windows once
         self.windows_initialized = False
@@ -208,7 +211,7 @@ class Controller(ABC):
     def display_loop(self, episode_time_s):
         timestamp = 0
         start_episode_t = time.perf_counter()
-        while timestamp < episode_time_s:
+        while timestamp < episode_time_s and self.running:
             start_loop_t = time.time_ns()
             self.display()
             
@@ -311,6 +314,10 @@ class Controller(ABC):
                     
                 
                     action = self.control_step(self.last_observation)
+
+                    if action == ActionValue.STOP:
+                        self.running = False
+                        break
 
                     self.send_action(action)
 

@@ -1,0 +1,10 @@
+defaults:
+  - controller
+  - _self_
+repo_id: /Users/raul/workspace/lerobot/datasets/so100_pick_lego_block_lerobot_object
+episodes: [1, 2, 3]
+reset_time_s: 3
+reset_period: 60
+play_sounds: true
+display_cameras: true
+batch_size: 50
