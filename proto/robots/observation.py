@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from pydantic import Field
 from proto.common.configs import ValueName
 from proto.conf import settings
+from proto.common.utils import value_str
 import numpy as np
 
 class Observation(BaseModel):
@@ -53,8 +54,5 @@ class Observation(BaseModel):
             s += f"{module_name}:\n"
             for sensor_name, sensor_data in module_data.items():
                 for value_name, value in sensor_data.items():
-                    if value_name == ValueName.IMAGE:
-                        s += f"    {sensor_name}: {value_name} = <image> ({type(value)})\n"
-                    else:
-                        s += f"    {sensor_name}: {value_name} = {value}\n"
+                    s += f"    {sensor_name}: {value_name} = {value_str(value)}\n"
         return s

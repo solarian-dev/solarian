@@ -2,11 +2,14 @@ import cv2
 import torch
 import numpy as np
 from ultralytics import YOLO, YOLOWorld, YOLOE, FastSAM
-
 from .depth_anything_v2.dpt import DepthAnythingV2
+
+from proto.common.utils import StatusBoard
 
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+
+EMPTY_BOX = [-1]*5
 
 class Coords:
     def __init__(self, x, y):
@@ -26,7 +29,7 @@ class ImageProcessor:
         self.tracking_active = False
         self.tracked_id = None
         self.show_mask = False
-        self.tracked_box = None
+        self.tracked_box = EMPTY_BOX
         self.tracked_mask = None
         self.tracking_confidence = 0.6
         self.tracking_iou = 0.2
@@ -67,6 +70,7 @@ class ImageProcessor:
         self.clicked_point = None
         self.tracked_id = None
         self.tracking_active = False
+        self.tracked_box = EMPTY_BOX
 
     def process_image(self, image):
         frame = image
@@ -124,7 +128,7 @@ class ImageProcessor:
                     print("No objects detected at the clicked point")
             
             elif self.tracking_active:
-                print("Tracking pointed object id:", self.tracked_id)
+                StatusBoard.set("Object id tracked", self.tracked_id)
                 results = self.tracking_model.track(
                     frame,
                     device=device,
@@ -174,7 +178,7 @@ class ImageProcessor:
             object_coords = Coords(int((self.tracked_box[0] + self.tracked_box[2]) / 2), int((self.tracked_box[1] + self.tracked_box[3]) / 2))
             # get depth of the tracked object
             object_depth_value = np.mean(depth[object_coords.y - 10:object_coords.y + 10, object_coords.x - 10:object_coords.x + 10])
-            print("object_depth_value", object_depth_value)
+            # print("object_depth_value", object_depth_value)
 
             tmp_depth_diff = (ref_depth_value - object_depth_value) * 100# + 150
             if not np.isnan(tmp_depth_diff):
@@ -183,7 +187,7 @@ class ImageProcessor:
         if self.tracked_box:
             return self.tracked_box + [depth_diff]
         else:
-            return None
+            return EMPTY_BOX
 
 
     def set_classes(self, classes):

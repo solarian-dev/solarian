@@ -189,8 +189,9 @@ class Robot(ABC):
                 # print("Getting observation")
                 observation = self.get_observation()
 
-                board = StatusBoard()
-                board.set("Observation", observation)
+                # board = StatusBoard()
+                # board.set("Observation", observation)
+                StatusBoard.set("Observation", observation)
                 # print("Observation:", observation)
                 # if 'arm' in observation.data and 'wrist' in observation.data['arm'] and 'image' in observation.data['arm']['wrist'] and type(observation.data['arm']['wrist']['image']) is np.ndarray:
                 #     print("Image is numpy array")

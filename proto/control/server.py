@@ -8,6 +8,8 @@ from proto.perception.vision.image_processor import ImageProcessor
 from proto.control import Message
 from proto.common.configs import ValueName, ServerConfig
 from proto.robots.observation import Observation
+from proto.common.utils import StatusBoard
+
 
 class RelayServer:
     def __init__(self, cfg: ServerConfig):
@@ -15,6 +17,8 @@ class RelayServer:
         self.running = False
         self.cfg = cfg
         self.captured_click = None
+
+        self.image_processor_lock = threading.Lock()
         
         # Setup action relay (Client → Relay → Robot)
         self.client_cmd_receiver = self.context.socket(zmq.PULL)
@@ -53,10 +57,12 @@ class RelayServer:
                     
                     # TODO use enumeration instead of string for message
                     if self.cfg.image_processing and "stop_tracking" in msg.data:
-                        self.image_processor.stop_tracking()
+                        with self.image_processor_lock:
+                            self.image_processor.stop_tracking()
                     elif self.cfg.image_processing and "click" in msg.data:
                         # print(f"Tracking point (relay): {msg.data['click']['point']}")
-                        self.image_processor.track_object(msg.data["click"]["point"])
+                        with self.image_processor_lock:
+                            self.image_processor.track_object(msg.data["click"]["point"])
                         self.captured_click = msg.data["click"]["id"]
                     else:
                         self.captured_click = None
@@ -85,7 +91,9 @@ class RelayServer:
                     start_time = time.time_ns()
                     msg = self.process_image(msg, self.cfg.image_processing)
                     end_time = time.time_ns()
-                    print(f"Image processing time: {(end_time - start_time) / 1e6} ms")
+                    # print(f"Image processing time: {(end_time - start_time) / 1e6} ms")
+                    StatusBoard.set("Image processing time (ms)", (end_time - start_time) / 1e6)
+
                 self.client_state_sender.send(msg.serialize())
             except zmq.Again:
                 time.sleep(0.001)
@@ -102,13 +110,9 @@ class RelayServer:
                 if observation.data[module_name][sensor_name].get(ValueName.IMAGE) is not None and sensor_name in cams_to_process:
                     frame = cv2.imdecode(np.frombuffer(observation.data[module_name][sensor_name][ValueName.IMAGE], dtype=np.uint8),
                         cv2.IMREAD_COLOR)
-                    tracked_box = self.image_processor.process_image(frame)
-                    # print("Tracked box: ", tracked_box)
-                    # print("Tracked box type: ", type(tracked_box))
-                    # print("Depth: ", depth)
-                    if tracked_box is not None:
-                        # TODO: the observation name is a little bit hacked, also, bounding box should be under the camera name and value name
-                        observation.data[module_name][sensor_name][ValueName.BOUNDING_BOX] = tracked_box
+                    with self.image_processor_lock:
+                        tracked_box = self.image_processor.process_image(frame)
+                    observation.data[module_name][sensor_name][ValueName.BOUNDING_BOX] = tracked_box
 
         if self.captured_click is not None:
             msg.data["click_ack"] = self.captured_click

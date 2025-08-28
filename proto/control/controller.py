@@ -311,8 +311,9 @@ class Controller(ABC):
 
         COLOR = (255, 0, 0)
 
-        board = StatusBoard()
-        board.set("Observation", self.last_observation)
+        # board = StatusBoard()
+        # board.set("Observation", self.last_observation)
+        StatusBoard.set("Observation", self.last_observation)
 
         for name, image in images.items():
             img = image[ValueName.IMAGE]
@@ -320,7 +321,7 @@ class Controller(ABC):
             # print("Image: ", image)
             
             # Only modify the image if bounding box exists
-            if image.get(ValueName.BOUNDING_BOX, None) is not None:
+            if image.get(ValueName.BOUNDING_BOX, None) is not None and image.get(ValueName.BOUNDING_BOX)[0] != -1:
                 # Create a copy only when drawing on the image
                 display_img = img.copy()
                 # print("bounding box", image[ValueName.BOUNDING_BOX])
@@ -351,9 +352,12 @@ class Controller(ABC):
         try:
             timestamp = 0
             start_episode_t = time.perf_counter()
+            self.send_stop_tracking()
             while timestamp < episode_time_s:
                 start_loop_t = time.time_ns()
                 timestamp = time.perf_counter() - start_episode_t
+
+                
 
                 # if "reset_policy" in events and events["reset_policy"]:
                 #     events["reset_policy"] = False

@@ -5,6 +5,21 @@ from rich.console import Console
 import threading
 import time
 import queue
+import numpy as np
+
+
+def value_str(value):
+    if isinstance(value, np.ndarray):
+        return "<numpy.ndarray>"
+    elif isinstance(value, bytes):
+        return "<bytes>"
+    elif isinstance(value, (float, np.floating)):
+        return f"{value:.3f}"
+    elif type(value) == list:
+        return "[" + ", ".join([f"{x:.0f}" if isinstance(x, (float, np.floating)) else str(x) for x in value]) + "]"
+    else:
+        return str(value)
+
 
 class StatusBoard:
     _instance = None
@@ -29,13 +44,17 @@ class StatusBoard:
 
             threading.Thread(target=self.ui_loop, daemon=True).start()
 
-    def set(self, key, value):
-        with self._instance_lock:
-            self._q.put((key, value))
+    @classmethod
+    def set(cls, key, value):
+        if cls._instance is None or not hasattr(cls._instance, '_initialized') or not cls._instance._initialized:
+            raise ValueError("StatusBoard not initialized")
+        with cls._instance._instance_lock:
+            cls._instance._q.put((key, value))
 
-    def get(self):
+    @classmethod
+    def get(cls):
         try:
-            return self._q.get_nowait()
+            return cls._instance._q.get_nowait()
         except Exception:
             return None, None
 
@@ -44,7 +63,7 @@ class StatusBoard:
         t.add_column("State"); t.add_column("Value")
         t.add_row("Local time", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
         for k, v in self.data.items():
-            t.add_row(k, str(v))
+            t.add_row(k, value_str(v))
         return t
 
     def ui_loop(self):
