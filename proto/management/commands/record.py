@@ -36,9 +36,6 @@ class RecordCommand(BaseCommand):
         }
         num_cameras = 0
 
-        print("Observation:")
-        
-
         for module_name, module_spec in settings.OBSERVATION.items():
             for sensor_name, sensor_spec in module_spec.items():
                 for data_name, data_spec in sensor_spec.items():
@@ -177,7 +174,11 @@ class RecordCommand(BaseCommand):
             while j < len(cfg.tasks):
                 log_say(f"Recording episode {i} task {cfg.tasks[j]}", cfg.play_sounds)
                 dataset = datasets[cfg.tasks[j]]
+
+                # controller.send_stop_tracking()
+                # dataset = None
                 controller.start(dataset=dataset, episode_time_s=cfg.episode_time_s, single_task=cfg.tasks[j])
+                
 
                 if not controller.events["stop_recording"] and (
                     (i < cfg.num_episodes and j == len(cfg.tasks) - 1 and (i % cfg.reset_period == 0)) or controller.events["rerecord_episode"]
@@ -206,6 +207,9 @@ class RecordCommand(BaseCommand):
                 # save_thread.start()
                 # save_threads[str(j)] = save_thread
                 # save_threads.append(save_thread)
+
+
+
                 dataset.save_episode()
                 print("-------------->Episode saved.")
                 j += 1
@@ -213,7 +217,11 @@ class RecordCommand(BaseCommand):
             if controller.events["stop_recording"]:
                 break
         
-        log_say("Saving episodes", cfg.play_sounds, blocking=False)
+        log_say("Reset robot", cfg.play_sounds, blocking=True)
+        controller.control_loop(episode_time_s=reset_time_s)
+
+
+        # log_say("Saving episodes", cfg.play_sounds, blocking=False)
         # for save_thread in save_threads.values():
         #     save_thread.join()
         # dataset.save_episode()
@@ -221,6 +229,7 @@ class RecordCommand(BaseCommand):
         # for dataset in datasets.values():
         #     dataset.store_dataset()
         
+        log_say("Recording finished", cfg.play_sounds, blocking=False)
         controller.disconnect()
 
         # if cfg.push_to_hub:

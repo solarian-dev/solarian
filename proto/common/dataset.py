@@ -61,7 +61,6 @@ class Dataset:
 
     def save_episode(self):
         # self.data.append(self.episode)
-        
 
         # save episode as pickle file using dataset name as folder and episode number as filename
         with open(f"{self.root}/pickles/episode_{self.episode_number}.pkl", "wb") as f:

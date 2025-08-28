@@ -51,7 +51,10 @@ class RelayServer:
                     msg = Message.deserialize(bytes)
                     # print("Message received (relay): ", msg)
                     
-                    if self.cfg.image_processing and "click" in msg.data:
+                    # TODO use enumeration instead of string for message
+                    if self.cfg.image_processing and "stop_tracking" in msg.data:
+                        self.image_processor.stop_tracking()
+                    elif self.cfg.image_processing and "click" in msg.data:
                         # print(f"Tracking point (relay): {msg.data['click']['point']}")
                         self.image_processor.track_object(msg.data["click"]["point"])
                         self.captured_click = msg.data["click"]["id"]
@@ -100,8 +103,8 @@ class RelayServer:
                     frame = cv2.imdecode(np.frombuffer(observation.data[module_name][sensor_name][ValueName.IMAGE], dtype=np.uint8),
                         cv2.IMREAD_COLOR)
                     tracked_box = self.image_processor.process_image(frame)
-                    print("Tracked box: ", tracked_box)
-                    print("Tracked box type: ", type(tracked_box))
+                    # print("Tracked box: ", tracked_box)
+                    # print("Tracked box type: ", type(tracked_box))
                     # print("Depth: ", depth)
                     if tracked_box is not None:
                         # TODO: the observation name is a little bit hacked, also, bounding box should be under the camera name and value name

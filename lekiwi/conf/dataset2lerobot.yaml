@@ -1,6 +1,9 @@
-input_root: ./datasets/lekiwi_eval2_pick_lego_block
-output_root: ./datasets/lekiwi_eval2_pick_lego_block_lr
-repo_id: rgarreta/lekiwi_eval2_pick_lego_block
+# input_root: ./datasets/lekiwi_eval2_pick_lego_block
+# output_root: ./datasets/lekiwi_eval2_pick_lego_block_lr
+# repo_id: rgarreta/lekiwi_eval2_pick_lego_block
+input_root: ./datasets/lekiwi_pick_lego_block_test_1
+output_root: ./datasets/lekiwi_pick_lego_block_test_1_lr
+repo_id: rgarreta/lekiwi_pick_lego_block_test_1
 push_to_hub: true
 fps: 30
 tags: null

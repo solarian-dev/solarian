@@ -12,7 +12,7 @@ from .action import Action
 from .module import Module
 from .component_bus import ComponentBus
 from proto.conf import settings
-from proto.common.utils import profile, manual_profile, get_class, busy_wait
+from proto.common.utils import profile, manual_profile, get_class, busy_wait, StatusBoard
 
 
 class Robot(ABC):
@@ -88,6 +88,9 @@ class Robot(ABC):
         try:
             bytes = self.action_socket.recv(zmq.NOBLOCK)
             msg = Message.deserialize(bytes)
+
+            if "action" not in msg.data:
+                return
             action = Action.model_validate(msg.data["action"])
             self.current_action = action
             
@@ -174,29 +177,41 @@ class Robot(ABC):
     
     def control_loop(self):
         print("Control loop started")
-        while self.running:
-            start_loop_t = time.time_ns()
-            # Get and send observation
+        try:
+            while self.running:
+                start_loop_t = time.time_ns()
+                # Get and send observation
 
-            print("Updating")
-            self.update()
-            print("Getting action")
-            self.get_action()
-            print("Getting observation")
-            observation = self.get_observation()
-            print("Observation:", observation)
+                # print("Updating")
+                self.update()
+                # print("Getting action")
+                self.get_action()
+                # print("Getting observation")
+                observation = self.get_observation()
 
-            if observation is not None:
-                # print("Sending observation:", observation)
-                self.send_observation(observation)
+                board = StatusBoard()
+                board.set("Observation", observation)
+                # print("Observation:", observation)
+                # if 'arm' in observation.data and 'wrist' in observation.data['arm'] and 'image' in observation.data['arm']['wrist'] and type(observation.data['arm']['wrist']['image']) is np.ndarray:
+                #     print("Image is numpy array")
+                # else:
+                #     print("Image is not numpy array")
+                #     exit(1)
 
-            # # Wait for next frame
-            # if self.cfg.fps is not None:
-            #     dt_s = (time.time_ns() - start_loop_t)/1e9
-            #     busy_wait((1.0 / self.cfg.fps) - dt_s)
+                if observation is not None:
+                    # print("Sending observation:", observation)
+                    self.send_observation(observation)
 
-            # print("Observation sent", observation)
-            time.sleep(0.001)
+                # # Wait for next frame
+                # if self.cfg.fps is not None:
+                #     dt_s = (time.time_ns() - start_loop_t)/1e9
+                #     busy_wait((1.0 / self.cfg.fps) - dt_s)
+
+                # print("Observation sent", observation)
+                time.sleep(0.001)
+        except KeyboardInterrupt:
+            print("\nKeyboardInterrupt: Shutting down robot...")
+            self.disconnect()
 
     def connect(self):
         self.calibration = {}
@@ -219,7 +234,7 @@ class Robot(ABC):
         # threading.Thread(target=self._state_publisher, daemon=True).start()
         
         for module_name, module_sensors in settings.OBSERVATION.items():
-            threading.Thread(target=self.get_module_observation, args=(module_name,), daemon=True).start()
+            threading.Thread(target=self.get_module_observation_loop, args=(module_name,), daemon=True).start()
 
         self.control_loop()
         
@@ -232,12 +247,13 @@ class Robot(ABC):
 
     def disconnect(self):
         """Clean shutdown, you can extend this method to do other cleanup"""
+        self.running = False
         self.action_socket.close()
         self.state_socket.close()
         if self.component_bus is not None:
             self.component_bus.disconnect()
         self.context.term()
-        self.running = False
+        
 
     def display(self):
         images = {}
@@ -284,30 +300,71 @@ class Robot(ABC):
             if key == ord('q'):
                 return False
 
-    def get_module_observation(self, module_name: str) -> Observation:
+    def get_module_observation_loop(self, module_name: str):
         """Thread for capturing and sending module observation"""
         print(f"Getting observation for module: {module_name}")
-        while self.running:
-            # point_0 = time.time_ns()
-            with self.observation_lock:
-                module_observation = self.modules[module_name].get_observation()
-                # print(f"Module observation for {module_name}:", module_observation)
-                point_1 = time.time_ns()
-                if self.last_observation is None:
-                    self.last_observation = module_observation
-                else:
-                    data = self.last_observation.data.copy()
-                    data.update(module_observation.data)
-                    self.last_observation = Observation(data=data)
-                # print("Observation:", self.last_observation)
-                point_2 = time.time_ns()
-                # self.display()
-                # point_3 = time.time_ns()
-            time.sleep(0.001)
-            # manual_profile(f"get_module_observation {module_name} 1", (point_1 - point_0))
-            manual_profile(f"get_module_observation {module_name} 2", (point_2 - point_1))
-            # manual_profile(f"get_module_observation {module_name} 3", (point_3 - point_2))
-        
+        try:
+            while self.running:
+                point_0 = time.time_ns()
+                with self.observation_lock:
+                    module_observation = self.modules[module_name].get_observation()
+                    # print(f"Module observation for {module_name}:", module_observation)
+
+                    point_1 = time.time_ns()
+                    if self.last_observation is None:
+                        self.last_observation = module_observation
+                        # print("Observation1:", self.last_observation)
+                    else:
+                        data = self.last_observation.data.copy()
+                        data.update(module_observation.data)
+                        self.last_observation = Observation(data=data)
+                        # print("Observation2:", self.last_observation)
+
+                    # if type(self.last_observation.data['arm']['wrist']['image']) is np.ndarray:
+                    #     print("Image is numpy array")
+                    # else:
+                    #     print("Image is not numpy array")
+                    #     exit(1)
+
+                    point_2 = time.time_ns()
+                    # self.display()
+                    # point_3 = time.time_ns()
+                time.sleep(0.001)
+                manual_profile(f"get_module_observation {module_name} 1", (point_1 - point_0))
+                # manual_profile(f"get_module_observation {module_name} 2", (point_2 - point_1))
+                # manual_profile(f"get_module_observation {module_name} 3", (point_3 - point_2))
+        except KeyboardInterrupt:
+            print("\nKeyboardInterrupt: Shutting down robot...")
+
+    def get_module_observation(self, module_name: str) -> Observation:
+        # point_0 = time.time_ns()
+        with self.observation_lock:
+            module_observation = self.modules[module_name].get_observation()
+            # print(f"Module observation for {module_name}:", module_observation)
+            point_1 = time.time_ns()
+            if self.last_observation is None:
+                self.last_observation = module_observation
+                # print("Observation1:", self.last_observation)
+            else:
+                data = self.last_observation.data.copy()
+                data.update(module_observation.data)
+                self.last_observation = Observation(data=data)
+                # print("Observation2:", self.last_observation)
+
+            # if type(self.last_observation.data['arm']['wrist']['image']) is np.ndarray:
+            #     print("Image is numpy array")
+            # else:
+            #     print("Image is not numpy array")
+            #     exit(1)
+
+            point_2 = time.time_ns()
+            # self.display()
+            # point_3 = time.time_ns()
+        time.sleep(0.001)
+        manual_profile(f"get_module_observation {module_name} 1", (point_1 - point_0))
+        # manual_profile(f"get_module_observation {module_name} 2", (point_2 - point_1))
+        # manual_profile(f"get_module_observation {module_name} 3", (point_3 - point_2))
+            
     
     def get_observation(self) -> Observation:
         """Create an observation with current robot state.
@@ -317,7 +374,8 @@ class Robot(ABC):
         if self.last_observation is None:
             return None
         # return a copy of the observation
-        return self.last_observation.model_copy()       
+        # return self.last_observation.model_copy()       
+        return self.last_observation
                     
     # @profile
     @abstractmethod

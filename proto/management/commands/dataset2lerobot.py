@@ -16,14 +16,15 @@ class Dataset2LeRobotCommand(BaseCommand):
         features = pickle.load(open(os.path.join(cfg.input_root, "pickles", "features.pkl"), "rb"))
 
 
-        # TODO: remove this
-        features['observation.state']['shape'] = (6,)
-        features['observation.environment_state']['shape'] = (5,)
+        # # TODO: remove this
+        # features['observation.state']['shape'] = (6,)
+        # features['observation.environment_state']['shape'] = (5,)
         features['action']['shape'] = (6,)
         features['action']['names'] = features['action']['names'][3:]
 
 
-        print(features)
+        print("Dataset features: ", features)
+        # exit()
         
         # create lerobot dataset
         dataset = LeRobotDataset.create(
@@ -48,8 +49,8 @@ class Dataset2LeRobotCommand(BaseCommand):
                         episode[i]['frame']['action'] = frame['frame']['action'][3:]
                 # print(episode[0])
 
-                # print(episode[0].keys())
-                # break
+                print("Episode: ", episode)
+                break
                 for frame in episode:
                     print("Frame action:", frame["frame"]["action"])
                     dataset.add_frame(frame["frame"], frame["task"])

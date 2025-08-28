@@ -34,7 +34,10 @@ class Observation(BaseModel):
                     if data_name in [ValueName.POS, ValueName.SPEED]:
                         data[settings.OBSERVATION[module_name][sensor_name][data_name].lerobot_group].append(data_value)
                     elif data_name == ValueName.BOUNDING_BOX:
-                        data[settings.OBSERVATION[module_name][sensor_name][data_name].lerobot_group].extend(data_value)
+                        if data_value is not None:
+                            data[settings.OBSERVATION[module_name][sensor_name][data_name].lerobot_group].extend(data_value)
+                        else:
+                            data[settings.OBSERVATION[module_name][sensor_name][data_name].lerobot_group].extend([-1]*5)
                     elif data_name == ValueName.IMAGE:
                         data["observation.images." + sensor_name] = np.array(data_value)
                     else:

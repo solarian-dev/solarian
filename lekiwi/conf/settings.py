@@ -118,12 +118,12 @@ class ProjectSettings(Settings):
     # Define observation space
     # TODO: FIX hardcoded image dimensions
     OBSERVATION: ClassVar[Dict[str, Dict[str, Dict[str, DataSpec]]]] = {
-        ModuleName.BASE: {
-            # SensorName.LEFT_WHEEL: {ValueName.SPEED: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["left_wheel"])},
-            # SensorName.RIGHT_WHEEL: {ValueName.SPEED: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["right_wheel"])},
-            # SensorName.BACK_WHEEL: {ValueName.SPEED: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["back_wheel"])},
-            # SensorName.FRONT: {ValueName.IMAGE: DataSpec((540, 960, 3), DataComputer.ROBOT, "observation.images.front", ["front"])},
-        },
+        # ModuleName.BASE: {
+        #     SensorName.LEFT_WHEEL: {ValueName.SPEED: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["left_wheel"])},
+        #     SensorName.RIGHT_WHEEL: {ValueName.SPEED: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["right_wheel"])},
+        #     SensorName.BACK_WHEEL: {ValueName.SPEED: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["back_wheel"])},
+        #     SensorName.FRONT: {ValueName.IMAGE: DataSpec((540, 960, 3), DataComputer.ROBOT, "observation.images.front", ["front"])},
+        # },
         ModuleName.ARM: {
             SensorName.SHOULDER_PAN: {
                     ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["shoulder_pan"]),
@@ -152,17 +152,17 @@ class ProjectSettings(Settings):
 
     # Define action space
     ACTION: ClassVar[Dict[str, Dict[str, DataSpec]]] = {
-        ModuleName.BASE: {
-            ActuatorName.LEFT_WHEEL: {
-                ValueName.SPEED: DataSpec((1,), DataComputer.CONTROLLER, "action", ["left_wheel"])
-            },
-            ActuatorName.RIGHT_WHEEL: {
-                ValueName.SPEED: DataSpec((1,), DataComputer.CONTROLLER, "action", ["right_wheel"])
-            },
-            ActuatorName.BACK_WHEEL: {
-                ValueName.SPEED: DataSpec((1,), DataComputer.CONTROLLER, "action", ["back_wheel"])
-            },
-        },
+        # ModuleName.BASE: {
+        #     ActuatorName.LEFT_WHEEL: {
+        #         ValueName.SPEED: DataSpec((1,), DataComputer.CONTROLLER, "action", ["left_wheel"])
+        #     },
+        #     ActuatorName.RIGHT_WHEEL: {
+        #         ValueName.SPEED: DataSpec((1,), DataComputer.CONTROLLER, "action", ["right_wheel"])
+        #     },
+        #     ActuatorName.BACK_WHEEL: {
+        #         ValueName.SPEED: DataSpec((1,), DataComputer.CONTROLLER, "action", ["back_wheel"])
+        #     },
+        # },
         ModuleName.ARM: {
             ActuatorName.SHOULDER_PAN: {
                 ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["shoulder_pan"])

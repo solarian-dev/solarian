@@ -15,8 +15,18 @@ from proto.control import Message
 from proto.robots.observation import Observation
 from proto.robots.module import Module
 from proto.robots.component_bus import ComponentBus
-from proto.common.utils import profile, manual_profile, get_class
+from proto.common.utils import profile, manual_profile, get_class, StatusBoard
 from proto.conf import settings
+
+
+from screeninfo import get_monitors
+
+try:
+    monitors = get_monitors()
+    m = monitors[0]
+    sw, sh, sx, sy = m.width, m.height, m.x, m.y
+except:
+    print("No monitors found.")
 
 
 class Controller(ABC):
@@ -32,7 +42,7 @@ class Controller(ABC):
         self.device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
         
         # Initialize OpenCV windows once
-        self.windows_initialized = False
+        self.windows_initialized = []
         
         # action socket
         self.action_socket = self.context.socket(zmq.PUSH)
@@ -136,13 +146,19 @@ class Controller(ABC):
 
     def _state_receiver(self):
         """Receive and decode image streams"""
-        while self.running:
-            try:
-                self.get_state() 
-            except zmq.Again:
-                time.sleep(0.001)
-            except Exception as e:
-                print(f"[ERROR] Image receiver failed: {e}")
+        try:
+            while self.running:
+                try:
+                    self.get_state() 
+                except zmq.Again:
+                    time.sleep(0.001)
+                except KeyboardInterrupt:
+                    print("\nShutting down state receiver")
+                    break
+                except Exception as e:
+                    print(f"[ERROR] State receiver failed: {e}")
+        except KeyboardInterrupt:
+            print("\nShutting down state receiver")
 
     def connect(self):
         """Start receiver threads"""
@@ -168,11 +184,16 @@ class Controller(ABC):
 
     def disconnect(self):
         """Clean shutdown"""
+        if not self.is_connected:
+            return
         self.running = False
         self.action_socket.close()
         self.state_socket.close()
         self.context.term()
         self.is_connected = False
+
+    def stop(self):
+        self.running = False
 
     @profile
     def send_action(self, action: Action):
@@ -186,6 +207,12 @@ class Controller(ABC):
                 "point": self.clicked_point,
                 "id": self.clicked_id
             }
+        self.action_socket.send(msg.serialize())
+
+    def send_stop_tracking(self):
+        msg = Message()
+        msg.controller_timestamp = time.time_ns()
+        msg.data = {"stop_tracking": True}
         self.action_socket.send(msg.serialize())
 
     def record_frame(self, dataset, action, task):
@@ -211,21 +238,43 @@ class Controller(ABC):
     def display_loop(self, episode_time_s):
         timestamp = 0
         start_episode_t = time.perf_counter()
-        while timestamp < episode_time_s and self.running:
-            start_loop_t = time.time_ns()
-            self.display()
-            
-            timestamp = time.perf_counter() - start_episode_t
-            if self.events["exit_early"]:
-                break
+        try:
+            while timestamp < episode_time_s and self.running:
+                start_loop_t = time.time_ns()
+                result = self.display()
+                
+                # If display returns False, exit the loop
+                if result is False:
+                    break
+                
+                timestamp = time.perf_counter() - start_episode_t
+                if self.events["exit_early"]:
+                    break
 
-            # Wait for next frame
-            if self.cfg.fps is not None:
-                dt_s = (time.time_ns() - start_loop_t)/1e9
-                busy_wait((1.0 / self.cfg.fps) - dt_s)
+                # Wait for next frame
+                if self.cfg.fps is not None:
+                    dt_s = (time.time_ns() - start_loop_t)/1e9
+                    busy_wait((1.0 / self.cfg.fps) - dt_s)
+                
+                manual_profile("display loop latency", (time.time_ns() - start_loop_t))
+        except KeyboardInterrupt:
+            print("\nKeyboardInterrupt: Shutting down display loop...")
+        except Exception as e:
+            print(f"\nError in display loop: {e}")
+        finally:
+            # Clean up OpenCV windows
+            if self.windows_initialized:
+                print("Cleaning up OpenCV windows...")
+                for name in self.windows_initialized:
+                    try:
+                        cv2.destroyWindow(name)
+                    except:
+                        pass
+                cv2.destroyAllWindows()
+                self.windows_initialized = []
             
-            manual_profile("display loop latency", (time.time_ns() - start_loop_t))
-
+            
+            
     
     # Mouse callback function
     def mouse_callback(self, event, x, y, flags, param):
@@ -256,9 +305,14 @@ class Controller(ABC):
                 # Set the size of the window to the resolution of the image
                 cv2.resizeWindow(name, width, height)
                 cv2.setMouseCallback(name, self.mouse_callback)
-            self.windows_initialized = True
+                cv2.moveWindow(name, sx + (sw - width)//2, sy + (sh - height)//2)
+                self.windows_initialized.append(name)
+            
 
         COLOR = (255, 0, 0)
+
+        board = StatusBoard()
+        board.set("Observation", self.last_observation)
 
         for name, image in images.items():
             img = image[ValueName.IMAGE]
@@ -343,7 +397,9 @@ class Controller(ABC):
                 # print(f"Control loop time elapsed: {(time.time_ns() - start_loop_t)/1e9:.6f} seconds")
                 
         except KeyboardInterrupt:
-            print("\nShutting down teleop client...")
+            print("\nShutting down control loop...")
+        finally:
+            self.running = False
 
 
     def start(self, dataset=None, episode_time_s=None, single_task=None):
@@ -363,13 +419,16 @@ class Controller(ABC):
             episode_time_s = float("inf")
 
         self.running = True
+        print("Starting state receiver")
         threading.Thread(target=self._state_receiver, daemon=True).start()
 
         # spin control loop in a separate thread
+        print("Starting control loop")
         t = threading.Thread(target=self.control_loop, args=(dataset, episode_time_s + 1, single_task), daemon=True)
         t.start()
         
         # run display loop in main thread
+        print("Starting display loop")
         self.display_loop(episode_time_s)
 
         t.join()

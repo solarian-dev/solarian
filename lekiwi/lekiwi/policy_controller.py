@@ -1,4 +1,5 @@
 import torch
+import math
 from pynput import keyboard
 from lerobot.common.policies.act.modeling_act import ACTPolicy
 from lerobot.configs.policies import PreTrainedConfig
@@ -23,9 +24,11 @@ class PolicyController(Controller):
         config = PreTrainedConfig.from_pretrained(
             pretrained_name_or_path=cfg.policy_path
         )
-        config.n_action_steps = 60
-        # config.n_action_steps = 1
-        # config.temporal_ensemble_coeff = 0.01
+        config.n_action_steps = 50
+        config.n_action_steps = 1
+        config.temporal_ensemble_coeff = 0.01
+
+        self.homing = True
         
         self.policy = ACTPolicy.from_pretrained(cfg.policy_path, config=config)
         
@@ -82,10 +85,7 @@ class PolicyController(Controller):
         xy_speed = speed_setting["xy"]  # e.g. 0.1, 0.25, or 0.4
         theta_speed = speed_setting["theta"]  # e.g. 30, 60, or 90
         # print("Observation: ", observation)
-        action_data = {
-            settings.ModuleName.ARM: {}, 
-            settings.ModuleName.BASE: {}
-        }
+        
 
         # print("PolicyController.control_step")
 
@@ -95,16 +95,21 @@ class PolicyController(Controller):
         #     'observation.images.wrist': PolicyFeature(type=<FeatureType.VISUAL: 'VISUAL'>, shape=(3, 540, 960))
         # }
 
+        action_data = {
+            settings.ModuleName.ARM: {}, 
+            settings.ModuleName.BASE: {}
+        }
+
         if observation:
             
             if self.pressed_keys["run_policy"]:
                 # self.pressed_keys["run_policy"] = False
                 action_data = self.call_model(observation)
+            elif self.homing:
+                print("Homing")
+                action_data = self.move_home(observation)
             else:
-                action_data = {
-                    settings.ModuleName.ARM: {}, 
-                    settings.ModuleName.BASE: {}
-                }
+                
                 # # use observation as action
                 # for i, name in enumerate(settings.ACTION[settings.ModuleName.ARM].keys()):
                 #     action_data[settings.ModuleName.ARM][name] = observation.data[settings.ModuleName.ARM][name]
@@ -190,6 +195,52 @@ class PolicyController(Controller):
         # print("Action data: ", action_data)
         return action_data
 
+
+    def move_home(self, observation):
+        action_data = {
+            settings.ModuleName.ARM: {}, 
+            settings.ModuleName.BASE: {}
+        }
+        
+        self.homing = False
+        if settings.ModuleName.LEADER_ARM in self.modules:
+            sensor_names = settings.ACTION[settings.ModuleName.ARM].keys()
+
+            leader_arm_data = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
+
+            MAX_POS_STEP = 10
+
+            # # First move shoulder pan
+            # sensor_names = [settings.SensorName.SHOULDER_LIFT]#, settings.SensorName.SHOULDER_LIFT]
+            # first_stage = False
+            # for name in sensor_names:
+            #     action_data[settings.ModuleName.ARM][name] = {}
+            #     if abs(leader_arm_data[name][ValueName.POS] - observation.data[settings.ModuleName.ARM][name][ValueName.POS]) > MAX_POS_STEP:
+            #         action_data[settings.ModuleName.ARM][name][ValueName.POS] = observation.data[settings.ModuleName.ARM][name][ValueName.POS] + MAX_POS_STEP*math.copysign(1, leader_arm_data[name][ValueName.POS] - observation.data[settings.ModuleName.ARM][name][ValueName.POS])
+            #         self.homing = True
+            #         first_stage = True
+            #     else:
+            #         action_data[settings.ModuleName.ARM][name][ValueName.POS] = leader_arm_data[name][ValueName.POS]
+                    
+
+            # if first_stage:
+            #     return action_data
+
+
+            # Then move the rest of the joints
+            sensor_names = settings.ACTION[settings.ModuleName.ARM].keys()
+            for i, name in enumerate(sensor_names):
+                action_data[settings.ModuleName.ARM][name] = {}
+
+                if abs(leader_arm_data[name][ValueName.POS] - observation.data[settings.ModuleName.ARM][name][ValueName.POS]) > MAX_POS_STEP:
+                    action_data[settings.ModuleName.ARM][name][ValueName.POS] = observation.data[settings.ModuleName.ARM][name][ValueName.POS] + MAX_POS_STEP*math.copysign(1, leader_arm_data[name][ValueName.POS] - observation.data[settings.ModuleName.ARM][name][ValueName.POS])
+                    self.homing = True
+                else:
+                    action_data[settings.ModuleName.ARM][name][ValueName.POS] = leader_arm_data[name][ValueName.POS]
+                    
+        
+        return action_data
+
     def on_press(self, key):
         try:
             # Handle recording-specific keys
@@ -221,7 +272,10 @@ class PolicyController(Controller):
             elif key.char == self.teleop_keys["run_policy"]:
                 print("Run policy key pressed")
                 self.pressed_keys["run_policy"] = not self.pressed_keys["run_policy"]
-                self.policy.reset()
+                if self.pressed_keys["run_policy"]:
+                    self.policy.reset()
+                else:
+                    self.homing = True
 
             # Quit teleoperation
             elif key.char == self.teleop_keys["quit"]:
