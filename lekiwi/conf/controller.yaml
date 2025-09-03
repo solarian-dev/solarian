@@ -6,7 +6,7 @@ tps: 1
 system2_model: gemini/gemini-1.5-flash
 system2_prompt: Be a smart and helpful robot assistant.
 # policy_path: /Users/raul/workspace/lerobot/outputs/train/act_lekiwi_pick_lego_block/checkpoints/006000/pretrained_model
-policy_path: /Users/raul/workspace/lerobot/outputs/train/act_so100_pick_lego_block_object/checkpoints/040000/pretrained_model
+policy_path: /Users/raul/workspace/lerobot/outputs/train/act_so100_pick_lego_block_object/checkpoints/060000/pretrained_model
 # policy_path: /home/raul/workspace/lerobot/outputs/train/act_so100_pick_lego_block_object/checkpoints/020000/pretrained_model
 # device: cuda
 device: mps

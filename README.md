@@ -16,6 +16,12 @@ conda create -n proto python=3.10
 conda activate proto
 ```
 
+### Install FFmpeg
+
+```bash
+conda install ffmpeg=7.1.1 -c conda-forge
+```
+
 ### Clone the repository:
 
 ```bash

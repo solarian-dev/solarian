@@ -100,8 +100,8 @@ class ProjectSettings(Settings):
     # ROBOT_CLASS: str = "lekiwi.robot_sim.LeKiwiRobotSim"
     ROBOT_CLASS: str = "lekiwi.robot.LeKiwiRobot"
     SERVER_CLASS: str = "lekiwi.server.LeKiwiServer"
-    CONTROLLER_CLASS: str = "lekiwi.controller.LeKiwiController"
-    # CONTROLLER_CLASS: str = "lekiwi.policy_controller.PolicyController"
+    # CONTROLLER_CLASS: str = "lekiwi.controller.LeKiwiController"
+    CONTROLLER_CLASS: str = "lekiwi.policy_controller.PolicyController"
     MODULE_CLASSES: dict[str, str] = {
         ModuleName.BASE: "lekiwi.modules.BaseModule",
         ModuleName.ARM: "lekiwi.modules.ArmModule",

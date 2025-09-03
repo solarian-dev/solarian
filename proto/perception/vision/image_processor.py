@@ -180,11 +180,11 @@ class ImageProcessor:
             object_depth_value = np.mean(depth[object_coords.y - 10:object_coords.y + 10, object_coords.x - 10:object_coords.x + 10])
             # print("object_depth_value", object_depth_value)
 
-            tmp_depth_diff = (ref_depth_value - object_depth_value) * 100# + 150
+            tmp_depth_diff = (ref_depth_value - object_depth_value) * 100
             if not np.isnan(tmp_depth_diff):
                 depth_diff = float(tmp_depth_diff)
             
-        if self.tracked_box:
+        if self.tracked_box != EMPTY_BOX:
             return self.tracked_box + [depth_diff]
         else:
             return EMPTY_BOX

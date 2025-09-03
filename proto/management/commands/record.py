@@ -218,7 +218,7 @@ class RecordCommand(BaseCommand):
                 break
         
         log_say("Reset robot", cfg.play_sounds, blocking=True)
-        controller.control_loop(episode_time_s=reset_time_s)
+        controller.control_loop(episode_time_s=cfg.reset_time_s)
 
 
         # log_say("Saving episodes", cfg.play_sounds, blocking=False)

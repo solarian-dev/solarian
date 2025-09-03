@@ -11,7 +11,7 @@ fps: 30
 play_sounds: true
 display_cameras: true
 # tasks: ["pick lego block", "place lego block"]
-tasks: ["pick lego block test 1"]
+tasks: ["pick lego block test 2"]
 tags: null
 private: true
 num_image_writer_processes: 8

@@ -61,7 +61,8 @@ class ArmModule(Module):
         self.set_actuators_position_mode()
         # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
         # self.write_actuators("P_Coefficient", 16)
-        self.write_actuators("P_Coefficient", 8)
+        # self.write_actuators("P_Coefficient", 8)
+        self.write_actuators("P_Coefficient", 12)
         # Set I_Coefficient and D_Coefficient to default value 0 and 32
         self.write_actuators("I_Coefficient", 0)
         self.write_actuators("D_Coefficient", 32)
