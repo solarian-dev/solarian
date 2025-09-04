@@ -8,6 +8,7 @@ from . import (
     run_controller,
     record,
     replay,
+    train,
     write_controller_calibration,
     write_robot_calibration,
     calibrate_controller,

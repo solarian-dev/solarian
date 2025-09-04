@@ -19,6 +19,7 @@ else:
     CONF_NAME = "default"
 
 os.environ["PROTO_SETTINGS"] = str(Path(__file__).parent / CONF_PATH / "settings.py")
+os.environ["PROTO_PROJECT_PATH"] = str(Path(__file__).parent)
 
 from hydra import initialize, compose
 from omegaconf import DictConfig

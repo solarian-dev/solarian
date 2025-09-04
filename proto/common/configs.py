@@ -164,3 +164,39 @@ class ProjectConfig(BaseModel):
     controller: ControllerConfig
     server: ServerConfig
     robot: RobotConfig
+
+
+class WandBConfig(BaseModel):
+    enable: bool = False
+    project: str
+    disable_artifact: bool = True
+    entity: str | None = None
+    notes: str | None = None
+    run_id: str | None = None
+    mode: str | None = None
+
+
+class ACTConfig(BaseModel):
+    n_obs_steps: int = 1
+    chunk_size: int = 100
+    n_action_steps: int = 100
+    use_vae: bool = True
+    temporal_ensemble_coeff: float | None = None
+
+class TrainConfig(BaseModel):
+    train_dataset: str
+    val_dataset: str
+    output_dir: str
+
+    policy_path: str | None = None
+    job_name: str
+    resume: bool
+    batch_size: int
+    steps: int
+    num_workers: int
+    log_freq: int
+    save_freq: int
+    
+    wandb: WandBConfig
+    model: ACTConfig
+    
