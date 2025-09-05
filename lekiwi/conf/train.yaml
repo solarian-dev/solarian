@@ -1,11 +1,13 @@
-train_dataset: local@so100_pick_lego_block_lerobot_object
-val_dataset: local@lekiwi_pick_lego_block_test_2_lr
+# train_dataset: local@so100_pick_lego_block_lerobot_object
+train_dataset: local@lekiwi_place_lego_block_1
+val_dataset: null #local@lekiwi_pick_lego_block_test_2_lr
+val_percentage: 0.2
 job_name: so100_pick_dev
 resume: false
 batch_size: 16
 steps: 100
 log_freq: 1
-save_freq: 10
+save_freq: 20
 num_workers: 4
 wandb:
     enable: false

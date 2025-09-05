@@ -185,8 +185,9 @@ class ACTConfig(BaseModel):
 
 class TrainConfig(BaseModel):
     train_dataset: str
-    val_dataset: str
+    val_dataset: str | None = None
     output_dir: str
+    val_percentage: float | None = None
 
     policy_path: str | None = None
     job_name: str
@@ -196,6 +197,7 @@ class TrainConfig(BaseModel):
     num_workers: int
     log_freq: int
     save_freq: int
+    
     
     wandb: WandBConfig
     model: ACTConfig
