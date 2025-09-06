@@ -39,6 +39,7 @@ class ComponentType(str, Enum):
     FEETECH = "feetech"
     DYNAMIXEL = "dynamixel"
     OPENCV = "opencv"
+    UR5 = "ur5"
 
     def __str__(self):
         return self.value

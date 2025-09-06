@@ -1,0 +1,23 @@
+# train_dataset: local@so100_pick_lego_block_lerobot_object
+train_dataset: local@lekiwi_place_lego_block_1
+val_dataset: null #local@lekiwi_pick_lego_block_test_2_lr
+val_percentage: 0.2
+job_name: ur5_test
+resume: false
+batch_size: 16
+steps: 100
+log_freq: 1
+save_freq: 20
+num_workers: 4
+wandb:
+    enable: false
+    project: ur5
+    disable_artifact: true
+model:
+    n_obs_steps: 1
+    chunk_size: 100
+    n_action_steps: 100
+    use_vae: true
+    temporal_ensemble_coeff: null
+    # temporal_ensemble_coeff: 0.01
+

@@ -1,0 +1,6 @@
+name: ur5
+defaults:
+    controller: controller
+    server: server
+    robot: robot
+    

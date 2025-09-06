@@ -22,3 +22,20 @@
 #         except Exception as e:
 #             print(f"Error creating project: {e}")
 #             raise
+
+
+import pickle
+import os
+from omegaconf import DictConfig, OmegaConf
+from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+
+from proto.management import BaseCommand, CommandRegistry
+from proto.conf import settings
+
+
+@CommandRegistry.register('create-project', 'create_project')
+class CreateProjectCommand(BaseCommand):
+    help = 'Create a new project with the specified name'
+
+    def handle(self, cfg: DictConfig) -> None:
+        pass

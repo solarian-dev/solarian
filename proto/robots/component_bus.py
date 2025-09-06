@@ -15,6 +15,7 @@ from lerobot.common.motors.feetech import (
 
 
 from proto.robots.opencv_camera import OpenCVCamera
+from proto.robots.ur5_bus import UR5Bus
 from proto.robots.component import Component
 from proto.common.configs import ValueName, ComponentType
 from proto.common.utils import manual_profile
@@ -36,6 +37,10 @@ DATA_NAME_READ_MAP = {
     OpenCVCamera: {
         ValueName.IMAGE: ValueName.IMAGE,
     },
+    UR5Bus: {
+        ValueName.POS: "Present_Position",
+        ValueName.SPEED: "Present_Speed",
+    },
 }
 
 DATA_NAME_WRITE_MAP = {
@@ -45,6 +50,11 @@ DATA_NAME_WRITE_MAP = {
         ValueName.TORQUE_ENABLE: "Torque_Enable",
     },
     DynamixelMotorsBus: {
+        ValueName.POS: "Goal_Position",
+        ValueName.SPEED: "Goal_Speed",
+        ValueName.TORQUE_ENABLE: "Torque_Enable",
+    },
+    UR5Bus: {
         ValueName.POS: "Goal_Position",
         ValueName.SPEED: "Goal_Speed",
         ValueName.TORQUE_ENABLE: "Torque_Enable",
@@ -110,6 +120,10 @@ class ComponentBus():
                     },
                     calibration=calibration.get(port, None)
                 )
+            elif component_type == ComponentType.UR5:
+                self.component_bus_by_port[port] = UR5Bus(
+                    port=port,
+                )
             elif component_type == ComponentType.OPENCV:
                 # cameras don't share ports
                 self.component_bus_by_port[port] = first_component
@@ -130,8 +144,12 @@ class ComponentBus():
             # group component writes by port
             values_bus = {name: value for name, value in values.items() if name in self.components_by_port[port]}
             if values_bus:
-                # component_bus.write(map_write(data_name, component_bus), values=list(values_bus.values()), motor_names=list(values_bus.keys()))
-                component_bus.sync_write(map_write(data_name, component_bus), values=values_bus, normalize=normalize)
+                if isinstance(component_bus, FeetechMotorsBus) or isinstance(component_bus, DynamixelMotorsBus):
+                    component_bus.sync_write(map_write(data_name, component_bus), values=values_bus, normalize=normalize)
+                elif isinstance(component_bus, UR5Bus):
+                    component_bus.write(data_name, list(values_bus.keys()), list(values_bus.values()))
+                else:
+                    raise ValueError(f"Unknown component bus type: {component_bus.__class__}")
     
     def read(self, data_name: ValueName, component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         """Read values from components."""
@@ -140,14 +158,13 @@ class ComponentBus():
             # group component reads by port
             names_bus = [name for name in component_names if name in self.components_by_port[port]]
             if names_bus:
-                if isinstance(component_bus, FeetechMotorsBus):
+                if isinstance(component_bus, FeetechMotorsBus) or isinstance(component_bus, DynamixelMotorsBus):
                     data_name = map_read(data_name, component_bus)
                     # data = component_bus.read(data_name, motor_names=names_bus)
                     data = component_bus.sync_read(data_name, motors=names_bus, normalize=normalize).values()
-                elif isinstance(component_bus, DynamixelMotorsBus):
+                elif isinstance(component_bus, UR5Bus):
                     data_name = map_read(data_name, component_bus)
-                    # data = component_bus.read(data_name, motor_names=names_bus)
-                    data = component_bus.sync_read(data_name, motors=names_bus, normalize=normalize).values()
+                    data = component_bus.read(data_name, names_bus)
                 elif isinstance(component_bus, OpenCVCamera):
                     data_name = map_read(data_name, component_bus)
                     data = [component_bus.read(data_name)]
