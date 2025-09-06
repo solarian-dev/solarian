@@ -8,13 +8,15 @@ from enum import Enum
 class ActuatorEnum(str, Enum):
     FEETECH = "feetech"
     DYNAMIXEL = "dynamixel"
-    UR5 = "ur5"
+    UR5_JOINT = "ur5_joint"
+    UR5_CARTESIAN = "ur5_cartesian"
 
 
 actuators = {
     ActuatorEnum.FEETECH.value: FeetechServo,
     ActuatorEnum.DYNAMIXEL.value: DynamixelServo,
-    ActuatorEnum.UR5.value: UR5Servo,
+    ActuatorEnum.UR5_JOINT.value: UR5Servo,
+    ActuatorEnum.UR5_CARTESIAN.value: UR5Servo,
 }
 
 class ActuatorFactory():

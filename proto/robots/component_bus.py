@@ -120,9 +120,11 @@ class ComponentBus():
                     },
                     calibration=calibration.get(port, None)
                 )
-            elif component_type == ComponentType.UR5:
+            elif component_type == ComponentType.UR5_JOINT or component_type == ComponentType.UR5_CARTESIAN:
                 self.component_bus_by_port[port] = UR5Bus(
                     port=port,
+                    joint_names2ids={name: component.cfg.id for name, component in components.items() if component.cfg.type == ComponentType.UR5_JOINT},
+                    cartesian_names2ids={name: component.cfg.id for name, component in components.items() if component.cfg.type == ComponentType.UR5_CARTESIAN}
                 )
             elif component_type == ComponentType.OPENCV:
                 # cameras don't share ports

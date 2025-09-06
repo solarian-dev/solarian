@@ -40,18 +40,23 @@ class Module(ABC):
             self.joints[joint_name] = joint
     
         self.actuators: Dict[str, Actuator] = {}
+        self.sensors: Dict[str, Sensor] = {}
+        
+        # add actuators and sensors from joints
         for joint in self.joints.values():
             self.actuators.update(joint.get_actuators())
             self.component_bus.add_components(joint.get_actuators())
 
-        self.sensors: Dict[str, Sensor] = {}
-        for body in self.bodies.values():
-            self.sensors.update(body.get_sensors())
-            self.component_bus.add_components(body.get_sensors())
-
-        for joint in self.joints.values():
             self.sensors.update(joint.get_sensors())
             self.component_bus.add_components(joint.get_sensors())
+
+        # add actuators and sensors from bodies
+        for body in self.bodies.values():
+            self.actuators.update(body.get_actuators())
+            self.component_bus.add_components(body.get_actuators())
+
+            self.sensors.update(body.get_sensors())
+            self.component_bus.add_components(body.get_sensors())
 
         self._load_calibration()
         

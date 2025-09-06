@@ -39,7 +39,8 @@ class ComponentType(str, Enum):
     FEETECH = "feetech"
     DYNAMIXEL = "dynamixel"
     OPENCV = "opencv"
-    UR5 = "ur5"
+    UR5_CARTESIAN = "ur5_cartesian"
+    UR5_JOINT = "ur5_joint"
 
     def __str__(self):
         return self.value
@@ -83,11 +84,13 @@ class BodyConfig(BaseModel):
     mass: float
     inertia: float
     sensors: dict[str, SensorConfig] = {}
+    actuators: dict[str, ActuatorConfig] = {}
 
 # A joint is composed by a parent body, a child body, an axis and an actuator
 class JointConfig(BaseModel):
     parent_body: str
     child_body: str
+    sensors: dict[str, SensorConfig] = {}
     actuators: dict[str, ActuatorConfig] = {}
 
 # A module is composed by joints and bodies

@@ -36,6 +36,43 @@ modules:
             wrist3:
                 mass: 1
                 inertia: 1
+                actuators:
+                    x:
+                        id: 0
+                        model: ur5
+                        port: ${actuator_port}
+                        type: ur5_cartesian
+                        mode: range_m100_100
+                    y:
+                        id: 1
+                        model: ur5
+                        port: ${actuator_port}
+                        type: ur5_cartesian
+                        mode: range_m100_100
+                    z:
+                        id: 2
+                        model: ur5
+                        port: ${actuator_port}
+                        type: ur5_cartesian
+                        mode: range_m100_100
+                    rx:
+                        id: 3
+                        model: ur5
+                        port: ${actuator_port}
+                        type: ur5_cartesian
+                        mode: range_m100_100
+                    ry:
+                        id: 4
+                        model: ur5
+                        port: ${actuator_port}
+                        type: ur5_cartesian
+                        mode: range_m100_100
+                    rz:
+                        id: 5
+                        model: ur5
+                        port: ${actuator_port}
+                        type: ur5_cartesian
+                        mode: range_m100_100
             # fixed_jaw:
             #     mass: 1
             #     inertia: 1
@@ -49,10 +86,10 @@ modules:
                 child_body: shoulder
                 actuators:
                     shoulder_pan:
-                        id: 1
+                        id: 0
                         model: ur5
                         port: ${actuator_port}
-                        type: ur5
+                        type: ur5_joint
                         mode: range_m100_100
                 
             shoulder_lift:
@@ -60,49 +97,49 @@ modules:
                 child_body: upper_arm
                 actuators:
                     shoulder_lift:
-                        id: 2
+                        id: 1
                         model: ur5
                         port: ${actuator_port}
-                        type: ur5
+                        type: ur5_joint
                         mode: range_m100_100
             elbow_flex:
                 parent_body: upper_arm
                 child_body: lower_arm
                 actuators:
                     elbow_flex:
-                        id: 3
+                        id: 2
                         model: ur5
                         port: ${actuator_port}
-                        type: ur5
+                        type: ur5_joint
                         mode: range_m100_100
             wrist_flex:
                 parent_body: lower_arm
                 child_body: wrist1
                 actuators:
                     wrist_flex:
-                        id: 4
+                        id: 3
                         model: ur5
                         port: ${actuator_port}
-                        type: ur5
+                        type: ur5_joint
                         mode: range_m100_100
             wrist_yaw:
                 parent_body: wrist1
                 child_body: wrist2
                 actuators:
                     wrist_yaw:
-                        id: 5
+                        id: 4
                         model: ur5
                         port: ${actuator_port}
-                        type: ur5
+                        type: ur5_joint
                         mode: range_m100_100
             wrist_roll:
                 parent_body: wrist2
                 child_body: wrist3
                 actuators:
                     wrist_roll:
-                        id: 6
+                        id: 5
                         model: ur5
                         port: ${actuator_port}
-                        type: ur5
+                        type: ur5_joint
                         mode: range_m100_100
             

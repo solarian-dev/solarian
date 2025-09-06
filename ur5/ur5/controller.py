@@ -91,10 +91,10 @@ class UR5Controller(Controller):
             # elbow_flex += math.radians(2)
             # action_data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX] = {ValueName.POS: elbow_flex}
             
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.SHOULDER_PAN][ValueName.POS]
+            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.X][ValueName.POS]
             # add 0.1 meters to X
             value += 0.1
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.SHOULDER_PAN] = {ValueName.POS: value}
+            action_data[settings.ModuleName.ARM][settings.ActuatorName.X] = {ValueName.POS: value}
 
 
         if self.pressed_keys["backward"]:
@@ -103,34 +103,34 @@ class UR5Controller(Controller):
             # elbow_flex -= math.radians(2)
             # action_data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX] = {ValueName.POS: elbow_flex}
 
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.SHOULDER_PAN][ValueName.POS]
+            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.X][ValueName.POS]
             # add 0.1 meters
             value -= 0.1
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.SHOULDER_PAN] = {ValueName.POS: value}
+            action_data[settings.ModuleName.ARM][settings.ActuatorName.X] = {ValueName.POS: value}
 
         if self.pressed_keys["left"]:
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.SHOULDER_LIFT][ValueName.POS]
+            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Y][ValueName.POS]
             # add 0.1 meters to Y
             value += 0.1
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.SHOULDER_LIFT] = {ValueName.POS: value}
+            action_data[settings.ModuleName.ARM][settings.ActuatorName.Y] = {ValueName.POS: value}
 
         if self.pressed_keys["right"]:
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.SHOULDER_LIFT][ValueName.POS]
+            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Y][ValueName.POS]
             # add 0.1 meters
             value -= 0.1
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.SHOULDER_LIFT] = {ValueName.POS: value}
+            action_data[settings.ModuleName.ARM][settings.ActuatorName.Y] = {ValueName.POS: value}
 
         if self.pressed_keys["rotate_left"]:
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX][ValueName.POS]
+            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Z][ValueName.POS]
             # add 0.1 meters to Z
             value -= 0.1
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX] = {ValueName.POS: value}
+            action_data[settings.ModuleName.ARM][settings.ActuatorName.Z] = {ValueName.POS: value}
 
         if self.pressed_keys["rotate_right"]:
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX][ValueName.POS]
+            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Z][ValueName.POS]
             # add 0.1 meters
             value += 0.1
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX] = {ValueName.POS: value}
+            action_data[settings.ModuleName.ARM][settings.ActuatorName.Z] = {ValueName.POS: value}
 
         # wheel_actions = body_to_wheel_raw(x_cmd, y_cmd, theta_cmd)
         
