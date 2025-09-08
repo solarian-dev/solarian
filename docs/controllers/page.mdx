@@ -1,0 +1,17 @@
+export const metadata = {
+  title: 'Controllers',
+  description:
+    '',
+}
+
+# Controller
+
+Controller is a class representing a controller node in a robotic system. It is 
+responsible for receiving sensor data from the server and visualizing it in some 
+way. It also sends actuator commands to the server.
+
+## See Also
+- [Server](/server): The server node acts as a bridge between the robot and the controller. It runs on a remote machine and is responsible for receiving actuator commands from the controller and forwarding them to the robot, as well as receiving sensor data from the robot and forwarding it to the controller.
+- [Robot](/robots): The robot node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
+- [Observation](/observations): The observation node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
+- [Action](/actions): The action node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.

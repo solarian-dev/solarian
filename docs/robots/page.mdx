@@ -1,0 +1,25 @@
+export const metadata = {
+  title: 'Robots',
+  description:
+    'Robot is the node that runs on the robot hardware and abstracts all the components',
+}
+
+# Robots
+
+A robot is the node that runs on the robot hardware and abstracts all the components
+of the robot into a single interface. A robot is composed of multiple modules, each
+containing its own actuators, sensors, bodies and joints.
+
+A robot node is in charge of collecting sensor data from the robot and sending it to
+the server. It also receives actuator commands from the server and executes them on the robot.
+
+## See Also
+- [Module](/modules): The module node runs on the robot and is responsible for 
+managing the robot's actuators and sensors.
+- [Actuator](/actuators): Actuator is a base class for hardware output components 
+in robotic systems. It defines a standardized interface for sending control signals 
+to physical devices like motors or servos.
+- [Sensor](/sensors): Sensor is a base class for hardware input components in 
+robotic systems. It defines a standardized interface for reading sensor data from 
+physical devices like cameras or lidars.
+- [Server](/server): The server node acts as a bridge between the robot and the controller. It runs on a remote machine and is responsible for receiving actuator commands from the controller and forwarding them to the robot, as well as receiving sensor data from the robot and forwarding it to the controller.

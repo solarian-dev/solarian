@@ -1,0 +1,23 @@
+export const metadata = {
+  title: 'Servers',
+  description:
+    'Server is a node that runs on a remote machine and is responsible for receiving actuator commands from the controller and forwarding them to the robot, as well as receiving sensor data from the robot and forwarding it to the controller.',
+}
+
+# Servers
+
+Server is a node that runs on a remote machine (typically a cloud server) and acts
+as a relay between the robot and the controller. It is responsible for receiving 
+actuator commands from the controller and forwarding them to the robot, as well as 
+receiving sensor data from the robot and forwarding it to the controller.
+
+A server will typically run preprocessing and postprocessing logic on the sensor 
+data before sending it to the controller and on the actuator commands before sending 
+them to the robot. An example would be to convert the sensor data to a standardized 
+format or to apply some filtering, smoothing, object detection, depth estimation, etc.
+
+## See Also
+- [Controller](/controllers): The controller node runs on the robot and is responsible for managing the robot's actuators and sensors.
+- [Robot](/robots): The robot node runs on the robot and is responsible for managing the robot's actuators and sensors.
+- [Actuator](/actuators): Actuator is a base class for hardware output components in robotic systems. It defines a standardized interface for sending control signals to physical devices like motors or servos.
+- [Sensor](/sensors): Sensor is a base class for hardware input components in robotic systems. It defines a standardized interface for reading sensor data from physical devices like cameras or lidars.

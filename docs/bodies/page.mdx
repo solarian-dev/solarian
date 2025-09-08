@@ -1,0 +1,25 @@
+export const metadata = {
+  title: 'Bodies',
+  description:
+    'Bodies are the physical components of a robot module, encapsulating its actuators and sensors.',
+}
+
+# Bodies
+
+Body is a class representing a physical component of a robot module, encapsulating 
+its actuators and sensors.
+
+It is instantiated during the initialization of a Module, using configuration data 
+to dynamically create and store sensor and actuator components based on the provided BodyConfig.
+
+## See Also
+- [Module](/modules): The module node runs on the robot and is responsible for 
+managing the robot's actuators and sensors.
+- [Actuator](/actuators): Actuator is a base class for hardware output components 
+in robotic systems. It defines a standardized interface for sending control signals 
+to physical devices like motors or servos.
+- [Sensor](/sensors): Sensor is a base class for hardware input components in 
+robotic systems. It defines a standardized interface for reading sensor data from 
+physical devices like cameras or lidars.
+- [BodyConfig](/body-config): BodyConfig is a configuration class for a robot body, 
+- [Joint](/joints): Joint is a class representing a joint between two bodies.

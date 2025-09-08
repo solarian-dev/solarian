@@ -1,0 +1,34 @@
+export const metadata = {
+  title: 'Architecture',
+  description:
+    'This guide will explain the architecture of the Proto framework.',
+}
+
+# Architecture
+
+Proto is designed as a Robot `<->` Server `<->` Controller architecture.
+
+The robot node runs on the robot and is responsible for collecting sensor data and 
+sending it to the server. It also receives actuator commands from the server and 
+executes them on the robot.
+
+The server node acts as a bridge between the robot and the controller. It runs 
+on a remote machine and is responsible for:
+- Receiving actuator commands from the controller and forwarding them to the robot
+- Receiving sensor data from the robot and forwarding it to the controller
+
+The controller node runs on a remote machine and is responsible for:
+- Receiving sensor data from the server and visualizing them in some way
+- Sending actuator commands to the server
+A typical controller node will either run a policy (e.g. a neural network) or an
+interface for human operators (joysticks, leader arms, etc.).
+
+## See Also
+- [Robot](/robots): The robot node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
+- [Server](/server): The server node acts as a bridge between the robot and the controller. It runs on a remote machine and is responsible for receiving actuator commands from the controller and forwarding them to the robot, as well as receiving sensor data from the robot and forwarding it to the controller.
+- [Controller](/controller): The controller node runs on a remote machine and is responsible for receiving sensor data from the server and visualizing them in some way. It also sends actuator commands to the server.
+- [Observation](/observations): The observation node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
+- [Action](/actions): The action node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
+
+
+

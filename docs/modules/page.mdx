@@ -1,0 +1,33 @@
+export const metadata = {
+  title: 'Modules',
+  description:
+    'Modules are the physical components of a robot module, encapsulating its bodies, joints, actuators and sensors.',
+}
+
+# Modules
+
+Modules are the physical components of a robot module, encapsulating its bodies, 
+joints, actuators and sensors.
+
+It is instantiated during the initialization of a Robot, using configuration data 
+to dynamically create and store sensor and actuator components based on the provided ModuleConfig.
+
+Modules can be reused to create multiple instances of the same module on the same or 
+different robots.
+
+A typical module would be a robot arm, robot leg, robot base, etc.
+
+## See Also
+- [Body](/bodies): Bodies are the physical components of a robot module, 
+encapsulating its actuators and sensors.
+- [Joint](/joints): Joints are the physical connections between two bodies in a 
+robotic system. They define the relative positions and orientations of the two 
+bodies and allow for relative motion between them.
+- [Actuator](/actuators): Actuator is a base class for hardware output components 
+in robotic systems. It defines a standardized interface for sending control signals 
+to physical devices like motors or servos.
+- [Sensor](/sensors): Sensor is a base class for hardware input components in 
+robotic systems. It defines a standardized interface for reading sensor data from 
+physical devices like cameras or lidars.
+- [ModuleConfig](/module-config): ModuleConfig is a configuration class for a robot module, 
+defining the module's bodies, joints, actuators and sensors.
