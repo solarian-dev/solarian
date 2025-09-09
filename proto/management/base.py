@@ -1,4 +1,4 @@
-from typing import Dict, Type
+from typing import Dict, Type, Optional, Any
 from abc import ABC, abstractmethod
 from omegaconf import DictConfig
 
@@ -28,6 +28,16 @@ class CommandRegistry:
 
 class BaseCommand(ABC):
     help = ""  # Command help text
+    
+    def get_config_class(self) -> Optional[Type[Any]]:
+        """
+        Return the Pydantic model class for this command's configuration.
+        Override this method in subclasses that need config validation.
+        
+        Returns:
+            Optional[Type[Any]]: A Pydantic model class or None if no validation is needed
+        """
+        return None
 
     @abstractmethod
     def handle(self, cfg: DictConfig) -> None:

@@ -22,7 +22,8 @@ os.environ["PROTO_SETTINGS"] = str(Path(__file__).parent / CONF_PATH / "settings
 os.environ["PROTO_PROJECT_PATH"] = str(Path(__file__).parent)
 
 from hydra import initialize, compose
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
+import colorama
 
 from proto.management import CommandRegistry
 
@@ -32,6 +33,8 @@ def main() -> None:
     Given the command-line arguments, figure out which subcommand is being
     run, create a parser appropriate to that command, and run it.
     """
+    colorama.init()  # Initialize colorama for colored terminal output
+    
     subcommand = args.subcommand or "help"
     try:
         cmd = CommandRegistry.get_command(subcommand)
@@ -44,9 +47,37 @@ def main() -> None:
     else:
         config_name = CONF_NAME
 
-    with initialize(version_base=None, config_path=CONF_PATH, job_name='proto_app'):
-        cfg = compose(config_name=config_name)
-        cmd.handle(cfg)
+    try:
+        with initialize(version_base=None, config_path=CONF_PATH, job_name='proto_app'):
+            # Store the current config path for error reporting
+            config_file = Path(CONF_PATH) / f"{config_name}.yaml"
+            if config_file.exists():
+                os.environ["PROTO_CURRENT_CONFIG"] = str(config_file.absolute())
+                
+            # Load the config using hydra
+            hydra_cfg = compose(config_name=config_name)
+            
+            # Convert to dict for Pydantic parsing
+            cfg_dict = OmegaConf.to_container(hydra_cfg, resolve=True)
+            
+            # Parse using the command's config class which now has built-in validation
+            cmd_config_class = cmd.get_config_class()
+            if cmd_config_class:
+                cfg = cmd_config_class.parse_with_friendly_errors(cfg_dict)
+            else:
+                cfg = hydra_cfg
+                
+            cmd.handle(cfg)
+    except ValueError as e:
+        # Handle configuration validation errors
+        print(f"\n{colorama.Fore.RED}{str(e)}{colorama.Style.RESET_ALL}")
+        sys.exit(1)
+    except Exception as e:
+        # Handle other exceptions
+        print(f"\n{colorama.Fore.RED}Error: {str(e)}{colorama.Style.RESET_ALL}")
+        import traceback
+        print(traceback.format_exc())
+        sys.exit(1)
 
 
 if __name__ == '__main__':
@@ -64,4 +95,3 @@ if __name__ == '__main__':
             
     sys.argv = [arg for i, arg in enumerate(sys.argv) if i not in index_remove]
     main()
-

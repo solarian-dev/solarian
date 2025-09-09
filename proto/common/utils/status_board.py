@@ -83,5 +83,5 @@ class StatusBoard:
 
 
 
-board = StatusBoard()
+# board = StatusBoard()
 

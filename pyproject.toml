@@ -29,6 +29,7 @@ dependencies = [
     "pydantic-settings>=2.9.1",
     "dm_control==1.0.30",
     "urx==0.11.0",
+    "wandb>=0.16.3",
 ]
 
 
