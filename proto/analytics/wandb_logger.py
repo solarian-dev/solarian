@@ -65,4 +65,4 @@ class WandBLogger(TrainLogger):
 
 
     def log(self, data: LogTrainData):
-        self.run.log(step=data.step, data=data.model_dump())
+        self.run.log(data.model_dump()["data"], step=data.step)

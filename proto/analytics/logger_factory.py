@@ -35,18 +35,6 @@ class LoggerFactory():
         try:
             if logger_cfg.type not in loggers:
                 raise ValueError(f"Logger type '{logger_cfg.type}' is not implemented.")
-            
-            # If using WandB logger, ensure we have the correct config type
-            if logger_cfg.type == LoggerEnum.WANDB.value:
-                # If we have a TrainLoggerConfig but need a WandBLoggerConfig
-                if not isinstance(logger_cfg, WandBLoggerConfig):
-                    # Create a WandBLoggerConfig with the same project from TrainLoggerConfig
-                    # All other fields will use default values (entity=None, run_id=None, mode=None)
-                    logger_cfg = WandBLoggerConfig(
-                        type=logger_cfg.type,
-                        project=logger_cfg.project,
-                        notes=logger_cfg.notes if hasattr(logger_cfg, 'notes') else None
-                    )
                 
             # Let the specific logger implementation handle additional validation
             return loggers[logger_cfg.type](logger_cfg, **kwargs)

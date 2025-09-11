@@ -3,21 +3,26 @@ train_dataset: local@lekiwi_place_lego_block_1
 # val_dataset: null #local@lekiwi_pick_lego_block_test_2_lr
 # output_dir: null
 val_percentage: 0.2
-job_name: so100_pick_dev
+job_name: so100_pick_dev2
 resume: false
-learning_rate: 1e-4
 batch_size: 16
 steps: 100
-log_freq: 1
-save_freq: 20
+log_freq: 10
+save_freq: 50
 num_workers: 4
+optimizer:
+    type: adam
+precision:
+    amp_enabled: false
+scheduler:
+    type: null
 logger:
-    enable: false
     type: wandb
     project: lekiwi
     notes: "testing wandb integration"
     log_artifact: false
 model:
+    type: act
     n_obs_steps: 1
     chunk_size: 100
     n_action_steps: 100

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, field_validator, model_validator, ValidationError
 from enum import Enum
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Union, Literal
 import os
 from pathlib import Path
 
@@ -197,15 +197,14 @@ class ConfigBaseModel(BaseModel):
 
 
 class LoggerConfig(ConfigBaseModel):
-    type: str
+    type: Literal['wandb'] | None = None
     
 
-class TrainLoggerConfig(LoggerConfig):
-    enable: bool = False
+class TrainLoggerConfig(ConfigBaseModel):
+    type: Literal['none', 'wandb']
     project: str
     notes: str | None = None
     log_artifact: bool = False
-
 
 class WandBLoggerConfig(TrainLoggerConfig):
     entity: str | None = None
@@ -221,7 +220,35 @@ class WandBLoggerConfig(TrainLoggerConfig):
         return v
 
 
-class ACTConfig(ConfigBaseModel):
+class SchedulerConfig(ConfigBaseModel):
+    type: Literal['cosine'] | None = None
+    
+
+class PrecisionConfig(ConfigBaseModel):
+    amp_enabled: bool = False # Use mixed precision training and enable grad scaler
+    init_scale: float = 2 ** 16
+    growth_interval: int = 2000
+    growth_factor: float = 2.0
+
+
+class TrainOptimizerConfig(ConfigBaseModel):
+    type: Literal['adam'] = 'adam'
+    
+
+class AdamOptimizerConfig(TrainOptimizerConfig):
+    lr: float = 1e-3
+    betas: tuple[float, float] = (0.9, 0.999)
+    eps: float = 1e-8
+    weight_decay: float = 0.0
+    grad_clip_norm: float = 10.0
+    
+    
+
+
+class ModelConfig(ConfigBaseModel):
+    type: Literal['act', 'diffusion'] = 'act'
+
+class ACTConfig(ModelConfig):
     n_obs_steps: int = 1
     chunk_size: int = 100
     n_action_steps: int = 100
@@ -238,15 +265,17 @@ class TrainConfig(ConfigBaseModel):
     policy_path: str | None = None
     job_name: str
     resume: bool
-    learning_rate: float
     batch_size: int
     steps: int
     num_workers: int
     log_freq: int
     save_freq: int
     
-    logger: TrainLoggerConfig
-    model: ACTConfig
+    optimizer: Union[AdamOptimizerConfig] = Field(discriminator="type")
+    scheduler: SchedulerConfig
+    precision: PrecisionConfig
+    logger: Union[WandBLoggerConfig] = Field(discriminator="type")
+    model: Union[ACTConfig] = Field(discriminator="type")
     
     @model_validator(mode='after')
     def validate_output_dir_when_resuming(cls, values) -> 'TrainConfig':
@@ -259,14 +288,14 @@ class TrainConfig(ConfigBaseModel):
     @classmethod
     def validate_logger_config(cls, v):
         """Validate the logger configuration"""
-        if v.enable and v.type == "wandb":
+        if v.type == "wandb":
             if not hasattr(v, 'project') or not v.project:
                 raise ValueError("logger.project must be specified when logger is enabled with type 'wandb'")
         return v
     
     def to_tags(self) -> list[str]:
         tags = [
-            f"lr:{self.learning_rate}",
+            f"lr:{self.optimizer.lr}",
             f"batch_size:{self.batch_size}",
             f"train_dataset:{self.train_dataset}",
             f"val_dataset:{self.val_dataset if self.val_dataset else self.train_dataset}",

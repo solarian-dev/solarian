@@ -16,6 +16,123 @@ from proto.common.configs import TrainConfig
 from proto.analytics import LoggerFactory
 
 
+import os
+import time
+import random
+from typing import Optional, Tuple, Dict, Any
+
+import torch
+import numpy as np
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import _LRScheduler
+from torch.cuda.amp import GradScaler
+
+
+def save_training_state(
+    path: str,
+    optimizer: Optimizer,
+    *,
+    step: int,
+    scheduler: Optional[_LRScheduler] = None,
+    scaler: Optional[GradScaler] = None,
+    save_rng_state: bool = True,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Save training state for resume:
+      - optimizer state
+      - learning-rate scheduler state (if any)
+      - AMP GradScaler state (if any)
+      - global step (int)
+      - RNG states (optional: torch, cuda, numpy, random)
+      - any extra metadata you want (dict)
+
+    Notes:
+    - This does NOT save model weights (use model.state_dict() separately).
+    - File is written atomically by saving to a temp file then renaming.
+    """
+    state = {
+        "version": 1,
+        "timestamp": time.time(),
+        "step": int(step),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict() if scheduler is not None else None,
+        "scaler": scaler.state_dict() if scaler is not None else None,
+        "extra": extra or {},
+    }
+
+    if save_rng_state:
+        state["rng"] = {
+            "python_random": random.getstate(),
+            "numpy_random": np.random.get_state(),
+            "torch_cpu": torch.get_rng_state(),
+            "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        }
+
+    # Atomic write
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp_path = f"{path}.tmp"
+    torch.save(state, tmp_path)
+    os.replace(tmp_path, path)
+
+
+def load_training_state(
+    path: str,
+    optimizer: Optimizer,
+    *,
+    scheduler: Optional[_LRScheduler] = None,
+    scaler: Optional[GradScaler] = None,
+    map_location: str = "cpu",
+    restore_rng_state: bool = True,
+) -> Tuple[int, Dict[str, Any]]:
+    """
+    Load training state and restore into the provided optimizer/scheduler/scaler.
+
+    Returns:
+      step (int), extra (dict)
+
+    Usage pattern:
+      step, extra = load_training_state(ckpt, optimizer, scheduler=my_sched, scaler=my_scaler)
+      # resume your loop from `step+1`
+    """
+    state = torch.load(path, map_location=map_location)
+
+    # Optimizer
+    optimizer.load_state_dict(state["optimizer"])
+
+    # Scheduler (if provided & present)
+    if scheduler is not None and state.get("scheduler") is not None:
+        try:
+            scheduler.load_state_dict(state["scheduler"])
+        except Exception as e:
+            # In case of scheduler type/param mismatch, don't hard-crash.
+            print(f"[load_training_state] Warning: could not load scheduler state ({e}).")
+
+    # GradScaler (if provided & present)
+    if scaler is not None and state.get("scaler") is not None:
+        try:
+            scaler.load_state_dict(state["scaler"])
+        except Exception as e:
+            print(f"[load_training_state] Warning: could not load GradScaler state ({e}).")
+
+    # RNG
+    if restore_rng_state and state.get("rng"):
+        rng = state["rng"]
+        try:
+            random.setstate(rng["python_random"])
+            np.random.set_state(rng["numpy_random"])
+            torch.set_rng_state(rng["torch_cpu"])
+            if torch.cuda.is_available() and rng["torch_cuda"] is not None:
+                torch.cuda.set_rng_state_all(rng["torch_cuda"])
+        except Exception as e:
+            print(f"[load_training_state] Warning: could not restore RNG state ({e}).")
+
+    step = int(state.get("step", 0))
+    extra = state.get("extra", {})
+    return step, extra
+
+
+
 @CommandRegistry.register('train', 'train')
 class TrainCommand(BaseCommand):
     help = 'Train a model.'
@@ -36,7 +153,7 @@ class TrainCommand(BaseCommand):
 
             # Create logger if enabled
             logger = None
-            if cfg.logger.enable:
+            if cfg.logger.type is not 'none':
                 logger = LoggerFactory.create_logger(cfg.logger, train_cfg=cfg)
 
             # Select your device
@@ -173,7 +290,39 @@ class TrainCommand(BaseCommand):
 
 
             # Then we create our optimizer and dataloader for offline training.
-            optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.learning_rate)
+            # TODO: support other optimizers use a factory pattern
+            optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.optimizer.lr)
+            
+            if cfg.scheduler.type is not None:
+                # TODO: support other schedulers use a factory pattern
+                lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.9)
+            else:
+                lr_scheduler = None
+
+            if cfg.precision.amp_enabled:
+                grad_scaler = torch.amp.GradScaler(
+                    init_scale=cfg.precision.init_scale, 
+                    growth_interval=cfg.precision.growth_interval, 
+                    growth_factor=cfg.precision.growth_factor
+                )
+            else:
+                grad_scaler = None
+
+            if cfg.resume:
+                # load training state
+                step, extra = load_training_state(
+                    cfg.policy_path + "/train_state.pt", 
+                    optimizer, 
+                    scheduler=lr_scheduler, 
+                    scaler=grad_scaler
+                )
+            else:
+                step = 0
+
+
+            # TODO: print number of trainable parameters
+                
+            
             train_dataloader = torch.utils.data.DataLoader(
                 train_dataset,
                 num_workers=cfg.num_workers,
@@ -184,7 +333,6 @@ class TrainCommand(BaseCommand):
             )
 
             # Run training loop.
-            step = 0 
             done = False
             training_loss = 0
             average_loss = 0
@@ -197,35 +345,83 @@ class TrainCommand(BaseCommand):
 
                         batch = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
                         
-                        loss, _ = policy.forward(batch)
-                        loss.backward()
-                        optimizer.step()
+                        if cfg.precision.amp_enabled:
+                            with torch.autocast():
+                                loss, loss_dict = policy.forward(batch)
+                        else:
+                            loss, loss_dict = policy.forward(batch)
+                        
+                        
+                        if cfg.precision.amp_enabled:
+                            grad_scaler.scale(loss).backward()
+                            grad_scaler.unscale_(optimizer)
+                            grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
+                            grad_scaler.step(optimizer)
+                            grad_scaler.update()
+                        else:
+                            loss.backward()
+                            grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
+                            optimizer.step()
+
                         optimizer.zero_grad()
+
+                        if lr_scheduler is not None:
+                            lr_scheduler.step()
+
+                        if hasattr(policy, "update") and callable(getattr(policy, "update")):
+                            policy.update()
 
                         step += 1
 
                         training_loss = loss.item()
                         pbar.set_postfix({"epoch": epoch, "train_loss": training_loss})
                         pbar.update(1)
+                        log_data = {}
 
                         if step % log_freq == 0:
                             training_loss = loss.item()
                             # print(f"step: {step} loss: {loss.item():.3f}")
-                            if cfg.logger.enable and logger is not None:
+                            if logger is not None:
                                 from proto.analytics.train_logger import LogTrainData
-                                logger.log(LogTrainData(step=step, data={"train/loss": training_loss}))
+                                log_data.update({
+                                    "train/loss": training_loss,
+                                    "train/lr": optimizer.param_groups[0]["lr"],
+                                    "train/epoch": epoch,
+                                    "train/episodes": epoch,
+                                })
+                                for key, value in loss_dict.items():
+                                    log_data[f"train/{key}"] = value
+                                logger.log(
+                                    LogTrainData(
+                                        step=step, 
+                                        data=log_data
+                                    )
+                                )
                                 
                             # print(f"step: {step}")
 
                         # save checkpoint
                         if step % cfg.save_freq == 0:
                             step_str = str(step).zfill(6)
+                            # save model params checkpoint
                             policy.save_pretrained(output_directory / f"checkpoints/{step_str}/pretrained_model")
+                            # save training state checkpoint
+                            save_training_state(
+                                path=output_directory / f"checkpoints/{step_str}/pretrained_model/train_state.pt",
+                                optimizer=optimizer,
+                                step=step,
+                                scheduler=lr_scheduler,
+                                scaler=grad_scaler,
+                            )
+
 
                             # perform evaluation on validation dataset
                             if val_dataset is not None:
                                 policy.eval()
-                                with torch.inference_mode():
+                                with (
+                                    torch.inference_mode(),
+                                    torch.autocast(device_type=device.type, enabled=cfg.precision.amp_enabled)
+                                ):
                                     loss_cumsum = 0
                                     j = 0
                                     average_loss = 0
@@ -248,9 +444,22 @@ class TrainCommand(BaseCommand):
                                 # Calculate the average loss over the validation set.
                                 # average_loss = loss_cumsum / len(val_dataloader)
                                 # print(f"Validation loss: {average_loss:.3f}")
-                                if cfg.logger.enable and logger is not None:
+                                if logger is not None:
                                     from proto.analytics.train_logger import LogTrainData
-                                    logger.log(LogTrainData(step=step, data={"validate/loss": average_loss}))
+                                    log_data.update({
+                                        "validate/loss": average_loss,
+                                        "validate/lr": optimizer.param_groups[0]["lr"],
+                                        "validate/epoch": epoch,
+                                        "validate/episodes": epoch,
+                                    })
+                                    for key, value in loss_dict.items():
+                                        log_data[f"validate/{key}"] = value
+                                    logger.log(
+                                        LogTrainData(
+                                            step=step, 
+                                            data=log_data
+                                        )
+                                    )
                                 # reset policy to training mode
                                 policy.train()
 
