@@ -12,6 +12,8 @@ videos
 images
 policies
 *.pt
+conf_dev
+# conf_test
 
 
 # Ignore WIP
@@ -27,6 +29,7 @@ gd.py
 backups
 datasets
 view_parquet.ipynb
+notes.txt
 # ur5
 
 # Apple

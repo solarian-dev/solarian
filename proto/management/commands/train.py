@@ -153,7 +153,7 @@ class TrainCommand(BaseCommand):
 
             # Create logger if enabled
             logger = None
-            if cfg.logger.type is not 'none':
+            if cfg.logger.type != 'none':
                 logger = LoggerFactory.create_logger(cfg.logger, train_cfg=cfg)
 
             # Select your device
@@ -179,8 +179,8 @@ class TrainCommand(BaseCommand):
                 train_root = None
                 train_revision = None
 
-            print(f"Selected dataset: {train_repo_id}")
-            print(f"Selected root: {train_root}")
+            print(f"Dataset: {train_repo_id}")
+            # print(f"Selected root: {train_root}")
 
             train_ds_meta = LeRobotDatasetMetadata(repo_id=train_repo_id, root=train_root, revision=train_revision)
             features = dataset_to_policy_features(train_ds_meta.features)
@@ -240,11 +240,11 @@ class TrainCommand(BaseCommand):
                 total_episodes = train_ds_meta.total_episodes
                 episodes = list(range(train_ds_meta.total_episodes))
                 num_train_episodes = math.floor(total_episodes * (1 - cfg.val_percentage))
+                num_train_frames = train_ds_meta.total_frames * (1 - cfg.val_percentage)
                 train_episodes = episodes[:num_train_episodes]
                 val_episodes = episodes[num_train_episodes:]
-                print(f"Number of episodes in training dataset: {len(train_episodes)}")
-                print(f"Number of episodes in validation dataset: {len(val_episodes)}")
-                
+                num_val_episodes = len(val_episodes)
+                num_val_frames = train_ds_meta.total_frames - num_train_frames
                 
                 # - Load train and val datasets
                 train_dataset = LeRobotDataset(train_repo_id, root=train_root, revision=train_revision, episodes=train_episodes, delta_timestamps=delta_timestamps)
@@ -255,7 +255,11 @@ class TrainCommand(BaseCommand):
                 val_dataset = LeRobotDataset(train_repo_id, root=train_root, revision=train_revision, episodes=val_episodes, delta_timestamps=delta_timestamps)
                 
             else:
-                print(f"Number of episodes in training dataset: {train_ds_meta.total_episodes}")
+                num_train_episodes = train_ds_meta.total_episodes
+                num_train_frames = train_ds_meta.total_frames
+                num_val_episodes = 0
+                num_val_frames = 0
+                
                 train_dataset = LeRobotDataset(train_repo_id, root=train_root, revision=train_revision, delta_timestamps=delta_timestamps)
                 if cfg.val_dataset is not None:
                     val_repo_id = cfg.val_dataset.split("@")[1]
@@ -263,18 +267,13 @@ class TrainCommand(BaseCommand):
                     val_revision = '-'
                     val_dataset = LeRobotDataset(val_repo_id, root=val_root, revision=val_revision, delta_timestamps=delta_timestamps)
                     val_ds_meta = LeRobotDatasetMetadata(repo_id=val_repo_id, root=val_root, revision=val_revision)
-                    print(f"Number of episodes in validation dataset: {val_ds_meta.total_episodes}")
-                    
+                    num_val_episodes = val_ds_meta.total_episodes
+                    num_val_frames = val_ds_meta.total_frames
                 else:
                     val_dataset = None
 
-            print(f"Number of frames in training dataset: {len(train_dataset)}")
-
-
             val_batch_size = min(cfg.batch_size, len(val_dataset))
-            print(f"Validation batch size: {val_batch_size}")
             
-
             # Create dataloader for evaluation.
             if val_dataset is not None:
                 val_dataloader = torch.utils.data.DataLoader(
@@ -285,10 +284,7 @@ class TrainCommand(BaseCommand):
                     pin_memory=(device == torch.device("cuda")),
                     drop_last=False,
                 )
-                print(f"Number of frames in validation dataset: {len(val_dataset)}")
-
-
-
+                
             # Then we create our optimizer and dataloader for offline training.
             # TODO: support other optimizers use a factory pattern
             optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.optimizer.lr)
@@ -307,6 +303,24 @@ class TrainCommand(BaseCommand):
                 )
             else:
                 grad_scaler = None
+            
+            train_dataloader = torch.utils.data.DataLoader(
+                train_dataset,
+                num_workers=cfg.num_workers,
+                batch_size=cfg.batch_size,
+                shuffle=True,
+                pin_memory=(device == torch.device("cuda")),
+                drop_last=True,
+            )
+
+            num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
+            num_total_params = sum(p.numel() for p in policy.parameters())
+            print(f"Number of learnable parameters: {num_learnable_params}")
+            print(f"Number of total parameters: {num_total_params}")
+            print(f"Number of frames in training dataset: {num_train_frames}")
+            print(f"Number of episodes in training dataset: {num_train_episodes}")
+            print(f"Number of frames in validation dataset: {num_val_frames}")
+            print(f"Number of episodes in validation dataset: {num_val_episodes}")
 
             if cfg.resume:
                 # load training state
@@ -319,24 +333,12 @@ class TrainCommand(BaseCommand):
             else:
                 step = 0
 
-
-            # TODO: print number of trainable parameters
-                
-            
-            train_dataloader = torch.utils.data.DataLoader(
-                train_dataset,
-                num_workers=cfg.num_workers,
-                batch_size=cfg.batch_size,
-                shuffle=True,
-                pin_memory=(device == torch.device("cuda")),
-                drop_last=True,
-            )
-
             # Run training loop.
             done = False
             training_loss = 0
             average_loss = 0
             epoch = 0
+            samples = 0
             with tqdm(total=training_steps, desc="Training") as pbar:
                 while not done:
                     
@@ -372,6 +374,9 @@ class TrainCommand(BaseCommand):
                             policy.update()
 
                         step += 1
+                        samples += cfg.batch_size
+                        episodes = samples / (num_train_frames / num_train_episodes)
+                        epoch = samples / num_train_frames
 
                         training_loss = loss.item()
                         pbar.set_postfix({"epoch": epoch, "train_loss": training_loss})
@@ -387,7 +392,8 @@ class TrainCommand(BaseCommand):
                                     "train/loss": training_loss,
                                     "train/lr": optimizer.param_groups[0]["lr"],
                                     "train/epoch": epoch,
-                                    "train/episodes": epoch,
+                                    "train/episodes": episodes,
+                                    "train/samples": samples,
                                 })
                                 for key, value in loss_dict.items():
                                     log_data[f"train/{key}"] = value
@@ -398,8 +404,6 @@ class TrainCommand(BaseCommand):
                                     )
                                 )
                                 
-                            # print(f"step: {step}")
-
                         # save checkpoint
                         if step % cfg.save_freq == 0:
                             step_str = str(step).zfill(6)
@@ -413,7 +417,6 @@ class TrainCommand(BaseCommand):
                                 scheduler=lr_scheduler,
                                 scaler=grad_scaler,
                             )
-
 
                             # perform evaluation on validation dataset
                             if val_dataset is not None:
@@ -448,9 +451,6 @@ class TrainCommand(BaseCommand):
                                     from proto.analytics.train_logger import LogTrainData
                                     log_data.update({
                                         "validate/loss": average_loss,
-                                        "validate/lr": optimizer.param_groups[0]["lr"],
-                                        "validate/epoch": epoch,
-                                        "validate/episodes": epoch,
                                     })
                                     for key, value in loss_dict.items():
                                         log_data[f"validate/{key}"] = value
@@ -462,14 +462,10 @@ class TrainCommand(BaseCommand):
                                     )
                                 # reset policy to training mode
                                 policy.train()
-
-                        
                         
                         if step >= training_steps:
                             done = True
                             break
-
-                    epoch += 1
 
                         
         except Exception as e:

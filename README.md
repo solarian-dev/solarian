@@ -95,3 +95,12 @@ v4l2-ctl --list-devices
 
 # Check supported formats and frame rates for your camera (replace /dev/video0 with your device)
 v4l2-ctl -d /dev/video0 --list-formats-ext
+```
+
+### Training a model
+
+First you should create a config file in the `conf/train` directory. Then you can run the following command:
+
+```bash
+python manage.py train --conf conf/your_train_config.yaml
+```

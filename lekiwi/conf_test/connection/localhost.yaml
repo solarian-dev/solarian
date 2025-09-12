@@ -1,5 +1,0 @@
-ip: 127.0.0.1
-action_sender_port: 5560
-action_receiver_port: 5561
-state_sender_port: 5562
-state_receiver_port: 5563
