@@ -13,7 +13,7 @@ images
 policies
 *.pt
 conf_dev
-# conf_test
+conf_test
 
 
 # Ignore WIP

@@ -232,15 +232,25 @@ class PrecisionConfig(ConfigBaseModel):
 
 
 class TrainOptimizerConfig(ConfigBaseModel):
-    type: Literal['adam'] = 'adam'
+    type: Literal['adam', 'adamw'] = 'adamw'
     
 
 class AdamOptimizerConfig(TrainOptimizerConfig):
-    lr: float = 1e-3
+    type: Literal['adam'] = 'adam'
+    lr: float = 2e-5
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
-    weight_decay: float = 0.0
-    grad_clip_norm: float = 10.0
+    weight_decay: float = 0.0001
+    
+
+
+class AdamWOptimizerConfig(TrainOptimizerConfig):
+    type: Literal['adamw'] = 'adamw'
+    lr: float = 2e-5
+    betas: tuple[float, float] = (0.9, 0.999)
+    eps: float = 1e-8
+    weight_decay: float = 0.0001
+    
     
     
 
@@ -269,19 +279,20 @@ class TrainConfig(ConfigBaseModel):
     steps: int
     num_workers: int
     log_freq: int
+    val_freq: int
     save_freq: int
     
-    optimizer: Union[AdamOptimizerConfig] = Field(discriminator="type")
+    optimizer: Union[AdamOptimizerConfig, AdamWOptimizerConfig] = Field(discriminator="type")
     scheduler: SchedulerConfig
     precision: PrecisionConfig
     logger: Union[WandBLoggerConfig] = Field(discriminator="type")
     model: Union[ACTConfig] = Field(discriminator="type")
     
     @model_validator(mode='after')
-    def validate_output_dir_when_resuming(cls, values) -> 'TrainConfig':
-        """Validate that output_dir is provided when resuming"""
-        if values.resume and not values.output_dir:
-            raise ValueError("output_dir must be specified when resume is true")
+    def validate_policy_path_when_resuming(cls, values) -> 'TrainConfig':
+        """Validate that policy_path is provided when resuming"""
+        if values.resume and not values.policy_path:
+            raise ValueError("policy_path must be specified when resume is true")
         return values
     
     @field_validator('logger')

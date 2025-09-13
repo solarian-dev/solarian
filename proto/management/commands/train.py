@@ -14,6 +14,7 @@ from lerobot.common.policies.act.configuration_act import ACTConfig
 from proto.management import BaseCommand, CommandRegistry
 from proto.common.configs import TrainConfig
 from proto.analytics import LoggerFactory
+from proto.analytics.train_logger import TrainDataLog
 
 
 import os
@@ -26,6 +27,14 @@ import numpy as np
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.cuda.amp import GradScaler
+
+
+def update_last_checkpoint(checkpoint_dir: Path) -> Path:
+    last_checkpoint_dir = checkpoint_dir.parent / "last"
+    if last_checkpoint_dir.is_symlink():
+        last_checkpoint_dir.unlink()
+    relative_target = checkpoint_dir.relative_to(checkpoint_dir.parent)
+    last_checkpoint_dir.symlink_to(relative_target)
 
 
 def save_training_state(
@@ -95,7 +104,7 @@ def load_training_state(
       step, extra = load_training_state(ckpt, optimizer, scheduler=my_sched, scaler=my_scaler)
       # resume your loop from `step+1`
     """
-    state = torch.load(path, map_location=map_location)
+    state = torch.load(path, map_location=map_location, weights_only=False)
 
     # Optimizer
     optimizer.load_state_dict(state["optimizer"])
@@ -287,7 +296,12 @@ class TrainCommand(BaseCommand):
                 
             # Then we create our optimizer and dataloader for offline training.
             # TODO: support other optimizers use a factory pattern
-            optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.optimizer.lr)
+            optimizer_args = cfg.optimizer.model_dump()
+            optimizer_args.pop("type")
+            if cfg.optimizer.type == 'adam':
+                optimizer = torch.optim.Adam(policy.parameters(), **optimizer_args)
+            elif cfg.optimizer.type == 'adamw':
+                optimizer = torch.optim.AdamW(policy.parameters(), **optimizer_args)
             
             if cfg.scheduler.type is not None:
                 # TODO: support other schedulers use a factory pattern
@@ -335,11 +349,10 @@ class TrainCommand(BaseCommand):
 
             # Run training loop.
             done = False
-            training_loss = 0
-            average_loss = 0
-            epoch = 0
-            samples = 0
-            with tqdm(total=training_steps, desc="Training") as pbar:
+            samples = step*cfg.batch_size
+            
+            data_log = TrainDataLog()
+            with tqdm(initial=step, total=training_steps, desc="Training") as pbar:
                 while not done:
                     
                     for batch in train_dataloader:
@@ -378,37 +391,30 @@ class TrainCommand(BaseCommand):
                         episodes = samples / (num_train_frames / num_train_episodes)
                         epoch = samples / num_train_frames
 
-                        training_loss = loss.item()
-                        pbar.set_postfix({"epoch": epoch, "train_loss": training_loss})
+                        # update main metrics
+                        data_log.update_metrics({
+                            "step": step,
+                            "train/loss": loss.item(),
+                            "train/lr": optimizer.param_groups[0]["lr"],
+                            "train/epoch": epoch,
+                            "train/episodes": episodes,
+                            "train/samples": samples,
+                        })
+                        
+                        # update other loss metrics
+                        for metric, value in loss_dict.items():
+                            data_log.update("train/" + metric, value)
+                        
+                        pbar.set_postfix({"epoch": epoch, "train_loss": data_log.get("train/loss")})
                         pbar.update(1)
-                        log_data = {}
-
-                        if step % log_freq == 0:
-                            training_loss = loss.item()
-                            # print(f"step: {step} loss: {loss.item():.3f}")
-                            if logger is not None:
-                                from proto.analytics.train_logger import LogTrainData
-                                log_data.update({
-                                    "train/loss": training_loss,
-                                    "train/lr": optimizer.param_groups[0]["lr"],
-                                    "train/epoch": epoch,
-                                    "train/episodes": episodes,
-                                    "train/samples": samples,
-                                })
-                                for key, value in loss_dict.items():
-                                    log_data[f"train/{key}"] = value
-                                logger.log(
-                                    LogTrainData(
-                                        step=step, 
-                                        data=log_data
-                                    )
-                                )
-                                
+                        
+                        
                         # save checkpoint
                         if step % cfg.save_freq == 0:
                             step_str = str(step).zfill(6)
                             # save model params checkpoint
                             policy.save_pretrained(output_directory / f"checkpoints/{step_str}/pretrained_model")
+                            update_last_checkpoint(output_directory / f"checkpoints/{step_str}/pretrained_model")
                             # save training state checkpoint
                             save_training_state(
                                 path=output_directory / f"checkpoints/{step_str}/pretrained_model/train_state.pt",
@@ -418,50 +424,35 @@ class TrainCommand(BaseCommand):
                                 scaler=grad_scaler,
                             )
 
-                            # perform evaluation on validation dataset
+                        # perform evaluation on validation dataset
+                        if step % cfg.val_freq == 0:
                             if val_dataset is not None:
                                 policy.eval()
                                 with (
                                     torch.inference_mode(),
                                     torch.autocast(device_type=device.type, enabled=cfg.precision.amp_enabled)
                                 ):
-                                    loss_cumsum = 0
-                                    j = 0
-                                    average_loss = 0
+                                    data_log.reset_metric("validate/loss")
                                     pbar_val = tqdm(val_dataloader, desc=f"Validation at step: {step}")
                                     for eval_batch in pbar_val:
-                                        # print(f"eval_batch: {j}")
-                                        j += 1
                                         eval_batch = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in eval_batch.items()}
-                                        
                                         eval_loss, _ = policy.forward(eval_batch)
-                                        
-                                        # loss.backward()
-                                        # optimizer.step()
-                                        # optimizer.zero_grad()
-                                        
-                                        loss_cumsum += eval_loss.item()
-                                        average_loss = loss_cumsum / j
-                                        pbar_val.set_postfix({"val_loss": average_loss, "train_loss": training_loss})
+                                        # update validation loss
+                                        data_log.update("validate/loss", eval_loss.item())
+                                        pbar_val.set_postfix({"val_loss": data_log.get("validate/loss"), "train_loss": data_log.get("train/loss")})
 
-                                # Calculate the average loss over the validation set.
-                                # average_loss = loss_cumsum / len(val_dataloader)
-                                # print(f"Validation loss: {average_loss:.3f}")
+                                # log validation metrics
                                 if logger is not None:
-                                    from proto.analytics.train_logger import LogTrainData
-                                    log_data.update({
-                                        "validate/loss": average_loss,
-                                    })
-                                    for key, value in loss_dict.items():
-                                        log_data[f"validate/{key}"] = value
-                                    logger.log(
-                                        LogTrainData(
-                                            step=step, 
-                                            data=log_data
-                                        )
-                                    )
+                                    logger.log(data_log)
                                 # reset policy to training mode
                                 policy.train()
+
+                        # log training metrics
+                        if step % log_freq == 0:
+                            if logger is not None:
+                                logger.log(data_log)
+                            # reset training metrics
+                            data_log.reset_pattern("train/")
                         
                         if step >= training_steps:
                             done = True

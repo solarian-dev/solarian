@@ -22,7 +22,17 @@ conda activate proto
 conda install ffmpeg=7.1.1 -c conda-forge
 ```
 
-### Clone the repository:
+
+### Install Lerobot
+
+```bash
+git clone https://github.com/huggingface/lerobot.git
+cd lerobot
+pip install -e .
+```
+
+
+### Clone Proto repository
 
 ```bash
 git clone https://github.com/raulgarreta/teleop.git
@@ -33,6 +43,12 @@ cd teleop
 
 ```bash
 pip install -e .
+```
+
+### Install xformers
+
+```bash
+pip install xformers==0.0.31.post1
 ```
 
 ## Running
@@ -104,3 +120,7 @@ First you should create a config file in the `conf/train` directory. Then you ca
 ```bash
 python manage.py train --conf conf/your_train_config.yaml
 ```
+
+## Useful commands
+
+watch -n 2 nvidia-smi

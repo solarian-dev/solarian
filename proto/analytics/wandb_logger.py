@@ -6,7 +6,7 @@ from typing import Dict, Any
 import wandb
 
 from proto.common.configs import WandBLoggerConfig, TrainConfig
-from proto.analytics.train_logger import TrainLogger, LogTrainData
+from proto.analytics.train_logger import TrainLogger, TrainDataLog
 
 
 def get_wandb_run_id_from_filesystem(log_dir: Path) -> str:
@@ -64,5 +64,7 @@ class WandBLogger(TrainLogger):
             raise ValueError(f"Error initializing WandB logger: {str(e)}")
 
 
-    def log(self, data: LogTrainData):
-        self.run.log(data.model_dump()["data"], step=data.step)
+    def log(self, data: TrainDataLog):
+        data_log = data.to_dict()
+        step = data_log.pop("step")
+        self.run.log(data_log, step=step)
