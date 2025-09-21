@@ -7,8 +7,8 @@ fps: 30
 actuator_port: /dev/tty.usbmodem58FD0169131
 # front_camera_port: /dev/video0
 # wrist_camera_port: /dev/video2
-front_camera_port: '0'
-wrist_camera_port: '1'
+front_camera_port: '1'
+wrist_camera_port: '0'
 modules:  
     base:
         type: lekiwi

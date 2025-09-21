@@ -47,7 +47,8 @@ class StatusBoard:
     @classmethod
     def set(cls, key, value):
         if cls._instance is None or not hasattr(cls._instance, '_initialized') or not cls._instance._initialized:
-            raise ValueError("StatusBoard not initialized")
+            # raise ValueError("StatusBoard not initialized")
+            _ = StatusBoard()
         with cls._instance._instance_lock:
             cls._instance._q.put((key, value))
 

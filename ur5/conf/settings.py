@@ -100,8 +100,8 @@ class ProjectSettings(Settings):
     SERVER_CLASS: str = "ur5.server.UR5Server"
     CONTROLLER_CLASS: str = "ur5.controller.UR5Controller"
     MODULE_CLASSES: dict[str, str] = {
-        ModuleName.ARM: "ur5.modules.UR5ArmModule",
-        ModuleName.LEADER_ARM: "ur5.modules.LeaderArmModule",
+        ModuleName.ARM: "proto.modules.arms.ur5.UR5FollowerArmModule",
+        ModuleName.LEADER_ARM: "proto.modules.arms.koch.KochLeaderArmModule",
     }
 
     PROJECT_CONFIG_CLASS: str = "proto.common.configs.ProjectConfig"

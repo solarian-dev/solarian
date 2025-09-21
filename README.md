@@ -123,4 +123,14 @@ python manage.py train --conf conf/your_train_config.yaml
 
 ## Useful commands
 
+### Watch GPU usage
+
+```bash
 watch -n 2 nvidia-smi
+```
+
+### find motor port
+
+```bash
+python lerobot/find_port.py
+```

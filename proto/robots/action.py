@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from proto.common.configs import ValueName
 import numpy as np
 from proto.conf import settings
+from proto.common.utils import value_str
 
 
 class Action(BaseModel):
@@ -63,7 +64,7 @@ class Action(BaseModel):
                     if value_name == ValueName.IMAGE:
                         s += f"    {actuator_name}: {value_name} = <image>\n"
                     else:
-                        s += f"    {actuator_name}: {value_name} = {value}\n"
+                        s += f"    {actuator_name}: {value_name} = {value_str(value)}\n"
         return s
 
 

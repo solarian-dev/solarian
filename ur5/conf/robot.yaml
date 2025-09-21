@@ -42,37 +42,37 @@ modules:
                         model: ur5
                         port: ${actuator_port}
                         type: ur5_cartesian
-                        mode: range_m100_100
+                        mode: raw
                     y:
                         id: 1
                         model: ur5
                         port: ${actuator_port}
                         type: ur5_cartesian
-                        mode: range_m100_100
+                        mode: raw
                     z:
                         id: 2
                         model: ur5
                         port: ${actuator_port}
                         type: ur5_cartesian
-                        mode: range_m100_100
+                        mode: raw
                     rx:
                         id: 3
                         model: ur5
                         port: ${actuator_port}
                         type: ur5_cartesian
-                        mode: range_m100_100
+                        mode: raw
                     ry:
                         id: 4
                         model: ur5
                         port: ${actuator_port}
                         type: ur5_cartesian
-                        mode: range_m100_100
+                        mode: raw
                     rz:
                         id: 5
                         model: ur5
                         port: ${actuator_port}
                         type: ur5_cartesian
-                        mode: range_m100_100
+                        mode: raw
             # fixed_jaw:
             #     mass: 1
             #     inertia: 1

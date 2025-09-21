@@ -76,6 +76,7 @@ class CameraConfig(SensorConfig):
 class ActuatorConfig(ComponentConfig):
     id: int
     model: str
+    # TODO validate mode string value
     mode: str
 
 class ServoConfig(ActuatorConfig, SensorConfig):

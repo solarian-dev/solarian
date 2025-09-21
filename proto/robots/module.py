@@ -58,6 +58,13 @@ class Module(ABC):
             self.sensors.update(body.get_sensors())
             self.component_bus.add_components(body.get_sensors())
 
+        # group actuators by port
+        self.actuators_by_port = {}
+        for actuator_name, actuator in self.actuators.items():
+            if actuator.cfg.port not in self.actuators_by_port:
+                self.actuators_by_port[actuator.cfg.port] = []
+            self.actuators_by_port[actuator.cfg.port].append(actuator_name)
+
         self._load_calibration()
         
             
@@ -158,40 +165,51 @@ class Module(ABC):
         if actuator_names is None:
             actuator_names = list(self.actuators.keys())
         self.component_bus.set_position_mode(actuator_names)
+
+    def is_calibrated(self) -> bool:
+        if self.calibration is None:
+            return False
+        return self.calibration == self.read_calibration()
+
+    def read_calibration(self) -> dict[str, MotorCalibration]:
+        """Read calibration parameters from the actuators."""
+        actuator_names = list(self.actuators.keys())
+        offsets = self.component_bus.read("Homing_Offset", actuator_names, normalize=False)
+        mins = self.component_bus.read("Min_Position_Limit", actuator_names, normalize=False)
+        maxes = self.component_bus.read("Max_Position_Limit", actuator_names, normalize=False)
         
+        calibration = {}
+        for actuator_name in actuator_names:
+            calibration[actuator_name] = MotorCalibration(
+                id=self.actuators[actuator_name].cfg.id,
+                drive_mode=0,
+                homing_offset=offsets[actuator_name],
+                range_min=mins[actuator_name],
+                range_max=maxes[actuator_name],
+            )
 
-    @abstractmethod
-    def calibrate(self):
-        """
-        Calibrates the bus. Attempts to load an existing calibration file;
-        if not found, runs manual calibration and saves the result.
-        """
+        return calibration
 
-    def is_calibrated(self):
-        return self.component_bus.is_calibrated()
-
-    @abstractmethod
-    def setup(self):
-        """Setup module"""
-        
     def write_calibration(self) -> None:
         print(f"\nWriting calibration of: {self.name}")
-        # group actuators by port
-        actuators_by_port = {}
-        for actuator_name, actuator in self.actuators.items():
-            if actuator.cfg.port not in actuators_by_port:
-                actuators_by_port[actuator.cfg.port] = []
-            actuators_by_port[actuator.cfg.port].append(actuator_name)
+        # # group actuators by port
+        # actuators_by_port = {}
+        # for actuator_name, actuator in self.actuators.items():
+        #     if actuator.cfg.port not in actuators_by_port:
+        #         actuators_by_port[actuator.cfg.port] = []
+        #     actuators_by_port[actuator.cfg.port].append(actuator_name)
         
-        print("Disabling torque...")
-        self.component_bus.disable_torque(self.actuators.keys())
+        # print("Disabling torque...")
+        # self.component_bus.disable_torque(self.actuators.keys())
 
-        print("Setting position mode...")
-        self.component_bus.set_position_mode(self.actuators.keys())
+        # print("Setting position mode...")
+        # self.component_bus.set_position_mode(self.actuators.keys())
+
+        self.set_calibration_mode()
 
         self._load_calibration()
 
-        for port, actuators in actuators_by_port.items():
+        for port, actuators in self.actuators_by_port.items():
             port_calibration = {}
             for actuator_name in actuators:
                 port_calibration[actuator_name] = self.calibration[actuator_name]
@@ -244,3 +262,59 @@ class Module(ABC):
             self.calibration = {actuator_name: MotorCalibration(**calibration) for actuator_name, calibration in self.calibration.items()}
             print(f"Calibration loaded for module {self.name}")
         
+    def calibrate(self) -> None:
+
+        print(f"\nRunning calibration of {self}")
+
+        self.start_calibration_mode()
+
+        input(f"Move {self} to the middle of its range of motion and press ENTER....")
+        homing_offsets = {}
+        for port, actuator_names in self.actuators_by_port.items():
+            homing_offsets.update(self.component_bus.component_bus_by_port[port].set_half_turn_homings(actuator_names))
+
+        print(
+            f"Move all joints sequentially through their "
+            "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
+        )
+
+        range_mins = {}
+        range_maxes = {}
+       
+        # get ranges of motion for each actuator
+        for port, actuator_names in self.actuators_by_port.items():
+            range_mins, range_maxes = self.component_bus.component_bus_by_port[port].record_ranges_of_motion(actuator_names)
+            range_mins.update(range_mins)
+            range_maxes.update(range_maxes)
+            
+
+        self.calibration = {}
+        for port, actuator_names in self.actuators_by_port.items():
+            port_calibration = {}
+            for actuator_name in actuator_names:
+                port_calibration[actuator_name] = MotorCalibration(
+                    id=self.actuators[actuator_name].cfg.id,
+                    drive_mode=0,
+                    homing_offset=homing_offsets[actuator_name],
+                    range_min=range_mins[actuator_name],
+                    range_max=range_maxes[actuator_name],
+                )
+            self.component_bus.component_bus_by_port[port].write_calibration(port_calibration)
+            self.calibration[port] = port_calibration
+
+        self._save_calibration()
+        print("Calibration saved to", self.cfg.calibration_file)
+        self.end_calibration_mode()
+
+    def start_calibration_mode(self):
+        for port, actuator_names in self.actuators_by_port.items():
+            self.component_bus.component_bus_by_port[port].start_calibration_mode()
+
+    def end_calibration_mode(self):
+        for port, actuator_names in self.actuators_by_port.items():
+            self.component_bus.component_bus_by_port[port].end_calibration_mode()
+
+    @abstractmethod
+    def setup(self):
+        """Setup module"""
+        pass

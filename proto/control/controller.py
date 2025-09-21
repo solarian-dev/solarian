@@ -61,6 +61,7 @@ class Controller(ABC):
         self._verify_connection()
         
         self.last_observation = None
+        self.last_action = None
         self.obs_none_count = 0
         self.last_msg = None
         self.observation_lock = threading.Lock()  # Thread-safe image access
@@ -286,6 +287,9 @@ class Controller(ABC):
     
     @profile
     def display(self):
+
+        StatusBoard.set("Action", self.last_action)
+
         if self.last_observation is None:
             return
 
@@ -314,6 +318,7 @@ class Controller(ABC):
         # board = StatusBoard()
         # board.set("Observation", self.last_observation)
         StatusBoard.set("Observation", self.last_observation)
+        
 
         for name, image in images.items():
             img = image[ValueName.IMAGE]
@@ -371,17 +376,17 @@ class Controller(ABC):
                 if True or self.last_observation is not None:
                     
                 
-                    action = self.control_step(self.last_observation)
+                    self.last_action = self.control_step(self.last_observation)
 
-                    if action == ActionValue.STOP:
+                    if self.last_action == ActionValue.STOP:
                         self.running = False
                         break
 
-                    self.send_action(action)
+                    self.send_action(self.last_action)
 
                     # Add frame to dataset if recording
                     if dataset is not None and self.last_observation is not None:
-                        self.record_frame(dataset, action, single_task)
+                        self.record_frame(dataset, self.last_action, single_task)
                 else:
                     # self.obs_none_count += 1
                     # if self.obs_none_count > 1:

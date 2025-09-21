@@ -48,7 +48,7 @@ class UR5Robot(Robot):
     def process_action(self, action: Action):
         """Process received action"""
 
-        print("Action:", action.data)
+        # print("Action:", action.data)
         try:
             for module_name, module_data in action.data.items():
                 for actuator_name, actuator_data in module_data.items():

@@ -184,9 +184,9 @@ class Robot(ABC):
 
                 # print("Updating")
                 self.update()
-                # print("Getting action")
+                print("Getting action")
                 self.get_action()
-                # print("Getting observation")
+                print("Getting observation")
                 observation = self.get_observation()
 
                 # board = StatusBoard()
