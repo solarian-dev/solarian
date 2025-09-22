@@ -4,8 +4,7 @@ from proto.conf import settings
 
 class KochLeaderArmModule(Module):
     def setup(self):
-        if not self.is_calibrated():
-            self.calibrate()
+        super().setup()
 
         # Disable torque for all actuators
         self.disable_actuators_torque()

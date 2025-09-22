@@ -4,9 +4,7 @@ from proto.robots.module import Module
 class SO100FollowerArmModule(Module):
     
     def setup(self):
-
-        if not self.is_calibrated():
-            self.calibrate()
+        super().setup()
 
         # Disable torque for each arm motor.
         self.write_actuators("Torque_Enable", 0)

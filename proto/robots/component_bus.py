@@ -228,4 +228,11 @@ class ComponentBus():
                 return False
         return True
 
+    def read_calibration(self) -> dict[str, MotorCalibration]:
+        calibration = {}
+        for component_bus in self.component_bus_by_port.values():
+            if not isinstance(component_bus, OpenCVCamera):
+                calibration.update(component_bus.read_calibration())
+        return calibration
+
     

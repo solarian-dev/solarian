@@ -7,6 +7,8 @@ import platform
 import traceback
 import subprocess
 import importlib
+import select
+import sys
 
 
 
@@ -285,3 +287,15 @@ def is_headless():
         traceback.print_exc()
         print()
         return True
+
+
+def enter_pressed() -> bool:
+    if platform.system() == "Windows":
+        import msvcrt
+
+        if msvcrt.kbhit():
+            key = msvcrt.getch()
+            return key in (b"\r", b"\n")  # enter key
+        return False
+    else:
+        return select.select([sys.stdin], [], [], 0)[0] and sys.stdin.readline().strip() == ""

@@ -182,11 +182,8 @@ class Robot(ABC):
                 start_loop_t = time.time_ns()
                 # Get and send observation
 
-                # print("Updating")
                 self.update()
-                print("Getting action")
                 self.get_action()
-                print("Getting observation")
                 observation = self.get_observation()
 
                 # board = StatusBoard()

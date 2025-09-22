@@ -174,9 +174,6 @@ class Controller(ABC):
         print("Controller connected")
         
     def setup(self):
-        if not self.is_calibrated():
-            self.calibrate()
-
         # setup modules
         for module_name, module in self.modules.items():
             module.setup()

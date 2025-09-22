@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from dataclasses import dataclass, asdict
 from abc import ABC, abstractmethod
 import numpy as np
 from typing import Dict, List, Tuple, Any
@@ -172,25 +173,38 @@ class Module(ABC):
         return self.calibration == self.read_calibration()
 
     def read_calibration(self) -> dict[str, MotorCalibration]:
-        """Read calibration parameters from the actuators."""
-        actuator_names = list(self.actuators.keys())
-        offsets = self.component_bus.read("Homing_Offset", actuator_names, normalize=False)
-        mins = self.component_bus.read("Min_Position_Limit", actuator_names, normalize=False)
-        maxes = self.component_bus.read("Max_Position_Limit", actuator_names, normalize=False)
-        
-        calibration = {}
-        for actuator_name in actuator_names:
-            calibration[actuator_name] = MotorCalibration(
-                id=self.actuators[actuator_name].cfg.id,
-                drive_mode=0,
-                homing_offset=offsets[actuator_name],
-                range_min=mins[actuator_name],
-                range_max=maxes[actuator_name],
-            )
+        if self.cfg.calibration_file is None:
+            print(f"No calibration required for module {self.name}")
+            return {}
 
+        """Read calibration parameters from the actuators."""
+        # actuator_names = list(self.actuators.keys())
+        # offsets = self.component_bus.read("Homing_Offset", actuator_names, normalize=False)
+        # mins = self.component_bus.read("Min_Position_Limit", actuator_names, normalize=False)
+        # maxes = self.component_bus.read("Max_Position_Limit", actuator_names, normalize=False)
+        # drive_modes = self.component_bus.read("Drive_Mode", actuator_names, normalize=False)
+        
+        # calibration = {}
+        # for actuator_name in actuator_names:
+        #     calibration[actuator_name] = MotorCalibration(
+        #         id=self.actuators[actuator_name].cfg.id,
+        #         drive_mode=drive_modes[actuator_name],
+        #         homing_offset=offsets[actuator_name],
+        #         range_min=mins[actuator_name],
+        #         range_max=maxes[actuator_name],
+        #     )
+
+        data = self.component_bus.read_calibration()
+        calibration = {}
+        for actuator_name, actuator in self.actuators.items():
+            calibration[actuator_name] = data[actuator_name]
         return calibration
 
     def write_calibration(self) -> None:
+        if self.cfg.calibration_file is None:
+            print(f"No calibration required for module {self.name}")
+            return
+
         print(f"\nWriting calibration of: {self.name}")
         # # group actuators by port
         # actuators_by_port = {}
@@ -205,7 +219,7 @@ class Module(ABC):
         # print("Setting position mode...")
         # self.component_bus.set_position_mode(self.actuators.keys())
 
-        self.set_calibration_mode()
+        self.start_calibration_mode()
 
         self._load_calibration()
 
@@ -215,6 +229,7 @@ class Module(ABC):
                 port_calibration[actuator_name] = self.calibration[actuator_name]
             self.component_bus.component_bus_by_port[port].write_calibration(port_calibration)
         print("Calibration written to:", self.name)
+        self.end_calibration_mode()
 
     
     def get_observation(self) -> Observation:
@@ -247,22 +262,37 @@ class Module(ABC):
         return Observation(data={self.name: data})
 
     def _save_calibration(self, calibration: dict):
+        if self.cfg.calibration_file is None:
+            print(f"No calibration required for module {self.name}")
+            return
+        
+        if not os.path.exists(os.path.dirname(self.cfg.calibration_file)):
+            os.makedirs(os.path.dirname(self.cfg.calibration_file))
         with open(self.cfg.calibration_file, "w") as f:
-            json.dump(calibration, f, indent=4)
+            data = {actuator_name: asdict(motor_calib) for actuator_name, motor_calib in calibration.items()}
+            json.dump(data, f, indent=4)
             print(f"Calibration saved for module {self.name}")
 
     def _load_calibration(self):
+        if self.cfg.calibration_file is None:
+            print(f"No calibration required for module {self.name}")
+            self.calibration = {}
+            return
+        
         if not os.path.exists(self.cfg.calibration_file):
             print(f"Calibration file not found for module {self.name}")
-            self.calibration = {}
+            self.calibration = None
             return
 
         with open(self.cfg.calibration_file, "r") as f:
-            self.calibration = json.load(f)
-            self.calibration = {actuator_name: MotorCalibration(**calibration) for actuator_name, calibration in self.calibration.items()}
+            data = json.load(f)
+            self.calibration = {actuator_name: MotorCalibration(**calibration) for actuator_name, calibration in data.items()}
             print(f"Calibration loaded for module {self.name}")
         
     def calibrate(self) -> None:
+        if self.cfg.calibration_file is None:
+            print(f"No calibration required for module {self.name}")
+            return
 
         print(f"\nRunning calibration of {self}")
 
@@ -300,9 +330,9 @@ class Module(ABC):
                     range_max=range_maxes[actuator_name],
                 )
             self.component_bus.component_bus_by_port[port].write_calibration(port_calibration)
-            self.calibration[port] = port_calibration
+            self.calibration.update(port_calibration)
 
-        self._save_calibration()
+        self._save_calibration(self.calibration)
         print("Calibration saved to", self.cfg.calibration_file)
         self.end_calibration_mode()
 
@@ -314,7 +344,15 @@ class Module(ABC):
         for port, actuator_names in self.actuators_by_port.items():
             self.component_bus.component_bus_by_port[port].end_calibration_mode()
 
-    @abstractmethod
+    
     def setup(self):
         """Setup module"""
-        pass
+        if self.calibration is None:
+            self.calibrate()
+        if not self.is_calibrated():
+            self.write_calibration()
+        
+
+
+    def __str__(self):
+        return f"{self.name} ({self.cfg.type})"

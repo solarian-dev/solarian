@@ -12,7 +12,7 @@ wrist_camera_port: '0'
 modules:  
     base:
         type: lekiwi
-        calibration_file: .cache/calibration/lekiwi/robot_base.json
+        calibration_file: null
         bodies:
             base:
                 mass: 1
@@ -73,8 +73,7 @@ modules:
             
     arm:
         type: so100
-        # calibration_file: .cache/calibration/lekiwi/robot_arm.json
-        calibration_file: .cache/calibration/lekiwi2/lekiwi_follower_arm.json
+        calibration_file: .cache/calibration/so100_follower_arm.json
         bodies:
             base:
                 mass: 1

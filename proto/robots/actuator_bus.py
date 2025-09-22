@@ -1,10 +1,13 @@
 import abc
+import json
 from typing import Dict, Any
 
 from lerobot.common.motors import MotorCalibration, MotorNormMode
 
 from proto.common.configs import ValueName
 from proto.robots.component import Component
+from proto.common.utils.general import enter_pressed
+from proto.common.utils.status_board import StatusBoard
 
 
 class ActuatorBus(abc.ABC):
@@ -94,10 +97,13 @@ class ActuatorBus(abc.ABC):
             mins = {motor: min(positions[motor], min_) for motor, min_ in mins.items()}
             maxes = {motor: max(positions[motor], max_) for motor, max_ in maxes.items()}
 
-            print("\n-------------------------------------------")
-            print(f"{'NAME':<15} | {'MIN':>6} | {'POS':>6} | {'MAX':>6}")
-            for motor in component_names:
-                print(f"{motor:<15} | {mins[motor]:>6} | {positions[motor]:>6} | {maxes[motor]:>6}")
+            # print("\n-------------------------------------------")
+            # print(f"{'NAME':<15} | {'MIN':>6} | {'POS':>6} | {'MAX':>6}")
+            # for motor in component_names:
+            #     print(f"{motor:<15} | {mins[motor]:>6} | {positions[motor]:>6} | {maxes[motor]:>6}")
+            StatusBoard.set("MIN", mins)
+            StatusBoard.set("POS", positions)
+            StatusBoard.set("MAX", maxes)
 
             if enter_pressed():
                 user_pressed_enter = True

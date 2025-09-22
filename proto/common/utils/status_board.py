@@ -2,10 +2,24 @@
 from rich.live import Live
 from rich.table import Table
 from rich.console import Console
+from rich.pretty import Pretty
+from rich.json import JSON
+from rich import print as rprint
 import threading
 import time
 import queue
 import numpy as np
+
+
+def format_floats(obj, fmt="{:.3f}"):
+    if isinstance(obj, float):
+        return fmt.format(obj)        # keep as str to preserve formatting
+    if isinstance(obj, dict):
+        return {k: format_floats(v, fmt) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [format_floats(x, fmt) for x in obj]
+    return obj
+
 
 
 def value_str(value):
@@ -17,6 +31,8 @@ def value_str(value):
         return f"{value:.3f}"
     elif type(value) == list:
         return "[" + ", ".join([f"{x:.0f}" if isinstance(x, (float, np.floating)) else str(x) for x in value]) + "]"
+    elif type(value) == dict:
+        return JSON.from_data(format_floats(value, "{:.3f}"), indent=2)
     else:
         return str(value)
 

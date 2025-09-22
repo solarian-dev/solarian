@@ -12,6 +12,8 @@ class BaseModule(Module):
         super().__init__(cfg, name, component_bus)
 
     def setup(self):
+        super().setup()
+        
         # disable torque
         self.write_actuators("Torque_Enable", 0)
         self.write_actuators("Lock", 0)
@@ -30,12 +32,12 @@ class BaseModule(Module):
         self.write_actuators("Lock", 1)
 
 
-    def calibrate(self):
-        # no calibration needed
-        pass
+    # def calibrate(self):
+    #     # no calibration needed
+    #     pass
 
-    def is_calibrated(self) -> bool:
-        return True
+    # def is_calibrated(self) -> bool:
+    #     return True
 
 
 # class ArmModule(Module):
@@ -73,39 +75,39 @@ class BaseModule(Module):
     
 
 
-class LeaderArmModule(Module):
-    def __init__(self, cfg: ModuleConfig, name: str, component_bus: ComponentBus):
-        super().__init__(cfg, name, component_bus)
+# class LeaderArmModule(Module):
+#     def __init__(self, cfg: ModuleConfig, name: str, component_bus: ComponentBus):
+#         super().__init__(cfg, name, component_bus)
     
     
-    def setup(self):
-        if not self.is_calibrated():
-            self.calibrate()
+#     def setup(self):
+#         if not self.is_calibrated():
+#             self.calibrate()
 
-        # Disable torque for all actuators
-        self.disable_actuators_torque()
+#         # Disable torque for all actuators
+#         self.disable_actuators_torque()
         
-        POSITION = 3
-        EXTENDED_POSITION = 4
-        CURRENT_POSITION = 5
+#         POSITION = 3
+#         EXTENDED_POSITION = 4
+#         CURRENT_POSITION = 5
 
-        self.write_actuators("Operating_Mode", 
-            {
-                settings.ActuatorName.SHOULDER_PAN: POSITION, 
-                settings.ActuatorName.SHOULDER_LIFT: POSITION, 
-                settings.ActuatorName.ELBOW_FLEX: POSITION, 
-                settings.ActuatorName.WRIST_FLEX: POSITION, 
-                settings.ActuatorName.WRIST_ROLL: POSITION
-            })
+#         self.write_actuators("Operating_Mode", 
+#             {
+#                 settings.ActuatorName.SHOULDER_PAN: POSITION, 
+#                 settings.ActuatorName.SHOULDER_LIFT: POSITION, 
+#                 settings.ActuatorName.ELBOW_FLEX: POSITION, 
+#                 settings.ActuatorName.WRIST_FLEX: POSITION, 
+#                 settings.ActuatorName.WRIST_ROLL: POSITION
+#             })
 
-        self.write_actuators("Return_Delay_Time", 0)
+#         self.write_actuators("Return_Delay_Time", 0)
 
-        self.write_actuators("Operating_Mode", {settings.ActuatorName.GRIPPER: CURRENT_POSITION})
+#         self.write_actuators("Operating_Mode", {settings.ActuatorName.GRIPPER: CURRENT_POSITION})
 
-        # Enable torque for the gripper and set position
-        print(f"Setting gripper open angle...")
-        self.enable_actuators_torque([settings.ActuatorName.GRIPPER])
-        self.write_actuators_pos({settings.ActuatorName.GRIPPER: self.cfg.gripper_open_degree}, normalize=True)
+#         # Enable torque for the gripper and set position
+#         print(f"Setting gripper open angle...")
+#         self.enable_actuators_torque([settings.ActuatorName.GRIPPER])
+#         self.write_actuators_pos({settings.ActuatorName.GRIPPER: self.cfg.gripper_open_degree}, normalize=True)
 
    
         

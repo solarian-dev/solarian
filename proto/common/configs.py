@@ -99,7 +99,7 @@ class JointConfig(BaseModel):
 # A module is composed by joints and bodies
 class ModuleConfig(BaseModel):
     type: str
-    calibration_file: str
+    calibration_file: str | None = None
     gripper_open_degree: Optional[float] = 30
     bodies: dict[str, BodyConfig] = {}
     joints: dict[str, JointConfig] = {}

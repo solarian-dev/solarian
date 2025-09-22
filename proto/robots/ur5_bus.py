@@ -110,10 +110,10 @@ class UR5Bus(ActuatorBus):
 
     def start_calibration_mode(self):
         # Enable freedrive (gravity compensation)
-        self.robot.freedrive_mode()
+        self.robot.set_freedrive(True, 600)
 
     def end_calibration_mode(self):
-        self.robot.end_freedrive_mode()
+        self.robot.set_freedrive(False)
 
     def set_half_turn_homings(self, actuator_names: list[str]):
         self.reset_calibration(actuator_names)
