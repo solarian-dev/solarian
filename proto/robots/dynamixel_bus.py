@@ -79,13 +79,19 @@ class DynamixelBus(ActuatorBus):
     def read_calibration(self) -> dict[str, MotorCalibration]:
         return self.bus.read_calibration()
         
-    def write_calibration(self, calibration_dict: dict[str, MotorCalibration]) -> None:
+    def write_calibration(self, calibration_dict: dict[str, MotorCalibration]) -> dict[str, MotorCalibration]:
+        # bound min and max to range of motion
+        for name, calibration in calibration_dict.items():
+            calibration.range_min = max(calibration.range_min, 0)
+            calibration.range_max = min(calibration.range_max, 4095)
         self.bus.write_calibration(calibration_dict)
+        return calibration_dict
 
     def start_calibration_mode(self):
         """Sets the actuators where the arm can be moved manually freely"""
         # self.bus.disable_torque(list(self.components.keys()))
         # self.bus.set_position_mode(list(self.components.keys()))
+        self.bus.disable_torque(list(self.components.keys()))
         self.write("Operating_Mode", {name: 0 for name in list(self.components.keys())})
 
     def end_calibration_mode(self):

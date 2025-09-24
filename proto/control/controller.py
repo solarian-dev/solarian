@@ -165,7 +165,10 @@ class Controller(ABC):
         """Start receiver threads"""
         self.calibration = {}
         for module_name, module in self.modules.items():
-            self.calibration.update(module.get_calibration())
+            mod_calib = module.get_calibration()
+            if mod_calib is None:
+                continue
+            self.calibration.update(mod_calib)
 
         if self.component_bus is not None:
             self.component_bus.connect(self.calibration)

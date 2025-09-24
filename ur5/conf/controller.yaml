@@ -16,7 +16,7 @@ modules:
     leader_arm:
         type: koch
         # calibration_file: .cache/calibration/lekiwi/leader_arm.json
-        calibration_file: .cache/calibration/lekiwi2/lekiwi_leader_arm_translated.json
+        calibration_file: .cache/calibration/koch_leader_arm.json
         gripper_open_degree: 35
         bodies:
             base:

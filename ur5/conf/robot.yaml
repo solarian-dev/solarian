@@ -13,7 +13,7 @@ modules:
     arm:
         type: ur5
         # calibration_file: .cache/calibration/lekiwi/robot_arm.json
-        calibration_file: .cache/calibration/ur5/ur5.json
+        calibration_file: .cache/calibration/ur5_follower_arm.json
         bodies:
             base:
                 mass: 1

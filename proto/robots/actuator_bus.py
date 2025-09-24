@@ -55,11 +55,14 @@ class ActuatorBus(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def write_calibration(self, calibration_dict: dict[str, MotorCalibration]) -> None:
+    def write_calibration(self, calibration_dict: dict[str, MotorCalibration]) -> dict[str, MotorCalibration]:
         """Write calibration parameters to the actuators and cache them.
 
         Args:
             calibration_dict (dict[str, MotorCalibration]): parameters per actuator
+
+        Returns:
+            dict[str, MotorCalibration]: parameters per actuator, it might bound the ranges of motion
         """
         pass
 

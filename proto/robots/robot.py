@@ -189,6 +189,7 @@ class Robot(ABC):
                 # board = StatusBoard()
                 # board.set("Observation", observation)
                 StatusBoard.set("Observation", observation)
+                StatusBoard.set("Action", self.current_action)
                 # print("Observation:", observation)
                 # if 'arm' in observation.data and 'wrist' in observation.data['arm'] and 'image' in observation.data['arm']['wrist'] and type(observation.data['arm']['wrist']['image']) is np.ndarray:
                 #     print("Image is numpy array")
@@ -214,7 +215,10 @@ class Robot(ABC):
     def connect(self):
         self.calibration = {}
         for module_name, module in self.modules.items():
-            self.calibration.update(module.get_calibration())
+            mod_calib = module.get_calibration()
+            if mod_calib is None:
+                continue
+            self.calibration.update(mod_calib)
 
         if self.component_bus is not None:
             self.component_bus.connect(self.calibration)

@@ -11,7 +11,7 @@ from proto.common.utils import body_to_wheel_raw
 from proto.conf import settings
 
 from proto.common.configs import ControllerConfig, ValueName
-from proto.common.utils import profile
+from proto.common.utils import profile, StatusBoard
 
 
 class UR5Controller(Controller):
@@ -79,12 +79,12 @@ class UR5Controller(Controller):
         # if settings.ModuleName.LEADER_ARM in self.modules:
         #     action_data[settings.ModuleName.ARM] = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
         
+        sensor_names = [settings.SensorName.SHOULDER_PAN, settings.SensorName.SHOULDER_LIFT, settings.SensorName.ELBOW_FLEX, settings.SensorName.WRIST_FLEX, settings.SensorName.WRIST_ROLL]
+        leader_data = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
+        StatusBoard().set("Leader Arm", leader_data)
 
+        DELTA = 0.05
 
-
-        # y_cmd = 0.0  # m/s forward/backward
-        # x_cmd = 0.0  # m/s lateral
-        # theta_cmd = 0.0  # deg/s rotation
         if self.pressed_keys["forward"]:
             # elbow_flex = observation.data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX][ValueName.POS]
             # # add 2 degrees in radians
@@ -93,11 +93,11 @@ class UR5Controller(Controller):
             
             value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.X][ValueName.POS]
             # add 0.1 meters to X
-            value += 0.1
+            value += DELTA
             action_data[settings.ModuleName.ARM][settings.ActuatorName.X] = {ValueName.POS: value}
 
 
-        if self.pressed_keys["backward"]:
+        elif self.pressed_keys["backward"]:
             # elbow_flex = observation.data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX][ValueName.POS]
             # # add 2 degrees in radians
             # elbow_flex -= math.radians(2)
@@ -105,45 +105,38 @@ class UR5Controller(Controller):
 
             value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.X][ValueName.POS]
             # add 0.1 meters
-            value -= 0.1
+            value -= DELTA
             action_data[settings.ModuleName.ARM][settings.ActuatorName.X] = {ValueName.POS: value}
 
-        if self.pressed_keys["left"]:
+        elif self.pressed_keys["left"]:
             value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Y][ValueName.POS]
             # add 0.1 meters to Y
-            value += 0.1
+            value +=  DELTA
             action_data[settings.ModuleName.ARM][settings.ActuatorName.Y] = {ValueName.POS: value}
 
-        if self.pressed_keys["right"]:
+        elif self.pressed_keys["right"]:
             value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Y][ValueName.POS]
             # add 0.1 meters
-            value -= 0.1
+            value -= DELTA
             action_data[settings.ModuleName.ARM][settings.ActuatorName.Y] = {ValueName.POS: value}
 
-        if self.pressed_keys["rotate_left"]:
+        elif self.pressed_keys["rotate_left"]:
             value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Z][ValueName.POS]
             # add 0.1 meters to Z
-            value -= 0.1
+            value -= DELTA
             action_data[settings.ModuleName.ARM][settings.ActuatorName.Z] = {ValueName.POS: value}
 
-        if self.pressed_keys["rotate_right"]:
+        elif self.pressed_keys["rotate_right"]:
             value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Z][ValueName.POS]
             # add 0.1 meters
-            value += 0.1
+            value += DELTA
             action_data[settings.ModuleName.ARM][settings.ActuatorName.Z] = {ValueName.POS: value}
 
-        # wheel_actions = body_to_wheel_raw(x_cmd, y_cmd, theta_cmd)
+        else:
+            # if no cartessian commands are sent, then send leader arm commands
+            action_data[settings.ModuleName.ARM] = leader_data
+            # pass
         
-        # # TODO: this is not the best way to do it
-        # for actuator, speed in wheel_actions.items():
-        #     action_data[settings.ModuleName.BASE][actuator] = {ValueName.SPEED: speed}
-    
-
-        # if self.clicked_point is not None:
-        #     message["click"] = {
-        #         "point": self.clicked_point,
-        #         "id": self.clicked_id
-        #     }
         
         self.last_action = Action(data=action_data)
         return self.last_action

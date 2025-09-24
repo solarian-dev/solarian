@@ -71,6 +71,9 @@ class Module(ABC):
             
     def get_calibration(self) -> dict:
         "returns calibrations grouped by port"
+        if self.calibration is None:
+            return self.calibration
+            
         calibration = {}
         for actuator_name in self.calibration.keys():
             port = self.actuators[actuator_name].cfg.port
@@ -329,11 +332,13 @@ class Module(ABC):
                     range_min=range_mins[actuator_name],
                     range_max=range_maxes[actuator_name],
                 )
-            self.component_bus.component_bus_by_port[port].write_calibration(port_calibration)
+            port_calibration = self.component_bus.component_bus_by_port[port].write_calibration(port_calibration)
             self.calibration.update(port_calibration)
 
         self._save_calibration(self.calibration)
         print("Calibration saved to", self.cfg.calibration_file)
+        self.write_calibration()
+        print("Calibration written to actuators")
         self.end_calibration_mode()
 
     def start_calibration_mode(self):
@@ -349,6 +354,7 @@ class Module(ABC):
         """Setup module"""
         if self.calibration is None:
             self.calibrate()
+        
         if not self.is_calibrated():
             self.write_calibration()
         
