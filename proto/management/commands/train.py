@@ -293,6 +293,10 @@ class TrainCommand(BaseCommand):
                     pin_memory=(device == torch.device("cuda")),
                     drop_last=False,
                 )
+
+            print("Loaded datasets")
+
+            # exit()
                 
             # Then we create our optimizer and dataloader for offline training.
             # TODO: support other optimizers use a factory pattern

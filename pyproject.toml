@@ -37,7 +37,7 @@ dependencies = [
     "imageio==2.34.0",
     "imageio-ffmpeg",
     "einops==0.8.1",
-    "easydict",
+    "easydict==1.13",
 
     # AI
     "torch==2.8.0",

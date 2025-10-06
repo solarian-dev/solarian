@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from ultralytics import YOLO, YOLOWorld, YOLOE, FastSAM
 from .depth_anything_v2.dpt import DepthAnythingV2
+from .video_depth_anything.video_depth_stream import VideoDepthAnything
 
 from proto.common.utils import StatusBoard
 
@@ -58,7 +59,8 @@ class ImageProcessor:
 
             encoder = 'vits' # or 'vits', 'vitb', 'vitg'
 
-            self.depth_model = DepthAnythingV2(**model_depth_configs[encoder])
+            # self.depth_model = DepthAnythingV2(**model_depth_configs[encoder])
+            self.depth_model = VideoDepthAnything(**model_depth_configs[encoder])
             self.depth_model.load_state_dict(torch.load(depth_model_name, map_location='cpu'))
             self.depth_model = self.depth_model.to(DEVICE).eval()
 
@@ -173,7 +175,8 @@ class ImageProcessor:
         # get depth
         depth_diff = -1
         if self.depth_model and self.tracking_active:
-            depth = self.depth_model.infer_image(frame)
+            # depth = self.depth_model.infer_image(frame)
+            depth = self.depth_model.infer_video_depth_one(frame, input_size=518, device=DEVICE, fp32=False)
             ref_depth_value = depth[self.ref_coords.y, self.ref_coords.x]
             object_coords = Coords(int((self.tracked_box[0] + self.tracked_box[2]) / 2), int((self.tracked_box[1] + self.tracked_box[3]) / 2))
             # get depth of the tracked object
