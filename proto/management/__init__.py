@@ -2,7 +2,7 @@ from hydra import initialize, compose
 import sys
 
 from .base import BaseCommand, CommandRegistry
-from . import commands  # Import commands to ensure they are registered
+# from . import commands  # Import commands to ensure they are registered
 
 
 def execute_command(argv):

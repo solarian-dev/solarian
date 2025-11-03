@@ -6,27 +6,11 @@ import argparse
 from pathlib import Path
 from pydantic import ValidationError
 
-parser = argparse.ArgumentParser(description="Proto's command-line utility for project commands.")
-parser.add_argument("subcommand", type=str, help="The subcommand to run.")
-parser.add_argument("--conf", type=str, default="conf", help="The conf directory with yaml config files to use.")
-parser.add_argument("overrides", nargs="*", help="Hydra-style config overrides (e.g., name=value)")
-args = parser.parse_args()
-
-if '/' in args.conf:
-    CONF_PATH = args.conf.split("/")[0]
-    CONF_NAME = args.conf.split("/")[1]
-else:
-    CONF_PATH = args.conf
-    CONF_NAME = "default"
-
-os.environ["PROTO_SETTINGS"] = str(Path(__file__).parent / CONF_PATH / "settings.py")
-os.environ["PROTO_PROJECT_PATH"] = str(Path(__file__).parent)
-
-from hydra import initialize, compose
+from hydra import initialize, compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 import colorama
 
-from proto.management import CommandRegistry
+from .base import CommandRegistry
 
 
 def parse_with_friendly_errors(model_class, data):
@@ -52,6 +36,32 @@ def main() -> None:
     Given the command-line arguments, figure out which subcommand is being
     run, create a parser appropriate to that command, and run it.
     """
+
+    parser = argparse.ArgumentParser(description="Proto's command-line utility for project commands.")
+    parser.add_argument("subcommand", type=str, help="The subcommand to run.")
+    parser.add_argument("--conf", type=str, default="conf", help="The conf directory with yaml config files to use.")
+    parser.add_argument("overrides", nargs="*", help="Hydra-style config overrides (e.g., name=value)")
+    args = parser.parse_args()
+
+    if '/' in args.conf:
+        CONF_PATH = args.conf.split("/")[0]
+        CONF_NAME = args.conf.split("/")[1]
+    else:
+        CONF_PATH = args.conf
+        CONF_NAME = "default"
+
+    os.environ["PROTO_SETTINGS"] = os.getcwd() + "/" + CONF_PATH + "/settings.py"
+    os.environ["PROTO_PROJECT_PATH"] = os.getcwd()
+
+    # Add project path to sys.path
+    sys.path.insert(0, os.getcwd())
+
+    # make conf path absolute
+    CONF_PATH =  os.getcwd() + "/" + CONF_PATH
+
+    # load commands so they are registered
+    from ..management import commands
+
     colorama.init()  # Initialize colorama for colored terminal output
     subcommand = args.subcommand or "help"
     try:
@@ -66,7 +76,7 @@ def main() -> None:
         config_name = CONF_NAME
 
     try:
-        with initialize(version_base=None, config_path=CONF_PATH, job_name='proto_app'):
+        with initialize_config_dir(version_base=None, config_dir=CONF_PATH, job_name='proto_app'):
             # Store the current config path for error reporting
             if config_name is not None:
                 config_file = Path(CONF_PATH) / config_name
@@ -92,5 +102,3 @@ def main() -> None:
         sys.exit(1)
 
 
-if __name__ == '__main__':
-    main()

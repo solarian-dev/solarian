@@ -57,7 +57,7 @@ dependencies = [
     "urx==0.11.0",
 
     # Logging
-    "wandb>=0.16.3",
+    "wandb>=0.22.3",
 
     # Other
     "cmake==4.0.3",
@@ -67,6 +67,10 @@ dependencies = [
     # "openpi_client @ git+https://github.com/Physical-Intelligence/openpi.git#subdirectory=packages/openpi-client",
     
 ]
+
+[project.scripts]
+proto = "proto.management.manage:main"
+create-proto = "proto.management.scaffolder:create_project"
 
 
 [build-system]

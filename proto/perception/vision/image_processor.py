@@ -3,8 +3,8 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from ultralytics import YOLO, YOLOWorld, YOLOE, FastSAM
-from .depth_anything_v2.dpt import DepthAnythingV2
-from .video_depth_anything.video_depth_stream import VideoDepthAnything
+# from .depth_anything_v2.dpt import DepthAnythingV2
+
 
 from proto.common.utils import StatusBoard
 from proto.common.configs import ValueName
@@ -89,6 +89,7 @@ class ImageProcessor:
             encoder = 'vits' # or 'vits', 'vitb', 'vitg'
 
             # self.depth_model = DepthAnythingV2(**model_depth_configs[encoder])
+            from .video_depth_anything.video_depth_stream import VideoDepthAnything
             self.depth_model = VideoDepthAnything(**model_depth_configs[encoder])
             self.depth_model.load_state_dict(torch.load(depth_model_name, map_location='cpu'))
             self.depth_model = self.depth_model.to(DEVICE).eval()
