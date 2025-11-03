@@ -12,5 +12,8 @@ from . import (
     write_controller_calibration,
     write_robot_calibration,
     calibrate_controller,
-    dataset2lerobot
+    dataset2lerobot,
+    detect_device,
+    create_project,
+    setup_module
 )

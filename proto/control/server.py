@@ -9,7 +9,7 @@ from proto.control import Message
 from proto.common.configs import ValueName, ServerConfig
 from proto.robots.observation import Observation
 from proto.common.utils import StatusBoard
-
+from proto.conf import settings
 
 class RelayServer:
     def __init__(self, cfg: ServerConfig):
@@ -108,11 +108,26 @@ class RelayServer:
         for module_name in observation.data.keys():
             for sensor_name in observation.data[module_name].keys():
                 if observation.data[module_name][sensor_name].get(ValueName.IMAGE) is not None and sensor_name in cams_to_process:
+                    # if image is not empty and has to be processed
+
+                    # decode image
                     frame = cv2.imdecode(np.frombuffer(observation.data[module_name][sensor_name][ValueName.IMAGE], dtype=np.uint8),
                         cv2.IMREAD_COLOR)
+
+                    # process image
                     with self.image_processor_lock:
-                        tracked_box = self.image_processor.process_image(frame)
-                    observation.data[module_name][sensor_name][ValueName.BOUNDING_BOX] = tracked_box
+                        data = self.image_processor.process_image(frame)
+
+                    observation.data[module_name][sensor_name][ValueName.BOUNDING_BOX] = data[ValueName.BOUNDING_BOX]
+                    print("Data: ", data)
+
+                    # if there is depth image and required in observation space, then encode it and send it
+                    if data[ValueName.DEPTH_IMAGE] is not None and ValueName.DEPTH_IMAGE in settings.OBSERVATION[module_name][sensor_name]:
+                        print("Encoding depth image")
+                        encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.cfg.img_compression_quality]
+                        encoded_img = cv2.imencode('.jpeg', data[ValueName.DEPTH_IMAGE], encode_params)[1].tobytes()
+                        print("Encoded depth image", type(encoded_img))
+                        observation.data[module_name][sensor_name][ValueName.DEPTH_IMAGE] = encoded_img 
 
         if self.captured_click is not None:
             msg.data["click_ack"] = self.captured_click

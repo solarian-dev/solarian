@@ -11,8 +11,8 @@ class BaseModule(Module):
     def __init__(self, cfg: ModuleConfig, name: str, component_bus: ComponentBus):
         super().__init__(cfg, name, component_bus)
 
-    def setup(self):
-        super().setup()
+    def initialize(self):
+        super().initialize()
         
         # disable torque
         self.write_actuators("Torque_Enable", 0)

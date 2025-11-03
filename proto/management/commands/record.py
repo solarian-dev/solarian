@@ -42,7 +42,7 @@ class RecordCommand(BaseCommand):
                     if data_name in [ValueName.POS, ValueName.SPEED, ValueName.BOUNDING_BOX]:
                         features[data_spec.lerobot_group]["shape"] = tuple(a + b for a, b in zip(features[data_spec.lerobot_group]["shape"], data_spec.shape))
                         features[data_spec.lerobot_group]["names"].extend(data_spec.lerobot_names)
-                    elif data_name == ValueName.IMAGE:
+                    elif data_name in [ValueName.IMAGE, ValueName.DEPTH_IMAGE]:
                         features[f"observation.images.{''.join(data_spec.lerobot_names)}"] = {
                             "shape": self.cfg.video_res,
                             "names": ["height", "width", "channels"],
@@ -75,8 +75,7 @@ class RecordCommand(BaseCommand):
         ControllerClass = get_class(settings.CONTROLLER_CLASS)
         controller = ControllerClass(cfg)
         controller.connect()
-        controller.setup()
-        # controller.start()
+        controller.initialize()
 
         features, num_cameras = self.get_features_lerobot_format()
 

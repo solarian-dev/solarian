@@ -23,6 +23,12 @@ class Component(ABC):
         """Disconnect the component."""
         pass
 
+    @abstractmethod
+    def needs_setup(self) -> bool:
+        """Check if the component needs setup."""
+        
+    
+
     
 
     

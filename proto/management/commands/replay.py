@@ -94,7 +94,7 @@ class ReplayCommand(BaseCommand):
         ControllerClass = get_class("lekiwi.replay_controller.ReplayController")
         controller = ControllerClass(cfg)
         controller.connect()
-        controller.setup()
+        controller.initialize()
         # controller.start()
 
         # features, num_cameras = self.get_features_lerobot_format()

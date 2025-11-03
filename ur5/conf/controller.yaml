@@ -12,12 +12,13 @@ policy_path: /Users/raul/workspace/lerobot/outputs/train/act_so100_pick_lego_blo
 device: mps
 # actuator_port: /dev/ttyACM0
 actuator_port: /dev/tty.usbmodem58FD0167571
+# /dev/cu.usbmodem58FD0167571
 modules:
     leader_arm:
         type: koch
         # calibration_file: .cache/calibration/lekiwi/leader_arm.json
         calibration_file: .cache/calibration/koch_leader_arm.json
-        gripper_open_degree: 35
+        gripper_open_degree: 95
         bodies:
             base:
                 mass: 1

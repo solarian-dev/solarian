@@ -1,16 +1,45 @@
 import cv2
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
 from ultralytics import YOLO, YOLOWorld, YOLOE, FastSAM
 from .depth_anything_v2.dpt import DepthAnythingV2
 from .video_depth_anything.video_depth_stream import VideoDepthAnything
 
 from proto.common.utils import StatusBoard
+from proto.common.configs import ValueName
 
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 EMPTY_BOX = [-1]*5
+
+def colorize_depth(depth, grayscale=False):
+    """
+    depth: (H, W) float32 array in meters
+    returns: (H, W, 3) uint8 BGR image for cv2.imshow
+    """
+
+    d_min, d_max = np.nanmin(depth), np.nanmax(depth)
+    
+    # Normalize depth to [0,1]
+    normed = (depth - d_min) / (d_max - d_min)
+    normed = np.clip(normed, 0, 1)
+    # normed = (1 - normed)
+
+    depth_norm = (normed * 255).astype(np.uint8)
+
+    if grayscale:
+        return depth_norm, depth_norm
+    else:
+        # Map with inferno colormap
+        cmap = plt.colormaps["inferno"]
+        colored = cmap(normed)[:, :, :3]  # drop alpha channel
+
+        # Convert to 0–255 uint8, and swap RGB->BGR for OpenCV
+        colored = (colored * 255).astype(np.uint8)
+        return cv2.cvtColor(colored, cv2.COLOR_RGB2BGR), depth_norm
+
 
 class Coords:
     def __init__(self, x, y):
@@ -174,23 +203,27 @@ class ImageProcessor:
         
         # get depth
         depth_diff = -1
+        depth_display_vis = None
         if self.depth_model and self.tracking_active:
             # depth = self.depth_model.infer_image(frame)
             depth = self.depth_model.infer_video_depth_one(frame, input_size=518, device=DEVICE, fp32=False)
-            ref_depth_value = depth[self.ref_coords.y, self.ref_coords.x]
+            depth_display_vis, depth_norm = colorize_depth(depth, True)
+            ref_depth_value = depth_norm[self.ref_coords.y, self.ref_coords.x]
             object_coords = Coords(int((self.tracked_box[0] + self.tracked_box[2]) / 2), int((self.tracked_box[1] + self.tracked_box[3]) / 2))
             # get depth of the tracked object
-            object_depth_value = np.mean(depth[object_coords.y - 10:object_coords.y + 10, object_coords.x - 10:object_coords.x + 10])
-            # print("object_depth_value", object_depth_value)
+            object_depth_value = depth_norm[object_coords.y, object_coords.x]
 
-            tmp_depth_diff = (ref_depth_value - object_depth_value) * 100
-            if not np.isnan(tmp_depth_diff):
-                depth_diff = float(tmp_depth_diff)
+            depth_diff = ref_depth_value.astype(np.int16) - object_depth_value.astype(np.int16)
+            depth_diff = np.clip(depth_diff, 0, 255).astype(np.uint8).item()
             
+        res = {}
         if self.tracked_box != EMPTY_BOX:
-            return self.tracked_box + [depth_diff]
+            res[ValueName.BOUNDING_BOX] = self.tracked_box + [depth_diff]
         else:
-            return EMPTY_BOX
+            res[ValueName.BOUNDING_BOX] = EMPTY_BOX
+
+        res[ValueName.DEPTH_IMAGE] = depth_display_vis
+        return res
 
 
     def set_classes(self, classes):

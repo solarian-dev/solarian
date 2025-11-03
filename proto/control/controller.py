@@ -8,6 +8,7 @@ import string
 import numpy as np
 from abc import ABC, abstractmethod
 
+
 from proto.common.utils import busy_wait
 from proto.robots import Action
 from proto.common.configs import ControllerConfig, ValueName, ActionValue
@@ -27,6 +28,11 @@ try:
     sw, sh, sx, sy = m.width, m.height, m.x, m.y
 except:
     print("No monitors found.")
+
+
+
+
+
 
 
 class Controller(ABC):
@@ -123,13 +129,14 @@ class Controller(ABC):
         # Decode images
         for module_name in observation.data.keys():
             for sensor_name in observation.data[module_name].keys():
-                if observation.data[module_name][sensor_name].get(ValueName.IMAGE) is not None:
-                    img = observation.data[module_name][sensor_name][ValueName.IMAGE]
-                    img = cv2.imdecode(
-                        np.frombuffer(img, dtype=np.uint8),
-                        cv2.IMREAD_COLOR
-                    )
-                    observation.data[module_name][sensor_name][ValueName.IMAGE] = img
+                for image_type in [ValueName.IMAGE, ValueName.DEPTH_IMAGE]:
+                    if observation.data[module_name][sensor_name].get(image_type, None) is not None:
+                        img = observation.data[module_name][sensor_name][image_type]
+                        img = cv2.imdecode(
+                            np.frombuffer(img, dtype=np.uint8),
+                            cv2.IMREAD_COLOR
+                        )
+                        observation.data[module_name][sensor_name][image_type] = img
         
         if msg.data.get("click_ack", None) and msg.data["click_ack"] == self.clicked_id:
             print("Click acknowledged", self.clicked_id)
@@ -156,8 +163,8 @@ class Controller(ABC):
                 except KeyboardInterrupt:
                     print("\nShutting down state receiver")
                     break
-                except Exception as e:
-                    print(f"[ERROR] State receiver failed: {e}")
+                # except Exception as e:
+                #     print(f"[ERROR] State receiver failed: {e}")
         except KeyboardInterrupt:
             print("\nShutting down state receiver")
 
@@ -176,12 +183,12 @@ class Controller(ABC):
         self.is_connected = True
         print("Controller connected")
         
-    def setup(self):
-        # setup modules
+    def initialize(self):
+        # initialize modules
         for module_name, module in self.modules.items():
-            module.setup()
+            module.initialize()
         
-        print("Controller setup")
+        print("Controller initialized")
 
     def disconnect(self):
         """Clean shutdown"""
@@ -297,20 +304,25 @@ class Controller(ABC):
         # add all images in observation
         for module_name, module_data in self.last_observation.data.items():
             for sensor_name, sensor_data in module_data.items():
-                if sensor_data.get(ValueName.IMAGE) is not None:
+                if sensor_data.get(ValueName.IMAGE) is not None or sensor_data.get(ValueName.DEPTH_IMAGE) is not None:
                     images[sensor_name] = sensor_data
-
+                
         # Initialize windows once if not already done
         if not self.windows_initialized:
             for name, image in images.items():
-                cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-                # Get the resolution of the image
-                height, width, _ = image[ValueName.IMAGE].shape
-                # Set the size of the window to the resolution of the image
-                cv2.resizeWindow(name, width, height)
-                cv2.setMouseCallback(name, self.mouse_callback)
-                cv2.moveWindow(name, sx + (sw - width)//2, sy + (sh - height)//2)
-                self.windows_initialized.append(name)
+                for img_type in [ValueName.IMAGE, ValueName.DEPTH_IMAGE]:
+                    if not img_type in image:
+                        continue
+                    window_name = f"{name} {img_type}"
+
+                    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+                    # Get the resolution of the image
+                    height, width, _ = image[img_type].shape
+                    # Set the size of the window to the resolution of the image
+                    cv2.resizeWindow(window_name, width, height)
+                    cv2.setMouseCallback(window_name, self.mouse_callback)
+                    cv2.moveWindow(window_name, sx + (sw - width)//2, sy + (sh - height)//2)
+                    self.windows_initialized.append(window_name)
             
 
         COLOR = (255, 0, 0)
@@ -321,32 +333,41 @@ class Controller(ABC):
         
 
         for name, image in images.items():
-            img = image[ValueName.IMAGE]
 
-            # print("Image: ", image)
-            
-            # Only modify the image if bounding box exists
-            if image.get(ValueName.BOUNDING_BOX, None) is not None and image.get(ValueName.BOUNDING_BOX)[0] != -1:
-                # Create a copy only when drawing on the image
-                display_img = img.copy()
-                # print("bounding box", image[ValueName.BOUNDING_BOX])
-                x1, y1, x2, y2, depth = image[ValueName.BOUNDING_BOX]
-                cv2.rectangle(display_img,
-                            (int(x1), int(y1)), 
-                            (int(x2), int(y2)), 
-                            COLOR, 2)
-                cv2.putText(display_img, f"Depth: {depth:.3f}", 
-                            (int(x1), int(y1) + 15), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 
-                            0.9, (0, 255, 0), 2)
-            else:
-                display_img = img
+            for img_type in [ValueName.IMAGE, ValueName.DEPTH_IMAGE]:
+                if not img_type in image:
+                    continue
+
+                img = image[img_type]
+
+                # print("Image: ", image)
                 
-            # Convert color only once before display
-            display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
-            
-            # Show frames
-            cv2.imshow(name, display_img_bgr)
+                # Only modify the image if bounding box exists
+                if image.get(ValueName.BOUNDING_BOX, None) is not None and image.get(ValueName.BOUNDING_BOX)[0] != -1:
+                    # Create a copy only when drawing on the image
+                    display_img = img.copy()
+                    # print("bounding box", image[ValueName.BOUNDING_BOX])
+                    x1, y1, x2, y2, depth = image[ValueName.BOUNDING_BOX]
+                    cv2.rectangle(display_img,
+                                (int(x1), int(y1)), 
+                                (int(x2), int(y2)), 
+                                COLOR, 2)
+                    cv2.putText(display_img, f"Depth: {depth:.3f}", 
+                                (int(x1), int(y1) + 15), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 
+                                0.9, (0, 255, 0), 2)
+                else:
+                    display_img = img
+                    
+                display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
+                # Convert color only once before display
+                # if img_type == ValueName.IMAGE:
+                #     display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
+                # else:
+                #     display_img_bgr = colorize_depth(display_img, True)
+                
+                # Show frames
+                cv2.imshow(name + " " + str(img_type), display_img_bgr)
             
             # No need to call getWindowProperty every time since windows are created once
             key = cv2.waitKey(1) & 0xFF

@@ -33,9 +33,14 @@ from proto.management import BaseCommand, CommandRegistry
 from proto.conf import settings
 
 
-@CommandRegistry.register('create-project', 'create_project')
+@CommandRegistry.register('create-project')
 class CreateProjectCommand(BaseCommand):
     help = 'Create a new project with the specified name'
 
     def handle(self, cfg: DictConfig) -> None:
-        pass
+        project_name = cfg.project_name
+        # project_path = os.path.join(settings.PROJECTS_DIR, project_name)
+        # os.makedirs(project_path, exist_ok=True)
+
+        print(project_name)
+        

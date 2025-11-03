@@ -71,7 +71,7 @@ class UR5Controller(Controller):
         theta_speed = speed_setting["theta"]  # e.g. 30, 60, or 90
 
         action_data = {
-            settings.ModuleName.ARM: {}, 
+            
         }
 
         # sensor_names = settings.ACTION[settings.ModuleName.ARM].keys()
@@ -79,63 +79,75 @@ class UR5Controller(Controller):
         # if settings.ModuleName.LEADER_ARM in self.modules:
         #     action_data[settings.ModuleName.ARM] = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
         
-        sensor_names = [settings.SensorName.SHOULDER_PAN, settings.SensorName.SHOULDER_LIFT, settings.SensorName.ELBOW_FLEX, settings.SensorName.WRIST_FLEX, settings.SensorName.WRIST_ROLL]
+        sensor_names = [
+            settings.SensorName.SHOULDER_PAN, 
+            settings.SensorName.SHOULDER_LIFT, 
+            settings.SensorName.ELBOW_FLEX, 
+            settings.SensorName.WRIST_FLEX, 
+            settings.SensorName.WRIST_ROLL,
+            settings.SensorName.GRIPPER
+        ]
         leader_data = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
-        StatusBoard().set("Leader Arm", leader_data)
+        # StatusBoard().set("Leader Arm", leader_data)
+
+        action_data[settings.ModuleName.GRIPPER] = {settings.SensorName.GRIPPER: leader_data[settings.SensorName.GRIPPER]}
+
+
+        # StatusBoard().set("Leader Arm", action_data)
 
         DELTA = 0.05
 
-        if self.pressed_keys["forward"]:
-            # elbow_flex = observation.data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX][ValueName.POS]
-            # # add 2 degrees in radians
-            # elbow_flex += math.radians(2)
-            # action_data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX] = {ValueName.POS: elbow_flex}
+        # if self.pressed_keys["forward"]:
+        #     # elbow_flex = observation.data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX][ValueName.POS]
+        #     # # add 2 degrees in radians
+        #     # elbow_flex += math.radians(2)
+        #     # action_data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX] = {ValueName.POS: elbow_flex}
             
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.X][ValueName.POS]
-            # add 0.1 meters to X
-            value += DELTA
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.X] = {ValueName.POS: value}
+        #     value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.X][ValueName.POS]
+        #     # add 0.1 meters to X
+        #     value += DELTA
+        #     action_data[settings.ModuleName.ARM][settings.ActuatorName.X] = {ValueName.POS: value}
 
 
-        elif self.pressed_keys["backward"]:
-            # elbow_flex = observation.data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX][ValueName.POS]
-            # # add 2 degrees in radians
-            # elbow_flex -= math.radians(2)
-            # action_data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX] = {ValueName.POS: elbow_flex}
+        # elif self.pressed_keys["backward"]:
+        #     # elbow_flex = observation.data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX][ValueName.POS]
+        #     # # add 2 degrees in radians
+        #     # elbow_flex -= math.radians(2)
+        #     # action_data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX] = {ValueName.POS: elbow_flex}
 
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.X][ValueName.POS]
-            # add 0.1 meters
-            value -= DELTA
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.X] = {ValueName.POS: value}
+        #     value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.X][ValueName.POS]
+        #     # add 0.1 meters
+        #     value -= DELTA
+        #     action_data[settings.ModuleName.ARM][settings.ActuatorName.X] = {ValueName.POS: value}
 
-        elif self.pressed_keys["left"]:
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Y][ValueName.POS]
-            # add 0.1 meters to Y
-            value +=  DELTA
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.Y] = {ValueName.POS: value}
+        # elif self.pressed_keys["left"]:
+        #     value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Y][ValueName.POS]
+        #     # add 0.1 meters to Y
+        #     value +=  DELTA
+        #     action_data[settings.ModuleName.ARM][settings.ActuatorName.Y] = {ValueName.POS: value}
 
-        elif self.pressed_keys["right"]:
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Y][ValueName.POS]
-            # add 0.1 meters
-            value -= DELTA
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.Y] = {ValueName.POS: value}
+        # elif self.pressed_keys["right"]:
+        #     value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Y][ValueName.POS]
+        #     # add 0.1 meters
+        #     value -= DELTA
+        #     action_data[settings.ModuleName.ARM][settings.ActuatorName.Y] = {ValueName.POS: value}
 
-        elif self.pressed_keys["rotate_left"]:
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Z][ValueName.POS]
-            # add 0.1 meters to Z
-            value -= DELTA
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.Z] = {ValueName.POS: value}
+        # elif self.pressed_keys["rotate_left"]:
+        #     value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Z][ValueName.POS]
+        #     # add 0.1 meters to Z
+        #     value -= DELTA
+        #     action_data[settings.ModuleName.ARM][settings.ActuatorName.Z] = {ValueName.POS: value}
 
-        elif self.pressed_keys["rotate_right"]:
-            value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Z][ValueName.POS]
-            # add 0.1 meters
-            value += DELTA
-            action_data[settings.ModuleName.ARM][settings.ActuatorName.Z] = {ValueName.POS: value}
+        # elif self.pressed_keys["rotate_right"]:
+        #     value = observation.data[settings.ModuleName.ARM][settings.ActuatorName.Z][ValueName.POS]
+        #     # add 0.1 meters
+        #     value += DELTA
+        #     action_data[settings.ModuleName.ARM][settings.ActuatorName.Z] = {ValueName.POS: value}
 
-        else:
-            # if no cartessian commands are sent, then send leader arm commands
-            action_data[settings.ModuleName.ARM] = leader_data
-            # pass
+        # else:
+        #     # if no cartessian commands are sent, then send leader arm commands
+        #     action_data[settings.ModuleName.ARM] = leader_data
+        #     # pass
         
         
         self.last_action = Action(data=action_data)

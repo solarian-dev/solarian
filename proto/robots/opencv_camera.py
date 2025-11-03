@@ -122,3 +122,8 @@ class OpenCVCamera(Camera):
     def is_connected(self) -> bool:
         """bool: `True` if the underlying serial port is open."""
         return self.camera.isOpened()
+
+
+    def needs_setup(self) -> bool:
+        """Check if the component needs setup."""
+        return False

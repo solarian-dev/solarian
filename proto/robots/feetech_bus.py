@@ -100,3 +100,12 @@ class FeetechBus(ActuatorBus):
     def set_half_turn_homings(self, component_names: list[str]) -> Dict[str, int]:
         """Set half turn homings for the actuators. Read present position and set/store"""
         return self.bus.set_half_turn_homings(component_names)
+
+    def setup_component(self, component_name: str, configs: Dict[str, Any]):
+        """Setup config for a component"""
+
+        print("Setting the following configs for component:", component_name)
+        print(configs)
+        input("Connect the servo to the controller, make sure only the servo to be configured is connected. Press Enter when ready.")
+        self.bus.setup_motor(component_name, initial_baudrate=configs["baudrate"], initial_id=configs["id"])
+        print("Configuration completed.")

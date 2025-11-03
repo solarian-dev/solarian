@@ -11,14 +11,13 @@ from proto.conf import settings
 class RunServerCommand(BaseCommand):
     help = 'Run the relay server'
 
+    def get_config_class(self):
+        """Return the config class for this command."""
+        return get_class(settings.SERVER_CONFIG_CLASS)
+
     # @hydra.main(version_base=None, config_path="conf", config_name="server")
     # def handle(self, args: DictConfig) -> None:
     def handle(self, cfg: DictConfig) -> None:
-        # Get config class
-        ConfigClass = get_class(settings.SERVER_CONFIG_CLASS)
-        # Instantiate config
-        cfg = ConfigClass(**OmegaConf.to_object(cfg))
-
         # Create server instance
         ServerClass = get_class(settings.SERVER_CLASS)
         server = ServerClass(cfg)

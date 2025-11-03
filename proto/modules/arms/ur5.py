@@ -8,7 +8,7 @@ class UR5FollowerArmModule(Module):
     def __init__(self, cfg: ModuleConfig, name: str, component_bus: ComponentBus):
         super().__init__(cfg, name, component_bus)
 
-    # def setup(self):
+    # def initialize(self):
     #     # move to home
     #     # self.write_actuators_pos({
     #     #     settings.ActuatorName.SHOULDER_PAN: 0,

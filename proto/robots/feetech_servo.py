@@ -18,3 +18,7 @@ class FeetechServo(Servo):
 
     def write(self, data_name: str, value: Any):
         pass
+
+    def needs_setup(self) -> bool:
+        """Check if the component needs setup."""
+        return True

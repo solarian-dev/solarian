@@ -37,11 +37,11 @@ class Action(BaseModel):
         tmp_data = self.data.copy()
 
         # filter out modules, actuators and data types that are not in settings.ACTION
-        tmp_data = {k_m: v_m for k_m, v_m in tmp_data.items() if k_m in settings.ACTION}
-        for k_m, v_m in tmp_data.items():
-            tmp_data[k_m] = {k_s: v_s for k_s, v_s in v_m.items() if k_s in settings.ACTION[k_m]}
-            for k_s, v_s in tmp_data[k_m].items():
-                tmp_data[k_m][k_s] = {k_d: v_d for k_d, v_d in v_s.items() if k_d in settings.ACTION[k_m][k_s]}
+        tmp_data = {k_module: v_module for k_module, v_module in tmp_data.items() if k_module in settings.ACTION}
+        for k_module, v_module in tmp_data.items():
+            tmp_data[k_module] = {k_actuator: v_actuator for k_actuator, v_actuator in v_module.items() if k_actuator in settings.ACTION[k_module]}
+            for k_actuator, v_actuator in tmp_data[k_module].items():
+                tmp_data[k_module][k_actuator] = {k_data: v_data for k_data, v_data in v_actuator.items() if k_data in settings.ACTION[k_module][k_actuator]}
         
         for module_name, module_data in tmp_data.items():
             for actuator_name, actuator_data in module_data.items():

@@ -105,7 +105,6 @@ class Module(ABC):
 
         values_dict = self.component_bus.read(data_name, component_names, normalize)
         values = values_dict.values()
-
         # Perform calibration transformations if required
         # if data_name in CALIBRATION_REQUIRED and self.calibrator is not None:
         #     values = np.array(list(values))
@@ -254,11 +253,9 @@ class Module(ABC):
         # read sensors in batches
         data = {}
         for data_name, sensor_names in sensors_by_data_name.items():
-            # print("Reading sensors:", sensor_names)
             data.update(self.read_sensors(data_name, sensor_names))
 
         point_2 = time.time_ns()
-
         manual_profile("get observation 1", (point_1 - point_0))
         manual_profile("get observation 2", (point_2 - point_1))
         
@@ -350,15 +347,54 @@ class Module(ABC):
             self.component_bus.component_bus_by_port[port].end_calibration_mode()
 
     
-    def setup(self):
-        """Setup module"""
+    def initialize(self):
+        """Initialize module"""
         if self.calibration is None:
             self.calibrate()
         
         if not self.is_calibrated():
             self.write_calibration()
         
+    def setup(self):
 
+        # List all available components that need setup
+        print("\n=== Available Components ===")
+        idx = 0
+        components = []
+
+        # List all actuators and sensors that need setup
+        for actuator_name, actuator in self.actuators.items():
+            if actuator.needs_setup() and not actuator in components:
+                idx += 1
+                print(f"{idx}. {actuator_name} ({actuator.cfg.type} - {actuator.cfg.model})")
+                components.append(actuator)
+        
+        for sensor_name, sensor in self.sensors.items():
+            if sensor.needs_setup() and not sensor in components:
+                idx += 1
+                print(f"{idx}. {sensor_name} ({sensor.cfg.type} - {sensor.cfg.model})")
+                components.append(sensor)
+        
+        # Ask user to select a component
+        print("\n=== Select Component to Setup ===")
+        while True:
+            user_input = input(f"Enter component name or number (1-{len(components)}): ").strip()
+            
+            # Check if input is a number
+            if user_input.isdigit():
+                idx_cfg = int(user_input)
+                if 1 <= idx_cfg <= len(components):
+                    break
+                else:
+                    print(f"Invalid number. Please enter a number between 1 and {len(components)}")
+            else:
+                print(f"Invalid number. Please enter a number between 1 and {len(components)}")
+        
+        component = components[idx_cfg - 1]
+        print(f"\nSetting up component: {component}")
+        self.component_bus.setup_component(component.name, component_port=component.cfg.port, configs=component.cfg.configs)
+        
+        
 
     def __str__(self):
         return f"{self.name} ({self.cfg.type})"

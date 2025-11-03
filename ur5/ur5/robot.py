@@ -48,19 +48,29 @@ class UR5Robot(Robot):
     def process_action(self, action: Action):
         """Process received action"""
 
-        print("Action:", action.data)
-        try:
-            for module_name, module_data in action.data.items():
-                for actuator_name, actuator_data in module_data.items():
-                    for data_name, data_value in actuator_data.items():
-                        if data_name == ValueName.POS:
-                            self.modules[module_name].write_actuators_pos({actuator_name: data_value})
-                        elif data_name == ValueName.SPEED:
-                            self.modules[module_name].write_actuators_speed({actuator_name: data_value})
-                        # print(module_name, actuator_name, data_name, data_value)
+        # print("Action:", action.data)
+        # try:
+        #     for module_name, module_data in action.data.items():
+        #         for actuator_name, actuator_data in module_data.items():
+        #             for data_name, data_value in actuator_data.items():
+        #                 if data_name == ValueName.POS:
+        #                     self.modules[module_name].write_actuators_pos({actuator_name: data_value})
+        #                 elif data_name == ValueName.SPEED:
+        #                     self.modules[module_name].write_actuators_speed({actuator_name: data_value})
+        #                 # print(module_name, actuator_name, data_name, data_value)
         
-        except KeyError:
-            print("KeyError: ", action.data)
+        # except KeyError:
+        #     print("KeyError: ", action.data)
+
+        # self.modules[settings.ModuleName.GRIPPER].write_actuators_pos(action.data[settings.ModuleName.GRIPPER])
+
+        for module_name, module_data in action.data.items():
+            for actuator_name, actuator_data in module_data.items():
+                for data_name, data_value in actuator_data.items():
+                    if data_name == ValueName.POS:
+                        self.modules[module_name].write_actuators_pos({actuator_name: data_value})
+                    elif data_name == ValueName.SPEED:
+                        self.modules[module_name].write_actuators_speed({actuator_name: data_value})
 
         
         

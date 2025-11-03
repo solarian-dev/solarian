@@ -20,5 +20,5 @@ class RunPolicyCommand(BaseCommand):
         ControllerClass = get_class(settings.CONTROLLER_CLASS)
         controller = ControllerClass(cfg)
         controller.connect()
-        controller.setup()
+        controller.initialize()
         controller.control_loop()

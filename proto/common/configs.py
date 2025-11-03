@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, field_validator, model_validator, ValidationError
 from enum import Enum
-from typing import Tuple, Optional, List, Union, Literal
+from typing import Tuple, Optional, List, Union, Literal, Any
 import os
 from pathlib import Path
 
@@ -27,6 +27,7 @@ class ValueName(str, Enum):
     IMAGE = "image"
     TORQUE_ENABLE = "torque_enable"
     BOUNDING_BOX = "bounding_box"
+    DEPTH_IMAGE = "depth_image"
 
     def __str__(self):
         return self.value
@@ -50,6 +51,7 @@ class ComponentType(str, Enum):
 class ComponentConfig(BaseModel):
     type: ComponentType
     port: str | int
+    configs: dict[str, Any] = {}
 
 class SensorConfig(ComponentConfig):
     fps: int
@@ -78,6 +80,7 @@ class ActuatorConfig(ComponentConfig):
     model: str
     # TODO validate mode string value
     mode: str
+    
 
 class ServoConfig(ActuatorConfig, SensorConfig):
     pass
@@ -164,6 +167,7 @@ class ServerConfig(BaseModel):
     depth_model: str | None
     ref_x: int
     ref_y: int
+    img_compression_quality: int
 
 # A project is composed by a robot, a server, a controller and a config
 # In its top level config it also points to the classes that implement the robot, server, controller and config
@@ -174,20 +178,21 @@ class ProjectConfig(BaseModel):
     robot: RobotConfig
 
 
+    
+
 class ConfigBaseModel(BaseModel):
     """Base model with enhanced error handling for configs"""
     
-    @classmethod
-    def parse_with_friendly_errors(cls, data):
+    def parse_with_friendly_errors(self, data):
         """Parse config data with user-friendly error messages"""
         try:
-            return cls.model_validate(data)
+            return self.model_validate(data)
         except ValidationError as e:
             # Get the config filename if possible
             config_path = os.environ.get("PROTO_CURRENT_CONFIG", "")
             
             # Format a user-friendly error message
-            error_msg = f"Configuration Error in {cls.__name__}:\n"
+            error_msg = f"Configuration Error in {self.__class__.__name__}:\n"
             error_msg += f"  {str(e)}\n"
             
             if config_path:
@@ -277,6 +282,7 @@ class TrainConfig(ConfigBaseModel):
     job_name: str
     resume: bool
     batch_size: int
+    image_channels: int
     steps: int
     num_workers: int
     log_freq: int
@@ -314,3 +320,8 @@ class TrainConfig(ConfigBaseModel):
             f"policy:{'act' if type(self.model) == ACTConfig else 'unknown'}",
         ]
         return tags
+
+
+
+class SetupModuleConfig(ConfigBaseModel):
+    module_name: str

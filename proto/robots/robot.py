@@ -224,11 +224,11 @@ class Robot(ABC):
             self.component_bus.connect(self.calibration)
         print("Robot connected")
 
-    def setup(self):
-        # setup modules
+    def initialize(self):
+        # initialize modules
         for module_name, module in self.modules.items():
-            module.setup()
-        print("Robot setup")
+            module.initialize()
+        print("Robot initialized")
 
     def start(self):
         self.running = True
@@ -309,8 +309,12 @@ class Robot(ABC):
             while self.running:
                 point_0 = time.time_ns()
                 with self.observation_lock:
-                    module_observation = self.modules[module_name].get_observation()
-                    # print(f"Module observation for {module_name}:", module_observation)
+                    try:
+                        module_observation = self.modules[module_name].get_observation()
+                        # print(f"Module observation for {module_name}:", module_observation)
+                    except ConnectionError as e:
+                        print(f"Failed to get observation for module {module_name}: {e}")
+                        continue
 
                     point_1 = time.time_ns()
                     if self.last_observation is None:

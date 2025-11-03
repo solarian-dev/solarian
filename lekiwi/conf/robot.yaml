@@ -23,8 +23,10 @@ modules:
                         fps: 30
                         width: 1920
                         height: 1080
-                        resize_width: 960
-                        resize_height: 540
+                        # resize_width: 960
+                        # resize_height: 540
+                        resize_width: 480
+                        resize_height: 270
                         rotation: 0
                         channels: 3
                         color_mode: rgb
@@ -99,8 +101,10 @@ modules:
                         fps: 30
                         width: 1920
                         height: 1080
-                        resize_width: 960
-                        resize_height: 540
+                        # resize_width: 960
+                        # resize_height: 540
+                        resize_width: 480
+                        resize_height: 270
                         rotation: 0
                         channels: 3
                         color_mode: rgb

@@ -95,7 +95,7 @@ class ComponentBus():
                 self.components_by_port[component.cfg.port] = {}
             self.components_by_port[component.cfg.port][name] = component
 
-    def connect(self, calibration: Dict[str, MotorCalibration]):
+    def connect(self, calibration: Dict[str, MotorCalibration] = {}):
         self.component_bus_by_port = {}
         for port, components in self.components_by_port.items():
             # get the first component type
@@ -132,7 +132,12 @@ class ComponentBus():
             else:
                 raise ValueError(f"Unknown component bus type: {component_type}")
 
-            self.component_bus_by_port[port].connect()
+            try:
+                self.component_bus_by_port[port].connect()
+            except Exception as e:
+                print(f"Failed to connect to component bus on port {port}: {e}")
+                print("Check if the device is connected and powered.")
+                exit(1)
 
     def disconnect(self):
         for bus in self.component_bus_by_port.values():
@@ -205,5 +210,10 @@ class ComponentBus():
             if not isinstance(component_bus, OpenCVCamera):
                 calibration.update(component_bus.read_calibration())
         return calibration
+
+
+    def setup_component(self, component_name: str, component_port: str, configs: Dict[str, Any]):
+        component_bus = self.component_bus_by_port[component_port]
+        component_bus.setup_component(component_name, configs)
 
     

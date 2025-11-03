@@ -106,7 +106,7 @@ class ProjectSettings(Settings):
         # ModuleName.BASE: "lekiwi.modules.BaseModule",
         # ModuleName.ARM: "lekiwi.modules.ArmModule",
         # ModuleName.LEADER_ARM: "lekiwi.modules.LeaderArmModule",
-        ModuleName.BASE: "lekiwi.modules.BaseModule",
+        # ModuleName.BASE: "lekiwi.modules.BaseModule",
         ModuleName.ARM: "proto.modules.arms.so100.SO100FollowerArmModule",
         ModuleName.LEADER_ARM: "proto.modules.arms.koch.KochLeaderArmModule",
     }
@@ -147,8 +147,9 @@ class ProjectSettings(Settings):
                     ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["gripper"]),
             },
             SensorName.WRIST: {
-                    ValueName.IMAGE: DataSpec((540, 960, 3), DataComputer.ROBOT, "observation.images.wrist", ["wrist"]),
+                    ValueName.IMAGE: DataSpec((270, 480, 3), DataComputer.ROBOT, "observation.images.wrist", ["wrist"]),
                     ValueName.BOUNDING_BOX: DataSpec((5,), DataComputer.SERVER, "observation.environment_state", ["object_x0", "object_y0", "object_x1", "object_y1", "object_z"]),
+                    ValueName.DEPTH_IMAGE: DataSpec((270, 480, 1), DataComputer.SERVER, "observation.images.wrist_depth", ["wrist_depth"]),
             },
         }
     }

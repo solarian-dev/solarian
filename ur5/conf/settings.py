@@ -89,6 +89,7 @@ class ProjectSettings(Settings):
     class ModuleName(str, Enum):
         ARM = "arm"
         LEADER_ARM = "leader_arm"
+        GRIPPER = "gripper"
         
         def __str__(self):
             return self.value
@@ -100,8 +101,9 @@ class ProjectSettings(Settings):
     SERVER_CLASS: str = "ur5.server.UR5Server"
     CONTROLLER_CLASS: str = "ur5.controller.UR5Controller"
     MODULE_CLASSES: dict[str, str] = {
-        ModuleName.ARM: "proto.modules.arms.ur5.UR5FollowerArmModule",
+        # ModuleName.ARM: "proto.modules.arms.ur5.UR5FollowerArmModule",
         ModuleName.LEADER_ARM: "proto.modules.arms.koch.KochLeaderArmModule",
+        ModuleName.GRIPPER: "proto.modules.grippers.umi_evo.UMIEvoGripperModule",
     }
 
     PROJECT_CONFIG_CLASS: str = "proto.common.configs.ProjectConfig"
@@ -114,44 +116,49 @@ class ProjectSettings(Settings):
     # Define observation space
     # TODO: FIX hardcoded image dimensions
     OBSERVATION: ClassVar[Dict[str, Dict[str, Dict[str, DataSpec]]]] = {
-        ModuleName.ARM: {
-            SensorName.SHOULDER_PAN: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["shoulder_pan"]),
+        ModuleName.GRIPPER: {
+            SensorName.GRIPPER: {
+                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["gripper"]),
             },
-            SensorName.SHOULDER_LIFT: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["shoulder_lift"]),
-            },
-            SensorName.ELBOW_FLEX: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["elbow_flex"]),
-            },
-            SensorName.WRIST_FLEX: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["wrist_flex"]),
-            },
-            SensorName.WRIST_YAW: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["wrist_yaw"]),
-            },
-            SensorName.WRIST_ROLL: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["wrist_roll"]),
-            },
-            SensorName.X: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["x"]),
-            },
-            SensorName.Y: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["y"]),
-            },
-            SensorName.Z: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["z"]),
-            },
-            SensorName.RX: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["rx"]),
-            },
-            SensorName.RY: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["ry"]),
-            },
-            SensorName.RZ: {
-                    ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["rz"]),
-            },
-        }
+        },
+        # ModuleName.ARM: {
+        #     SensorName.SHOULDER_PAN: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["shoulder_pan"]),
+        #     },
+        #     SensorName.SHOULDER_LIFT: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["shoulder_lift"]),
+        #     },
+        #     SensorName.ELBOW_FLEX: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["elbow_flex"]),
+        #     },
+        #     SensorName.WRIST_FLEX: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["wrist_flex"]),
+        #     },
+        #     SensorName.WRIST_YAW: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["wrist_yaw"]),
+        #     },
+        #     SensorName.WRIST_ROLL: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["wrist_roll"]),
+        #     },
+        #     SensorName.X: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["x"]),
+        #     },
+        #     SensorName.Y: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["y"]),
+        #     },
+        #     SensorName.Z: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["z"]),
+        #     },
+        #     SensorName.RX: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["rx"]),
+        #     },
+        #     SensorName.RY: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["ry"]),
+        #     },
+        #     SensorName.RZ: {
+        #             ValueName.POS: DataSpec((1,), DataComputer.ROBOT, "observation.state", ["rz"]),
+        #     },
+        # }
     }
 
     # Define action space
@@ -175,6 +182,9 @@ class ProjectSettings(Settings):
             # ActuatorName.WRIST_ROLL: {
             #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["wrist_roll"])
             # },
+            ActuatorName.GRIPPER: {
+                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["gripper"])
+            },
             ActuatorName.X: {
                 ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["x"])
             },

@@ -244,6 +244,13 @@ class TrainCommand(BaseCommand):
                 "action": [i / train_ds_meta.fps for i in config.action_delta_indices],
             }
 
+            if cfg.image_channels == 1:
+                import torchvision.transforms.v2 as v2
+                image_transforms = v2.Grayscale(num_output_channels=1)
+            else:
+                image_transforms = None
+                
+
             if cfg.val_percentage is not None:
                 # - Calculate train and val episodes
                 total_episodes = train_ds_meta.total_episodes
@@ -256,12 +263,12 @@ class TrainCommand(BaseCommand):
                 num_val_frames = train_ds_meta.total_frames - num_train_frames
                 
                 # - Load train and val datasets
-                train_dataset = LeRobotDataset(train_repo_id, root=train_root, revision=train_revision, episodes=train_episodes, delta_timestamps=delta_timestamps)
+                train_dataset = LeRobotDataset(train_repo_id, root=train_root, revision=train_revision, episodes=train_episodes, delta_timestamps=delta_timestamps, image_transforms=image_transforms)
                 
                 # Create a new dataset with remapped episode indices for validation
                 # This is necessary because LeRobotDataset expects episode indices to be 0-based
                 # when accessing them through episode_data_index
-                val_dataset = LeRobotDataset(train_repo_id, root=train_root, revision=train_revision, episodes=val_episodes, delta_timestamps=delta_timestamps)
+                val_dataset = LeRobotDataset(train_repo_id, root=train_root, revision=train_revision, episodes=val_episodes, delta_timestamps=delta_timestamps, image_transforms=image_transforms)
                 
             else:
                 num_train_episodes = train_ds_meta.total_episodes
@@ -269,12 +276,12 @@ class TrainCommand(BaseCommand):
                 num_val_episodes = 0
                 num_val_frames = 0
                 
-                train_dataset = LeRobotDataset(train_repo_id, root=train_root, revision=train_revision, delta_timestamps=delta_timestamps)
+                train_dataset = LeRobotDataset(train_repo_id, root=train_root, revision=train_revision, delta_timestamps=delta_timestamps, image_transforms=image_transforms)
                 if cfg.val_dataset is not None:
                     val_repo_id = cfg.val_dataset.split("@")[1]
                     val_root = os.getenv("PROTO_PROJECT_PATH") + "/datasets/" + val_repo_id
                     val_revision = '-'
-                    val_dataset = LeRobotDataset(val_repo_id, root=val_root, revision=val_revision, delta_timestamps=delta_timestamps)
+                    val_dataset = LeRobotDataset(val_repo_id, root=val_root, revision=val_revision, delta_timestamps=delta_timestamps, image_transforms=image_transforms)
                     val_ds_meta = LeRobotDatasetMetadata(repo_id=val_repo_id, root=val_root, revision=val_revision)
                     num_val_episodes = val_ds_meta.total_episodes
                     num_val_frames = val_ds_meta.total_frames

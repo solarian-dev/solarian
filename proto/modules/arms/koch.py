@@ -3,8 +3,8 @@ from proto.robots.module import Module
 from proto.conf import settings
 
 class KochLeaderArmModule(Module):
-    def setup(self):
-        super().setup()
+    def initialize(self):
+        super().initialize()
 
         # Disable torque for all actuators
         self.disable_actuators_torque()

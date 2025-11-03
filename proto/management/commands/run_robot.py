@@ -9,17 +9,16 @@ from proto.conf import settings
 class RunRobotCommand(BaseCommand):
     help = 'Run robot with the specified configuration'
 
-    def handle(self, cfg: DictConfig) -> None:
-        # Get config class
-        ConfigClass = get_class(settings.ROBOT_CONFIG_CLASS)
-        # Instantiate config
-        cfg = ConfigClass(**OmegaConf.to_object(cfg))
+    def get_config_class(self):
+        """Return the config class for this command."""
+        return get_class(settings.ROBOT_CONFIG_CLASS)
 
+    def handle(self, cfg: DictConfig) -> None:
         # Create robot instance
         RobotClass = get_class(settings.ROBOT_CLASS)
         robot = RobotClass(cfg)
         robot.connect()
-        robot.setup()
+        robot.initialize()
         robot.start()
 
 

@@ -1,0 +1,83 @@
+export const metadata = {
+  title: 'Commands',
+  description:
+    'Proto has multiple management commands.',
+}
+
+# Commands
+
+Proto has multiple management commands. The following are the most common ones:
+
+- `train`: Trains a model.
+- `detect-device`: Detects devices connected to the computer (port and name).
+- `setup-servo`: Setup servo device.
+
+
+# Creating a new command
+
+To create a new command, you need to create a new file in the `proto/management/commands` directory.
+
+```python
+from proto.management import BaseCommand, CommandRegistry
+
+@CommandRegistry.register('my-command')
+class MyCommand(BaseCommand):
+    help = 'My command.'
+
+    def handle(self, cfg: DictConfig) -> None:
+        print('Hello, world!')
+```
+
+You can then run it with:
+
+```bash
+python manage.py my-command
+```
+
+Optionally you can add a config file to the command and specify it with the `--conf` option.
+The default config file name can be specified in the `CommandRegistry.register` decorator.
+
+```python
+@CommandRegistry.register('my-command', 'my_command')
+class MyCommand(BaseCommand):
+    help = 'My command.'
+
+    def handle(self, cfg: DictConfig) -> None:
+        print('Hello, world!')
+```
+
+Then you will add a config file in the `<project_path>/conf` directory.
+
+For example, if you have a command called `my-command`, you will add a file called `my_command.yaml` in the `<project_path>/conf` directory.
+
+When running a command form a differnt config file or directory, you can specify it with the `--conf` option.
+
+```bash
+python manage.py my-command --conf <conf_path>/<conf_name>
+```
+
+If you want to add validation logic to parse the config file, you can add a config class to the command.
+
+```python
+from pydantic import BaseModel
+
+
+class MyCommandConfig(BaseModel):
+    param1: int
+    param2: str
+    param3: float
+
+@CommandRegistry.register('my-command', 'my_command')
+class MyCommand(BaseCommand):
+    help = 'My command.'
+
+    def get_config_class(self):
+        return MyCommandConfig
+
+    def handle(self, cfg: DictConfig) -> None:
+        print('Hello, world!')
+        print(cfg)
+
+```
+
+The config class will be used to parse the config file and validate the values automatically.
