@@ -11,25 +11,10 @@ from omegaconf import DictConfig, OmegaConf
 import colorama
 
 from .base import CommandRegistry
+from proto.common.utils.configs import parse_with_friendly_errors
 
 
-def parse_with_friendly_errors(model_class, data):
-    """Parse config data with user-friendly error messages"""
-    try:
-        return model_class(**data)
-    except ValidationError as e:
-        # Get the config filename if possible
-        config_path = os.environ.get("PROTO_CURRENT_CONFIG", "")
-        
-        # Format a user-friendly error message
-        error_msg = f"Configuration Error in {model_class.__name__}:\n"
-        error_msg += f"  {str(e)}\n"
-        
-        if config_path:
-            error_msg += f"  Please check your configuration file: {config_path}\n"
-            
-        # Re-raise with the friendly message
-        raise ValueError(error_msg) from e
+
 
 def main() -> None:
     """

@@ -1,0 +1,19 @@
+from proto.robots.robot import Robot
+from proto.robots.action import Action
+from proto.common.configs import RobotConfig
+from proto.conf import settings
+
+
+# Must define robot
+class ${project_name_camel}Robot(Robot):
+    def __init__(self, cfg: RobotConfig):
+        super().__init__(cfg)
+
+    def update(self):
+        pass
+
+    def process_action(self, action: Action):
+        """Process received action"""
+        pass
+
+        

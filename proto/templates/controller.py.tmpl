@@ -1,0 +1,13 @@
+from proto.control import Controller
+from proto.robots.action import Action
+from proto.robots.observation import Observation
+from proto.conf import settings
+from proto.common.configs import ControllerConfig
+
+
+class ${project_name_camel}Controller(Controller):
+    def __init__(self, cfg: ControllerConfig):
+        super().__init__(cfg)
+
+    def control_step(self, observation: Observation) -> Action:
+        pass

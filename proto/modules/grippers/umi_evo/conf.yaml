@@ -1,0 +1,23 @@
+type: umi_evo
+calibration_file: .cache/calibration/umi_evo.json
+bodies:
+    base:
+        mass: 1
+        inertia: 1
+    fingers:
+        mass: 1
+        inertia: 1
+joints:
+    fingers:
+        parent_body: base
+        child_body: fingers
+        actuators:
+            gripper:
+                id: 1
+                model: sts3215
+                port: ${gripper_actuator_port}
+                type: feetech
+                mode: range_m100_100
+                configs:
+                    id: 1
+                    baudrate: 1_000_000

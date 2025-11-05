@@ -32,6 +32,7 @@ view_parquet.ipynb
 notes.txt
 # ur5
 proto/cli
+pyproject3-39.toml
 
 # Apple
 .DS_Store

@@ -30,11 +30,6 @@ except:
     print("No monitors found.")
 
 
-
-
-
-
-
 class Controller(ABC):
     
     def __init__(self, cfg: ControllerConfig):

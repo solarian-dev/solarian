@@ -86,6 +86,7 @@ def create_project() -> Path:
     ctx = {
         "project_name": args.project_name,
         "package_name": args.project_name.replace("-", "_"),
+        "project_name_camel": args.project_name.replace("-", " ").title().replace(" ", ""),
     }
 
     for spec, text in zip(PROJECT_FILES, (t for _, t in _iter_template_files())):
