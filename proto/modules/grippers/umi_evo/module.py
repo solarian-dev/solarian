@@ -21,13 +21,19 @@ class UMIEvoGripperModule(Module):
         # Set P_Coefficient to lower value to avoid shakiness (Default is 32)
         # self.write_actuators("P_Coefficient", 16)
         # self.write_actuators("P_Coefficient", 8)
+        # self.write_actuators("P_Coefficient", 32)
+        # # Set I_Coefficient and D_Coefficient to default value 0 and 32
+        # self.write_actuators("I_Coefficient", 0)
+        # self.write_actuators("D_Coefficient", 16)
         self.write_actuators("P_Coefficient", 32)
         # Set I_Coefficient and D_Coefficient to default value 0 and 32
-        self.write_actuators("I_Coefficient", 0)
-        self.write_actuators("D_Coefficient", 16)
+        self.write_actuators("I_Coefficient", 2)
+        self.write_actuators("D_Coefficient", 2)
         
         # enable torque
         self.write_actuators("Torque_Enable", 1)
         self.write_actuators("Lock", 1)
+
+        # self.write_actuators_pos({"gripper": 0})
 
    

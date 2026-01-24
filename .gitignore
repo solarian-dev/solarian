@@ -15,6 +15,10 @@ policies
 conf_dev
 conf_test
 
+# Projects
+ur5
+lekiwi
+
 
 # Ignore WIP
 examples
@@ -30,7 +34,6 @@ backups
 datasets
 view_parquet.ipynb
 notes.txt
-# ur5
 proto/cli
 pyproject3-39.toml
 

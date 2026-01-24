@@ -177,6 +177,14 @@ class ComponentBus():
         """Write a value to the actuator group."""
         self.write(ValueName.SPEED, values)
 
+    def read_pos(self, component_names: list[str]):
+        """Read a value from the actuator group."""
+        return self.read(ValueName.POS, component_names)
+
+    def read_speed(self, component_names: list[str]):
+        """Read a value from the actuator group."""
+        return self.read(ValueName.SPEED, component_names)
+
     def enable_torque(self, component_names: list[str]):
         """Enable torque for the actuator."""
         self.write(ValueName.TORQUE_ENABLE, {name: TorqueMode.ENABLED for name in component_names})

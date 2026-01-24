@@ -230,6 +230,14 @@ class Robot(ABC):
             module.initialize()
         print("Robot initialized")
 
+    def on_start(self):
+        """Hook method called after observation threads start but before control loop.
+        
+        Override this in subclasses to start additional threads or perform
+        setup that should happen right before the main control loop begins.
+        """
+        pass
+
     def start(self):
         self.running = True
         # threading.Thread(target=self._action_receiver, daemon=True).start()
@@ -237,6 +245,9 @@ class Robot(ABC):
         
         for module_name, module_sensors in settings.OBSERVATION.items():
             threading.Thread(target=self.get_module_observation_loop, args=(module_name,), daemon=True).start()
+
+        # Hook for subclasses to start additional threads
+        self.on_start()
 
         self.control_loop()
         

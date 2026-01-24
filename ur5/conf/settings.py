@@ -102,7 +102,7 @@ class ProjectSettings(Settings):
     CONTROLLER_CLASS: str = "ur5.controller.UR5Controller"
     MODULE_CLASSES: dict[str, str] = {
         # ModuleName.ARM: "proto.modules.arms.ur5.UR5FollowerArmModule",
-        ModuleName.LEADER_ARM: "proto.modules.arms.koch.KochLeaderArmModule",
+        # ModuleName.LEADER_ARM: "proto.modules.arms.koch.KochLeaderArmModule",
         ModuleName.GRIPPER: "proto.modules.grippers.umi_evo.UMIEvoGripperModule",
     }
 
@@ -163,46 +163,51 @@ class ProjectSettings(Settings):
 
     # Define action space
     ACTION: ClassVar[Dict[str, Dict[str, DataSpec]]] = {
-       ModuleName.ARM: {
-            # ActuatorName.SHOULDER_PAN: {
-            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["shoulder_pan"])
-            # },
-            # ActuatorName.SHOULDER_LIFT: {
-            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["shoulder_lift"])
-            # },
-            # ActuatorName.ELBOW_FLEX: {
-            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["elbow_flex"])
-            # },
-            # ActuatorName.WRIST_FLEX: {
-            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["wrist_flex"])
-            # },
-            # ActuatorName.WRIST_YAW: {
-            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["wrist_yaw"])
-            # },
-            # ActuatorName.WRIST_ROLL: {
-            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["wrist_roll"])
-            # },
+        ModuleName.GRIPPER: {
             ActuatorName.GRIPPER: {
-                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["gripper"])
+                    ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["gripper"]),
             },
-            ActuatorName.X: {
-                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["x"])
+        },
+        ModuleName.ARM: {
+            ActuatorName.SHOULDER_PAN: {
+                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["shoulder_pan"])
             },
-            ActuatorName.Y: {
-                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["y"])
+            ActuatorName.SHOULDER_LIFT: {
+                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["shoulder_lift"])
             },
-            ActuatorName.Z: {
-                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["z"])
+            ActuatorName.ELBOW_FLEX: {
+                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["elbow_flex"])
             },
-            ActuatorName.RX: {
-                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["rx"])
+            ActuatorName.WRIST_FLEX: {
+                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["wrist_flex"])
             },
-            ActuatorName.RY: {
-                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["ry"])
+            ActuatorName.WRIST_YAW: {
+                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["wrist_yaw"])
             },
-            ActuatorName.RZ: {
-                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["rz"])
+            ActuatorName.WRIST_ROLL: {
+                ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["wrist_roll"])
             },
+            # ActuatorName.GRIPPER: {
+            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["gripper"])
+            # },
+            # ActuatorName.X: {
+            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["x"])
+            # },
+            # ActuatorName.Y: {
+            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["y"])
+            # },
+            # ActuatorName.Z: {
+            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["z"])
+            # },
+            # ActuatorName.RX: {
+            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["rx"])
+            # },
+            # ActuatorName.RY: {
+            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["ry"])
+            # },
+            # ActuatorName.RZ: {
+            #     ValueName.POS: DataSpec((1,), DataComputer.CONTROLLER, "action", ["rz"])
+            # },
         }
     }
 

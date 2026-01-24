@@ -1,0 +1,207 @@
+export const metadata = {
+  title: 'Controllers',
+  description:
+    '',
+}
+
+# AI Controller
+
+The AIController extends the base Controller class and implements a dual-process cognitive architecture:
+
+Key Components:
+Component	Rate	Role
+Controller	Base class	Handles ZMQ communication, threading, display
+AIController	-	Orchestrates System1 and System2
+System1	~30 Hz (FPS)	Fast reactions, skill execution
+System2	~1 Hz (TPS)	Slow reasoning via VLM
+
+Data Flow:
+1. Robot → Controller: Observation via ZMQ
+2. Controller → System1: control_step(observation)
+3. System1 ↔ System2: Events sent via attend(), actions received via get_actions()
+4. System1 → Controller: LowLevelAction returned
+4. Controller → Robot: Action sent via ZMQ
+
+Key Design Decisions:
+- System2 runs in a daemon thread started in connect() - always thinking in background
+- System1 is synchronous with the control loop - reacts at frame rate
+- Communication is asynchronous: System1 notifies System2 of events, System2 queues actions when ready
+- Skills bridge high-level to low-level: HighLevelAction contains a Skill that executes to produce LowLevelAction
+
+
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    AI CONTROLLER ARCHITECTURE                                    │
+│                              Dual-Process Cognitive Control System                               │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+                                    ┌───────────────────────┐
+                                    │       Robot           │
+                                    │  (Server/Hardware)    │
+                                    └───────────┬───────────┘
+                                                │
+                                    ┌───────────▼───────────┐
+                                    │      ZMQ Sockets      │
+                                    │  state_socket (SUB)   │
+                                    │  action_socket (PUSH) │
+                                    └───────────┬───────────┘
+                                                │
+┌───────────────────────────────────────────────▼───────────────────────────────────────────────┐
+│                                      CONTROLLER (Base)                                         │
+│                                                                                                │
+│  ┌─────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │  Threading Architecture:                                                                 │  │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐                          │  │
+│  │  │ State Receiver  │  │  Control Loop   │  │  Display Loop   │                          │  │
+│  │  │    (Thread)     │  │    (Thread)     │  │  (Main Thread)  │                          │  │
+│  │  │  _state_recv()  │  │  control_loop() │  │  display_loop() │                          │  │
+│  │  └────────┬────────┘  └────────┬────────┘  └─────────────────┘                          │  │
+│  │           │                    │                                                         │  │
+│  │           ▼                    │                                                         │  │
+│  │    ┌─────────────┐             │                                                         │  │
+│  │    │ Observation │─────────────┼──────────────────────────────┐                         │  │
+│  │    │   (locked)  │             │                              │                         │  │
+│  │    └─────────────┘             ▼                              ▼                         │  │
+│  │                    ┌───────────────────────┐       ┌────────────────────┐               │  │
+│  │                    │   control_step()      │       │    send_action()   │               │  │
+│  │                    │     @abstractmethod   │──────▶│                    │               │  │
+│  │                    └───────────────────────┘       └────────────────────┘               │  │
+│  └─────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                                │
+│  Key Methods: connect(), start(), initialize(), disconnect()                                   │
+│  Components: modules, component_bus, calibration                                               │
+└───────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                │
+                                    ┌───────────▼───────────┐
+                                    │     AICONTROLLER      │
+                                    │   (extends Controller)│
+                                    └───────────┬───────────┘
+                                                │
+          ┌─────────────────────────────────────┼─────────────────────────────────────┐
+          │                                     │                                     │
+          ▼                                     │                                     ▼
+┌──────────────────────────────────────┐        │        ┌──────────────────────────────────────┐
+│          SYSTEM 1 (Fast)             │        │        │          SYSTEM 2 (Slow)             │
+│     "Reactive / Intuitive"           │        │        │     "Deliberative / Reasoning"       │
+│                                      │        │        │                                      │
+│  ┌────────────────────────────────┐  │        │        │  ┌────────────────────────────────┐  │
+│  │ Runs at: FPS rate (~30 Hz)    │  │        │        │  │ Runs at: TPS rate (~1 Hz)      │  │
+│  │ Triggered by: control_step()  │  │        │        │  │ Triggered by: threading.Thread │  │
+│  └────────────────────────────────┘  │        │        │  │              (daemon)          │  │
+│                                      │◀───────┴───────▶│  └────────────────────────────────┘  │
+│  ┌────────────────────────────────┐  │  references     │                                      │
+│  │         react(obs)             │  │                 │  ┌────────────────────────────────┐  │
+│  │              │                 │  │                 │  │          think()               │  │
+│  │              ▼                 │  │                 │  │    Continuous loop:            │  │
+│  │   ┌─────────────────────┐     │  │   attend()      │  │              │                 │  │
+│  │   │   feel(obs)         │─────│──│────────────────▶│  │              ▼                 │  │
+│  │   │ Detect Events       │     │  │   (events,obs)  │  │   ┌─────────────────────┐     │  │
+│  │   └─────────────────────┘     │  │                 │  │   │   call_model()      │     │  │
+│  │              │                │  │                 │  │   │   (VLM inference)   │     │  │
+│  │              ▼                │  │                 │  │   └──────────┬──────────┘     │  │
+│  │   ┌─────────────────────┐     │  │   get_actions() │  │              │                │  │
+│  │   │   get_actions()     │◀────│──│────────────────◀│  │              ▼                │  │
+│  │   │   from System2      │     │  │  HighLevelAction│  │   ┌─────────────────────┐     │  │
+│  │   └─────────────────────┘     │  │                 │  │   │get_action_from_     │     │  │
+│  │              │                │  │                 │  │   │    thought()        │     │  │
+│  │              ▼                │  │                 │  │   └──────────┬──────────┘     │  │
+│  │   ┌─────────────────────┐     │  │                 │  │              │                │  │
+│  │   │  active_actions     │     │  │                 │  │              ▼                │  │
+│  │   │  Execute Skills     │     │  │                 │  │   ┌─────────────────────┐     │  │
+│  │   └──────────┬──────────┘     │  │                 │  │   │   queue_action()    │     │  │
+│  │              │                │  │                 │  │   └─────────────────────┘     │  │
+│  │              ▼                │  │                 │  │                               │  │
+│  │   ┌─────────────────────┐     │  │                 │  │  Also: sleep(), dream()       │  │
+│  │   │merge_low_level_     │     │  │                 │  │  (future capabilities)        │  │
+│  │   │    actions()        │     │  │                 │  │                               │  │
+│  │   └──────────┬──────────┘     │  │                 │  └────────────────────────────────┘  │
+│  │              │                │  │                 │                                      │
+│  └──────────────│────────────────┘  │                 │                                      │
+│                 │                    │                 │                                      │
+│                 ▼                    │                 │                                      │
+│         LowLevelAction               │                 │                                      │
+│                                      │                 │                                      │
+└──────────────────────────────────────┘                 └──────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                      DATA STRUCTURES                                            │
+├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                 │
+│   ┌────────────────────┐        ┌────────────────────┐        ┌────────────────────┐           │
+│   │    Observation     │        │  HighLevelAction   │        │   LowLevelAction   │           │
+│   │    (Pydantic)      │        │    (Pydantic)      │        │                    │           │
+│   ├────────────────────┤        ├────────────────────┤        ├────────────────────┤           │
+│   │ data: Dict         │        │ action_id: str     │        │ (Robot commands)   │           │
+│   │  └─ module_name    │        │ skill: Skill       │        │                    │           │
+│   │      └─ sensor     │        │ params: Dict       │        │                    │           │
+│   │         └─ values  │        └────────────────────┘        └────────────────────┘           │
+│   │ (images, pos, etc) │                  │                                                    │
+│   └────────────────────┘                  │                                                    │
+│                                           ▼                                                    │
+│   ┌────────────────────┐        ┌────────────────────┐        ┌────────────────────┐           │
+│   │       Event        │        │       Skill        │        │      Policy        │           │
+│   ├────────────────────┤        │      (ABC)         │        ├────────────────────┤           │
+│   │ description: str   │        ├────────────────────┤        │ select_action()    │           │
+│   │                    │        │ execute(params)    │        │                    │           │
+│   └────────────────────┘        └─────────┬──────────┘        └────────────────────┘           │
+│                                           │                             ▲                      │
+│                                           ▼                             │                      │
+│                                 ┌────────────────────┐                  │                      │
+│                                 │   PhysicalSkill    │                  │                      │
+│                                 ├────────────────────┤                  │                      │
+│                                 │ policy: Policy     │──────────────────┘                      │
+│                                 │ build_policy()     │                                         │
+│                                 │ build_policy_obs() │                                         │
+│                                 └─────────┬──────────┘                                         │
+│                                           │                                                    │
+│                                           ▼                                                    │
+│                                 ┌────────────────────┐                                         │
+│                                 │  PickObjectSkill   │                                         │
+│                                 │  (concrete impl)   │                                         │
+│                                 └────────────────────┘                                         │
+│                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                         EXECUTION FLOW                                          │
+├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                 │
+│   1. AIController.connect()                                                                     │
+│      └─▶ Starts System2.think() in daemon thread (runs at 1 TPS)                               │
+│                                                                                                 │
+│   2. AIController.start()                                                                       │
+│      ├─▶ Starts _state_receiver thread (receives Observations)                                  │
+│      ├─▶ Starts control_loop thread                                                             │
+│      │      └─▶ Calls control_step(observation) at FPS rate                                     │
+│      │            └─▶ system1.react(observation)                                                │
+│      │                  ├─▶ feel(obs) → Events                                                  │
+│      │                  ├─▶ system2.attend(events, obs)  [async notification]                   │
+│      │                  ├─▶ system2.get_actions() → HighLevelActions                            │
+│      │                  ├─▶ Execute active skills                                               │
+│      │                  └─▶ Return merged LowLevelAction                                        │
+│      └─▶ Runs display_loop in main thread                                                       │
+│                                                                                                 │
+│   3. System2 (parallel):                                                                        │
+│      └─▶ think() loop at 1 TPS                                                                  │
+│            ├─▶ Pops from attention_queue                                                        │
+│            ├─▶ call_model(events, obs) → thought (VLM)                                          │
+│            ├─▶ get_action_from_thought() → HighLevelAction                                      │
+│            └─▶ queue_action() → available to System1                                            │
+│                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Key Insight: This is a dual-process architecture inspired by Kahneman's System 1/System 2 theory:
+  • System 1 (Fast): Reactive, runs at sensor rate (~30Hz), handles immediate responses
+  • System 2 (Slow): Deliberative, runs at ~1Hz, uses VLM for reasoning and planning
+
+
+
+
+## See Also
+- [Server](/server): The server node acts as a bridge between the robot and the controller. It runs on a remote machine and is responsible for receiving actuator commands from the controller and forwarding them to the robot, as well as receiving sensor data from the robot and forwarding it to the controller.
+- [Robot](/robots): The robot node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
+- [Observation](/observations): The observation node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
+- [Action](/actions): The action node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.

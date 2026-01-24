@@ -64,38 +64,45 @@ class UR5Controller(Controller):
 
     
 
+
     @profile
     def control_step(self, observation: Observation) -> Action:
-        speed_setting = self.speed_levels[self.speed_index]
-        xy_speed = speed_setting["xy"]  # e.g. 0.1, 0.25, or 0.4
-        theta_speed = speed_setting["theta"]  # e.g. 30, 60, or 90
+        # speed_setting = self.speed_levels[self.speed_index]
+        # xy_speed = speed_setting["xy"]  # e.g. 0.1, 0.25, or 0.4
+        # theta_speed = speed_setting["theta"]  # e.g. 30, 60, or 90
 
-        action_data = {
+        # action_data = {
             
-        }
+        # }
 
-        # sensor_names = settings.ACTION[settings.ModuleName.ARM].keys()
+        # # sensor_names = settings.ACTION[settings.ModuleName.ARM].keys()
 
-        # if settings.ModuleName.LEADER_ARM in self.modules:
-        #     action_data[settings.ModuleName.ARM] = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
+        # # if settings.ModuleName.LEADER_ARM in self.modules:
+        # #     action_data[settings.ModuleName.ARM] = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
         
-        sensor_names = [
-            settings.SensorName.SHOULDER_PAN, 
-            settings.SensorName.SHOULDER_LIFT, 
-            settings.SensorName.ELBOW_FLEX, 
-            settings.SensorName.WRIST_FLEX, 
-            settings.SensorName.WRIST_ROLL,
-            settings.SensorName.GRIPPER
-        ]
-        leader_data = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
-        # StatusBoard().set("Leader Arm", leader_data)
+        # sensor_names = [
+        #     settings.SensorName.SHOULDER_PAN, 
+        #     settings.SensorName.SHOULDER_LIFT, 
+        #     settings.SensorName.ELBOW_FLEX, 
+        #     settings.SensorName.WRIST_FLEX, 
+        #     settings.SensorName.WRIST_ROLL,
+        #     settings.SensorName.GRIPPER
+        # ]
+        # leader_data = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS, sensor_names, normalize=True)
+        
 
-        action_data[settings.ModuleName.GRIPPER] = {settings.SensorName.GRIPPER: leader_data[settings.SensorName.GRIPPER]}
+        # action_data[settings.ModuleName.GRIPPER] = {settings.SensorName.GRIPPER: leader_data[settings.SensorName.GRIPPER]}
 
 
-        # StatusBoard().set("Leader Arm", action_data)
+        # MAX = 8.0
+        # gripper_pos = observation.data[settings.ModuleName.GRIPPER][settings.SensorName.GRIPPER][ValueName.POS]
+        # gripper_pos_cm = MAX * (gripper_pos + 84) / 180.0
+        # StatusBoard().set("Gripper in cm", gripper_pos_cm)
 
-        DELTA = 0.05
+
+        # # StatusBoard().set("Leader Arm", action_data)
+
+        # DELTA = 0.05
 
         # if self.pressed_keys["forward"]:
         #     # elbow_flex = observation.data[settings.ModuleName.ARM][settings.ActuatorName.ELBOW_FLEX][ValueName.POS]
@@ -149,7 +156,19 @@ class UR5Controller(Controller):
         #     action_data[settings.ModuleName.ARM] = leader_data
         #     # pass
         
+
         
+
+        leader_arm_data = self.modules[settings.ModuleName.LEADER_ARM].read_sensors(ValueName.POS)
+
+        action_gripper = {settings.SensorName.GRIPPER: leader_arm_data[settings.SensorName.GRIPPER]}
+        del leader_arm_data[settings.SensorName.GRIPPER]
+        action_arm = leader_arm_data
+        action_arm[settings.ModuleName.ARM][settings.ActuatorName.WRIST_YAW] = {ValueName.POS: 0}
+
+        action_data = {}
+        action_data[settings.ModuleName.ARM] = action_arm
+        action_data[settings.ModuleName.GRIPPER] = action_gripper
         self.last_action = Action(data=action_data)
         return self.last_action
 

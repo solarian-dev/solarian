@@ -64,13 +64,22 @@ class UR5Robot(Robot):
 
         # self.modules[settings.ModuleName.GRIPPER].write_actuators_pos(action.data[settings.ModuleName.GRIPPER])
 
-        for module_name, module_data in action.data.items():
-            for actuator_name, actuator_data in module_data.items():
-                for data_name, data_value in actuator_data.items():
-                    if data_name == ValueName.POS:
-                        self.modules[module_name].write_actuators_pos({actuator_name: data_value})
-                    elif data_name == ValueName.SPEED:
-                        self.modules[module_name].write_actuators_speed({actuator_name: data_value})
+        # for module_name, module_data in action.data.items():
+        #     for actuator_name, actuator_data in module_data.items():
+        #         for data_name, data_value in actuator_data.items():
+        #             if data_name == ValueName.POS:
+        #                 self.modules[module_name].write_actuators_pos({actuator_name: data_value})
+        #             elif data_name == ValueName.SPEED:
+        #                 self.modules[module_name].write_actuators_speed({actuator_name: data_value})
+
+        
+        # gripper_data = action.data[settings.ModuleName.LEADER_ARM][settings.ActuatorName.GRIPPER]
+        # arm_data = {key: value[ValueName.POS] for key, value in action.data[settings.ModuleName.LEADER_ARM].items() if key in settings.ACTUATOR[settings.ModuleName.ARM]}
+        
+        
+        # self.modules[settings.ModuleName.GRIPPER].write_actuators_pos(gripper_data)
+
+        self.modules[settings.ModuleName.ARM].write_actuators_pos(action.data[settings.ModuleName.ARM])
 
         
         

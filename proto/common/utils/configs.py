@@ -30,8 +30,5 @@ def load_config_yaml(yaml_path: str, config_class: type) -> Any:
     return parse_with_friendly_errors(config_class, data)
 
 
-def load_default_module_config(module_class: type) -> ModuleConfig:
-    # get file path from module_class
-    module_path = module_class.__module__
-    yaml_path = os.path.join(module_path, "config.yaml")
+def load_module_config_yaml(yaml_path: str) -> ModuleConfig:
     return load_config_yaml(yaml_path, ModuleConfig)

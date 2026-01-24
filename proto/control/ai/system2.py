@@ -77,9 +77,19 @@ class System2:
             # or "I should do something to help someone"
             # or "I should do something to help the environment"
             # or "I should recharge"
+
+            # just the last event and observation
+            # don't use events for now, just observation
             events, observation = self.attention_queue.pop(0)
+            # clear attention queue, for now we only use the last event and observation
+            self.attention_queue = []
+
+
+            # call the VLM model to get a thought
             thought = self.call_model(events, observation)
+            # parse the thought into a high level action
             action = self.get_action_from_thought(thought)
+            # queue the action for execution
             self.queue_action(action)
         
             self.idle()

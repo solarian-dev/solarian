@@ -32,6 +32,8 @@ class System1:
         
         # TODO: implement
         # this should detect events from the observation
+        # should run at FPS rate, that mean it runs fast, think of it as a fast reaction to the environment, like a reflex
+        # the system 2 by itself will do its own thinking at a lower rate, which involves perceiving the envirionment.
         # for now just return a generic event
         return [Event(description="just pay attention to the environment")]
 

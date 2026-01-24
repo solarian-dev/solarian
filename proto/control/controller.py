@@ -427,6 +427,14 @@ class Controller(ABC):
             self.running = False
 
 
+    def on_start(self):
+        """Hook method called after control threads start but before display loop.
+        
+        Override this in subclasses to start additional threads or perform
+        setup that should happen right before the main display loop begins.
+        """
+        pass
+
     def start(self, dataset=None, episode_time_s=None, single_task=None):
         """Implements the control loop
         
@@ -451,6 +459,9 @@ class Controller(ABC):
         print("Starting control loop")
         t = threading.Thread(target=self.control_loop, args=(dataset, episode_time_s + 1, single_task), daemon=True)
         t.start()
+        
+        # Hook for subclasses to start additional threads
+        self.on_start()
         
         # run display loop in main thread
         print("Starting display loop")

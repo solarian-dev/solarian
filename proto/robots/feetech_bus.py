@@ -65,7 +65,7 @@ class FeetechBus(ActuatorBus):
         self.bus.disconnect()
 
     def read(self, data_name: str, component_names: list[str], normalize: bool = True):
-        return self.bus.sync_read(map_read(data_name), motors=component_names, normalize=normalize)
+        return self.bus.sync_read(map_read(data_name), motors=component_names, normalize=normalize, num_retry=10)
 
     def write(self, data_name: str, values: Dict[str, Any], normalize: bool = True):
         self.bus.sync_write(map_write(data_name), values=values, normalize=normalize)

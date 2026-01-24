@@ -15,5 +15,6 @@ from . import (
     dataset2lerobot,
     detect_device,
     create_project,
-    setup_module
+    setup_module,
+    calibrate_module
 )

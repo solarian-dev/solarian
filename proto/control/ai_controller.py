@@ -12,6 +12,7 @@ class AIController(Controller):
     def __init__(self, cfg: ControllerConfig):
         super().__init__(cfg)
         
+        # Creates system 2 and system 1 instances
         self.system2 = System2(cfg.system2_model, cfg.system2_prompt)
         self.system1 = System1(self.system2)
 
@@ -21,8 +22,7 @@ class AIController(Controller):
         return self.system1.react(observation)
 
 
-    def connect(self):
-        super().connect()
-        
-        # system 2 runs in a parallel async thread, at TPS rate
+    def on_start(self):
+        # System 2 runs in a parallel async thread, at TPS rate (~1 Hz)
+        print("Starting System 2 think loop")
         threading.Thread(target=self.system2.think, daemon=True).start()
