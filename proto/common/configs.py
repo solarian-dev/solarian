@@ -127,6 +127,8 @@ class ControllerConfig(BaseModel):
     tps: int
     system2_model: str
     system2_prompt: str
+    system2_base_url: str
+    system2_api_key: str
     policy_path: str
     device: str
     connection: ConnectionConfig

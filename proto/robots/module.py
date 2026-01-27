@@ -395,6 +395,5 @@ class Module(ABC):
         self.component_bus.setup_component(component.name, component_port=component.cfg.port, configs=component.cfg.configs)
         
         
-
     def __str__(self):
         return f"{self.name} ({self.cfg.type})"

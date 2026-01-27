@@ -55,12 +55,14 @@ dependencies = [
     "feetech-servo-sdk>=1.0.0",
     "dynamixel-sdk>=3.7.31",
     "urx==0.11.0",
+    "ur-rtde==1.5.6; platform_system != 'Darwin' or platform_machine != 'arm64'",
 
     # Logging
     "wandb>=0.22.3",
 
     # Other
     "cmake==4.0.3",
+    "threadpoolctl==3.2",
 
 
     # "lerobot (>=0.1,<0.2)",

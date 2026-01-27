@@ -22,6 +22,8 @@ lekiwi
 
 # Ignore WIP
 examples
+# examples/assets
+# examples/other
 notebooks
 test_code
 old_code
