@@ -25,6 +25,7 @@ examples
 # examples/assets
 # examples/other
 notebooks
+placeholder
 test_code
 old_code
 webrtc
@@ -38,6 +39,7 @@ view_parquet.ipynb
 notes.txt
 proto/cli
 pyproject3-39.toml
+projects
 
 # Apple
 .DS_Store

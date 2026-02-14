@@ -1,0 +1,27 @@
+[project]
+name = "solarian-ur5"
+version = "0.1.0"
+description = "Universal Robots UR5 actuator, bus, and arm module plugin for Solarian robotics framework"
+authors = [
+    {name = "Solarian Contributors", email = "solarian@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "solarian>=0.1.0",
+    "ur-rtde>=1.5.6; platform_system != 'Darwin' or platform_machine != 'arm64'",
+]
+
+[project.entry-points."solarian.actuators"]
+ur5_joint = "solarian_ur5.actuator:UR5JointActuator"
+ur5_cartesian = "solarian_ur5.actuator:UR5CartesianActuator"
+
+[project.entry-points."solarian.actuator_buses"]
+ur5 = "solarian_ur5.bus:UR5Bus"
+
+[project.entry-points."solarian.modules"]
+ur5_arm = "solarian_ur5.module:UR5ArmModule"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

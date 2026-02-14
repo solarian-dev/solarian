@@ -1,0 +1,21 @@
+[project]
+name = "solarian-umi-gripper"
+version = "0.1.0"
+description = "UMI Gripper module plugin for Solarian robotics framework"
+authors = [
+    {name = "Solarian Contributors", email = "solarian@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "solarian>=0.1.0",
+    "solarian-feetech>=0.1.0",  # Uses Feetech servos
+]
+
+[project.entry-points."solarian.modules"]
+umi_gripper = "solarian_umi_gripper.module:UMIGripperModule"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+

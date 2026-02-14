@@ -1,12 +1,12 @@
 export const metadata = {
   title: 'Project Structure',
   description:
-    'This guide will explain the structure of the Proto project.',
+    'This guide will explain the structure of the Solarian project.',
 }
 
 # Project Structure
 
-This page provides an overview of all the folder and file conventions in Proto, and recommendations for organizing your project.
+This page provides an overview of all the folder and file conventions in Solarian, and recommendations for organizing your project.
 
 
 ## Top-level folders
@@ -27,13 +27,13 @@ manage.py
 
 
 {/* <Note>
-  Before you can make requests to the Protocol API, you will need to grab your
+  Before you can make requests to the Solariancol API, you will need to grab your
   API key from your dashboard. You find it under [Settings &raquo; API](#).
 </Note>
 
 ## Choose your client
 
-Before making your first API request, you need to pick which API client you will use. In addition to good ol' cURL HTTP requests, Protocol offers clients for JavaScript, Python, and PHP. In the following example, you can see how to install each client.
+Before making your first API request, you need to pick which API client you will use. In addition to good ol' cURL HTTP requests, Solariancol offers clients for JavaScript, Python, and PHP. In the following example, you can see how to install each client.
 
 <CodeGroup>
 
@@ -43,17 +43,17 @@ curl --version
 ```
 
 ```bash {{ language: 'js' }}
-# Install the Protocol JavaScript SDK
+# Install the Solariancol JavaScript SDK
 npm install @example/protocol-api --save
 ```
 
 ```bash {{ language: 'python' }}
-# Install the Protocol Python SDK
+# Install the Solariancol Python SDK
 pip install protocol_api
 ```
 
 ```bash {{ language: 'php' }}
-# Install the Protocol PHP SDK
+# Install the Solariancol PHP SDK
 composer require protocol/sdk
 ```
 
@@ -67,7 +67,7 @@ composer require protocol/sdk
 
 ## Making your first API request
 
-After picking your preferred client, you are ready to make your first call to the Protocol API. Below, you can see how to send a GET request to the Conversations endpoint to get a list of all your conversations. In the cURL example, results are limited to ten conversations, the default page length for each client.
+After picking your preferred client, you are ready to make your first call to the Solariancol API. Below, you can see how to send a GET request to the Conversations endpoint to get a list of all your conversations. In the cURL example, results are limited to ten conversations, the default page length for each client.
 
 <CodeGroup tag="GET" label="/v1/conversations">
 
@@ -94,7 +94,7 @@ client.conversations.list()
 ```
 
 ```php
-$client = new \Protocol\ApiClient($token);
+$client = new \Solariancol\ApiClient($token);
 
 $client->conversations->list();
 ```
@@ -109,8 +109,8 @@ $client->conversations->list();
 
 ## What's next?
 
-Great, you're now set up with an API client and have made your first request to the API. Here are a few links that might be handy as you venture further into the Protocol API:
+Great, you're now set up with an API client and have made your first request to the API. Here are a few links that might be handy as you venture further into the Solariancol API:
 
-- [Grab your API key from the Protocol dashboard](#)
+- [Grab your API key from the Solariancol dashboard](#)
 - [Check out the Conversations endpoint](/conversations)
-- [Learn about the different error messages in Protocol](/errors) */}
+- [Learn about the different error messages in Solariancol](/errors) */}

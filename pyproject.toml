@@ -1,5 +1,5 @@
 [project]
-name = "proto"
+name = "solarian"
 version = "0.1.0"
 description = "A robotics framework for the modern world."
 authors = [
@@ -14,6 +14,7 @@ dependencies = [
     # Communication
     "pyzmq==26.4.0",
     "msgpack==1.1.0",
+    "atomics==1.0.3",
 
     # Data input, validation and settings
     "pynput>=1.7.7",
@@ -24,11 +25,13 @@ dependencies = [
     "colorama",
     "screeninfo",
     "rich==14.1.0",
+    "ipython",
 
     # Data processing
     "opencv-python==4.12.0.88",
     "ultralytics==8.3.179",
     "numpy==2.2.6",
+    "scipy>=1.15",
     "pandas",
     "pyarrow",
     "matplotlib",
@@ -51,11 +54,10 @@ dependencies = [
     "mujoco==3.3.2",
     "dm_control==1.0.30",
 
-    # Hardware
-    "feetech-servo-sdk>=1.0.0",
-    "dynamixel-sdk>=3.7.31",
-    "urx==0.11.0",
-    "ur-rtde==1.5.6; platform_system != 'Darwin' or platform_machine != 'arm64'",
+    # Hardware now installed in plugins
+    # "feetech-servo-sdk>=1.0.0",
+    # "dynamixel-sdk>=3.7.31",
+    # "ur-rtde==1.5.6; platform_system != 'Darwin' or platform_machine != 'arm64'",
 
     # Logging
     "wandb>=0.22.3",
@@ -71,8 +73,54 @@ dependencies = [
 ]
 
 [project.scripts]
-proto = "proto.management.manage:main"
-create-proto = "proto.management.scaffolder:create_project"
+solarian = "solarian.cli.manage:main"
+create-solarian = "solarian.cli.scaffolder:create_project"
+
+
+# ============================================================================
+# Plugin Entry Points
+# ============================================================================
+# Third-party packages can register their own modules and actuator buses
+# by declaring entry points in their pyproject.toml. Example:
+#
+#   [project.entry-points."solarian.modules"]
+#   my_custom_arm = "my_package.modules:MyCustomArmModule"
+#
+#   [project.entry-points."solarian.actuator_buses"]
+#   my_custom_bus = "my_package.buses:MyCustomBus"
+# ============================================================================
+
+# ============================================================================
+# NOTE: Module plugins are now in separate packages:
+#   - solarian-koch: pip install solarian-koch
+#   - solarian-so100: pip install solarian-so100
+#   - solarian-ur5: pip install solarian-ur5 (includes actuators, bus, and module)
+#
+# These plugins register themselves via entry points when installed.
+# The core Solarian framework no longer includes built-in module implementations.
+# ============================================================================
+
+# ============================================================================
+# NOTE: All modules are now in separate plugin packages:
+#   - solarian-koch: pip install solarian-koch
+#   - solarian-so100: pip install solarian-so100
+#   - solarian-ur5-arm: pip install solarian-ur5-arm
+#   - solarian-umi-evo: pip install solarian-umi-evo
+#   - solarian-lekiwi: pip install solarian-lekiwi
+#
+# These plugins register themselves via entry points when installed.
+# The core Solarian framework no longer includes built-in module implementations.
+# ============================================================================
+
+# ============================================================================
+# NOTE: Actuator and bus plugins are now in separate packages:
+#   - solarian-feetech: pip install solarian-feetech
+#   - solarian-dynamixel: pip install solarian-dynamixel  
+#   - solarian-ur5: pip install solarian-ur5 (includes actuators, bus, and module)
+#
+# These plugins register themselves via entry points when installed.
+# The core Solarian framework no longer includes built-in actuator/bus implementations.
+# ============================================================================
 
 
 [build-system]

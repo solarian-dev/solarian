@@ -1,0 +1,21 @@
+[project]
+name = "solarian-lekiwi"
+version = "0.1.0"
+description = "LeKiwi mobile base module plugin for Solarian robotics framework"
+authors = [
+    {name = "Solarian Contributors", email = "solarian@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "solarian>=0.1.0",
+    "solarian-feetech>=0.1.0",  # Uses Feetech servos
+]
+
+[project.entry-points."solarian.modules"]
+lekiwi_base = "solarian_lekiwi.module:LekiwiBaseModule"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+

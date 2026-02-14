@@ -1,0 +1,99 @@
+# SO100 Follower Arm Configuration
+# This file defines the physical structure and actuator configuration.
+# 
+# Variables like ${actuator_port} are resolved from the project's robot.yaml
+# when the module is instantiated.
+
+type: so100_follower_arm
+calibration_file: .cache/calibration/${module_name}.json
+
+bodies:
+    base:
+        mass: 1
+        inertia: 1
+    shoulder:
+        mass: 1
+        inertia: 1
+    upper_arm:
+        mass: 1
+        inertia: 1
+    lower_arm:
+        mass: 1
+        inertia: 1
+    wrist:
+        mass: 1
+        inertia: 1
+    fixed_jaw:
+        mass: 1
+        inertia: 1
+    moving_jaw:
+        mass: 1
+        inertia: 1
+
+joints:
+    shoulder_pan:
+        parent_body: base
+        child_body: shoulder
+        actuators:
+            shoulder_pan:
+                id: 1
+                model: sts3215
+                port: ${actuator_port}
+                type: feetech  # This references the built-in feetech actuator bus
+                mode: range_m100_100
+        
+    shoulder_lift:
+        parent_body: shoulder
+        child_body: upper_arm
+        actuators:
+            shoulder_lift:
+                id: 2
+                model: sts3215
+                port: ${actuator_port}
+                type: feetech
+                mode: range_m100_100
+                
+    elbow_flex:
+        parent_body: upper_arm
+        child_body: lower_arm
+        actuators:
+            elbow_flex:
+                id: 3
+                model: sts3215
+                port: ${actuator_port}
+                type: feetech
+                mode: range_m100_100
+                
+    wrist_flex:
+        parent_body: lower_arm
+        child_body: wrist
+        actuators:
+            wrist_flex:
+                id: 4
+                model: sts3215
+                port: ${actuator_port}
+                type: feetech
+                mode: range_m100_100
+                
+    wrist_roll:
+        parent_body: wrist
+        child_body: fixed_jaw
+        actuators:
+            wrist_roll:
+                id: 5
+                model: sts3215
+                port: ${actuator_port}
+                type: feetech
+                mode: range_m100_100
+                
+    gripper:
+        parent_body: fixed_jaw
+        child_body: moving_jaw
+        actuators:
+            gripper:
+                id: 6
+                model: sts3215
+                port: ${actuator_port}
+                type: feetech
+                mode: range_m100_100
+

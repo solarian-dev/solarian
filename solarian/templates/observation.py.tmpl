@@ -1,0 +1,25 @@
+from solarian.core.configs import PosValue, ImageValue
+from solarian.core import Observation, ModuleObservation
+
+# Example arm module observation
+class ArmObservation(ModuleObservation):
+    shoulder_pan: PosValue = PosValue()
+    shoulder_lift: PosValue = PosValue()
+    elbow_flex: PosValue = PosValue()
+    wrist_flex: PosValue = PosValue()
+    wrist_yaw: PosValue = PosValue()
+    wrist_roll: PosValue = PosValue()
+
+# Example gripper module observation
+class GripperObservation(ModuleObservation):
+    width: PosValue = PosValue()
+
+# Example camera module observation
+class WristCamObservation(ModuleObservation):
+    image: ImageValue = ImageValue(shape=(224, 224, 3))
+
+# Define your observation class here
+class MySolarianObservation(Observation):
+    arm: ArmObservation | None = None
+    gripper: GripperObservation | None = None
+    wrist_cam: WristCamObservation | None = None

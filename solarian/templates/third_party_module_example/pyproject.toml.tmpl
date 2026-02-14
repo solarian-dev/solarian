@@ -1,0 +1,42 @@
+# Example pyproject.toml for a third-party Solarian module
+# This shows how to create a reusable module package that can be
+# installed via pip and automatically discovered by Solarian.
+
+[project]
+name = "solarian-so100"
+version = "0.1.0"
+description = "SO100 arm modules for Solarian robotics framework"
+authors = [
+    {name = "Your Name", email = "you@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "solarian>=0.1.0",  # Require the Solarian framework
+]
+
+# =============================================================================
+# PLUGIN ENTRY POINTS
+# =============================================================================
+# This is how Solarian discovers your modules and actuator buses automatically.
+# The key (left side) is the identifier used in conf.yaml files.
+# The value (right side) is the Python import path to the class.
+
+[project.entry-points."solarian.modules"]
+# Register module classes
+# Usage in conf.yaml: type: so100_leader_arm
+so100_leader_arm = "solarian_so100.modules:SO100LeaderArmModule"
+so100_follower_arm = "solarian_so100.modules:SO100FollowerArmModule"
+
+[project.entry-points."solarian.actuator_buses"]
+# Register actuator bus classes (if you have custom hardware)
+# Usage in conf.yaml actuators: type: my_custom_servo
+# my_custom_servo = "solarian_so100.buses:MyCustomServoBus"
+
+# Note: For SO100, we reuse the built-in 'feetech' bus, so no custom bus needed.
+
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+

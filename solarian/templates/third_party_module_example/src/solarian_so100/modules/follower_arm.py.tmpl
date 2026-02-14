@@ -1,0 +1,65 @@
+"""
+SO100 Follower Arm Module
+
+Example of a reusable module that can be installed from pip and
+used across multiple Solarian projects.
+
+This demonstrates the recommended pattern:
+    1. Get actuator classes from the plugin registry
+    2. Use them to define module fields
+    3. The bus is automatically determined from the actuator class
+"""
+
+from solarian.core.module import Module
+from solarian.plugins import actuators
+
+# Get actuator classes from the plugin registry
+# This allows third-party actuators to be used by just installing their package
+FeetechServo = actuators.get("feetech")
+
+
+class SO100FollowerArmModule(Module):
+    """
+    SO100 robot arm module configured as a follower (controlled arm).
+    
+    This module uses Feetech STS3215 servos. The FeetechBus is automatically
+    used because FeetechServo declares _bus_type = "feetech".
+    
+    Configuration (conf.yaml included in this package):
+        - 6 DOF arm with shoulder, elbow, wrist, and gripper
+        - Uses feetech servo type
+        - Configurable port via ${actuator_port} variable
+    
+    Usage in a project:
+        from solarian.plugins import modules
+        SO100Arm = modules.get("so100_follower_arm")
+        arm = SO100Arm(name="arm", cfg=cfg, component_bus=bus, shm=shm)
+    """
+    
+    def initialize(self):
+        """Initialize the arm with optimal servo settings."""
+        super().initialize()
+
+        # Disable torque to configure settings
+        self.write_actuators("Torque_Enable", 0)
+        self.write_actuators("Lock", 0)
+        
+        # Configure servo communication
+        self.write_actuators("Return_Delay_Time", 0)
+        
+        # Set maximum acceleration for responsive movement
+        self.write_actuators("Maximum_Acceleration", 254)
+        self.write_actuators("Acceleration", 254)
+        
+        # Position control mode
+        self.set_actuators_position_mode()
+        
+        # PID tuning for smooth motion
+        self.write_actuators("P_Coefficient", 12)
+        self.write_actuators("I_Coefficient", 0)
+        self.write_actuators("D_Coefficient", 32)
+        
+        # Enable torque and lock settings
+        self.write_actuators("Torque_Enable", 1)
+        self.write_actuators("Lock", 1)
+

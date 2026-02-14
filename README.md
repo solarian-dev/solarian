@@ -1,4 +1,4 @@
-# Proto
+# Solarian
 
 A robotics control and teleoperation framework.
 
@@ -7,13 +7,13 @@ A robotics control and teleoperation framework.
 ### Create a conda environment:
 
 ```bash
-conda create -n proto python=3.10
+conda create -n solarian python=3.10
 ```
 
 ### Activate the environment:
 
 ```bash
-conda activate proto
+conda activate solarian
 ```
 
 ### Install FFmpeg
@@ -32,18 +32,30 @@ pip install -e .
 ```
 
 
-### Clone Proto repository
+### Clone Solarian repository
 
 ```bash
-git clone https://github.com/raulgarreta/teleop.git
-cd teleop
+git clone https://github.com/raulgarreta/solarian.git
+cd solarian
 ```
 
 ### Install dependencies:
 
+With pip:
+
 ```bash
 pip install -e .
 ```
+
+With uv (faster; use the same conda env):
+
+```bash
+# Install uv once: curl -LsSf https://astral.sh/uv/install.sh | sh
+conda activate solarian   # or your env name
+uv pip install -e .
+```
+
+uv uses whichever Python is active, so packages are installed into your conda env.
 
 ### Install xformers
 
@@ -57,8 +69,7 @@ pip install xformers==0.0.31.post1
 
 Within your project directory, run the following command:
 
-```bashconda create -n proto python=3.10
-
+```bash
 python manage.py run-server
 ```
 
