@@ -20,7 +20,16 @@ from .camera import Camera
 from .component import Component
 
 # core/component_bus.py
-from .component_bus import TorqueMode, ComponentBus
+from .component_bus import ComponentBus
+
+# core/module_bus.py
+from .module_bus import TorqueMode, ModuleBus
+
+# core/sensor_bus.py
+from .sensor_bus import SensorBus
+
+# core/opencv_camera_bus.py
+from .opencv_camera_bus import OpenCVCameraBus
 
 # core/dataset.py
 from .dataset import Dataset
@@ -35,7 +44,10 @@ from .message import Message
 from .module import Module
 
 # core/observation.py
-from .observation import ModuleObservation, Observation
+from .observation import ModuleObservation, Observation, SensorObservation
+
+# core/data.py
+from .data import Data, DataComputer
 
 # core/robot.py
 from .robot import Robot

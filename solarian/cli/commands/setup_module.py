@@ -4,7 +4,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.utils import get_class
-from solarian.core.component_bus import ComponentBus
+from solarian.core.module_bus import ModuleBus
 from solarian.core.configs import RobotConfig
 
 
@@ -54,7 +54,7 @@ class SetupModuleCommand(BaseCommand):
         module_name = module_names[idx - 1]
         module_class_path = settings.MODULE_CLASSES[module_name]
         module_class = get_class(module_class_path)
-        component_bus = ComponentBus()
+        component_bus = ModuleBus()
         module = module_class(cfg.modules[module_name], module_name, component_bus)
         component_bus.connect()
         print("Component bus connected")

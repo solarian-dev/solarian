@@ -6,11 +6,12 @@ from solarian.core.calibration import MotorCalibration, MotorNormMode
 
 from solarian.core.configs import ValueName
 from solarian.core.component import Component
+from solarian.core.component_bus import ComponentBus
 from solarian.utils.general import enter_pressed
 from solarian.utils.status_board import StatusBoard
 
 
-class ActuatorBus(abc.ABC):
+class ActuatorBus(ComponentBus):
     """
     Abstract base class for actuator bus implementations.
     
@@ -20,26 +21,20 @@ class ActuatorBus(abc.ABC):
     To create a custom actuator bus:
     
     1. Subclass ActuatorBus and implement all abstract methods
-    2. Register via entry point in pyproject.toml:
+    2. In your Actuator subclass, set bus_class to point to it:
     
-        [project.entry-points."solarian.actuator_buses"]
-        my_bus_type = "my_package:MyBusClass"
-    
-    3. Use the registered name as the 'type' in your module's conf.yaml:
-    
-        actuators:
-            my_motor:
-                type: my_bus_type
-                port: /dev/ttyUSB0
+        from my_package.bus import MyBus
+        
+        class MyActuator(Actuator):
+            bus_class = MyBus
     """
     
     def __init__(self, port: str, components: Dict[str, Component], calibration: Dict[str, MotorCalibration]):
-        self.port = port
-        self.components = components
+        super().__init__(port, components)
         self.calibration = calibration
 
     @classmethod
-    def create(cls, port: str, components: Dict[str, Component], calibration: Dict[str, MotorCalibration]) -> "ActuatorBus":
+    def create(cls, port: str, components: Dict[str, Component], calibration=None) -> "ActuatorBus":
         """
         Factory method to create a bus instance.
         
@@ -56,26 +51,6 @@ class ActuatorBus(abc.ABC):
         """
         return cls(port=port, components=components, calibration=calibration)
 
-    @property
-    def is_connected(self) -> bool:
-        return self.is_connected()
-
-    @abc.abstractmethod
-    def is_connected(self) -> bool:
-        pass
-        
-    @abc.abstractmethod
-    def connect(self):
-        pass
-        
-    @abc.abstractmethod
-    def disconnect(self):
-        pass
-    
-    @abc.abstractmethod
-    def read(self, data_name: str, component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
-        pass
-    
     @abc.abstractmethod
     def write(self, data_name: str, values: Dict[str, Any], normalize: bool = True):
         pass

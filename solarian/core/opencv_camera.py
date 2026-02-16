@@ -1,5 +1,6 @@
 from solarian.core.configs import CameraConfig, ValueName
 from solarian.core.camera import Camera
+from solarian.core.opencv_camera_bus import OpenCVCameraBus
 import cv2
 from enum import Enum
 import numpy as np
@@ -23,6 +24,8 @@ class ColorMode(str, Enum):
     BGR = "bgr"
 
 class OpenCVCamera(Camera):
+    bus_class: OpenCVCameraBus
+
     def __init__(self, cfg: CameraConfig, name: str):
         super().__init__(cfg, name)
 

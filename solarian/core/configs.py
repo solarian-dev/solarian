@@ -6,27 +6,6 @@ from pathlib import Path
 import numpy as np
 
 
-
-
-
-
-
-class DataComputer(str, Enum):
-    SERVER = "server"
-    ROBOT = "robot"
-    CONTROLLER = "controller"
-
-    def __str__(self):
-        return self.value
-
-class DataSpec:
-    def __init__(self, shape: Tuple[int], computer: DataComputer, lerobot_group: str, lerobot_names: List[str]):
-        self.shape = shape
-        self.computer = computer
-        self.lerobot_group = lerobot_group
-        self.lerobot_names = lerobot_names
-    
-
 # class ValueName(str, Enum):
 #     POS = "pos"
 #     SPEED = "speed"
@@ -79,7 +58,11 @@ def _convert_numpy_to_int(v):
         return int(v)
     return v
 
-class PosValue(BaseModel):
+
+class BaseValue(BaseModel):
+    computer: str
+
+class PosValue(BaseValue):
     value_type: Literal[ValueName.POS] = ValueName.POS
     value: float = 0
 
@@ -93,7 +76,7 @@ class PosValue(BaseModel):
     def convert_value(cls, v):
         return _convert_numpy_to_float(v)
 
-class SpeedValue(BaseModel):
+class SpeedValue(BaseValue):
     value_type: Literal[ValueName.SPEED] = ValueName.SPEED
     value: float = 0
 
@@ -107,7 +90,7 @@ class SpeedValue(BaseModel):
     def convert_value(cls, v):
         return _convert_numpy_to_float(v)
 
-class ImageValue(BaseModel):
+class ImageValue(BaseValue):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     value_type: Literal[ValueName.IMAGE] = ValueName.IMAGE
