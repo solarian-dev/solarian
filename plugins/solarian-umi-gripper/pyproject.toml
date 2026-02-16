@@ -12,9 +12,6 @@ dependencies = [
     "solarian-feetech>=0.1.0",  # Uses Feetech servos
 ]
 
-[project.entry-points."solarian.modules"]
-umi_gripper = "solarian_umi_gripper.module:UMIGripperModule"
-
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
