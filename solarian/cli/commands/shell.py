@@ -49,7 +49,6 @@ class ShellCommand(BaseCommand):
         # Build a namespace with useful objects pre-loaded
         namespace = {
             'settings': settings,
-            'PROJECT': getattr(settings, 'PROJECT', None),
         }
 
         # Try to import commonly useful modules into the namespace
@@ -74,7 +73,6 @@ class ShellCommand(BaseCommand):
             "─────────────────────────\n"
             "Available objects:\n"
             "  settings  - Project settings module\n"
-            "  PROJECT   - Project instance\n"
             f"{robot_line}"
             "  solarian  - The solarian package\n"
             "\n"

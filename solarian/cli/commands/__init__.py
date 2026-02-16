@@ -15,13 +15,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "add-module",
     module_path=f"{_pkg}.add_module",
-    help="Install a module plugin and add its configuration to the project",
-)
-CommandRegistry.register_lazy(
-    "list-plugins",
-    module_path=f"{_pkg}.list_plugins",
-    help="List all installed Solarian plugins (modules, actuators, and buses).",
-    config_name=None,
+    help="Install a module plugin and copy its default configuration to the project",
 )
 
 # Robot commands

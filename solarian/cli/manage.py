@@ -80,7 +80,6 @@ def _build_command_list() -> str:
     category_map = {
         "create-project": "Project",
         "add-module": "Project",
-        "list-plugins": "Project",
         "run-robot": "Robot",
         "calibrate-module": "Robot",
         "setup-module": "Robot",
@@ -183,7 +182,7 @@ def main() -> None:
     subcommand = args.subcommand
 
     # Commands that don't need Hydra config or project settings
-    no_hydra_commands = ['add-module', 'create-project', 'list-plugins']
+    no_hydra_commands = ['add-module', 'create-project']
 
     # Resolve settings.py location (skip for commands that don't need it)
     if subcommand not in no_hydra_commands:

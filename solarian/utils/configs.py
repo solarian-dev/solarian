@@ -74,3 +74,4 @@ def load_module_configs_for_robot(robot_class) -> dict[str, tuple[type, ModuleCo
                 module_configs[name] = (anno, module_cfg)
     
     return module_configs
+
