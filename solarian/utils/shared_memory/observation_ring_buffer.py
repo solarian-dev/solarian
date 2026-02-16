@@ -180,6 +180,8 @@ class ObservationRingBuffer:
     def _observation_to_flat_dict(self, observation) -> Dict[str, Union[np.ndarray, numbers.Number]]:
         """Convert an Observation to a flattened dictionary."""
         # Use Pydantic's model_dump() to get dict representation
+        if observation is None:
+            return {}
         observation_dict = observation.model_dump()
         return flatten_dict(observation_dict)
     

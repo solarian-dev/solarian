@@ -146,6 +146,8 @@ class ActionQueue:
     def _action_to_flat_dict(self, action) -> Dict[str, Union[np.ndarray, numbers.Number]]:
         """Convert an Action to a flattened dictionary."""
         # Use Pydantic's model_dump() to get dict representation
+        if action is None:
+            return {}
         action_dict = action.model_dump()
         return flatten_dict(action_dict)
     
