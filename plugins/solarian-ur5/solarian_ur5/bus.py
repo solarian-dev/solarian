@@ -89,13 +89,7 @@ class UR5Bus(ActuatorBus):
         Uses the actuator class type to distinguish between joint and cartesian actuators.
         Falls back to checking class name for YAML-loaded components.
         """
-        try:
-            from solarian_ur5.actuator import UR5JointActuator, UR5CartesianActuator
-        except ImportError:
-            # If imported as a string, try to get from registry
-            from solarian.plugins import actuators
-            UR5JointActuator = actuators.get("ur5_joint")
-            UR5CartesianActuator = actuators.get("ur5_cartesian")
+        from solarian_ur5.actuator import UR5JointActuator, UR5CartesianActuator
         
         joint_names2ids = {}
         cartesian_names2ids = {}
@@ -125,6 +119,7 @@ class UR5Bus(ActuatorBus):
             cartesian_names2ids=cartesian_names2ids
         )
 
+    @property
     def is_connected(self) -> bool:
         """bool: `True` if the underlying serial port is open."""
         return self.connected

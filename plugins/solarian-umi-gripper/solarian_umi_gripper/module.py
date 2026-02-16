@@ -16,7 +16,7 @@ class UMIGripperConfig(ModuleConfig):
 
 class UMIGripperModule(Module):
     config_class = UMIGripperConfig
-    gripper_actuator: FeetechServo = FeetechServo(id=1, model="sts3215")
+    gripper_actuator: FeetechServo
     
     def initialize(self):
         """Initialize the gripper with optimal servo settings."""
