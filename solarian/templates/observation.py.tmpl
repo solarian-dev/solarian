@@ -1,25 +1,32 @@
-from solarian.core.configs import PosValue, ImageValue
-from solarian.core import Observation, ModuleObservation
+from solarian.core import DataComputer, Data, Observation, ModuleObs, SensorObs, DataKind
+import numpy as np
 
-# Example arm module observation
-class ArmObservation(ModuleObservation):
-    shoulder_pan: PosValue = PosValue()
-    shoulder_lift: PosValue = PosValue()
-    elbow_flex: PosValue = PosValue()
-    wrist_flex: PosValue = PosValue()
-    wrist_yaw: PosValue = PosValue()
-    wrist_roll: PosValue = PosValue()
 
-# Example gripper module observation
-class GripperObservation(ModuleObservation):
-    width: PosValue = PosValue()
+class JointObs(SensorObs):
+    pos = Data(computer=DataComputer.ROBOT, dtype=int)
+    speed = Data(computer=DataComputer.ROBOT, dtype=int)
 
-# Example camera module observation
-class WristCamObservation(ModuleObservation):
-    image: ImageValue = ImageValue(shape=(224, 224, 3))
+class ImageObs(SensorObs):
+    image = Data(shape=(224, 224, 3), computer=DataComputer.ROBOT, dtype=np.uint8, kind=DataKind.IMAGE)
 
-# Define your observation class here
+class ArmObs(ModuleObs):
+    shoulder_pan = JointObs()
+    shoulder_lift = JointObs()
+    elbow_flex = JointObs()
+    wrist_flex = JointObs()
+    wrist_yaw = JointObs()
+    wrist_roll = JointObs()
+
+
+class GripperObs(ModuleObs):
+    width = JointObs()
+
+
+class WristCamObs(ModuleObs):
+    image = ImageObs()
+
+
 class MySolarianObservation(Observation):
-    arm: ArmObservation | None = None
-    gripper: GripperObservation | None = None
-    wrist_cam: WristCamObservation | None = None
+    arm = ArmObs()
+    gripper = GripperObs()
+    wrist_cam = WristCamObs()

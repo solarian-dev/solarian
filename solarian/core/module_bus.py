@@ -35,33 +35,18 @@ class ModuleBus():
             first_component = next(iter(components.values()))
             
             # Get the bus class directly from the component class
-            bus_cls = self._get_bus_class_for_component(first_component)
-            
+            bus_class = first_component.bus_class
             # Create the bus instance
-            self.component_bus_by_port[port] = bus_cls.create(
-                port=port,
-                components=components,
-                calibration=calibration.get(port, None)
-            )
+            self.component_bus_by_port[port] = bus_class.create(port=port, components=components, calibration=calibration.get(port, None))
 
             try:
+                print(f"Connecting {self.component_bus_by_port[port]} on port", port)
                 self.component_bus_by_port[port].connect()
             except Exception as e:
                 print(f"Failed to connect to component bus on port {port}: {e}")
                 print("Check if the device is connected and powered.")
                 exit(1)
     
-    def _get_bus_class_for_component(self, component: Component):
-        """
-        Get the bus class for a component from its bus_class attribute.
-        """
-        bus_cls = getattr(type(component), 'bus_class', None)
-        if bus_cls is None:
-            raise ValueError(
-                f"{type(component).__name__} does not define 'bus_class'. "
-                f"Component subclasses must set bus_class to their ComponentBus class."
-            )
-        return bus_cls
 
     def disconnect(self):
         for bus in self.component_bus_by_port.values():

@@ -1,5 +1,5 @@
 # core/action.py
-from .action import ActionType, ModuleAction, Action
+from .action import ActionType, ModuleAction, Action, ActuatorAction
 
 # core/actuator.py
 from .actuator import Actuator
@@ -44,10 +44,10 @@ from .message import Message
 from .module import Module
 
 # core/observation.py
-from .observation import ModuleObservation, Observation, SensorObservation
+from .observation import ModuleObs, Observation, SensorObs
 
 # core/data.py
-from .data import Data, DataComputer
+from .data import Data, DataComputer, DataKind
 
 # core/robot.py
 from .robot import Robot

@@ -13,6 +13,6 @@ It stores structured sensor-level readings (e.g., position, speed) across multip
 ## See Also
 
 [Action](/actions): Counterpart to Observation, stores actuator commands in the same hierarchical format. Used together in imitation learning loops.
-[settings.OBSERVATION](/settings): Defines the allowed structure of Observation.data. Controls which sensors and values are included in training/inference.
+[settings.OBSERVATION_CLASS](/settings): Defines class path to Observation class.
 [ValueName](/value-name): Enum (POS, SPEED, IMAGE, etc.) used as keys in Observation.data. Ensures consistency across action and observation spaces.
 [to_lerobot_format](/observations#to_lerobot_format): Enables compatibility with the LeRobot framework, which expects flat observation arrays for training and policy execution.

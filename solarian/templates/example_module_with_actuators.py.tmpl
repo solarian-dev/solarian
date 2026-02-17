@@ -1,27 +1,22 @@
 """
-Example: How to define a module using actuators from the plugin registry
+Example: How to define a module using actuators from plugin packages
 
-This shows the recommended pattern for creating modules that use actuators.
+Import actuator classes directly from their packages for full IDE support.
 """
 
 from solarian.core.module import Module
-from solarian.plugins import actuators
 
-# Get actuator classes from the plugin registry
-FeetechServo = actuators.get("feetech")
-DynamixelServo = actuators.get("dynamixel")
-UR5JointActuator = actuators.get("ur5_joint")
+# Import actuator classes directly from their packages
+from solarian_feetech.actuator import FeetechServo
+from solarian_dynamixel.actuator import DynamixelServo
+from solarian_ur5.actuator import UR5JointActuator
 
 
 class ExampleArmModule(Module):
     """
-    Example arm module using actuators from the plugin registry.
-    
-    The actuator classes are retrieved dynamically, so third-party
-    actuators can be used just by installing their package.
+    Example arm module using Feetech servos.
     """
     
-    # Define actuators using the classes from the registry
     shoulder_pan: FeetechServo = FeetechServo(id=1, model="sts3215")
     shoulder_lift: FeetechServo = FeetechServo(id=2, model="sts3215")
     elbow_flex: FeetechServo = FeetechServo(id=3, model="sts3215")
@@ -54,17 +49,3 @@ class MixedActuatorModule(Module):
     
     # UR5 for the base
     base_joint: UR5JointActuator = UR5JointActuator(id=0, model="ur5")
-
-
-# Example with third-party actuator (after installing solarian-mycustom)
-class ThirdPartyModule(Module):
-    """
-    Example using a third-party actuator from an installed package.
-    """
-    
-    # This would work after: pip install solarian-mycustom
-    # from solarian.plugins import actuators
-    # MyCustomServo = actuators.get("my_custom_servo")
-    
-    # motor1: MyCustomServo = MyCustomServo(id=1, model="custom-001")
-

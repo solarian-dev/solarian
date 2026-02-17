@@ -1,8 +1,4 @@
-from typing import ClassVar, Optional, TYPE_CHECKING
 from solarian.core.component import Component
-
-if TYPE_CHECKING:
-    from solarian.core.actuator_bus import ActuatorBus
 
 
 class Actuator(Component):

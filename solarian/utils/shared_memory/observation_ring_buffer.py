@@ -14,6 +14,7 @@ from multiprocessing.managers import SharedMemoryManager
 import numpy as np
 
 from solarian.utils.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
+from solarian.core.observation import ModuleObs
 
 
 def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
@@ -111,7 +112,7 @@ class ObservationRingBuffer:
     def __init__(
         self,
         shm_manager: SharedMemoryManager,
-        example_observation,  # Observation instance
+        example_observation: ModuleObs,  # Observation instance
         get_max_k: int = 32,
         get_time_budget: float = 0.2,
         put_desired_frequency: float = 60
@@ -119,9 +120,9 @@ class ObservationRingBuffer:
         self.get_max_k = get_max_k
         
         # Convert example observation to flattened dict to define schema
-        example_dict = self._observation_to_flat_dict(example_observation)
+        example_dict = flatten_dict(example_observation.data)
 
-        self.observation_class = type(example_observation)
+        self.observation_class: ModuleObs = example_observation.__class__
         
         # Create underlying SharedMemoryRingBuffer with the flattened schema
         self._buffer = SharedMemoryRingBuffer.create_from_examples(
@@ -177,22 +178,22 @@ class ObservationRingBuffer:
             put_desired_frequency
         )
     
-    def _observation_to_flat_dict(self, observation) -> Dict[str, Union[np.ndarray, numbers.Number]]:
-        """Convert an Observation to a flattened dictionary."""
-        # Use Pydantic's model_dump() to get dict representation
-        if observation is None:
-            return {}
-        observation_dict = observation.model_dump()
-        return flatten_dict(observation_dict)
+    # def _observation_to_flat_dict(self, observation: ModuleObs) -> Dict[str, Union[np.ndarray, numbers.Number]]:
+    #     """Convert an Observation to a flattened dictionary."""
+    #     # Use Pydantic's model_dump() to get dict representation
+    #     if observation is None:
+    #         return {}
+    #     observation_dict = observation.to_dict()
+    #     return flatten_dict(observation_dict)
     
-    def _flat_dict_to_observation(self, flat_dict: Dict[str, Any]):
+    def _flat_dict_to_observation(self, flat_dict: Dict[str, Any]) -> ModuleObs:
         """Convert a flattened dictionary back to an Observation.
         
         Args:
             flat_dict: Flattened dictionary from the ring buffer
         """
         nested_dict = unflatten_dict(flat_dict)
-        return self.observation_class.model_validate(nested_dict)
+        return self.observation_class(nested_dict)
     
     @property
     def count(self) -> int:
@@ -203,7 +204,7 @@ class ObservationRingBuffer:
         """Clear the ring buffer."""
         self._buffer.clear()
     
-    def put(self, observation, wait: bool = True) -> None:
+    def put(self, observation: ModuleObs, wait: bool = True):
         """
         Put an observation into the ring buffer.
         
@@ -215,10 +216,9 @@ class ObservationRingBuffer:
             TimeoutError: If wait=False and puts are happening too fast
             TypeError: If the observation contains unsupported types
         """
-        flat_dict = self._observation_to_flat_dict(observation)
-        self._buffer.put(flat_dict, wait=wait)
+        self._buffer.put(flatten_dict(observation.data), wait=wait)
     
-    def get(self):
+    def get(self) -> ModuleObs:
         """
         Get the most recent observation from the ring buffer.
         
@@ -231,7 +231,7 @@ class ObservationRingBuffer:
         flat_dict = self._buffer.get()
         return self._flat_dict_to_observation(flat_dict)
     
-    def get_last_k(self, k: int) -> List:
+    def get_last_k(self, k: int) -> List[ModuleObs]:
         """
         Get the last k observations from the ring buffer.
         

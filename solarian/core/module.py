@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import inspect
 from dataclasses import dataclass, asdict
 from abc import ABC, abstractmethod
 import numpy as np
@@ -12,15 +13,16 @@ from solarian.core.joint import Joint
 from solarian.core.actuator import Actuator
 from solarian.core.sensor import Sensor
 from solarian.core.servo import Servo
-from solarian.core.component_bus import ComponentBus
-from solarian.core.action import Action, ActionType, action_handler
+from solarian.core.module_bus import ModuleBus
+from solarian.core.action import Action, ActionType, action_handler, ModuleAction
 from solarian.core.configs import ModuleConfig, InterpolatorType
-from solarian.core.observation import ModuleObservation
-from solarian.core.configs import ValueName, DataComputer
+from solarian.core.observation import ModuleObs
+from solarian.core.configs import ValueName
+from solarian.core.data import DataComputer
 from solarian.utils import manual_profile, profile
 from solarian.utils.shared_memory.shared_memory_queue import Empty
 from solarian.utils.shared_memory.action_queue import ActionQueue
-from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
+from solarian.utils.shared_memory.observation_queue import ObservationQueue
 from solarian.utils.trajectory_interpolator import (
     TrajectoryInterpolator,
     ScalarTrajectoryInterpolator,
@@ -28,6 +30,7 @@ from solarian.utils.trajectory_interpolator import (
     PoseTrajectoryInterpolator,
 )
 from solarian.utils.precise_sleep import precise_wait
+from solarian.utils import get_class
 
 # TODO: remove speed from calibration required
 CALIBRATION_REQUIRED = [ValueName.POS]
@@ -56,30 +59,41 @@ class Module(Process):
     # Override in subclasses to use a custom config class (must extend ModuleConfig)
     config_class: type = ModuleConfig
 
-    def __init_subclass__(cls, **kwargs):
-        """Collect action handlers from the class hierarchy."""
-        super().__init_subclass__(**kwargs)
-        # Build action handler registry for this class
-        cls._action_handlers = {}
-        
-        # Collect handlers from all parent classes and this class
-        for klass in cls.__mro__:
-            for name, method in vars(klass).items():
-                if callable(method) and hasattr(method, '_handles_action'):
-                    action_type = method._handles_action
-                    # Don't override if already registered by a subclass
-                    if action_type not in cls._action_handlers:
-                        cls._action_handlers[action_type] = name
+    field_name = "component"
+
+    allowed_attr_type = Sensor | Actuator
+
+    # def __init_subclass__(cls, **kwargs):
+    #     super().__init_subclass__(**kwargs)
+
+    #     for name, value in cls.__dict__.items():
+    #         if name.startswith("_") or inspect.isroutine(value):
+    #             continue
+
+    #         if not isinstance(value, cls.allowed_attr_type):
+    #             raise TypeError(
+    #                 f"{cls.__name__}.{name} must be of type {cls.allowed_attr_type}, "
+    #                 f"got {type(value)}"
+    #             )
       
-    def __init__(self, cfg: ModuleConfig):
+    def __init__(self, cfg: ModuleConfig | None = None, name: str | None = None, component_bus: ModuleBus | None = None, observation_queue: ObservationQueue | None = None, action_queue: ActionQueue | None = None):
         super().__init__()
 
+        if cfg is None:
+            return
+
         self.cfg = cfg
-        self.component_bus = None
-        self.shm_manager = None
-        self.observation_buffer = None
-        
+        self.name = name if name is not None else self.__class__.__name__
+        self.component_bus = component_bus
+        self.observation_queue = observation_queue
+        self.action_queue = action_queue
+
+        # Build action handler registry from @action_handler decorated methods
         self.action_handlers: dict[int, str] = {}
+        for attr_name in dir(self):
+            method = getattr(type(self), attr_name, None)
+            if callable(method) and hasattr(method, '_handles_action'):
+                self.action_handlers[method._handles_action] = attr_name
 
         # self.bodies: Dict[str, Body] = {}
         # self.joints: Dict[str, Joint] = {}
@@ -89,52 +103,43 @@ class Module(Process):
         self.interp: TrajectoryInterpolator | None = None
         self.last_waypoint_time: float = 0.0
         self.speed_kwargs: dict[str, Any] = {}
-
-        # for body_name, body_cfg in cfg.bodies.items():
-        #     body = Body(body_name, body_cfg)
-        #     self.bodies[body_name] = body
-
-        # for joint_name, joint_cfg in cfg.joints.items():
-        #     joint = Joint(joint_name, joint_cfg, self.bodies[joint_cfg.parent_body], self.bodies[joint_cfg.child_body])
-        #     self.joints[joint_name] = joint
-    
-        # self.actuators: Dict[str, Actuator] = {}
-        # self.sensors: Dict[str, Sensor] = {}
-        
         
         self.ready_event = Event()
-        self.launch_timeout = cfg.launch_timeout
-        self.commands_per_cycle = cfg.commands_per_cycle
-        self.frequency = cfg.frequency
 
-    
-    # stores its name when created as a class attribute, eg in a Robot class
-    def __set_name__(self, owner, name):
-        self.name = name
-    
-    
-    def _get_fields_of_type(self, typ: type):
-        result = {}
-        for name, field in self.model_fields.items():
-            if field.annotation is typ:
-                result[name] = getattr(self, name)
-        return result
+        self.launch_timeout = self.cfg.launch_timeout
+        self.commands_per_cycle = self.cfg.commands_per_cycle
+        self.frequency = self.cfg.frequency
 
-    @property
-    def servos(self) -> Dict[str, Servo]:
-        return self._get_fields_of_type(Servo)
+        # create actuators and sensors from class-level attributes
+        self.actuators = {}
+        self.sensors = {}
+        self.actuators_by_port = {}
+        for name, value in self.__class__.__dict__.items():
+            if isinstance(value, Actuator):
+                # create actuator
+                actuator_class = value.__class__
+                self.actuators[name] = actuator_class(self.cfg.actuators[name])
+                setattr(self, name, self.actuators[name])
+                
+                # group actuators by port
+                if self.cfg.actuators[name].port not in self.actuators_by_port:
+                    self.actuators_by_port[self.cfg.actuators[name].port] = []
+                self.actuators_by_port[self.cfg.actuators[name].port].append(name)
+                
+                # if component is a servo, it is also a sensor
+                if isinstance(value, Sensor):
+                    self.sensors[name] = self.actuators[name]
+            elif isinstance(value, Sensor):
+                # create sensor
+                sensor_class = value.__class__
+                self.sensors[name] = sensor_class(self.cfg.sensors[name])
+                setattr(self, name, self.sensors[name])
 
-    @property
-    def joints(self) -> Dict[str, Joint]:
-        return self._get_fields_of_type(Joint)
+        # add actuators to component bus
+        self.component_bus.add_components(self.actuators)
+        # add sensors to component bus
+        self.component_bus.add_components(self.sensors)
 
-    @property
-    def actuators(self) -> Dict[str, Actuator]:
-        return self._get_fields_of_type(Actuator)
-
-    @property
-    def sensors(self) -> Dict[str, Sensor]:
-        return self._get_fields_of_type(Sensor)
         
     def get_calibration(self) -> dict:
         "returns calibrations grouped by port"
@@ -263,7 +268,7 @@ class Module(Process):
 
         self.start_calibration_mode()
 
-        self._load_calibration()
+        self.load_calibration()
 
         for port, actuators in self.actuators_by_port.items():
             port_calibration = {}
@@ -288,7 +293,7 @@ class Module(Process):
             json.dump(data, f, indent=4)
             print(f"Calibration saved for module {self.name}")
 
-    def _load_calibration(self):
+    def load_calibration(self):
         if self.cfg.calibration_file is None:
             print(f"No calibration required for module {self.name}")
             self.calibration = {}
@@ -361,36 +366,10 @@ class Module(Process):
         for port, actuator_names in self.actuators_by_port.items():
             self.component_bus.component_bus_by_port[port].end_calibration_mode()
 
-    
-    def initialize(self, component_bus: ComponentBus, observation_buffer: ObservationRingBuffer, action_queue: ActionQueue):
-        """Initialize module"""
 
-        self.component_bus = component_bus
-        self.observation_buffer = observation_buffer
-        self.action_queue = action_queue
+    def initialize(self):
+        pass
 
-        # add actuators and sensors from joints
-        for actuator in self.actuators.values():
-            self.component_bus.add_components(actuator)
-
-        # add actuators and sensors from bodies
-        for sensor in self.sensors.values():
-            self.component_bus.add_components(sensor)
-
-        # group actuators by port
-        self.actuators_by_port = {}
-        for actuator_name, actuator in self.actuators.items():
-            if actuator.port not in self.actuators_by_port:
-                self.actuators_by_port[actuator.port] = []
-            self.actuators_by_port[actuator.port].append(actuator_name)
-
-        self._load_calibration()
-
-        if self.calibration is None:
-            self.calibrate()
-        
-        if not self.is_calibrated():
-            self.write_calibration()
         
     def setup(self):
 
@@ -433,7 +412,7 @@ class Module(Process):
         
         
     def __str__(self):
-        return f"{self.name} ({self.cfg.type})"
+        return f"{self.name} module"
 
     # ========= launch method ===========
     def start(self, wait=True):
@@ -470,30 +449,37 @@ class Module(Process):
 
 
     # ========= receive APIs =============
-    def get_observation(self, k: int = None) -> Union[ModuleObservation, list]:
+    def get_observation(self, k: int = None) -> Union[ModuleObs, list, None]:
         """
-        Get observation(s) from the ring buffer.
+        Get observation(s) from the observation queue.
         
         Args:
-            k: If None, return the most recent observation. 
-               If specified, return the last k observations.
+            k: If None, return the next observation (FIFO).
+               If specified, return up to k observations.
                
         Returns:
-            ModuleObservation if k is None, otherwise list of ModuleObservations (oldest first)
+            ModuleObs if k is None, otherwise list of ModuleObs (oldest first).
+            Returns None if the queue is empty.
         """
         if k is None:
-            return self.observation_buffer.get()
+            if self.observation_queue.empty():
+                return None
+            return self.observation_queue.get()
         else:
-            return self.observation_buffer.get_last_k(k=k)
+            if self.observation_queue.empty():
+                return None
+            return self.observation_queue.get_k(k=k)
     
     def get_all_observations(self) -> list:
         """
-        Get all available observations from the ring buffer (up to get_max_k).
+        Get all available observations from the observation queue.
         
         Returns:
-            List of ModuleObservation instances (oldest first)
+            List of ModuleObs instances (oldest first)
         """
-        return self.observation_buffer.get_all()
+        if self.observation_queue.empty():
+            return []
+        return self.observation_queue.get_all()
 
 
     def update_observations(self):
@@ -504,12 +490,15 @@ class Module(Process):
         
         # group sensors by data name, to optimize reading in batches
         sensors_by_data_name = {}
-        for sensor_name, sensor_spec in settings.PROJECT.observation_class[self.name].items():
-            for data_name, data_spec in sensor_spec.items():
-                if data_spec.computer == DataComputer.ROBOT:
-                    if data_name not in sensors_by_data_name:
-                        sensors_by_data_name[data_name] = []
-                    sensors_by_data_name[data_name].append(sensor_name)
+        # ObsClass = get_class(settings.OBSERVATION_CLASS)
+        # for sensor_name, sensor_spec in get_class(settings.OBSERVATION_CLASS)[self.name].items():
+        #     for data_name, data_spec in sensor_spec.items():
+        #         if data_spec.computer == DataComputer.ROBOT:
+        #             if data_name not in sensors_by_data_name:
+        #                 sensors_by_data_name[data_name] = []
+        #             sensors_by_data_name[data_name].append(sensor_name)
+
+        # for sensor_name, sensor in self.sensors.items():
 
         point_1 = time.time_ns()
 
@@ -523,10 +512,11 @@ class Module(Process):
         manual_profile("get observation 2", (point_2 - point_1))
 
         # add timestamp
-        data[settings.SensorName.CLOCK] = {ValueName.TIMESTAMP: time.time() - self.cfg.receive_latency}
+        data['target_time'] = time.time() - self.cfg.receive_latency
 
-        observation = ModuleObservation(data={self.name: data})
-        self.observation_buffer.put(observation)
+        obs_class = get_class(settings.OBSERVATION_CLASS)
+        observation = obs_class[self.name](data)
+        self.observation_queue.put(observation)
 
 
     def reset(self):
@@ -622,44 +612,12 @@ class Module(Process):
     #     action = Action.schedule_waypoint(target_values, target_time)
     #     self.process_action(action)
 
-    def process_action(self, action: Action):
-        """Send an action to the module's input queue."""
-        self.action_queue.put(action)
-    
-    def _create_example_action(self) -> Action:
-        """
-        Create an example Action to define the input queue schema.
-        
-        Override in subclass if you need custom data fields in actions.
-        The example action should have the same structure as actions
-        that will be sent to this module.
-        
-        Returns:
-            Example Action with all fields that will be used
-        """
-        from solarian.conf import settings
-
-        # Default example with target_values for waypoint scheduling
-        # Subclasses should override this to match their actual data shape
-
-        example_data = {}
-        for actuator_name, actuator_spec in settings.PROJECT.action_class[self.name].items():
-            for data_name, data_spec in actuator_spec.items():
-                if data_name in [ValueName.POS, ValueName.SPEED, ValueName.TORQUE_ENABLE]:
-                    example_data[data_name] = 0.0
-                else:
-                    raise ValueError(f"Unknown data type: {data_name}")
-
-        return Action(
-            action_type=ActionType.SCHEDULE_WAYPOINT,
-            target_time=0.0,
-            data=example_data
-        )
-
-    
+    # def process_action(self, action: ModuleAction):
+    #     """Send an action to the module's input queue."""
+    #     self.action_queue.put(action)
 
     # ========= action dispatch system ============
-    def _dispatch_action(self, action: Action, t_now: float) -> bool:
+    def _dispatch_action(self, action: ModuleAction, t_now: float) -> bool:
         """
         Dispatch an action to its registered handler.
         
@@ -670,7 +628,7 @@ class Module(Process):
         Returns:
             bool: True to continue running, False to stop
         """
-        handler_name = self._action_handlers.get(action.action_type)
+        handler_name = self.action_handlers.get(action.action_type)
         
         if handler_name:
             handler = getattr(self, handler_name)

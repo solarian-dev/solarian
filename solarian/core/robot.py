@@ -3,6 +3,7 @@ import time
 import threading
 import cv2
 import numpy as np
+import os
 from abc import ABC, abstractmethod
 from multiprocessing.managers import SharedMemoryManager
 
@@ -11,11 +12,15 @@ from solarian.core.configs import ValueName, RobotConfig
 from solarian.core.message import Message
 from solarian.core.action import Action
 from .module import Module
-from .component_bus import ComponentBus
+from .module_bus import ModuleBus
 from solarian.core import Observation
 from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard
-from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
+from solarian.core.data import DataKind
+from solarian.utils.shared_memory.observation_queue import ObservationQueue
 from solarian.utils.shared_memory.action_queue import ActionQueue
+from solarian.conf import settings
+from solarian.utils import get_class
+
 
 class Robot(ABC):
 
@@ -25,20 +30,20 @@ class Robot(ABC):
     config_class: type = RobotConfig
     
 
-    def __init_subclass__(cls):
-        super().__init_subclass__()
+    # def __init_subclass__(cls):
+    #     super().__init_subclass__()
 
-        # 1) enforce required fields + types
-        req = getattr(Robot, "__annotations__", {})
-        for field, expected_type in req.items():
-            if not hasattr(cls, field):
-                raise TypeError(f"{cls.__name__} must declare '{field}: {expected_type}'")
-            value = getattr(cls, field)
-            if not isinstance(value, expected_type):
-                raise TypeError(
-                    f"{cls.__name__}.{field} must be {expected_type.__name__}, "
-                    f"got {type(value).__name__}"
-                )
+    #     # 1) enforce required fields + types
+    #     req = getattr(Robot, "__annotations__", {})
+    #     for field, expected_type in req.items():
+    #         if not hasattr(cls, field):
+    #             raise TypeError(f"{cls.__name__} must declare '{field}: {expected_type}'")
+    #         value = getattr(cls, field)
+    #         if not isinstance(value, expected_type):
+    #             raise TypeError(
+    #                 f"{cls.__name__}.{field} must be {expected_type.__name__}, "
+    #                 f"got {type(value).__name__}"
+                # )
 
         # # 2) enforce at least one Module
         # modules = {
@@ -55,22 +60,6 @@ class Robot(ABC):
         if Robot._instance is None:
             Robot._instance = super().__new__(cls)
         return Robot._instance
-
-    @property
-    def modules(self) -> dict[str, Module]:
-        """Return all Module instances on this robot (both class-level and instance-level)."""
-        result = {}
-        # Check class-level attributes (descriptor-style modules)
-        for name in self.__class__.__dict__:
-            val = getattr(self, name, None)
-            if isinstance(val, Module):
-                result[name] = val
-        # Check instance-level attributes (modules created from config)
-        for name, val in self.__dict__.items():
-            if isinstance(val, Module) and name not in result:
-                result[name] = val
-        return result
-
 
     """Base class with common robot functionality"""
     def __init__(self, cfg: RobotConfig):
@@ -103,28 +92,62 @@ class Robot(ABC):
         self.running = False
         self.verbose = True
         self.captured_start_pos = False        
+        self.connected = False
 
-        # Create module instances from class annotations and separate YAML configs
-        self._create_modules_from_annotations()
+        # create component bus
+        self.component_bus = ModuleBus()
 
-    def _create_modules_from_annotations(self):
-        """
-        Create module instances from the robot's class annotations and their
-        corresponding YAML config files.
-        
-        For each annotation like `arm: UR5ArmModule` on the Robot subclass,
-        loads `conf/arm.yaml`, parses it as a ModuleConfig, and creates a
-        UR5ArmModule(cfg) instance.
-        """
-        from solarian.utils.configs import load_module_configs_for_robot
-        
-        module_configs = load_module_configs_for_robot(type(self))
-        
-        for name, (module_type, module_cfg) in module_configs.items():
-            module = module_type(module_cfg)
-            module.name = name  # Set name (normally done by __set_name__ for class-level descriptors)
-            setattr(self, name, module)
+        self.modules = {}
+        self.observation_queues = {}
+        self.action_queues = {}
 
+        example_observation = get_class(settings.OBSERVATION_CLASS).zeros()
+        example_action = get_class(settings.ACTION_CLASS).zeros()
+
+        print(example_observation)
+        print(example_action)
+
+        # IMPORTANT: Store the manager so it doesn't get garbage collected
+        # (which would clean up all shared memory before subprocess can access it)
+        self.shm_manager = SharedMemoryManager()
+        self.shm_manager.start()
+
+        # Create modules from class-level attributes
+        for name in self.__class__.__dict__:
+            val = getattr(self, name, None)
+            if isinstance(val, Module):
+                module_class = val.__class__
+                module_cfg = self.load_module_config(name, module_class)
+
+                # create module's observation queue
+                print(example_observation[name])
+                self.observation_queues[name] = ObservationQueue(
+                    shm_manager=self.shm_manager,
+                    example_obs=example_observation[name],
+                    buffer_size=1024,
+                )
+                # create module's action queue
+                print(example_action[name])
+                self.action_queues[name] = ActionQueue(
+                    shm_manager=self.shm_manager,
+                    example_action=example_action[name],
+                    buffer_size=1024,
+                )
+                # create module
+                self.modules[name] = module_class(module_cfg, name, self.component_bus, self.observation_queues[name], self.action_queues[name])
+                # override class-level attribute with module instance
+                setattr(self, name, self.modules[name])
+        
+
+    def load_module_config(self, module_name: str, module_class: type):
+        """Load module config from YAML using the module's own config class"""
+        from solarian.utils.configs import load_config_yaml
+        conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
+        yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
+        module_cfg = load_config_yaml(yaml_path, module_class.config_class)
+        return module_cfg
+    
+    
     def _verify_connection(self, timeout=5000):
         """Verify that we can connect to the relay server"""
         print(f"Verifying connection to relay server at {self.cfg.connection.ip}...")
@@ -149,13 +172,6 @@ class Robot(ABC):
             print("Successfully connected to relay server")
             print("Cleaning up test socket...")
             test_socket.close()
-    
-    # def create_components(self):
-    #     self.component_bus = ComponentBus()
-    #     for module_name, module_cfg in self.cfg.modules.items():
-    #         if module_name in settings.MODULE_CLASSES:
-    #             module = get_class(settings.MODULE_CLASSES[module_name])(module_cfg, module_name, self.component_bus)
-    #             self.modules[module_name] = module
 
     @profile
     def get_action(self):
@@ -165,13 +181,16 @@ class Robot(ABC):
 
             if "action" not in msg.data:
                 return
-            action = Action.model_validate(msg.data["action"])
+
+            raw_action = msg.data["action"]
+            action = get_class(settings.ACTION_CLASS)(raw_action)
             self.current_action = action
             
             latency = (time.time_ns() - msg.controller_timestamp)
             manual_profile("process_action latency", latency)
-            with self.observation_lock:
-                self.process_action(action)
+            # with self.observation_lock:
+            self.process_action(action)
+            
         except zmq.Again:
             pass
 
@@ -197,36 +216,35 @@ class Robot(ABC):
 
     @profile
     def send_observation(self, observation: Observation):
+        if observation is None:
+            return
         msg = Message()
         msg.robot_timestamp = time.time_ns()
 
+        raw_obs = {}
+        obs_class = get_class(settings.OBSERVATION_CLASS)
+
         # Encode images as JPEG
-        for module_name in observation.data.keys():
-            for sensor_name in observation.data[module_name].keys():
-                if observation.data[module_name][sensor_name].get(ValueName.IMAGE) is not None:
-                    img = observation.data[module_name][sensor_name][ValueName.IMAGE]
-
-                    if not isinstance(img, np.ndarray):
-                        # image was already encoded
-                        continue
+        for module_name in observation.keys():
+            raw_obs[module_name] = {}
+            for sensor_name in observation[module_name].keys():
+                raw_obs[module_name][sensor_name] = {}
+                for data_name in observation[module_name][sensor_name].keys():
                     
-                    start_time = time.time()
-                    # encode_params = [cv2.IMWRITE_WEBP_QUALITY, self.cfg.img_compression_quality]
-                    # encoded_img = cv2.imencode('.webp', img, encode_params)[1].tobytes()
-                    encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.cfg.img_compression_quality]
-                    encoded_img = cv2.imencode('.jpeg', img, encode_params)[1].tobytes()
-                    # encoded_img = img.tobytes()
-
-                    # print image size
-                    # print("-----------------------------------------------")
-                    # print(f"Image size: {len(encoded_img)/1024:.2f} kb")
-                    # print("Compression time: ", time.time() - start_time)
-                    # print("-----------------------------------------------")
-
-                    observation.data[module_name][sensor_name][ValueName.IMAGE] = encoded_img
-                    # observation.data[module_name][sensor_name][ValueName.IMAGE] = img
-
-        msg.data = {"observation": observation.model_dump()}
+                    if obs_class[module_name][sensor_name][data_name].kind == DataKind.IMAGE:
+                        img = observation[module_name][sensor_name][data_name]
+                        encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.cfg.img_compression_quality]
+                        encoded_img = cv2.imencode('.jpeg', img, encode_params)[1].tobytes()
+                        raw_obs[module_name][sensor_name][data_name] = encoded_img
+                        # print image size
+                        # print("-----------------------------------------------")
+                        # print(f"Image size: {len(encoded_img)/1024:.2f} kb")
+                        # print("Compression time: ", time.time() - start_time)
+                        # print("-----------------------------------------------")
+                    else:
+                        raw_obs[module_name][sensor_name][data_name] = observation[module_name][sensor_name][data_name]
+                
+        msg.data = {"observation": raw_obs}
         self.state_socket.send(msg.serialize())
 
     # def _state_publisher(self):
@@ -271,7 +289,7 @@ class Robot(ABC):
                 #     print("Image is not numpy array")
                 #     exit(1)
 
-                if observation is not None:
+                if not observation.is_empty():
                     # print("Sending observation:", observation)
                     self.send_observation(observation)
 
@@ -288,48 +306,42 @@ class Robot(ABC):
 
     def connect(self):
         self.calibration = {}
+        # connect to hardware without calibration
+        self.component_bus.connect(self.calibration)
+
         for module_name, module in self.modules.items():
+            # module.load_config()
+            module.load_calibration()
+
+            # module requires calibration but no calibration file was found
+            if module.calibration is None:
+                # will start calibration process
+                module.calibrate()
+            
+            # module requires calibration but not yet written to hardware
+            if not module.is_calibrated():
+                module.write_calibration()
+                
+            # get module calibration grouped by port
             mod_calib = module.get_calibration()
             if mod_calib is None:
                 continue
             self.calibration.update(mod_calib)
 
-        if self.component_bus is not None:
-            self.component_bus.connect(self.calibration)
+        # disconnect and reconnect to hardware with calibration
+        self.component_bus.disconnect()
+        self.component_bus.connect(self.calibration)
+        
+        self.connected = True
         print("Robot connected")
 
     def initialize(self):
-        from solarian.conf import settings
-
-        self.component_bus = ComponentBus()
-
-        example_observation = settings.PROJECT.observation_class()
-        example_action = settings.PROJECT.action_class()
-
-        # IMPORTANT: Store the manager so it doesn't get garbage collected
-        # (which would clean up all shared memory before subprocess can access it)
-        self.shm_manager = SharedMemoryManager()
-        self.shm_manager.start()
-
-        self.observation_buffers = {}
-        self.action_queues = {}
-        # create one observation buffer for each module
-        for module_name, module in self.modules.items():
-            self.observation_buffers[module_name] = ObservationRingBuffer.create_from_example(
-                shm_manager=self.shm_manager,
-                example_observation=example_observation[module_name],
-                get_time_budget=0.2,
-            )
-            self.action_queues[module_name] = ActionQueue.create_from_example(
-                shm_manager=self.shm_manager,
-                example_action=example_action[module_name],
-                buffer_size=1024,
-            )
-
+        if not self.is_connected():
+            raise Exception("Robot not connected, cannot initialize, must call connect() first.")
         # initialize modules
         print("Initializing modules")
         for module_name, module in self.modules.items():
-            module.initialize(self.component_bus, self.observation_buffers[module_name], self.action_queues[module_name])
+            module.initialize()
         print("Robot initialized")
 
     def on_start(self):
@@ -357,6 +369,10 @@ class Robot(ABC):
         return True
         # return self.component_bus.is_calibrated()
 
+    def is_connected(self):
+        return self.connected
+
+
     def disconnect(self):
         """Clean shutdown, you can extend this method to do other cleanup"""
         self.running = False
@@ -365,7 +381,7 @@ class Robot(ABC):
         if self.component_bus is not None:
             self.component_bus.disconnect()
         self.context.term()
-        
+        self.connected = False
 
     def display(self):
         images = {}
@@ -411,75 +427,6 @@ class Robot(ABC):
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 return False
-
-    # def get_module_observation_loop(self, module_name: str):
-    #     """Thread for capturing and sending module observation"""
-    #     print(f"Getting observation for module: {module_name}")
-    #     try:
-    #         while self.running:
-    #             point_0 = time.time_ns()
-    #             with self.observation_lock:
-    #                 try:
-    #                     module_observation = self.modules[module_name].get_observation()
-    #                     # print(f"Module observation for {module_name}:", module_observation)
-    #                 except ConnectionError as e:
-    #                     print(f"Failed to get observation for module {module_name}: {e}")
-    #                     continue
-
-    #                 point_1 = time.time_ns()
-    #                 if self.last_observation is None:
-    #                     self.last_observation = module_observation
-    #                     # print("Observation1:", self.last_observation)
-    #                 else:
-    #                     data = self.last_observation.data.copy()
-    #                     data.update(module_observation.data)
-    #                     self.last_observation = Observation(data=data)
-    #                     # print("Observation2:", self.last_observation)
-
-    #                 # if type(self.last_observation.data['arm']['wrist']['image']) is np.ndarray:
-    #                 #     print("Image is numpy array")
-    #                 # else:
-    #                 #     print("Image is not numpy array")
-    #                 #     exit(1)
-
-    #                 point_2 = time.time_ns()
-    #                 # self.display()
-    #                 # point_3 = time.time_ns()
-    #             time.sleep(0.001)
-    #             manual_profile(f"get_module_observation {module_name} 1", (point_1 - point_0))
-    #             # manual_profile(f"get_module_observation {module_name} 2", (point_2 - point_1))
-    #             # manual_profile(f"get_module_observation {module_name} 3", (point_3 - point_2))
-    #     except KeyboardInterrupt:
-    #         print("\nKeyboardInterrupt: Shutting down robot...")
-
-    # def get_module_observation(self, module_name: str) -> Observation:
-    #     # point_0 = time.time_ns()
-    #     with self.observation_lock:
-    #         module_observation = self.modules[module_name].get_observation()
-    #         # print(f"Module observation for {module_name}:", module_observation)
-    #         point_1 = time.time_ns()
-    #         if self.last_observation is None:
-    #             self.last_observation = module_observation
-    #             # print("Observation1:", self.last_observation)
-    #         else:
-    #             data = self.last_observation.data.copy()
-    #             data.update(module_observation.data)
-    #             self.last_observation = Observation(data=data)
-    #             # print("Observation2:", self.last_observation)
-
-    #         # if type(self.last_observation.data['arm']['wrist']['image']) is np.ndarray:
-    #         #     print("Image is numpy array")
-    #         # else:
-    #         #     print("Image is not numpy array")
-    #         #     exit(1)
-
-    #         point_2 = time.time_ns()
-    #         # self.display()
-    #         # point_3 = time.time_ns()
-    #     time.sleep(0.001)
-    #     manual_profile(f"get_module_observation {module_name} 1", (point_1 - point_0))
-    #     # manual_profile(f"get_module_observation {module_name} 2", (point_2 - point_1))
-    #     # manual_profile(f"get_module_observation {module_name} 3", (point_3 - point_2))
             
     
     def get_observation(self) -> Observation:
@@ -487,20 +434,16 @@ class Robot(ABC):
         Returns:
             Observation: Contains camera images and actuator readings organized by groups
         """
-        from solarian.conf import settings
+        # creates empty observation
+        obs = get_class(settings.OBSERVATION_CLASS)()
 
-        # if self.last_observation is None:
-        #     return None
-        # # return a copy of the observation
-        # # return self.last_observation.model_copy()       
-        # return self.last_observation
-
-        data = {}
-        obs = settings.PROJECT.observation_class()
-        for module_name, module in self.modules.items():
-            module_observation = module.get_observation()
-            data.update(module_observation.data)
-        return Observation(data=data)
+        for module_name, obs_queue in self.observation_queues.items():
+            if not obs_queue.empty():
+                module_observation = obs_queue.get()
+                obs[module_name] = module_observation
+            else:
+                obs[module_name] = None
+        return obs
                     
     # @profile
     def process_action(self, action: Action):
@@ -508,8 +451,9 @@ class Robot(ABC):
         Args:
             action (Action): Action to process
         """
-        for module_name, module in self.modules.items():
-            module.process_action(action)
+        # put action into action queues
+        for module_name in action.data.keys():
+            self.action_queues[module_name].put(action[module_name])
 
     def update(self):
         """Update robot state"""

@@ -1,3 +1,4 @@
+import os
 import threading
 import torch
 import time
@@ -18,9 +19,10 @@ from solarian.core.configs import ControllerConfig, ValueName, ActionValue
 from solarian.core.message import Message
 from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
 from solarian.core.module import Module
-from solarian.core.component_bus import ComponentBus
+from solarian.core.module_bus import ModuleBus
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
+from solarian.core.data import DataKind
 
 
 from screeninfo import get_monitors
@@ -39,7 +41,6 @@ class Controller(ABC):
         self.cfg = cfg
         self.context = zmq.Context()
         
-        self.is_connected = False
         self.clicked_point = None
         self.clicked_id = None
 
@@ -70,9 +71,21 @@ class Controller(ABC):
         # self.last_msg = None
         self.observation_lock = threading.Lock()  # Thread-safe image access
         self.running = False
+        self.connected = False
+
+        # create component bus
+        self.component_bus = ModuleBus()
+
         self.modules = {}
-        self.component_bus = None
-        self.create_components()
+
+        # Create modules from class-level attributes
+        for name in self.__class__.__dict__:
+            val = getattr(self, name, None)
+            if isinstance(val, Module):
+                module_class = val.__class__
+                module_cfg = self.load_module_config(name, module_class)
+                self.modules[name] = module_class(module_cfg, name, self.component_bus)
+                setattr(self, name, self.modules[name])
 
         # Create events dictionary directly instead of using init_keyboard_listener
         self.events = {
@@ -88,20 +101,25 @@ class Controller(ABC):
 
         self.shm_manager = SharedMemoryManager()
 
-        example_observation = create_example_observation()
-        self.observation_buffer = ObservationRingBuffer.create_from_example(
-            shm_manager=self.shm_manager,
-            example_observation=example_observation,
-            get_max_k=cfg.get_max_k,
-            get_time_budget=0.2,
-            put_desired_frequency=cfg.frequency
-        )
+        example_observation = get_class(settings.OBSERVATION_CLASS).zeros()
 
-    def create_components(self):
-        self.component_bus = ComponentBus()
-        for module_name, module_cfg in self.cfg.modules.items():
-            module = get_class(settings.MODULE_CLASSES[module_name])(module_cfg, module_name, self.component_bus)
-            self.modules[module_name] = module
+        self.observation_buffers = {}
+        for module_name in self.modules.keys():
+            self.observation_buffers[module_name] = ObservationRingBuffer.create_from_example(
+                shm_manager=self.shm_manager,
+                example_observation=example_observation[module_name],
+                get_max_k=cfg.get_max_k,
+                get_time_budget=0.2,
+                put_desired_frequency=cfg.frequency
+            )
+
+    def load_module_config(self, module_name: str, module_class: type):
+        """Load module config from YAML using the module's own config class"""
+        from solarian.utils.configs import load_config_yaml
+        conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
+        yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
+        module_cfg = load_config_yaml(yaml_path, module_class.config_class)
+        return module_cfg
 
     def _verify_connection(self, timeout=5000):
         """Verify that we can connect to the relay server"""
@@ -133,21 +151,24 @@ class Controller(ABC):
     def get_state(self):
         bytes = self.state_socket.recv(zmq.NOBLOCK)
         msg = Message.deserialize(bytes)
-        ObservationClass = settings.OBSERVATION_CLASS
-        observation = get_class(ObservationClass).model_validate(msg.data["observation"])
+        obs_class = get_class(settings.OBSERVATION_CLASS)
 
-        # Decode images
-        for module_name in observation.data.keys():
-            for sensor_name in observation.data[module_name].keys():
-                for image_type in [ValueName.IMAGE, ValueName.DEPTH_IMAGE]:
-                    if observation.data[module_name][sensor_name].get(image_type, None) is not None:
-                        img = observation.data[module_name][sensor_name][image_type]
-                        img = cv2.imdecode(
-                            np.frombuffer(img, dtype=np.uint8),
+        # decode images into numpy arrays
+        raw_obs = msg.data["observation"]
+        for module_name in raw_obs.keys():
+            for sensor_name in raw_obs[module_name].keys():
+                for data_name in raw_obs[module_name][sensor_name].keys():
+                    if obs_class[module_name][sensor_name][data_name].kind == DataKind.IMAGE:
+                        raw_obs[module_name][sensor_name][data_name] = cv2.imdecode(
+                            np.frombuffer(raw_obs[module_name][sensor_name][data_name], dtype=obs_class[module_name][sensor_name][data_name].dtype),
                             cv2.IMREAD_COLOR
                         )
-                        observation.data[module_name][sensor_name][image_type] = img
-        
+
+        observation = obs_class(raw_obs)
+        # put observation into buffer
+        for module_name in observation.data.keys():
+            self.observation_buffers[module_name].put(observation[module_name])
+
         if msg.data.get("click_ack", None) and msg.data["click_ack"] == self.clicked_id:
             print("Click acknowledged", self.clicked_id)
             self.clicked_id = None
@@ -157,7 +178,7 @@ class Controller(ABC):
         #     print("Start position acknowledged")
         #     self.start_pos = False
                     
-        self.observation_buffer.put(observation)
+        
         # Thread-safe update observation
         # with self.observation_lock:
         #     self.last_observation = observation
@@ -182,34 +203,56 @@ class Controller(ABC):
     def connect(self):
         """Start receiver threads"""
         self.calibration = {}
+        # connect to hardware without calibration
+        self.component_bus.connect(self.calibration)
+
         for module_name, module in self.modules.items():
+            # module.load_config()
+            module.load_calibration()
+
+            # module requires calibration but no calibration file was found
+            if module.calibration is None:
+                # will start calibration process
+                module.calibrate()
+            
+            # module requires calibration but not yet written to hardware
+            if not module.is_calibrated():
+                module.write_calibration()
+                
+            # get module calibration grouped by port
             mod_calib = module.get_calibration()
             if mod_calib is None:
                 continue
             self.calibration.update(mod_calib)
 
-        if self.component_bus is not None:
-            self.component_bus.connect(self.calibration)
-
-        self.is_connected = True
+        # disconnect and reconnect to hardware with calibration
+        self.component_bus.disconnect()
+        self.component_bus.connect(self.calibration)
+        
+        self.connected = True
         print("Controller connected")
+
+    def is_connected(self):
+        return self.connected
         
     def initialize(self):
+        if not self.is_connected():
+            raise Exception("Controller not connected, cannot initialize, must call connect() first.")
         # initialize modules
+        print("Initializing modules")
         for module_name, module in self.modules.items():
             module.initialize()
-        
         print("Controller initialized")
 
     def disconnect(self):
         """Clean shutdown"""
-        if not self.is_connected:
+        if not self.is_connected():
             return
         self.running = False
         self.action_socket.close()
         self.state_socket.close()
         self.context.term()
-        self.is_connected = False
+        self.connected = False
 
     def stop(self):
         self.running = False
@@ -219,7 +262,7 @@ class Controller(ABC):
         """Send control actions to robot"""
         msg = Message()
         msg.controller_timestamp = time.time_ns()
-        msg.data = {"action": action.model_dump()}
+        msg.data = {"action": action.data}
 
         if self.clicked_point is not None:
             msg.data["click"] = {
@@ -398,7 +441,9 @@ class Controller(ABC):
                 start_loop_t = time.time_ns()
                 timestamp = time.perf_counter() - start_episode_t
 
-                
+                self.last_action = self.control_step()
+
+                self.send_action(self.last_action)
 
                 # if "reset_policy" in events and events["reset_policy"]:
                 #     events["reset_policy"] = False
@@ -409,31 +454,31 @@ class Controller(ABC):
                 #     time.sleep(2)
                 #     log_say(f"Policy reset", True)
 
-                self.last_observation = self.observation_buffer.get()
+                # self.last_observation = self.observation_buffer.get()
 
-                if True or self.last_observation is not None:
+                # if self.last_observation is not None:
                     
                 
-                    self.last_action = self.control_step(self.last_observation)
+                #     self.last_action = self.control_step(self.last_observation)
 
-                    if self.last_action == ActionValue.STOP:
-                        self.running = False
-                        break
+                #     if self.last_action == ActionValue.STOP:
+                #         self.running = False
+                #         break
 
-                    self.send_action(self.last_action)
+                #     self.send_action(self.last_action)
 
-                    # Add frame to dataset if recording
-                    if dataset is not None and self.last_observation is not None:
-                        self.record_frame(dataset, self.last_action, single_task)
-                else:
-                    # self.obs_none_count += 1
-                    # if self.obs_none_count > 1:
-                    #     raise ValueError("Last observation is None")
-                    print("Last observation is None")
+                #     # Add frame to dataset if recording
+                #     if dataset is not None and self.last_observation is not None:
+                #         self.record_frame(dataset, self.last_action, single_task)
+                # else:
+                #     # self.obs_none_count += 1
+                #     # if self.obs_none_count > 1:
+                #     #     raise ValueError("Last observation is None")
+                #     print("Last observation is None")
 
-                if self.events["exit_early"]:
-                    # events["exit_early"] = False
-                    break
+                # if self.events["exit_early"]:
+                #     # events["exit_early"] = False
+                #     break
 
                 # Wait for next frame
                 if self.cfg.fps is not None:
@@ -497,11 +542,10 @@ class Controller(ABC):
 
 
     @abstractmethod
-    def control_step(self, observation: Observation) -> Action:
+    def control_step(self) -> Action:
         """Implements the control step
         
         Args:
-            observation (Observation): The last observation received from the robot.
         
         Returns:
             Action: The action to be sent to the robot

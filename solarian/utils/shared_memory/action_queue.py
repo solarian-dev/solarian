@@ -13,6 +13,7 @@ from multiprocessing.managers import SharedMemoryManager
 import numpy as np
 
 from solarian.utils.shared_memory.shared_memory_queue import SharedMemoryQueue, Empty, Full
+from solarian.core.action import ModuleAction
 
 
 def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
@@ -143,18 +144,17 @@ class ActionQueue:
         """
         return cls(shm_manager, example_action, buffer_size)
     
-    def _action_to_flat_dict(self, action) -> Dict[str, Union[np.ndarray, numbers.Number]]:
+    def _action_to_flat_dict(self, action: ModuleAction) -> Dict[str, Union[np.ndarray, numbers.Number]]:
         """Convert an Action to a flattened dictionary."""
-        # Use Pydantic's model_dump() to get dict representation
         if action is None:
             return {}
-        action_dict = action.model_dump()
+        action_dict = action.data
         return flatten_dict(action_dict)
     
-    def _flat_dict_to_action(self, flat_dict: Dict[str, Any]):
+    def _flat_dict_to_action(self, flat_dict: Dict[str, Any]) -> ModuleAction:
         """Convert a flattened dictionary back to an Action."""
         nested_dict = unflatten_dict(flat_dict)
-        return self._action_class.model_validate(nested_dict)
+        return self._action_class(nested_dict)
     
     def qsize(self) -> int:
         """Return the approximate number of actions in the queue."""
@@ -168,7 +168,7 @@ class ActionQueue:
         """Clear all actions from the queue."""
         self._queue.clear()
     
-    def put(self, action) -> None:
+    def put(self, action: ModuleAction) -> None:
         """
         Put an action into the queue.
         
@@ -179,10 +179,9 @@ class ActionQueue:
             Full: If the queue is full
             TypeError: If the action contains unsupported types
         """
-        flat_dict = self._action_to_flat_dict(action)
-        self._queue.put(flat_dict)
+        self._queue.put(self._action_to_flat_dict(action))
     
-    def get(self):
+    def get(self) -> ModuleAction:
         """
         Get an action from the queue.
         
@@ -192,10 +191,9 @@ class ActionQueue:
         Raises:
             Empty: If the queue is empty
         """
-        flat_dict = self._queue.get()
-        return self._flat_dict_to_action(flat_dict)
+        return self._flat_dict_to_action(self._queue.get())
     
-    def get_k(self, k: int) -> List:
+    def get_k(self, k: int) -> List[ModuleAction]:
         """
         Get up to k actions from the queue.
         
