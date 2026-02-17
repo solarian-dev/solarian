@@ -57,6 +57,16 @@ uv pip install -e .
 
 uv uses whichever Python is active, so packages are installed into your conda env.
 
+
+
+### macOS (Darwin) on Apple Silicon (arm64)
+
+You will need to install separate extra requirements to install atomics library from source:
+
+```bash
+pip install -r requirements-macos-arm64.txt
+```
+
 ### Install xformers
 
 ```bash

@@ -14,7 +14,7 @@ dependencies = [
     # Communication
     "pyzmq==26.4.0",
     "msgpack==1.1.0",
-    "atomics==1.0.3",
+    "atomics==1.0.3; platform_system != 'Darwin' or platform_machine != 'arm64'",
 
     # Data input, validation and settings
     "pynput>=1.7.7",
