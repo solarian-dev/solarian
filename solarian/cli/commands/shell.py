@@ -59,13 +59,8 @@ class ShellCommand(BaseCommand):
             pass
 
         # Create the project's robot instance
-        robot = None
-        try:
-            robot = self._create_robot(settings)
-            namespace['robot'] = robot
-        except Exception as e:
-            print(f"Warning: Could not create robot instance: {e}")
-            print("The 'robot' variable will not be available in the shell.\n")
+        robot = self._create_robot(settings)
+        namespace['robot'] = robot
 
         robot_line = "  robot     - Robot instance\n" if robot is not None else ""
         banner = (

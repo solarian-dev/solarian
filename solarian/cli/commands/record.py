@@ -16,6 +16,8 @@ class RecordCommand(BaseCommand):
     help = 'Record sessions'
 
     def get_features_lerobot_format(self):
+        from solarian.conf import settings
+        
         features = {
             "observation.state": {
                 "shape": (0,),
@@ -35,9 +37,9 @@ class RecordCommand(BaseCommand):
         }
         num_cameras = 0
 
-        for module_name, module_spec in settings.PROJECT.observation_class.items():
-            for sensor_name, sensor_spec in module_spec.items():
-                for data_name, data_spec in sensor_spec.items():
+        for module_name, module_obs in get_class(settings.OBSERVATION_CLASS).items():
+            for sensor_name, sensor_obs in module_obs.items():
+                for data_name, data_obs in sensor_obs.items():
                     if data_name in [ValueName.POS, ValueName.SPEED, ValueName.BOUNDING_BOX]:
                         features[data_spec.lerobot_group]["shape"] = tuple(a + b for a, b in zip(features[data_spec.lerobot_group]["shape"], data_spec.shape))
                         features[data_spec.lerobot_group]["names"].extend(data_spec.lerobot_names)
@@ -52,7 +54,7 @@ class RecordCommand(BaseCommand):
                     else:
                         raise ValueError(f"Unknown data type: {data_name}")
 
-        for module_name, module_data in settings.PROJECT.action_class.items():
+        for module_name, module_data in get_class(settings.ACTION_CLASS).items():
             for sensor_name, sensor_spec in module_data.items():
                 for data_name, data_spec in sensor_spec.items():
                     if data_name in [ValueName.POS, ValueName.SPEED]:

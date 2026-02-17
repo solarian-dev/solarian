@@ -59,7 +59,7 @@ class ReplayCommand(BaseCommand):
                     else:
                         raise ValueError(f"Unknown data type: {data_name}")
 
-        for module_name, module_data in settings.PROJECT.action_class.items():
+        for module_name, module_data in get_class(settings.ACTION_CLASS).items():
             for sensor_name, sensor_spec in module_data.items():
                 for data_name, data_spec in sensor_spec.items():
                     if data_name in [ValueName.POS, ValueName.SPEED]:
