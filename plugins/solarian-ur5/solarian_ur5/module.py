@@ -31,18 +31,18 @@ class UR5ArmModule(Module):
     config_class = UR5ArmConfig
     
     # Joint-space actuators
-    shoulder_pan: UR5JointActuator
-    shoulder_lift: UR5JointActuator
-    elbow_flex: UR5JointActuator
-    wrist_flex: UR5JointActuator
-    wrist_yaw: UR5JointActuator
-    wrist_roll: UR5JointActuator
+    shoulder_pan = UR5JointActuator()
+    shoulder_lift = UR5JointActuator()
+    elbow_flex = UR5JointActuator()
+    wrist_flex = UR5JointActuator()
+    wrist_yaw = UR5JointActuator()
+    wrist_roll = UR5JointActuator()
     
     # Optional: Cartesian-space actuators (uncomment if needed)
-    x: UR5CartesianActuator
-    y: UR5CartesianActuator
-    z: UR5CartesianActuator
-    rx: UR5CartesianActuator
-    ry: UR5CartesianActuator
-    rz: UR5CartesianActuator
+    x = UR5CartesianActuator()
+    y = UR5CartesianActuator()
+    z = UR5CartesianActuator()
+    rx = UR5CartesianActuator()
+    ry = UR5CartesianActuator()
+    rz = UR5CartesianActuator()
 

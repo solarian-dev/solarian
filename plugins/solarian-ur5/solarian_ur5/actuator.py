@@ -25,7 +25,7 @@ class UR5JointActuator(Servo):
             shoulder_lift: UR5JointActuator = UR5JointActuator(id=1, model="ur5")
     """
     
-    bus_class: UR5Bus
+    bus_class = UR5Bus
     
 
 class UR5CartesianActuator(Servo):
@@ -44,7 +44,7 @@ class UR5CartesianActuator(Servo):
             z: UR5CartesianActuator = UR5CartesianActuator(id=2, model="ur5")
     """
     
-    bus_class: UR5Bus
+    bus_class = UR5Bus
     
 
 # Backward compatibility alias

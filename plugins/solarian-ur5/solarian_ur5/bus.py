@@ -125,7 +125,10 @@ class UR5Bus(ActuatorBus):
         return self.connected
 
     def connect(self):
+
+        print(f"Connecting rtde control interface to {self.port}") 
         self.rtde_c = rtde_control.RTDEControlInterface(self.port)
+        print(f"Connecting rtde receive interface to {self.port}") 
         self.rtde_r = rtde_receive.RTDEReceiveInterface(self.port)
         self.connected = True
 

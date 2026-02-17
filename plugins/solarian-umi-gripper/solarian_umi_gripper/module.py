@@ -16,11 +16,10 @@ class UMIGripperConfig(ModuleConfig):
 
 class UMIGripperModule(Module):
     config_class = UMIGripperConfig
-    gripper_actuator: FeetechServo
+    gripper_actuator = FeetechServo()
     
     def initialize(self):
         """Initialize the gripper with optimal servo settings."""
-        super().initialize()
 
         # Disable torque to configure settings
         self.write_actuators("Torque_Enable", 0)
