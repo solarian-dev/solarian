@@ -443,7 +443,8 @@ class Controller(ABC):
 
                 self.last_action = self.control_step()
 
-                self.send_action(self.last_action)
+                if self.last_action is not None:
+                    self.send_action(self.last_action)
 
                 # if "reset_policy" in events and events["reset_policy"]:
                 #     events["reset_policy"] = False

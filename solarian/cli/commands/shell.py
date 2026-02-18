@@ -20,28 +20,38 @@ class ShellCommand(BaseCommand):
         """This command doesn't require configuration."""
         return None
 
-    def _create_robot(self, settings):
-        """Load the robot config and create the robot instance for the project."""
-        from solarian.utils import get_class
+    def _load_config(self, config_name, config_class):
+        """Load a Hydra config and parse it into the given config class."""
         from solarian.utils.configs import parse_with_friendly_errors
-        from solarian.core.configs import RobotConfig
 
         conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
 
-        # Clear any existing Hydra state (manage.py already initializes one)
         if GlobalHydra.instance().is_initialized():
             GlobalHydra.instance().clear()
 
-        # Use Hydra to resolve the robot config (handles defaults like connection)
         with initialize_config_dir(version_base=None, config_dir=conf_path, job_name="solarian_shell"):
-            hydra_cfg = compose(config_name="robot")
+            hydra_cfg = compose(config_name=config_name)
             cfg_dict = OmegaConf.to_container(hydra_cfg, resolve=True)
 
-        robot_cfg = parse_with_friendly_errors(RobotConfig, cfg_dict)
+        return parse_with_friendly_errors(config_class, cfg_dict)
 
+    def _create_robot(self, settings):
+        """Load the robot config and create the robot instance for the project."""
+        from solarian.utils import get_class
+        from solarian.core.configs import RobotConfig
+
+        robot_cfg = self._load_config("robot", RobotConfig)
         RobotClass = get_class(settings.ROBOT_CLASS)
-        robot = RobotClass(robot_cfg)
-        return robot
+        return RobotClass(robot_cfg)
+
+    def _create_controller(self, settings):
+        """Load the controller config and create the controller instance for the project."""
+        from solarian.utils import get_class
+        from solarian.core.configs import ControllerConfig
+
+        ControllerClass = get_class(settings.CONTROLLER_CLASS)
+        controller_cfg = self._load_config("controller", ControllerConfig)
+        return ControllerClass(controller_cfg)
 
     def handle(self, cfg: DictConfig = None) -> None:
         from solarian.conf import settings
@@ -62,14 +72,20 @@ class ShellCommand(BaseCommand):
         robot = self._create_robot(settings)
         namespace['robot'] = robot
 
-        robot_line = "  robot     - Robot instance\n" if robot is not None else ""
+        # Create the project's controller instance
+        controller = self._create_controller(settings)
+        namespace['controller'] = controller
+
+        robot_line = "  robot      - Robot instance\n" if robot is not None else ""
+        controller_line = "  controller - Controller instance\n" if controller is not None else ""
         banner = (
             "\nSolarian Interactive Shell\n"
             "─────────────────────────\n"
             "Available objects:\n"
-            "  settings  - Project settings module\n"
+            "  settings   - Project settings module\n"
             f"{robot_line}"
-            "  solarian  - The solarian package\n"
+            f"{controller_line}"
+            "  solarian   - The solarian package\n"
             "\n"
             "Type exit() or Ctrl-D to quit.\n"
         )

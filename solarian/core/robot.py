@@ -104,9 +104,6 @@ class Robot(ABC):
         example_observation = get_class(settings.OBSERVATION_CLASS).zeros()
         example_action = get_class(settings.ACTION_CLASS).zeros()
 
-        print(example_observation)
-        print(example_action)
-
         # IMPORTANT: Store the manager so it doesn't get garbage collected
         # (which would clean up all shared memory before subprocess can access it)
         self.shm_manager = SharedMemoryManager()
@@ -120,14 +117,12 @@ class Robot(ABC):
                 module_cfg = self.load_module_config(name, module_class)
 
                 # create module's observation queue
-                print(example_observation[name])
                 self.observation_queues[name] = ObservationQueue(
                     shm_manager=self.shm_manager,
                     example_obs=example_observation[name],
                     buffer_size=1024,
                 )
                 # create module's action queue
-                print(example_action[name])
                 self.action_queues[name] = ActionQueue(
                     shm_manager=self.shm_manager,
                     example_action=example_action[name],
