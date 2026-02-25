@@ -7,7 +7,7 @@ import os
 from abc import ABC, abstractmethod
 from multiprocessing.managers import SharedMemoryManager
 
-from solarian.core.configs import ValueName, RobotConfig
+from solarian.core.configs import RobotConfig
 # from .observation import Observation
 from solarian.core.message import Message
 from solarian.core.action import Action
@@ -15,7 +15,7 @@ from .module import Module
 from .module_bus import ModuleBus
 from solarian.core import Observation
 from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard
-from solarian.core.data import DataKind
+from solarian.core.data import ImageData
 from solarian.utils.shared_memory.observation_queue import ObservationQueue
 from solarian.utils.shared_memory.action_queue import ActionQueue
 from solarian.conf import settings
@@ -53,13 +53,46 @@ class Robot(ABC):
         # if not modules:
         #     raise TypeError(f"{cls.__name__} must declare at least one Module")
 
+    
+    @classmethod
+    def module_names(cls):
+        return [name for name in cls.__dict__ if isinstance(getattr(cls, name), Module)]
+    
+    @classmethod
+    def validate_obs(cls, data: dict):
+        for module_name, module_data in data.items():
+            if module_name not in cls.module_names():
+                raise ValueError(f"Invalid module name: '{module_name}'")
+            module = getattr(cls, module_name)
+            module.validate_obs(module_data)
 
-        
+    @classmethod
+    def validate_act(cls, data: dict):
+        for module_name, module_data in data.items():
+            if module_name not in cls.module_names():
+                raise ValueError(f"Invalid module name: '{module_name}'")
+            module = getattr(cls, module_name)
+            module.validate_act(module_data)
+
+    @classmethod
+    def __class_getitem__(cls, item):
+        return getattr(cls, item)
+
+    def __getitem__(self, item):
+        return getattr(self, item)
 
     def __new__(cls, *args, **kwargs):
         if Robot._instance is None:
             Robot._instance = super().__new__(cls)
         return Robot._instance
+
+    @classmethod
+    def items(cls):
+        for module_name in cls.module_names():
+            for actuator_name in cls[module_name].actuator_names():
+                for data_name in cls[module_name][actuator_name].data_names():
+                    yield module_name, actuator_name, data_name, cls[module_name][actuator_name][data_name]
+            
 
     """Base class with common robot functionality"""
     def __init__(self, cfg: RobotConfig):
@@ -101,8 +134,10 @@ class Robot(ABC):
         self.observation_queues = {}
         self.action_queues = {}
 
-        example_observation = get_class(settings.OBSERVATION_CLASS).zeros()
-        example_action = get_class(settings.ACTION_CLASS).zeros()
+        example_observation = Observation.zeros()
+        # example_action = get_class(settings.ACTION_CLASS).zeros()
+        # return
+        example_action = Action.zeros()
 
         # IMPORTANT: Store the manager so it doesn't get garbage collected
         # (which would clean up all shared memory before subprocess can access it)
@@ -119,13 +154,13 @@ class Robot(ABC):
                 # create module's observation queue
                 self.observation_queues[name] = ObservationQueue(
                     shm_manager=self.shm_manager,
-                    example_obs=example_observation[name],
+                    example_obs=example_observation,
                     buffer_size=1024,
                 )
                 # create module's action queue
                 self.action_queues[name] = ActionQueue(
                     shm_manager=self.shm_manager,
-                    example_action=example_action[name],
+                    example_action=example_action,
                     buffer_size=1024,
                 )
                 # create module
@@ -169,25 +204,22 @@ class Robot(ABC):
             test_socket.close()
 
     @profile
-    def get_action(self):
+    def get_action(self) -> Action | None:
         try:
             bytes = self.action_socket.recv(zmq.NOBLOCK)
             msg = Message.deserialize(bytes)
 
             if "action" not in msg.data:
-                return
+                return None
 
             raw_action = msg.data["action"]
-            action = get_class(settings.ACTION_CLASS)(raw_action)
+            action = Action(raw_action)
             self.current_action = action
-            
-            latency = (time.time_ns() - msg.controller_timestamp)
-            manual_profile("process_action latency", latency)
-            # with self.observation_lock:
-            self.process_action(action)
-            
+            # latency = (time.time_ns() - action.controller_timestamp)
+            # manual_profile("process_action latency", latency)
+            return action
         except zmq.Again:
-            pass
+            return None
 
     # def _action_receiver(self):
     #     """Thread for receiving actions"""
@@ -217,17 +249,16 @@ class Robot(ABC):
         msg.robot_timestamp = time.time_ns()
 
         raw_obs = {}
-        obs_class = get_class(settings.OBSERVATION_CLASS)
 
         # Encode images as JPEG
-        for module_name in observation.keys():
+        for module_name, module_obs in observation.items():
             raw_obs[module_name] = {}
-            for sensor_name in observation[module_name].keys():
+            for sensor_name, sensor_obs in module_obs.items():
                 raw_obs[module_name][sensor_name] = {}
-                for data_name in observation[module_name][sensor_name].keys():
+                for data_name, data in sensor_obs.items():
                     
-                    if obs_class[module_name][sensor_name][data_name].kind == DataKind.IMAGE:
-                        img = observation[module_name][sensor_name][data_name]
+                    if isinstance(data, ImageData):
+                        img = data.value
                         encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.cfg.img_compression_quality]
                         encoded_img = cv2.imencode('.jpeg', img, encode_params)[1].tobytes()
                         raw_obs[module_name][sensor_name][data_name] = encoded_img
@@ -237,7 +268,7 @@ class Robot(ABC):
                         # print("Compression time: ", time.time() - start_time)
                         # print("-----------------------------------------------")
                     else:
-                        raw_obs[module_name][sensor_name][data_name] = observation[module_name][sensor_name][data_name]
+                        raw_obs[module_name][sensor_name][data_name] = data.value
                 
         msg.data = {"observation": raw_obs}
         self.state_socket.send(msg.serialize())
@@ -270,7 +301,12 @@ class Robot(ABC):
                 # Get and send observation
 
                 self.update()
-                self.get_action()
+                action = self.get_action()
+
+                if action is not None:
+                    self.process_action(action)
+            
+
                 observation = self.get_observation()
 
                 # board = StatusBoard()
@@ -379,49 +415,50 @@ class Robot(ABC):
         self.connected = False
 
     def display(self):
-        images = {}
-        # add all images in observation
-        for module_name, module_data in self.last_observation.data.items():
-            for sensor_name, sensor_data in module_data.items():
-                if sensor_data.get(ValueName.IMAGE) is not None:
-                    images[sensor_name] = sensor_data
+        pass
+        # images = {}
+        # # add all images in observation
+        # for module_name, module_data in self.last_observation.data.items():
+        #     for sensor_name, sensor_data in module_data.items():
+        #         if sensor_data.get(ValueName.IMAGE) is not None:
+        #             images[sensor_name] = sensor_data
 
-        # Initialize windows once if not already done
-        if not self.windows_initialized:
-            for name in images.keys():
-                cv2.namedWindow(name, cv2.WINDOW_NORMAL)
+        # # Initialize windows once if not already done
+        # if not self.windows_initialized:
+        #     for name in images.keys():
+        #         cv2.namedWindow(name, cv2.WINDOW_NORMAL)
                 
-            self.windows_initialized = True
+        #     self.windows_initialized = True
 
-        COLOR = (255, 0, 0)
+        # COLOR = (255, 0, 0)
 
-        for name, image in images.items():
-            img = image[ValueName.IMAGE]
+        # for name, image in images.items():
+        #     img = image[ValueName.IMAGE]
             
-            # Check if the image is encoded (bytes) and decode it
-            if isinstance(img, bytes):
-                # Decode the JPEG image
-                print("Decoding image for", name)
-                img = cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR)
-                if img is None:
-                    print(f"Failed to decode image for {name}")
-                    continue
-            elif not isinstance(img, np.ndarray):
-                print(f"Unsupported image type for {name}: {type(img)}")
-                continue                
-            # Print debug info
-            # print(f"Image type: {type(img)}, shape: {img.shape if hasattr(img, 'shape') else 'unknown'}")
+        #     # Check if the image is encoded (bytes) and decode it
+        #     if isinstance(img, bytes):
+        #         # Decode the JPEG image
+        #         print("Decoding image for", name)
+        #         img = cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR)
+        #         if img is None:
+        #             print(f"Failed to decode image for {name}")
+        #             continue
+        #     elif not isinstance(img, np.ndarray):
+        #         print(f"Unsupported image type for {name}: {type(img)}")
+        #         continue                
+        #     # Print debug info
+        #     # print(f"Image type: {type(img)}, shape: {img.shape if hasattr(img, 'shape') else 'unknown'}")
             
-            # Convert color only once before display
-            display_img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        #     # Convert color only once before display
+        #     display_img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-            # Show frames
-            cv2.imshow(name, display_img_bgr)
+        #     # Show frames
+        #     cv2.imshow(name, display_img_bgr)
             
-            # No need to call getWindowProperty every time since windows are created once
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                return False
+        #     # No need to call getWindowProperty every time since windows are created once
+        #     key = cv2.waitKey(1) & 0xFF
+        #     if key == ord('q'):
+        #         return False
             
     
     def get_observation(self) -> Observation:
@@ -430,15 +467,11 @@ class Robot(ABC):
             Observation: Contains camera images and actuator readings organized by groups
         """
         # creates empty observation
-        obs = get_class(settings.OBSERVATION_CLASS)()
-
+        obs_data = {}
         for module_name, obs_queue in self.observation_queues.items():
             if not obs_queue.empty():
-                module_observation = obs_queue.get()
-                obs[module_name] = module_observation
-            else:
-                obs[module_name] = None
-        return obs
+                obs_data[module_name] = obs_queue.get().to_dict()
+        return Observation(obs_data)
                     
     # @profile
     def process_action(self, action: Action):

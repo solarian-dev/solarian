@@ -223,31 +223,33 @@ def main() -> None:
         else:
             config_name = CONF_NAME
 
-        try:
-            with initialize_config_dir(version_base=None, config_dir=CONF_PATH, job_name='solarian_app'):
-                # Store the current config path for error reporting
-                if config_name is not None:
-                    config_file = Path(CONF_PATH) / config_name
-                    if config_file.exists():
-                        os.environ["SOLARIAN_CURRENT_CONFIG"] = str(config_file.absolute())
-                    
-                # Load the config using hydra
-                hydra_cfg = compose(config_name=config_name, overrides=overrides)
+        # try:
+        with initialize_config_dir(version_base=None, config_dir=CONF_PATH, job_name='solarian_app'):
+            # Store the current config path for error reporting
+            if config_name is not None:
+                config_file = Path(CONF_PATH) / config_name
+                if config_file.exists():
+                    os.environ["SOLARIAN_CURRENT_CONFIG"] = str(config_file.absolute())
                 
-                # Convert to dict for Pydantic parsing
-                cfg_dict = OmegaConf.to_container(hydra_cfg, resolve=True)
+            # Load the config using hydra
+            hydra_cfg = compose(config_name=config_name, overrides=overrides)
+            
+            # Convert to dict for Pydantic parsing
+            cfg_dict = OmegaConf.to_container(hydra_cfg, resolve=True)
+            
+            # Parse using the command's config class which now has built-in validation
+            if cmd.get_config_class() is not None:
+                from solarian.utils.configs import parse_with_friendly_errors
+                cfg = parse_with_friendly_errors(cmd.get_config_class(), cfg_dict)
+            else:
+                cfg = hydra_cfg
                 
-                # Parse using the command's config class which now has built-in validation
-                if cmd.get_config_class() is not None:
-                    from solarian.utils.configs import parse_with_friendly_errors
-                    cfg = parse_with_friendly_errors(cmd.get_config_class(), cfg_dict)
-                else:
-                    cfg = hydra_cfg
-                    
-                cmd.handle(cfg)
-        except ValueError as e:
-            # Handle configuration validation errors
-            print(f"\n{colorama.Fore.RED}{str(e)}{colorama.Style.RESET_ALL}")
-            sys.exit(1)
+            cmd.handle(cfg)
+        # except ValueError as e:
+        #     # Handle configuration validation errors
+        #     print(f"\n{colorama.Fore.RED}{str(e)}{colorama.Style.RESET_ALL}")
+        #     sys.exit(1)
 
 
+if __name__ == "__main__":
+    main()

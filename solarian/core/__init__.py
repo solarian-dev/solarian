@@ -1,14 +1,11 @@
 # core/action.py
-from .action import ActionType, ModuleAction, Action, ActuatorAction
+from .action import Action
 
 # core/actuator.py
 from .actuator import Actuator
 
 # core/actuator_bus.py
 from .actuator_bus import ActuatorBus
-
-# core/body.py
-from .body import BodyName, Body
 
 # core/calibration.py
 from .calibration import MotorCalibration
@@ -28,14 +25,8 @@ from .module_bus import TorqueMode, ModuleBus
 # core/sensor_bus.py
 from .sensor_bus import SensorBus
 
-# core/opencv_camera_bus.py
-from .opencv_camera_bus import OpenCVCameraBus
-
 # core/dataset.py
 from .dataset import Dataset
-
-# core/joint.py
-from .joint import JointName, JointType, Joint
 
 # core/message.py
 from .message import Message
@@ -44,10 +35,10 @@ from .message import Message
 from .module import Module
 
 # core/observation.py
-from .observation import ModuleObs, Observation, SensorObs
+from .observation import Observation
 
 # core/data.py
-from .data import Data, DataComputer, DataKind
+from .data import Data, DataComputer
 
 # core/robot.py
 from .robot import Robot

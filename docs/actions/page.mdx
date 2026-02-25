@@ -6,13 +6,11 @@ export const metadata = {
 
 # Actions
 
-Action is a Pydantic model for encapsulating robot control commands.
+Action encapsulates robot control commands.
 
-It stores structured actuator-level commands (e.g., position, speed) across multiple robot modules and supports conversion to standardized formats like LeRobot.
+It stores structured actuator-level commands (e.g., position, speed) across multiple robot modules.
 
 
 ## See Also
 [Observation](/observations): Counterpart to Action, stores sensor readings in the same hierarchical format. Used together in imitation learning loops.
-[settings.ACTION](/settings): Defines the allowed structure of Action.data. Controls which actuators and values are included in training/inference.
-[ValueName](/value-name): Enum (POS, SPEED, IMAGE, etc.) used as keys in Action.data. Ensures consistency across action and observation spaces.
-[to_lerobot_format](/actions#to_lerobot_format): Enables compatibility with the LeRobot framework, which expects flat action arrays for training and policy execution.
+[Action](/actions): The Action class.

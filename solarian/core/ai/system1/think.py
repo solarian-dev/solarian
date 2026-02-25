@@ -28,15 +28,8 @@ from typing import Dict, List, Any, Optional
 
 import numpy as np
 
-from solarian.core.configs import ValueName
+from solarian.core.data import ImageData
 from solarian.control.ai.system2.skill import Skill, SkillStatus
-
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-THINK_FREQUENCY = 5  # Hz
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +139,7 @@ class ThinkProcess(Process):
         user_msg_queue: Queue,
         vlm_config: Dict[str, Any],
         available_skills: Dict[str, type],
+        frequency: float = 2.0,
         running_event: Any,
     ):
         super().__init__(name="ThinkProcess", daemon=True)
@@ -155,6 +149,7 @@ class ThinkProcess(Process):
         self.user_msg_queue = user_msg_queue
         self.vlm_config = vlm_config
         self.available_skills = available_skills
+        self.frequency = frequency
         self.running_event = running_event
 
         # Populated at runtime inside the child process
@@ -162,6 +157,8 @@ class ThinkProcess(Process):
         self.skills_obs_history: List[Dict] = []
         self.last_user_msg: Optional[str] = None
         self.client: Any = None
+
+        self._create_vlm_client()
 
     # ------------------------------------------------------------------
     # VLM interaction
@@ -308,6 +305,7 @@ class ThinkProcess(Process):
     # Observation helpers
     # ------------------------------------------------------------------
 
+    # TODO: could be more than one image and the images to be used should be configurable
     def _get_latest_image(self) -> Optional[np.ndarray]:
         """Extract the most recent camera image from any observation buffer."""
         for _module_name, buffer in self.observation_buffers.items():
@@ -318,16 +316,10 @@ class ThinkProcess(Process):
             if obs is None:
                 continue
 
-            data = obs.data if hasattr(obs, "data") else obs
-            if not isinstance(data, dict):
-                continue
-
-            for _sensor_name, sensor_data in data.items():
-                if not isinstance(sensor_data, dict):
-                    continue
-                img = sensor_data.get(ValueName.IMAGE)
-                if img is not None and isinstance(img, np.ndarray) and img.size > 0:
-                    return img
+            for sensor_name, sensor_obs in obs.items():
+                for data_name, data in sensor_obs.items():
+                    if isinstance(data, ImageData):
+                        return data.value
         return None
 
     def _drain_queue(self, queue: Queue) -> List:
@@ -418,9 +410,9 @@ class ThinkProcess(Process):
         """Process entry point — loops ``_think_step`` at 5 Hz."""
         print(
             f"[Think] Process started (PID {multiprocessing.current_process().pid}), "
-            f"frequency={THINK_FREQUENCY} Hz"
+            f"frequency={self.frequency} Hz"
         )
-        self._create_vlm_client()
+        
 
         while self.running_event.is_set():
             t0 = time.monotonic()
@@ -430,7 +422,7 @@ class ThinkProcess(Process):
                 print(f"[Think] Error in think step: {exc}")
 
             elapsed = time.monotonic() - t0
-            sleep_time = (1.0 / THINK_FREQUENCY) - elapsed
+            sleep_time = (1.0 / self.frequency) - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
 

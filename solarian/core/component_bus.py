@@ -2,7 +2,7 @@ import abc
 from typing import Any, Dict
 
 from solarian.core.component import Component
-
+from solarian.core.data import Data
 
 class ComponentBus(abc.ABC):
     """
@@ -54,11 +54,11 @@ class ComponentBus(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def read(self, data_name: str, component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
+    def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         """Read values from components on this bus."""
         pass
 
-    def write(self, data_name: str, values: Dict[str, Any], normalize: bool = True):
+    def write(self, values: Dict[str, Data], normalize: bool = True):
         """Write values to components on this bus. Override in writable buses."""
         raise NotImplementedError(f"{type(self).__name__} does not support write operations")
 

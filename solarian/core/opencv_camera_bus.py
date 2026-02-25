@@ -1,35 +1,117 @@
 from typing import Any, Dict
+from enum import Enum
+
+import cv2
+import numpy as np
 
 from solarian.core.sensor_bus import SensorBus
 from solarian.core.component import Component
+from solarian.core.data import Data, ImageData
+
+
+BACKEND = {
+    "linux": cv2.CAP_V4L2,
+    "darwin": cv2.CAP_AVFOUNDATION,
+    "win32": cv2.CAP_MSMF,
+}[__import__("sys").platform]
+
+
+class Rotation(int, Enum):
+    NO_ROTATION = 0
+    ROTATE_90 = 90
+    ROTATE_180 = 180
+    ROTATE_270 = -90
+
+
+class ColorMode(str, Enum):
+    RGB = "rgb"
+    BGR = "bgr"
 
 
 class OpenCVCameraBus(SensorBus):
     """
-    Dummy sensor bus that wraps a single OpenCVCamera.
+    Sensor bus for OpenCV cameras.
 
     Since OpenCV cameras don't share a communication bus (each camera
-    has its own device), this bus simply delegates all operations
-    to the single camera component it contains.
+    has its own device), this bus manages a single camera per instance.
     """
+
+    def __init__(self, port: str, components: Dict[str, Component]):
+        super().__init__(port, components)
+        self.capture = None
 
     @property
     def is_connected(self) -> bool:
-        camera = next(iter(self.components.values()))
-        return camera.is_connected
+        return self.capture is not None and self.capture.isOpened()
 
     def connect(self):
-        camera = next(iter(self.components.values()))
-        camera.connect()
+        cfg = next(iter(self.components.values())).cfg
+
+        if isinstance(self.port, str) and self.port.startswith('/dev/'):
+            port = self.port
+        else:
+            port = int(self.port)
+
+        self.capture = cv2.VideoCapture(port, BACKEND)
+        self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*cfg.video_format))
+        self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(cfg.width))
+        self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(cfg.height))
+        self.capture.set(cv2.CAP_PROP_FPS, float(cfg.fps))
+
+        if not self.capture.isOpened():
+            print(f"Error: Could not open camera with platform backend: {self.port}")
+            print("Trying with default backend...")
+            self.capture = cv2.VideoCapture(port)
+
+        if not self.capture.isOpened():
+            raise RuntimeError(
+                f"Could not open camera: {self.port}. "
+                "Ensure the device is connected and codecs are installed."
+            )
+
+        fps = self.capture.get(cv2.CAP_PROP_FPS)
+        width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"Camera opened: port={self.port}, {width}x{height} @ {fps:.1f} fps")
 
     def disconnect(self):
-        camera = next(iter(self.components.values()))
-        camera.disconnect()
+        if self.capture is not None:
+            self.capture.release()
+            self.capture = None
 
-    def read(self, data_name: str, component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
-        camera = next(iter(self.components.values()))
+    def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
+        if not issubclass(data_type, ImageData):
+            raise ValueError(f"OpenCVCameraBus only supports ImageData, got {data_type}")
+
+        ret, frame = self.capture.read()
+        if not ret:
+            raise ValueError("Could not read frame from camera")
+
+        if isinstance(frame, bytes):
+            frame = cv2.imdecode(np.frombuffer(frame, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+        cfg = next(iter(self.components.values())).cfg
+        processed = frame
+
+        if cfg.color_mode == ColorMode.RGB.value:
+            processed = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
+
+        if cfg.rotation == Rotation.ROTATE_90.value:
+            processed = cv2.rotate(processed, cv2.ROTATE_90_CLOCKWISE)
+        elif cfg.rotation == Rotation.ROTATE_180.value:
+            processed = cv2.rotate(processed, cv2.ROTATE_180)
+        elif cfg.rotation == Rotation.ROTATE_270.value:
+            processed = cv2.rotate(processed, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+        if cfg.resize_width is not None or cfg.resize_height is not None:
+            if processed.shape[0] != cfg.resize_height or processed.shape[1] != cfg.resize_width:
+                processed = cv2.resize(processed, (cfg.resize_width, cfg.resize_height), interpolation=cv2.INTER_AREA)
+
+        if not isinstance(processed, np.ndarray):
+            raise TypeError(f"Expected numpy.ndarray, got {type(processed)}")
+
         camera_name = next(iter(self.components.keys()))
-        return {camera_name: camera.read(data_name)}
+        return {camera_name: processed}
 
     def is_calibrated(self) -> bool:
         return True

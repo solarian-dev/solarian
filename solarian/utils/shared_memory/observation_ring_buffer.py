@@ -14,7 +14,7 @@ from multiprocessing.managers import SharedMemoryManager
 import numpy as np
 
 from solarian.utils.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
-from solarian.core.observation import ModuleObs
+from solarian.core.observation import Observation
 
 
 def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
@@ -112,7 +112,7 @@ class ObservationRingBuffer:
     def __init__(
         self,
         shm_manager: SharedMemoryManager,
-        example_observation: ModuleObs,  # Observation instance
+        example_observation: Observation,  # Observation instance
         get_max_k: int = 32,
         get_time_budget: float = 0.2,
         put_desired_frequency: float = 60
@@ -122,7 +122,7 @@ class ObservationRingBuffer:
         # Convert example observation to flattened dict to define schema
         example_dict = flatten_dict(example_observation.data)
 
-        self.observation_class: ModuleObs = example_observation.__class__
+        self.observation_class: Observation = example_observation.__class__
         
         # Create underlying SharedMemoryRingBuffer with the flattened schema
         self._buffer = SharedMemoryRingBuffer.create_from_examples(
@@ -186,7 +186,7 @@ class ObservationRingBuffer:
     #     observation_dict = observation.to_dict()
     #     return flatten_dict(observation_dict)
     
-    def _flat_dict_to_observation(self, flat_dict: Dict[str, Any]) -> ModuleObs:
+    def _flat_dict_to_observation(self, flat_dict: Dict[str, Any]) -> Observation:
         """Convert a flattened dictionary back to an Observation.
         
         Args:
@@ -204,7 +204,7 @@ class ObservationRingBuffer:
         """Clear the ring buffer."""
         self._buffer.clear()
     
-    def put(self, observation: ModuleObs, wait: bool = True):
+    def put(self, observation: Observation, wait: bool = True):
         """
         Put an observation into the ring buffer.
         
@@ -218,7 +218,7 @@ class ObservationRingBuffer:
         """
         self._buffer.put(flatten_dict(observation.data), wait=wait)
     
-    def get(self) -> ModuleObs:
+    def get(self) -> Observation:
         """
         Get the most recent observation from the ring buffer.
         
@@ -231,7 +231,7 @@ class ObservationRingBuffer:
         flat_dict = self._buffer.get()
         return self._flat_dict_to_observation(flat_dict)
     
-    def get_last_k(self, k: int) -> List[ModuleObs]:
+    def get_last_k(self, k: int) -> List[Observation]:
         """
         Get the last k observations from the ring buffer.
         

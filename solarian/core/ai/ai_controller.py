@@ -49,8 +49,8 @@ from solarian.core.action import Action
 from solarian.core.configs import ControllerConfig
 from solarian.utils import get_class
 from solarian.conf import settings
-from solarian.control.ai.system1.think import ThinkProcess
-from solarian.control.ai.system2.skill import Skill, SkillStatus
+from solarian.core.ai.system1.think import ThinkProcess
+# from solarian.core.ai.system2.skill import Skill, SkillStatus
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +138,16 @@ class AIController(Controller):
         # Skill registry — think process can only launch skills listed here
         self.available_skills: Dict[str, type] = available_skills or {}
 
-        self._think_process: Optional[ThinkProcess] = None
+        self._think_process = ThinkProcess(
+            observation_buffers=self.observation_buffers,
+            action_queue=self.action_queue,
+            skills_obs_queue=self.skills_obs_queue,
+            user_msg_queue=self.user_msg_queue,
+            vlm_config=self.vlm_config,
+            available_skills=self.available_skills,
+            running_event=self._running_event,
+            frequency=self.cfg.tps,
+        )
 
     # ------------------------------------------------------------------
     # Controller interface
@@ -152,11 +161,11 @@ class AIController(Controller):
         module / actuator / data key the most recently queued value wins.
 
         Returns:
-            A single ``Action`` instance (type determined by
-            ``settings.ACTION_CLASS``) ready to send to the robot.
+            A single ``Action`` instance ready to send to the robot.
         """
-        action_class = get_class(settings.ACTION_CLASS)
-        merged = action_class.zeros()
+        # action_class = get_class(settings.ACTION_CLASS)
+        # action_class = Action
+        merged = Action.zeros()
 
         while not self.action_queue.empty():
             try:
@@ -181,16 +190,6 @@ class AIController(Controller):
         """
         print("[AIController] Launching think process")
         self._running_event.set()
-
-        self._think_process = ThinkProcess(
-            observation_buffers=self.observation_buffers,
-            action_queue=self.action_queue,
-            skills_obs_queue=self.skills_obs_queue,
-            user_msg_queue=self.user_msg_queue,
-            vlm_config=self.vlm_config,
-            available_skills=self.available_skills,
-            running_event=self._running_event,
-        )
         self._think_process.start()
         print(
             f"[AIController] Think process started "

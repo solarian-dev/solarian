@@ -13,7 +13,7 @@ from multiprocessing.managers import SharedMemoryManager
 import numpy as np
 
 from solarian.utils.shared_memory.shared_memory_queue import SharedMemoryQueue, Empty, Full
-from solarian.core.action import ModuleAction
+from solarian.core.action import Action
 
 
 def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
@@ -144,14 +144,14 @@ class ActionQueue:
         """
         return cls(shm_manager, example_action, buffer_size)
     
-    def _action_to_flat_dict(self, action: ModuleAction) -> Dict[str, Union[np.ndarray, numbers.Number]]:
+    def _action_to_flat_dict(self, action: Action) -> Dict[str, Union[np.ndarray, numbers.Number]]:
         """Convert an Action to a flattened dictionary."""
         if action is None:
             return {}
         action_dict = action.data
         return flatten_dict(action_dict)
     
-    def _flat_dict_to_action(self, flat_dict: Dict[str, Any]) -> ModuleAction:
+    def _flat_dict_to_action(self, flat_dict: Dict[str, Any]) -> Action:
         """Convert a flattened dictionary back to an Action."""
         nested_dict = unflatten_dict(flat_dict)
         return self._action_class(nested_dict)
@@ -168,7 +168,7 @@ class ActionQueue:
         """Clear all actions from the queue."""
         self._queue.clear()
     
-    def put(self, action: ModuleAction) -> None:
+    def put(self, action: Action) -> None:
         """
         Put an action into the queue.
         
@@ -181,7 +181,7 @@ class ActionQueue:
         """
         self._queue.put(self._action_to_flat_dict(action))
     
-    def get(self) -> ModuleAction:
+    def get(self) -> Action:
         """
         Get an action from the queue.
         
@@ -193,7 +193,7 @@ class ActionQueue:
         """
         return self._flat_dict_to_action(self._queue.get())
     
-    def get_k(self, k: int) -> List[ModuleAction]:
+    def get_k(self, k: int) -> List[Action]:
         """
         Get up to k actions from the queue.
         

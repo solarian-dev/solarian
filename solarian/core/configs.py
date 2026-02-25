@@ -6,42 +6,6 @@ from pathlib import Path
 import numpy as np
 
 
-# class ValueName(str, Enum):
-#     POS = "pos"
-#     SPEED = "speed"
-#     IMAGE = "image"
-#     TORQUE_ENABLE = "torque_enable"
-#     BOUNDING_BOX = "bounding_box"
-#     DEPTH_IMAGE = "depth_image"
-#     TIMESTAMP = "timestamp"
-
-#     def __str__(self):
-#         return self.value
-
-# VALUE_NAME_TO_STRING = {
-#     ValueName.POS: "pos",
-#     ValueName.SPEED: "speed",
-#     ValueName.IMAGE: "image",
-#     ValueName.TORQUE_ENABLE: "torque_enable",
-#     ValueName.BOUNDING_BOX: "bounding_box",
-#     ValueName.DEPTH_IMAGE: "depth_image",
-#     ValueName.TIMESTAMP: "timestamp",
-# }
-
-
-class ValueName(int, Enum):
-    POS = 0
-    SPEED = 1
-    IMAGE = 2
-    TORQUE_ENABLE = 3
-    BOUNDING_BOX = 4
-    DEPTH_IMAGE = 5
-    TIMESTAMP = 6
-
-    def __str__(self):
-        return str(self.value)
-
-
 def _convert_numpy_to_float(v):
     """Convert numpy types to Python float."""
     if isinstance(v, np.ndarray):
@@ -58,65 +22,6 @@ def _convert_numpy_to_int(v):
         return int(v)
     return v
 
-
-class BaseValue(BaseModel):
-    computer: str
-
-class PosValue(BaseValue):
-    value_type: Literal[ValueName.POS] = ValueName.POS
-    value: float = 0
-
-    @field_validator('value_type', mode='before')
-    @classmethod
-    def convert_value_type(cls, v):
-        return _convert_numpy_to_int(v)
-
-    @field_validator('value', mode='before')
-    @classmethod
-    def convert_value(cls, v):
-        return _convert_numpy_to_float(v)
-
-class SpeedValue(BaseValue):
-    value_type: Literal[ValueName.SPEED] = ValueName.SPEED
-    value: float = 0
-
-    @field_validator('value_type', mode='before')
-    @classmethod
-    def convert_value_type(cls, v):
-        return _convert_numpy_to_int(v)
-
-    @field_validator('value', mode='before')
-    @classmethod
-    def convert_value(cls, v):
-        return _convert_numpy_to_float(v)
-
-class ImageValue(BaseValue):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    value_type: Literal[ValueName.IMAGE] = ValueName.IMAGE
-    value: np.ndarray = Field(default_factory=lambda: np.zeros((0, 0, 0), dtype=np.uint8))
-    shape: Tuple[int, int, int] = Field(default_factory=lambda: (0, 0, 0))
-
-    @field_validator('value_type', mode='before')
-    @classmethod
-    def convert_value_type(cls, v):
-        return _convert_numpy_to_int(v)
-
-    @model_validator(mode='after')
-    def value_from_shape(self):
-        """When shape is declared and non-empty, set value to zeros of that shape."""
-        if self.shape != (0, 0, 0) and (
-            self.value.size == 0 or self.value.shape != self.shape
-        ):
-            self.value = np.zeros(self.shape, dtype=np.uint8)
-        return self
-
-    @classmethod
-    def create_empty_value(cls, shape: Tuple[int, int, int] = (0, 0, 0)) -> np.ndarray:
-        """Create an empty ndarray for use as default or with a given shape."""
-        return np.zeros(shape, dtype=np.uint8)
-
-
 class ActionValue(str, Enum):
     STOP = "stop"
     RESET = "reset"
@@ -131,7 +36,6 @@ class InterpolatorType(str, Enum):
     
     def __str__(self):
         return self.value
-
 
 
 class ComponentConfig(BaseModel):
@@ -170,20 +74,6 @@ class ActuatorConfig(ComponentConfig):
 class ServoConfig(ActuatorConfig, SensorConfig):
     pass
 
-# # A body has mass and inertia and it might have sensors attached to it
-# class BodyConfig(BaseModel):
-#     mass: float
-#     inertia: float
-#     sensors: dict[str, SensorConfig] = {}
-#     actuators: dict[str, ActuatorConfig] = {}
-
-# # A joint is composed by a parent body, a child body, an axis and an actuator
-# class JointConfig(BaseModel):
-#     parent_body: str
-#     child_body: str
-#     sensors: dict[str, SensorConfig] = {}
-#     actuators: dict[str, ActuatorConfig] = {}
-
 # A module is composed by joints and bodies
 class ModuleConfig(BaseModel):
     # Process/control loop settings
@@ -195,13 +85,14 @@ class ModuleConfig(BaseModel):
 
     actuators: dict[str, ActuatorConfig] = {}
     sensors: dict[str, SensorConfig] = {}
+
+    receive_latency: float = 0.0  # latency in seconds for receiving data from sensors
     
     # calibration_file: str | None = None
     # gripper_open_degree: Optional[float] = 30
     # # Interpolator settings
     # interpolator_type: InterpolatorType = InterpolatorType.JOINT
     # max_speed: float | list[float] = 1.0  # max speed for interpolation (single or per-joint)
-    
 
 class ConnectionConfig(BaseModel):
     connection_id: str = "connection_1"
@@ -274,9 +165,6 @@ class ProjectConfig(BaseModel):
     server: ServerConfig
     robot: RobotConfig
 
-
-    
-
 class ConfigBaseModel(BaseModel):
     """Base model with enhanced error handling for configs"""
     
@@ -302,7 +190,6 @@ class ConfigBaseModel(BaseModel):
 class LoggerConfig(ConfigBaseModel):
     type: Literal['wandb'] | None = None
     
-
 class TrainLoggerConfig(ConfigBaseModel):
     type: Literal['none', 'wandb']
     project: str
@@ -322,21 +209,17 @@ class WandBLoggerConfig(TrainLoggerConfig):
             raise ValueError("WandB project name cannot be empty")
         return v
 
-
 class SchedulerConfig(ConfigBaseModel):
     type: Literal['cosine'] | None = None
     
-
 class PrecisionConfig(ConfigBaseModel):
     amp_enabled: bool = False # Use mixed precision training and enable grad scaler
     init_scale: float = 2 ** 16
     growth_interval: int = 2000
     growth_factor: float = 2.0
 
-
 class TrainOptimizerConfig(ConfigBaseModel):
-    type: Literal['adam', 'adamw'] = 'adamw'
-    
+    type: Literal['adam', 'adamw'] = 'adamw'    
 
 class AdamOptimizerConfig(TrainOptimizerConfig):
     type: Literal['adam'] = 'adam'
@@ -345,8 +228,6 @@ class AdamOptimizerConfig(TrainOptimizerConfig):
     eps: float = 1e-8
     weight_decay: float = 0.0001
     
-
-
 class AdamWOptimizerConfig(TrainOptimizerConfig):
     type: Literal['adamw'] = 'adamw'
     lr: float = 2e-5
@@ -354,10 +235,6 @@ class AdamWOptimizerConfig(TrainOptimizerConfig):
     eps: float = 1e-8
     weight_decay: float = 0.0001
     
-    
-    
-
-
 class ModelConfig(ConfigBaseModel):
     type: Literal['act', 'diffusion'] = 'act'
 
@@ -367,7 +244,6 @@ class ACTConfig(ModelConfig):
     n_action_steps: int = 100
     use_vae: bool = True
     temporal_ensemble_coeff: float | None = None
-
 
 class TrainConfig(ConfigBaseModel):
     train_dataset: str

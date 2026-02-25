@@ -1,10 +1,8 @@
 import abc
-import json
 from typing import Dict, Any
 
 from solarian.core.calibration import MotorCalibration, MotorNormMode
-
-from solarian.core.configs import ValueName
+from solarian.core.data import Data, PosData
 from solarian.core.component import Component
 from solarian.core.component_bus import ComponentBus
 from solarian.utils.general import enter_pressed
@@ -52,7 +50,7 @@ class ActuatorBus(ComponentBus):
         return cls(port=port, components=components, calibration=calibration)
 
     @abc.abstractmethod
-    def write(self, data_name: str, values: Dict[str, Any], normalize: bool = True):
+    def write(self, values: Dict[str, Data], normalize: bool = True):
         pass
     
     @abc.abstractmethod
@@ -105,13 +103,13 @@ class ActuatorBus(ComponentBus):
         # elif not isinstance(motors, list):
         #     raise TypeError(motors)
 
-        start_positions = self.read("Present_Position", component_names, normalize=False)
+        start_positions = self.read(PosData, component_names, normalize=False)
         mins = start_positions.copy()
         maxes = start_positions.copy()
 
         user_pressed_enter = False
         while not user_pressed_enter:
-            positions = self.read("Present_Position", component_names, normalize=False)
+            positions = self.read(PosData, component_names, normalize=False)
             mins = {motor: min(positions[motor], min_) for motor, min_ in mins.items()}
             maxes = {motor: max(positions[motor], max_) for motor, max_ in maxes.items()}
 

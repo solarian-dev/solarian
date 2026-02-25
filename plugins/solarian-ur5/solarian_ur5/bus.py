@@ -23,7 +23,6 @@ except ImportError as e:
         ) from e
     raise
 
-from solarian.core.configs import ValueName
 from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.component import Component
 
@@ -137,7 +136,7 @@ class UR5Bus(ActuatorBus):
         self.rtde_c.close()
         self.rtde_r.close()
 
-    def read(self, data_name: str, component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
+    def read(self, data_type, component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         values = {}
         # start with joint values
         names = [name for name in component_names if name in self.joint_names2ids.keys()]

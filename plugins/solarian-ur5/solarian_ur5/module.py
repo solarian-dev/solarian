@@ -39,10 +39,6 @@ class UR5ArmModule(Module):
     wrist_roll = UR5JointActuator()
     
     # Optional: Cartesian-space actuators (uncomment if needed)
-    x = UR5CartesianActuator()
-    y = UR5CartesianActuator()
-    z = UR5CartesianActuator()
-    rx = UR5CartesianActuator()
-    ry = UR5CartesianActuator()
-    rz = UR5CartesianActuator()
+    cartesian = UR5CartesianActuator()
+
 

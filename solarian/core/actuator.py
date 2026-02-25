@@ -16,5 +16,12 @@ class Actuator(Component):
             bus_class = UR5Bus
             model: str = "ur5"
     """
+    @classmethod
+    def validate_act(cls, data: dict):
+        for data_name, data_value in data.items():
+            if data_name not in cls.data_names():
+                raise ValueError(f"Invalid data name: '{data_name}' for actuator '{cls.__name__}'")
+            data_class = getattr(cls, data_name)
+            data_class.model_validate({"value": data_value})
     
     

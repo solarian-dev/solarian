@@ -6,13 +6,11 @@ export const metadata = {
 
 # Observations
 
-Observation is a Pydantic model for encapsulating sensor readings from a robot.
+Observation encapsulates sensor readings from a robot.
 
-It stores structured sensor-level readings (e.g., position, speed) across multiple robot modules and supports conversion to standardized formats like LeRobot.
+It stores structured sensor-level readings (e.g., position, speed) across multiple robot modules.
 
 ## See Also
 
 [Action](/actions): Counterpart to Observation, stores actuator commands in the same hierarchical format. Used together in imitation learning loops.
-[settings.OBSERVATION_CLASS](/settings): Defines class path to Observation class.
-[ValueName](/value-name): Enum (POS, SPEED, IMAGE, etc.) used as keys in Observation.data. Ensures consistency across action and observation spaces.
-[to_lerobot_format](/observations#to_lerobot_format): Enables compatibility with the LeRobot framework, which expects flat observation arrays for training and policy execution.
+[Observation](/observations): Observation class.
