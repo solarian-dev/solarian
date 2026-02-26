@@ -5,9 +5,12 @@ from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.utils import get_class, is_headless
-from solarian.core.configs import RecordConfig, ValueName
+from solarian.core.configs import RecordConfig
 from solarian.utils import log_say
 from solarian.core.dataset import Dataset
+from solarian.core.data import PosData, SpeedData, ImageData, BoundingBoxData
+from solarian.core import Observation
+from solarian.core import Action
 
 
 
@@ -37,31 +40,29 @@ class RecordCommand(BaseCommand):
         }
         num_cameras = 0
 
-        for module_name, module_obs in get_class(settings.OBSERVATION_CLASS).items():
-            for sensor_name, sensor_obs in module_obs.items():
-                for data_name, data_obs in sensor_obs.items():
-                    if data_name in [ValueName.POS, ValueName.SPEED, ValueName.BOUNDING_BOX]:
-                        features[data_spec.lerobot_group]["shape"] = tuple(a + b for a, b in zip(features[data_spec.lerobot_group]["shape"], data_spec.shape))
-                        features[data_spec.lerobot_group]["names"].extend(data_spec.lerobot_names)
-                    elif data_name in [ValueName.IMAGE, ValueName.DEPTH_IMAGE]:
-                        features[f"observation.images.{''.join(data_spec.lerobot_names)}"] = {
-                            "shape": self.cfg.video_res,
-                            "names": ["height", "width", "channels"],
-                            "info": None,
-                            "dtype": "video"
-                        }
-                        num_cameras += 1
-                    else:
-                        raise ValueError(f"Unknown data type: {data_name}")
+        for obs_name, obs in Observation.get_sensor_obs().items():
+            if obs.data_class in [PosData, SpeedData, BoundingBoxData]:
+                lerobot_group = settings.LEROBOT_GROUP_NAMES[obs_name]
+                features[lerobot_group]["shape"] = tuple(a + b for a, b in zip(features[lerobot_group]["shape"], obs.shape))
+                features[lerobot_group]["names"].append(obs_name)
+            elif obs.data_class == ImageData:
+                features[f"observation.images.{obs_name}"] = {
+                    "shape": self.cfg.video_res,
+                    "names": ["height", "width", "channels"],
+                    "info": None,
+                    "dtype": "video"
+                }
+                num_cameras += 1
+            else:
+                raise ValueError(f"Unknown data type: {obs_name}")
 
-        for module_name, module_data in get_class(settings.ACTION_CLASS).items():
-            for sensor_name, sensor_spec in module_data.items():
-                for data_name, data_spec in sensor_spec.items():
-                    if data_name in [ValueName.POS, ValueName.SPEED]:
-                        features[data_spec.lerobot_group]["shape"] = tuple(a + b for a, b in zip(features[data_spec.lerobot_group]["shape"], data_spec.shape))
-                        features[data_spec.lerobot_group]["names"].extend(data_spec.lerobot_names)
-                    else:
-                        raise ValueError(f"Unknown data type: {data_name}")
+        for module_name, actuator_name, data_name, data_spec in Action.items():
+            if type(data_spec) in [PosData, SpeedData]:
+                lerobot_group = settings.LEROBOT_GROUP_NAMES[module_name][actuator_name][data_name]
+                features[lerobot_group]["shape"] = tuple(a + b for a, b in zip(features[lerobot_group]["shape"], data_spec.shape))
+                features[lerobot_group]["names"].extend(".".join([module_name, actuator_name, data_name]))
+            else:
+                raise ValueError(f"Unknown data type: {data_name}")
         return features, num_cameras
 
 

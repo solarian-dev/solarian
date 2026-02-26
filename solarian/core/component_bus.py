@@ -1,8 +1,13 @@
-import abc
-from typing import Any, Dict
+from __future__ import annotations
 
-from solarian.core.component import Component
+import abc
+from typing import Any, Dict, Mapping, TYPE_CHECKING
+
 from solarian.core.data import Data
+from solarian.core.calibration import MotorCalibration
+
+if TYPE_CHECKING:
+    from solarian.core.component import Component
 
 class ComponentBus(abc.ABC):
     """
@@ -16,26 +21,9 @@ class ComponentBus(abc.ABC):
         - SensorBus: for sensor hardware (cameras, force sensors, etc.)
     """
 
-    def __init__(self, port: str, components: Dict[str, Component]):
+    def __init__(self, port: str, components: Mapping[str, Component], calibration=None):
         self.port = port
         self.components = components
-
-    @classmethod
-    def create(cls, port: str, components: Dict[str, Component], calibration=None) -> "ComponentBus":
-        """
-        Factory method to create a bus instance.
-
-        Override this in subclasses that need special construction logic.
-
-        Args:
-            port: The communication port (e.g., '/dev/ttyUSB0' or IP address)
-            components: Dict of component name to Component
-            calibration: Optional calibration data (used by ActuatorBus subclasses)
-
-        Returns:
-            An instance of the ComponentBus subclass
-        """
-        return cls(port=port, components=components)
 
     @property
     @abc.abstractmethod
@@ -56,6 +44,27 @@ class ComponentBus(abc.ABC):
     @abc.abstractmethod
     def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         """Read values from components on this bus."""
+        pass
+
+    @abc.abstractmethod
+    def write_calibration(self, calibration_dict: dict[str, MotorCalibration]) -> dict[str, MotorCalibration]:
+        """Write calibration parameters to the actuators and cache them.
+
+        Args:
+            calibration_dict (dict[str, MotorCalibration]): parameters per actuator
+
+        Returns:
+            dict[str, MotorCalibration]: parameters per actuator, it might bound the ranges of motion
+        """
+        pass
+
+    @abc.abstractmethod
+    def start_calibration_mode(self):
+        """Sets the actuators where the arm can be moved manually freely"""
+        pass
+
+    @abc.abstractmethod
+    def end_calibration_mode(self):
         pass
 
     def write(self, values: Dict[str, Data], normalize: bool = True):

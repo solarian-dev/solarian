@@ -44,14 +44,17 @@ class SensorField:
 
     @property
     def data_name(self):
+        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
         return self.source.path[2]
 
     @property
     def sensor_name(self):
+        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
         return self.source.path[1]
 
     @property
     def module_name(self):
+        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
         return self.source.path[0]
 
 

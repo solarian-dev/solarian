@@ -37,7 +37,7 @@ def action_handler(action_type: int):
         action_type: The action type value (from BaseAction or custom enum)
     """
     def decorator(method: Callable) -> Callable:
-        method._handles_action = action_type
+        setattr(method, '_handles_action', action_type)
         return method
     return decorator
 
@@ -81,14 +81,17 @@ class ActuatorField:
 
     @property
     def data_name(self):
+        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
         return self.source.path[2]
 
     @property
     def actuator_name(self):
+        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
         return self.source.path[1]
 
     @property
     def module_name(self):
+        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
         return self.source.path[0]
 
     
@@ -221,7 +224,7 @@ class ModuleAction:
         return all(v is None for v in self.data.values())
 
     def to_dict(self):
-        return {'data': self.data, 'action_type': self.action_type.value}
+        return {'data': self.data, 'action_type': self.action_type}
 
     # -- Compression -------------------------------------------------------
 

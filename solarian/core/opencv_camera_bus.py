@@ -1,4 +1,6 @@
-from typing import Any, Dict
+from __future__ import annotations
+
+from typing import Any, Dict, TYPE_CHECKING
 from enum import Enum
 
 import cv2
@@ -6,7 +8,11 @@ import numpy as np
 
 from solarian.core.sensor_bus import SensorBus
 from solarian.core.component import Component
+from solarian.core.configs import CameraConfig
 from solarian.core.data import Data, ImageData
+
+if TYPE_CHECKING:
+    from solarian.core.opencv_camera import OpenCVCamera
 
 
 BACKEND = {
@@ -36,9 +42,10 @@ class OpenCVCameraBus(SensorBus):
     has its own device), this bus manages a single camera per instance.
     """
 
-    def __init__(self, port: str, components: Dict[str, Component]):
-        super().__init__(port, components)
+    def __init__(self, port: str, components: Dict[str, OpenCVCamera], calibration=None):
+        super().__init__(port, components, calibration)
         self.capture = None
+        self.components = components
 
     @property
     def is_connected(self) -> bool:
@@ -46,6 +53,7 @@ class OpenCVCameraBus(SensorBus):
 
     def connect(self):
         cfg = next(iter(self.components.values())).cfg
+        assert isinstance(cfg, CameraConfig)
 
         if isinstance(self.port, str) and self.port.startswith('/dev/'):
             port = self.port
@@ -53,7 +61,7 @@ class OpenCVCameraBus(SensorBus):
             port = int(self.port)
 
         self.capture = cv2.VideoCapture(port, BACKEND)
-        self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*cfg.video_format))
+        self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*cfg.video_format))
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(cfg.width))
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(cfg.height))
         self.capture.set(cv2.CAP_PROP_FPS, float(cfg.fps))
@@ -83,14 +91,20 @@ class OpenCVCameraBus(SensorBus):
         if not issubclass(data_type, ImageData):
             raise ValueError(f"OpenCVCameraBus only supports ImageData, got {data_type}")
 
+        if self.capture is None:
+            raise RuntimeError("Camera not connected")
+
         ret, frame = self.capture.read()
         if not ret:
             raise ValueError("Could not read frame from camera")
 
         if isinstance(frame, bytes):
             frame = cv2.imdecode(np.frombuffer(frame, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if frame is None:
+                raise ValueError("Could not decode frame from camera")
 
         cfg = next(iter(self.components.values())).cfg
+        assert isinstance(cfg, CameraConfig)
         processed = frame
 
         if cfg.color_mode == ColorMode.RGB.value:
@@ -103,7 +117,7 @@ class OpenCVCameraBus(SensorBus):
         elif cfg.rotation == Rotation.ROTATE_270.value:
             processed = cv2.rotate(processed, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-        if cfg.resize_width is not None or cfg.resize_height is not None:
+        if cfg.resize_width is not None and cfg.resize_height is not None:
             if processed.shape[0] != cfg.resize_height or processed.shape[1] != cfg.resize_width:
                 processed = cv2.resize(processed, (cfg.resize_width, cfg.resize_height), interpolation=cv2.INTER_AREA)
 

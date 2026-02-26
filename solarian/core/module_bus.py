@@ -4,7 +4,7 @@ import time
 
 from solarian.core.component import Component
 from solarian.core.component_bus import ComponentBus
-from solarian.core.configs import ValueName
+from solarian.core.data import Data
 from solarian.utils import manual_profile
 
 
@@ -24,6 +24,8 @@ class ModuleBus():
     def add_components(self, components: Dict[str, Component]):
         for name, component in components.items():
             self.components.append(component)
+            if component.cfg is None:
+                continue
             if component.cfg.port not in self.components_by_port:
                 self.components_by_port[component.cfg.port] = {}
             self.components_by_port[component.cfg.port][name] = component
@@ -37,7 +39,7 @@ class ModuleBus():
             # Get the bus class directly from the component class
             bus_class = first_component.bus_class
             # Create the bus instance
-            self.component_bus_by_port[port] = bus_class.create(port=port, components=components, calibration=calibration.get(port, None))
+            self.component_bus_by_port[port] = bus_class(port=port, components=components, calibration=calibration.get(port, None))
 
             try:
                 print(f"Connecting {self.component_bus_by_port[port]} on port", port)
@@ -54,55 +56,55 @@ class ModuleBus():
                 continue
             bus.disconnect()
 
-    def write(self, data_name: str, values: Dict[str, Any], normalize: bool = True):
+    def write(self, values: Dict[str, Data], normalize: bool = True):
         """Write values to components."""
         for port, component_bus in self.component_bus_by_port.items():
             # group component writes by port
             values_bus = {name: value for name, value in values.items() if name in self.components_by_port[port]}
             if values_bus:
-                component_bus.write(data_name, values_bus, normalize=normalize)
+                component_bus.write(values_bus, normalize)
     
-    def read(self, data_name: str, component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
+    def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         """Read values from components."""
         result = {}
         for port, component_bus in self.component_bus_by_port.items():
             # group component reads by port
             names_bus = [name for name in component_names if name in self.components_by_port[port]]
             if names_bus:
-                data = component_bus.read(data_name, names_bus, normalize=normalize)
+                data = component_bus.read(data_type, names_bus, normalize=normalize)
                 result.update(data)
         return result
 
-    def write_pos(self, values: Dict[str, Any]):
-        """Write a value to the actuator group."""
-        self.write(ValueName.POS, values)
+    # def write_pos(self, values: Dict[str, Any]):
+    #     """Write a value to the actuator group."""
+    #     self.write(ValueName.POS, values)
 
-    def write_speed(self, values: Dict[str, Any]):
-        """Write a value to the actuator group."""
-        self.write(ValueName.SPEED, values)
+    # def write_speed(self, values: Dict[str, Any]):
+    #     """Write a value to the actuator group."""
+    #     self.write(ValueName.SPEED, values)
 
-    def read_pos(self, component_names: list[str]):
-        """Read a value from the actuator group."""
-        return self.read(ValueName.POS, component_names)
+    # def read_pos(self, component_names: list[str]):
+    #     """Read a value from the actuator group."""
+    #     return self.read(ValueName.POS, component_names)
 
-    def read_speed(self, component_names: list[str]):
-        """Read a value from the actuator group."""
-        return self.read(ValueName.SPEED, component_names)
+    # def read_speed(self, component_names: list[str]):
+    #     """Read a value from the actuator group."""
+    #     return self.read(ValueName.SPEED, component_names)
 
-    def enable_torque(self, component_names: list[str]):
-        """Enable torque for the actuator."""
-        self.write(ValueName.TORQUE_ENABLE, {name: TorqueMode.ENABLED for name in component_names})
+    # def enable_torque(self, component_names: list[str]):
+    #     """Enable torque for the actuator."""
+    #     self.write(ValueName.TORQUE_ENABLE, {name: TorqueMode.ENABLED for name in component_names})
         
-    def disable_torque(self, component_names: list[str]):
-        """Disable torque for the actuator."""
-        self.write(ValueName.TORQUE_ENABLE, {name: TorqueMode.DISABLED for name in component_names})
+    # def disable_torque(self, component_names: list[str]):
+    #     """Disable torque for the actuator."""
+    #     self.write(ValueName.TORQUE_ENABLE, {name: TorqueMode.DISABLED for name in component_names})
         
     # TODO, remove hardcoded strings
-    def set_velocity_mode(self, component_names: list[str]):
-        self.write("Operating_Mode", {name: 1 for name in component_names})
+    # def set_velocity_mode(self, component_names: list[str]):
+    #     self.write("Operating_Mode", {name: 1 for name in component_names})
 
-    def set_position_mode(self, component_names: list[str]):
-        self.write("Operating_Mode", {name: 0 for name in component_names})
+    # def set_position_mode(self, component_names: list[str]):
+    #     self.write("Operating_Mode", {name: 0 for name in component_names})
         
     def is_calibrated(self) -> bool:
         for component_bus in self.component_bus_by_port.values():

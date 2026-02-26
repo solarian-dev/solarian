@@ -1,6 +1,7 @@
 from abc import ABC
 from solarian.core.configs import ComponentConfig
 from solarian.core.data import Data
+from solarian.core.component_bus import ComponentBus
 
 
 class Component(ABC):
@@ -25,6 +26,8 @@ class Component(ABC):
     @classmethod
     def data_types(cls):
         return {name: type(getattr(cls, name)) for name in cls.data_names()}
+
+    bus_class: type[ComponentBus]
 
     @property
     def data_points(self):

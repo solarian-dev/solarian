@@ -86,12 +86,12 @@ class Robot(ABC):
             Robot._instance = super().__new__(cls)
         return Robot._instance
 
-    @classmethod
-    def items(cls):
-        for module_name in cls.module_names():
-            for actuator_name in cls[module_name].actuator_names():
-                for data_name in cls[module_name][actuator_name].data_names():
-                    yield module_name, actuator_name, data_name, cls[module_name][actuator_name][data_name]
+    # @classmethod
+    # def items(cls):
+    #     for module_name in cls.module_names():
+    #         for actuator_name in cls[module_name].actuator_names():
+    #             for data_name in cls[module_name][actuator_name].data_names():
+    #                 yield module_name, actuator_name, data_name, cls[module_name][actuator_name][data_name]
             
 
     """Base class with common robot functionality"""
@@ -160,7 +160,7 @@ class Robot(ABC):
                 # create module's action queue
                 self.action_queues[name] = ActionQueue(
                     shm_manager=self.shm_manager,
-                    example_action=example_action,
+                    example_action=example_action[name],
                     buffer_size=1024,
                 )
                 # create module
@@ -259,6 +259,8 @@ class Robot(ABC):
                     
                     if isinstance(data, ImageData):
                         img = data.value
+                        if img is None:
+                            continue
                         encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.cfg.img_compression_quality]
                         encoded_img = cv2.imencode('.jpeg', img, encode_params)[1].tobytes()
                         raw_obs[module_name][sensor_name][data_name] = encoded_img

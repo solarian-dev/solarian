@@ -13,7 +13,7 @@ from multiprocessing.managers import SharedMemoryManager
 import numpy as np
 
 from solarian.utils.shared_memory.shared_memory_queue import SharedMemoryQueue, Empty, Full
-from solarian.core.action import Action
+from solarian.core.action import Action, ModuleAction
 
 
 def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
@@ -106,13 +106,14 @@ class ActionQueue:
     def __init__(
         self,
         shm_manager: SharedMemoryManager,
-        example_action,  # Action instance
+        example_action: ModuleAction,  # Action instance
         buffer_size: int
     ):
         self.buffer_size = buffer_size
         
         # Convert example action to flattened dict to define schema
-        example_dict = self._action_to_flat_dict(example_action)
+        # example_dict = self._action_to_flat_dict(example_action)
+        example_dict = example_action.to_dict()
         
         # Create underlying SharedMemoryQueue with the flattened schema
         self._queue = SharedMemoryQueue.create_from_examples(
@@ -122,7 +123,7 @@ class ActionQueue:
         )
         
         # Store the Action class for reconstruction
-        self._action_class = type(example_action)
+        self._module_action_class = type(example_action)
     
     @classmethod
     def create_from_example(
@@ -144,17 +145,19 @@ class ActionQueue:
         """
         return cls(shm_manager, example_action, buffer_size)
     
-    def _action_to_flat_dict(self, action: Action) -> Dict[str, Union[np.ndarray, numbers.Number]]:
+    def _action_to_flat_dict(self, action: ModuleAction) -> Dict[str, Union[np.ndarray, numbers.Number]]:
         """Convert an Action to a flattened dictionary."""
         if action is None:
             return {}
-        action_dict = action.data
+        # action_dict = action.data
+        action_dict = action.to_dict()
         return flatten_dict(action_dict)
     
-    def _flat_dict_to_action(self, flat_dict: Dict[str, Any]) -> Action:
-        """Convert a flattened dictionary back to an Action."""
-        nested_dict = unflatten_dict(flat_dict)
-        return self._action_class(nested_dict)
+    def _flat_dict_to_action(self, flat_dict: Dict[str, Any]) -> ModuleAction:
+        """Convert a flattened dictionary back to an ModuleAction."""
+        # nested_dict = unflatten_dict(flat_dict)
+        # return self._action_class(nested_dict)
+        return self._module_action_class(action_type=flat_dict['action_type'], data=flat_dict['data'])
     
     def qsize(self) -> int:
         """Return the approximate number of actions in the queue."""
@@ -168,12 +171,12 @@ class ActionQueue:
         """Clear all actions from the queue."""
         self._queue.clear()
     
-    def put(self, action: Action) -> None:
+    def put(self, action: ModuleAction) -> None:
         """
         Put an action into the queue.
         
         Args:
-            action: An Action instance to enqueue
+            action: An ModuleAction instance to enqueue
             
         Raises:
             Full: If the queue is full
@@ -181,19 +184,19 @@ class ActionQueue:
         """
         self._queue.put(self._action_to_flat_dict(action))
     
-    def get(self) -> Action:
+    def get(self) -> ModuleAction:
         """
         Get an action from the queue.
         
         Returns:
-            The next Action in the queue
+            The next ModuleAction in the queue
             
         Raises:
             Empty: If the queue is empty
         """
         return self._flat_dict_to_action(self._queue.get())
     
-    def get_k(self, k: int) -> List[Action]:
+    def get_k(self, k: int) -> List[ModuleAction]:
         """
         Get up to k actions from the queue.
         
@@ -201,7 +204,7 @@ class ActionQueue:
             k: Maximum number of actions to retrieve
             
         Returns:
-            List of Action instances
+            List of ModuleAction instances
             
         Raises:
             Empty: If the queue is empty
@@ -223,14 +226,14 @@ class ActionQueue:
         Get all actions from the queue.
         
         Returns:
-            List of all Action instances in the queue
+            List of all ModuleAction instances in the queue
             
         Raises:
             Empty: If the queue is empty
         """
         flat_results = self._queue.get_all()
         
-        # Convert each row back to an Action
+        # Convert each row back to an ModuleAction
         actions = []
         n_items = len(flat_results[next(iter(flat_results))])
         

@@ -39,7 +39,8 @@ class InterpolatorType(str, Enum):
 
 
 class ComponentConfig(BaseModel):
-    port: str | int
+    id: int = 0
+    port: str
     configs: dict[str, Any] = {}
 
 class SensorConfig(ComponentConfig):
@@ -65,7 +66,6 @@ class CameraConfig(SensorConfig):
     resize_height: int | None
 
 class ActuatorConfig(ComponentConfig):
-    id: int
     model: str
     # TODO validate mode string value
     mode: str
@@ -88,11 +88,12 @@ class ModuleConfig(BaseModel):
 
     receive_latency: float = 0.0  # latency in seconds for receiving data from sensors
     
-    # calibration_file: str | None = None
+    calibration_file: str | None = None
     # gripper_open_degree: Optional[float] = 30
+    
     # # Interpolator settings
-    # interpolator_type: InterpolatorType = InterpolatorType.JOINT
-    # max_speed: float | list[float] = 1.0  # max speed for interpolation (single or per-joint)
+    interpolator_type: InterpolatorType = InterpolatorType.JOINT
+    max_speed: float | list[float] = 1.0  # max speed for interpolation (single or per-joint)
 
 class ConnectionConfig(BaseModel):
     connection_id: str = "connection_1"
@@ -219,7 +220,7 @@ class PrecisionConfig(ConfigBaseModel):
     growth_factor: float = 2.0
 
 class TrainOptimizerConfig(ConfigBaseModel):
-    type: Literal['adam', 'adamw'] = 'adamw'    
+    pass
 
 class AdamOptimizerConfig(TrainOptimizerConfig):
     type: Literal['adam'] = 'adam'
@@ -265,8 +266,8 @@ class TrainConfig(ConfigBaseModel):
     optimizer: Union[AdamOptimizerConfig, AdamWOptimizerConfig] = Field(discriminator="type")
     scheduler: SchedulerConfig
     precision: PrecisionConfig
-    logger: Union[WandBLoggerConfig] = Field(discriminator="type")
-    model: Union[ACTConfig] = Field(discriminator="type")
+    logger: TrainLoggerConfig = Field(discriminator="type")
+    model: ModelConfig = Field(discriminator="type")
     
     @model_validator(mode='after')
     def validate_policy_path_when_resuming(cls, values) -> 'TrainConfig':

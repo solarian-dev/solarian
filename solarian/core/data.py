@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Optional, Tuple, Type
+from typing import Any, Optional, Tuple, Type, TYPE_CHECKING
 from enum import Enum
 import numpy as np
 from pydantic import BaseModel, ConfigDict, model_validator, Field
@@ -40,7 +40,7 @@ class Data(BaseModel):
 
     # Internal storage; serialized/deserialized under key "value"
     payload: Any | None = Field(default=None, alias="value")
-    
+    name: str | None = None
     # -----------------------
     # Public API
     # -----------------------
@@ -159,6 +159,12 @@ class Data(BaseModel):
 class PosData(Data):
     dtype: Type = int
     payload: int = Field(default=0, alias="value")
+
+    if TYPE_CHECKING:
+        @property
+        def value(self) -> int: ...
+        @value.setter
+        def value(self, v: Any | None) -> None: ...
 
 
 class SpeedData(Data):
