@@ -30,7 +30,6 @@ class Data(BaseModel):
     )
 
     dtype: Type = int
-    computer: "DataComputer" = Field(default_factory=lambda: DataComputer.ROBOT)
     shape: Tuple[int, ...] | None = None
     path: tuple[str, str, str] | None = None
     timestamp: float = Field(default_factory=time.time)

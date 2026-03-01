@@ -9,7 +9,7 @@ import math
 import platform
 import sys
 from typing import Any, Dict
-
+from solarian.core.data import Data, PosData
 try:
     import rtde_control
     import rtde_receive
@@ -24,7 +24,7 @@ except ImportError as e:
     raise
 
 from solarian.core.actuator_bus import ActuatorBus
-from solarian.core.component import Component
+from solarian.core.actuator import Actuator
 
 
 KP = 2.0                             # proportional gain [1/s]; tune 1.0–4.0
@@ -73,50 +73,31 @@ class UR5Bus(ActuatorBus):
     Automatically used when UR5JointActuator or UR5CartesianActuator are defined in a module.
     """
     
-    def __init__(self, port: str, components: Dict[str, Component], calibration: Dict[str, Any], joint_names2ids: Dict[str, int], cartesian_names2ids: Dict[str, int]):
+    def __init__(self, port: str, components: Dict[str, Actuator], calibration: Dict[str, Any] | None = None):
         super().__init__(port, components, calibration)
-        
-        self.joint_names2ids = joint_names2ids
-        self.cartesian_names2ids = cartesian_names2ids
-        self.connected = False
-    
-    @classmethod
-    def create(cls, port: str, components: Dict[str, Component], calibration: Dict[str, Any]) -> "UR5Bus":
-        """
-        Factory method that extracts joint and cartesian mappings from components.
-        
-        Uses the actuator class type to distinguish between joint and cartesian actuators.
-        Falls back to checking class name for YAML-loaded components.
-        """
+
         from solarian_ur5.actuator import UR5JointActuator, UR5CartesianActuator
-        
-        joint_names2ids = {}
-        cartesian_names2ids = {}
-        
+
+        self.joint_names2ids: Dict[str, int] = {}
+        self.cartesian_names2ids: Dict[str, int] = {}
+
         for name, component in components.items():
-            # Check if it's a UR5JointActuator instance or class
+            if component.cfg is None:
+                raise ValueError(f"Component {name} has no configuration")
             if isinstance(component, UR5JointActuator):
-                joint_names2ids[name] = component.cfg.id
+                self.joint_names2ids[name] = component.cfg.id
             elif isinstance(component, UR5CartesianActuator):
-                cartesian_names2ids[name] = component.cfg.id
+                self.cartesian_names2ids[name] = component.cfg.id
             else:
-                # Fallback: check class name (for YAML-loaded components)
                 class_name = component.__class__.__name__
                 if class_name == 'UR5JointActuator':
-                    joint_names2ids[name] = component.cfg.id
+                    self.joint_names2ids[name] = component.cfg.id
                 elif class_name == 'UR5CartesianActuator':
-                    cartesian_names2ids[name] = component.cfg.id
-                # If neither, assume joint by default (backward compatibility)
+                    self.cartesian_names2ids[name] = component.cfg.id
                 elif hasattr(component, 'cfg') and hasattr(component.cfg, 'id'):
-                    joint_names2ids[name] = component.cfg.id
-        
-        return cls(
-            port=port,
-            components=components,
-            calibration=calibration,
-            joint_names2ids=joint_names2ids,
-            cartesian_names2ids=cartesian_names2ids
-        )
+                    self.joint_names2ids[name] = component.cfg.id
+
+        self.connected = False
 
     @property
     def is_connected(self) -> bool:
@@ -155,15 +136,20 @@ class UR5Bus(ActuatorBus):
 
         return values
 
-    def write(self, data_name: str, values: Dict[str, Any], normalize: bool = True):
+    def write(self, values: Dict[str, Data], normalize: bool = True):
+        raw_values: dict[str, int] = {}
+        for name, value in values.items():
+            if not isinstance(value, PosData):
+                raise ValueError(f"Value {value} must be a PosData, got {type(value)}")
+            raw_values[name] = value.value
         if normalize:
-            values = self._unnormalize(values)
+            raw_values = self._unnormalize(raw_values)
             
         # first joint values
-        names = [name for name in values.keys() if name in self.joint_names2ids.keys()]
+        names = [name for name in raw_values.keys() if name in self.joint_names2ids.keys()]
         if names:
             q_now = self.rtde_r.getActualQ()
-            q_target = [clamp_joint_value(values[name], j) if name in values else q_now[j] for name, j in self.joint_names2ids.items()]
+            q_target = [clamp_joint_value(raw_values[name], j) if name in raw_values else q_now[j] for name, j in self.joint_names2ids.items()]
             
             try:
                 self.rtde_c.servoJ(q_target,
@@ -178,10 +164,10 @@ class UR5Bus(ActuatorBus):
                 print(e)
         
         # then with cartesian values
-        names = [name for name in values.keys() if name in self.cartesian_names2ids.keys()]
+        names = [name for name in raw_values.keys() if name in self.cartesian_names2ids.keys()]
         if names:
             cartesian_values = self.rtde_r.getActualTCPPose()
-            for name, value in values.items():
+            for name, value in raw_values.items():
                 if name in self.cartesian_names2ids:
                     cartesian_values[self.cartesian_names2ids[name]] = value
             try:
@@ -209,10 +195,11 @@ class UR5Bus(ActuatorBus):
     def end_calibration_mode(self):
         self.rtde_c.endFreedriveMode()
 
-    def set_half_turn_homings(self, actuator_names: list[str]):
+
+    def set_half_turn_homings(self, actuator_names: list[str]) -> Dict[str, int]:
         self.reset_calibration(actuator_names)
         half_turn_homings = {}
-        actual_positions = self.read("Present_Position", actuator_names, normalize=False)
+        actual_positions = self.read(PosData, actuator_names, normalize=False)
         for name, pos in actual_positions.items():
             if name not in self.calibration:
                 self.calibration[name] = {}

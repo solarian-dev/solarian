@@ -1,5 +1,4 @@
 import numpy as np
-from typing import Callable
 from .data import Data, ImageData, DataComputer
 
 
@@ -13,7 +12,7 @@ class SensorField:
 
     The reference is a ``Data`` instance from the robot tree, e.g.
     ``MySolarianRobot.arm.elbow_flex.pos``.  It carries schema information
-    (dtype, shape, computer) and is used at runtime to wrap raw values.
+    (dtype, shape) and is used at runtime to wrap raw values.
 
     Supports attribute access to create ``FieldRef`` for ``CalculatedField``
     ``depends_on`` declarations.
@@ -29,10 +28,6 @@ class SensorField:
     @property
     def shape(self):
         return self.source.shape
-
-    @property
-    def computer(self):
-        return self.source.computer
 
     @property
     def value(self):
@@ -60,19 +55,53 @@ class SensorField:
 
 class CalculatedField:
     """
-    Computed observation field with declared dependencies and a processor.
+    Schema declaration for a computed observation field.
 
-    Has the same schema attributes as ``Data`` (``dtype``, ``shape``,
-    ``computer``) so the observation schema is self-describing.
+    Declares *what* to compute (Processor subclass), *where* it runs
+    (computer), and *what* it depends on (inputs).
+
+    ``processor`` must be a ``Processor`` subclass (the class, not an
+    instance).  The component that owns the computation instantiates it
+    via ``create_processors()``, passing ``inputs``, ``output``, and
+    ``conf``::
+
+        bbox = CalculatedField(
+            inputs=[MyRobot.camera.sensor.rgb_image],
+            processor=BBoxProcessor,
+            computer=DataComputer.SERVER,
+            output=BoundingBoxData(),
+            conf='conf/bbox.yaml',
+        )
     """
 
-    def __init__(self, *, inputs: list[SensorField], processor: Callable, output: Data):
-        self.depends_on = inputs
+    def __init__(self, *, inputs: list[Data], computer: DataComputer,
+                 processor: type, output: Data, conf: str | None = None):
+        self.inputs = inputs
         self.processor = processor
         self.output = output
+        self.conf = conf
+        self._computer = computer
 
-    def compute(self, **inputs):
-        return self.processor(**inputs)
+    @property
+    def dtype(self):
+        return self.output.dtype
+
+    @property
+    def shape(self):
+        return self.output.shape
+
+    @property
+    def computer(self):
+        return self._computer
+
+    @property
+    def value(self):
+        return self.output.value
+
+    @property
+    def data_class(self):
+        return self.output.__class__
+        
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +200,9 @@ class ModuleObs:
     def __getitem__(self, name):
         return self._fields[name]
 
+    def __setitem__(self, name, value):
+        self._fields[name] = value
+
     @classmethod
     def __class_getitem__(cls, item):
         cls = cls._resolve_class()
@@ -212,6 +244,29 @@ class ModuleObs:
         self.is_compressed = False
 
 
+    @classmethod
+    def create_processors(cls, computer: DataComputer) -> dict:
+        """Instantiate processors for all CalculatedFields matching *computer*.
+
+        Each processor class declared in a ``CalculatedField`` is
+        instantiated with the field's ``inputs``, ``output``, and
+        ``conf``.
+
+        Returns:
+            ``{field_name: Processor instance}``
+        """
+        result = {}
+        for field_name, cf in cls.get_calculated_fields_spec().items():
+            if cf.computer != computer:
+                continue
+            result[field_name] = cf.processor(
+                inputs=cf.inputs,
+                output=cf.output,
+                conf=cf.conf,
+            )
+        return result
+
+
 # ---------------------------------------------------------------------------
 # Observation
 # ---------------------------------------------------------------------------
@@ -237,6 +292,29 @@ class Observation:
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         Observation._active_subclass = cls
+        cls._validate_module_obs_keys()
+
+    @classmethod
+    def _validate_module_obs_keys(cls):
+        """Verify that each ModuleObs attribute name matches the Robot module
+        name referenced by its SensorFields.  Raises ``TypeError`` at
+        class-definition time when there is a mismatch."""
+        for attr_name, attr_value in cls.__dict__.items():
+            if not isinstance(attr_value, ModuleObs):
+                continue
+
+            module_obs_cls = type(attr_value)
+            for field_name, sf in module_obs_cls.get_sensor_fields_spec().items():
+                if sf.source.path is None:
+                    continue
+                if sf.module_name != attr_name:
+                    raise TypeError(
+                        f"{cls.__name__}.{attr_name}: SensorField '{field_name}' "
+                        f"references module '{sf.module_name}', but the Observation "
+                        f"attribute is named '{attr_name}'. Observation attribute "
+                        f"names must match the module names declared on the Robot "
+                        f"subclass."
+                    )
 
     @classmethod
     def _resolve_class(cls):
@@ -292,7 +370,12 @@ class Observation:
         return object.__getattribute__(self, name)
 
     def __getitem__(self, name):
-        return self._module_obs[name] 
+        return self._module_obs[name]
+
+
+    def items(self):
+        return self._module_obs.items()
+
 
     @classmethod
     def __class_getitem__(cls, item):
@@ -329,3 +412,20 @@ class Observation:
             module_obs.uncompress()
         self.is_compressed = False
         
+
+    @classmethod
+    def create_processors(cls, computer: DataComputer) -> dict:
+        """Instantiate processors for all CalculatedFields matching *computer*.
+
+        Walks every ``ModuleObs`` and delegates to
+        ``ModuleObs.create_processors()``.
+
+        Returns:
+            ``{(module_name, field_name): Processor instance}``
+        """
+        cls = cls._resolve_class()
+        result = {}
+        for module_name, module_obs in cls.get_module_obs_spec().items():
+            for field_name, proc in type(module_obs).create_processors(computer).items():
+                result[(module_name, field_name)] = proc
+        return result

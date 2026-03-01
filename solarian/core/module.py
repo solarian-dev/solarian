@@ -11,14 +11,14 @@ from solarian.core.calibration import MotorCalibration
 
 from solarian.core.joint import Joint
 from solarian.core.actuator import Actuator
+from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.sensor import Sensor
 from solarian.core.servo import Servo
 from solarian.core.module_bus import ModuleBus
 from solarian.core.action import Action, ActionType, action_handler, ModuleAction
 from solarian.core.configs import ModuleConfig, InterpolatorType
-from solarian.core.observation import ModuleObs
-from solarian.core.configs import ValueName
-from solarian.core.data import DataComputer
+from solarian.core.observation import Observation, ModuleObs
+from solarian.core.data import DataComputer, TimestampData
 from solarian.utils import manual_profile, profile
 from solarian.utils.shared_memory.shared_memory_queue import Empty
 from solarian.utils.shared_memory.action_queue import ActionQueue
@@ -33,7 +33,7 @@ from solarian.utils.precise_sleep import precise_wait
 from solarian.utils import get_class
 
 # TODO: remove speed from calibration required
-CALIBRATION_REQUIRED = [ValueName.POS]
+# CALIBRATION_REQUIRED = [ValueName.POS]
 
 
 class Module(Process):
@@ -76,7 +76,50 @@ class Module(Process):
     #                 f"got {type(value)}"
     #             )
       
-    def __init__(self, cfg: ModuleConfig | None = None, name: str | None = None, component_bus: ModuleBus | None = None, observation_queue: ObservationQueue | None = None, action_queue: ActionQueue | None = None):
+    @classmethod
+    def actuator_names(cls):
+        return [name for name in cls.__dict__ if isinstance(getattr(cls, name), Actuator)]
+    
+    @classmethod
+    def sensor_names(cls):
+        return [name for name in cls.__dict__ if isinstance(getattr(cls, name), Sensor)]
+
+    @classmethod
+    def validate_obs(cls, data: dict):
+        for sensor_name, sensor_data in data.items():
+            if sensor_name == 'timestamp':
+                continue
+            if sensor_name not in cls.sensor_names():
+                raise ValueError(f"Invalid sensor name: '{sensor_name}' for module '{cls.__name__}'")
+            sensor = getattr(cls, sensor_name)
+            sensor.validate_obs(sensor_data)
+
+    @classmethod
+    def validate_act(cls, data: dict):
+        for actuator_name, actuator_data in data.items():
+            if actuator_name == 'target_time':
+                continue
+            if actuator_name not in cls.actuator_names():
+                raise ValueError(f"Invalid actuator name: '{actuator_name}' for module '{cls.__name__}'")
+            actuator = getattr(cls, actuator_name)
+            actuator.validate_act(actuator_data)
+
+    @classmethod
+    def __class_getitem__(cls, item):
+        return getattr(cls, item)
+
+    def __getitem__(self, item):
+        return getattr(self, item)
+
+    def __set_name__(self, owner, name):
+        self.name = name
+    
+    def __get__(self, instance, owner):
+        object.__setattr__(self, 'parent', owner)
+        return self    
+
+
+    def __init__(self, cfg: ModuleConfig | None = None, name: str | None = None, module_bus: ModuleBus | None = None, observation_queue: ObservationQueue | None = None, action_queue: ActionQueue | None = None):
         super().__init__()
 
         if cfg is None:
@@ -84,7 +127,7 @@ class Module(Process):
 
         self.cfg = cfg
         self.name = name if name is not None else self.__class__.__name__
-        self.component_bus = component_bus
+        
         self.observation_queue = observation_queue
         self.action_queue = action_queue
 
@@ -93,10 +136,8 @@ class Module(Process):
         for attr_name in dir(self):
             method = getattr(type(self), attr_name, None)
             if callable(method) and hasattr(method, '_handles_action'):
-                self.action_handlers[method._handles_action] = attr_name
+                self.action_handlers[getattr(method, '_handles_action')] = attr_name
 
-        # self.bodies: Dict[str, Body] = {}
-        # self.joints: Dict[str, Joint] = {}
         self.verbose = True
         
         # Runtime state for the control loop
@@ -135,13 +176,24 @@ class Module(Process):
                 self.sensors[name] = sensor_class(self.cfg.sensors[name])
                 setattr(self, name, self.sensors[name])
 
-        # add actuators to component bus
-        self.component_bus.add_components(self.actuators)
-        # add sensors to component bus
-        self.component_bus.add_components(self.sensors)
+
+        if module_bus is None:
+            self.module_bus = ModuleBus()
+        else:
+            self.module_bus = module_bus
+            self.module_bus.add_components(self.actuators)
+            self.module_bus.add_components(self.sensors)
+
+        module_obs_spec = Observation.get_module_obs_spec()
+        if self.name in module_obs_spec:
+            module_obs_cls = module_obs_spec[self.name].__class__
+            self._robot_processors = module_obs_cls.create_processors(DataComputer.ROBOT)
+        else:
+            self._robot_processors = {}
+
 
         
-    def get_calibration(self) -> dict:
+    def get_calibration(self) -> dict | None:
         "returns calibrations grouped by port"
         if self.calibration is None:
             return self.calibration
@@ -154,13 +206,13 @@ class Module(Process):
             calibration[port][actuator_name] = self.calibration[actuator_name]
         return calibration
             
-    def get_sensors(self) -> Dict[str, Sensor]:
-        """Get all sensors in the module."""
-        return self.sensors
+    # def sensors(self) -> tuple[str, Sensor]:
+    #     """Get all sensors in the module."""
+    #     return self.sensors
 
-    def get_actuators(self) -> Dict[str, Actuator]:
-        """Get all actuators in the module."""
-        return self.actuators
+    # def actuators(self) -> Dict[str, Actuator]:
+    #     """Get all actuators in the module."""
+    #     return self.actuators.items()
 
     def get_actuator_models(self) -> List[str]:
         """Get all actuator models in the module."""
@@ -170,12 +222,16 @@ class Module(Process):
         """Get all actuator names in the module."""
         return list(self.actuators.keys())
 
-    def read_sensors(self, data_name: str, component_names: list[str] | None = None, normalize: bool = True) -> Dict[str, Any]:
+    def read_sensors(self, data_type: type, component_names: list[str] | None = None, normalize: bool = True) -> Dict[str, Any]:
         """Read calibrated values from the actuators."""
+        
         if component_names is None:
             component_names = list(self.sensors.keys())
 
-        values_dict = self.component_bus.read(data_name, component_names, normalize)
+        if self.module_bus is None:
+            return {}
+
+        values_dict = self.module_bus.read(data_type, component_names, normalize)
         values = values_dict.values()
         # Perform calibration transformations if required
         # if data_name in CALIBRATION_REQUIRED and self.calibrator is not None:
@@ -183,15 +239,17 @@ class Module(Process):
         #     values = self.calibrator.avoid_rotation_reset(values, component_names, data_name)
         #     values = self.calibrator.apply_calibration_autocorrect(values, component_names).tolist()
 
-        return {name: {data_name: value} for name, value in zip(component_names, values)}
+        return {name: value for name, value in zip(component_names, values)}
 
     def connect_sensors(self):
         for sensor in self.sensors.values():
             sensor.connect()
 
-    def read_actuators_np(self, data_name: str, component_names: list[str] | None = None) -> np.ndarray:
-        """Read raw values from the actuators."""
-        return np.array(list(self.component_bus.read(data_name, component_names).values()))
+    # def read_actuators_np(self, data_type: type, component_names: list[str] | None = None) -> np.ndarray:
+    #     """Read raw values from the actuators."""
+    #     if self.module_bus is None:
+    #         return np.array([])
+    #     return np.array(list(self.module_bus.read(data_type, component_names).values()))
     
     def write_actuators(self, data_name: str, data: int | float | Dict[str, Any], normalize: bool = True):
         """Write calibrated values to the actuators."""
@@ -207,39 +265,7 @@ class Module(Process):
         #     values = self.calibrator.revert_calibration(values, component_names)
 
         values_dict = {name: value for name, value in zip(component_names, values)}
-        self.component_bus.write(data_name, values_dict, normalize)
-
-    def write_actuators_pos(self, values: int | float | Dict[str, Any], normalize: bool = True):
-        """Write positions to actuators."""
-        self.write_actuators(ValueName.POS, values, normalize)        
-    
-    def write_actuators_speed(self, values: int | float | Dict[str, Any], normalize: bool = True):
-        """Write speeds to actuators."""
-        self.write_actuators(ValueName.SPEED, values, normalize)
-    
-    def enable_actuators_torque(self, actuator_names: list[str] | None = None):
-        """Enable torque for the actuator."""
-        if actuator_names is None:
-            actuator_names = list(self.actuators.keys())
-        self.component_bus.enable_torque(actuator_names)
-
-    def disable_actuators_torque(self, actuator_names: list[str] | None = None):
-        """Disable torque for the actuator."""
-        if actuator_names is None:
-            actuator_names = list(self.actuators.keys())
-        self.component_bus.disable_torque(actuator_names)
-
-    def set_actuators_velocity_mode(self, actuator_names: list[str] | None = None):
-        """Set actuators to velocity mode."""
-        if actuator_names is None:
-            actuator_names = list(self.actuators.keys())
-        self.component_bus.set_velocity_mode(actuator_names)
-
-    def set_actuators_position_mode(self, actuator_names: list[str] | None = None):
-        """Set actuators to position mode."""
-        if actuator_names is None:
-            actuator_names = list(self.actuators.keys())
-        self.component_bus.set_position_mode(actuator_names)
+        self.module_bus.write(values_dict, normalize)
 
     def is_calibrated(self) -> bool:
         if self.calibration is None:
@@ -253,7 +279,7 @@ class Module(Process):
 
         """Read calibration parameters from the actuators."""
 
-        data = self.component_bus.read_calibration()
+        data = self.module_bus.read_calibration()
         calibration = {}
         for actuator_name, actuator in self.actuators.items():
             calibration[actuator_name] = data[actuator_name]
@@ -270,17 +296,17 @@ class Module(Process):
 
         self.load_calibration()
 
+        if self.calibration is None:
+            raise ValueError(f"No calibration found for module {self.name}")
+
         for port, actuators in self.actuators_by_port.items():
             port_calibration = {}
             for actuator_name in actuators:
                 port_calibration[actuator_name] = self.calibration[actuator_name]
-            self.component_bus.component_bus_by_port[port].write_calibration(port_calibration)
+            self.module_bus.component_bus_by_port[port].write_calibration(port_calibration)
         print("Calibration written to:", self.name)
         self.end_calibration_mode()
-
     
-    
-
     def _save_calibration(self, calibration: dict):
         if self.cfg.calibration_file is None:
             print(f"No calibration required for module {self.name}")
@@ -321,7 +347,9 @@ class Module(Process):
         input(f"Move {self} to the middle of its range of motion and press ENTER....")
         homing_offsets = {}
         for port, actuator_names in self.actuators_by_port.items():
-            homing_offsets.update(self.component_bus.component_bus_by_port[port].set_half_turn_homings(actuator_names))
+            bus = self.module_bus.component_bus_by_port[port]
+            assert isinstance(bus, ActuatorBus)
+            homing_offsets.update(bus.set_half_turn_homings(actuator_names))
 
         print(
             f"Move all joints sequentially through their "
@@ -331,9 +359,10 @@ class Module(Process):
         range_mins = {}
         range_maxes = {}
        
-        # get ranges of motion for each actuator
         for port, actuator_names in self.actuators_by_port.items():
-            range_mins, range_maxes = self.component_bus.component_bus_by_port[port].record_ranges_of_motion(actuator_names)
+            bus = self.module_bus.component_bus_by_port[port]
+            assert isinstance(bus, ActuatorBus)
+            range_mins, range_maxes = bus.record_ranges_of_motion(actuator_names)
             range_mins.update(range_mins)
             range_maxes.update(range_maxes)
             
@@ -349,7 +378,7 @@ class Module(Process):
                     range_min=range_mins[actuator_name],
                     range_max=range_maxes[actuator_name],
                 )
-            port_calibration = self.component_bus.component_bus_by_port[port].write_calibration(port_calibration)
+            port_calibration = self.module_bus.component_bus_by_port[port].write_calibration(port_calibration)
             self.calibration.update(port_calibration)
 
         self._save_calibration(self.calibration)
@@ -360,11 +389,11 @@ class Module(Process):
 
     def start_calibration_mode(self):
         for port, actuator_names in self.actuators_by_port.items():
-            self.component_bus.component_bus_by_port[port].start_calibration_mode()
+            self.module_bus.component_bus_by_port[port].start_calibration_mode()
 
     def end_calibration_mode(self):
         for port, actuator_names in self.actuators_by_port.items():
-            self.component_bus.component_bus_by_port[port].end_calibration_mode()
+            self.module_bus.component_bus_by_port[port].end_calibration_mode()
 
 
     def initialize(self):
@@ -408,7 +437,7 @@ class Module(Process):
         
         component = components[idx_cfg - 1]
         print(f"\nSetting up component: {component}")
-        self.component_bus.setup_component(component.name, component_port=component.cfg.port, configs=component.cfg.configs)
+        self.module_bus.setup_component(component.name, component_port=component.cfg.port, configs=component.cfg.configs)
         
         
     def __str__(self):
@@ -424,7 +453,8 @@ class Module(Process):
 
     def stop(self, wait=True):
         """Stop the module process."""
-        self.process_action(Action.stop())
+        # self.process_action(Action.stop())
+        self._dispatch_action(ModuleAction(ActionType.STOP), time.time())
         if wait:
             self.stop_wait()
 
@@ -449,7 +479,7 @@ class Module(Process):
 
 
     # ========= receive APIs =============
-    def get_observation(self, k: int = None) -> Union[ModuleObs, list, None]:
+    def get_observation(self, k: int | None = None) -> Union[ModuleObs, list, None]:
         """
         Get observation(s) from the observation queue.
         
@@ -461,63 +491,62 @@ class Module(Process):
             ModuleObs if k is None, otherwise list of ModuleObs (oldest first).
             Returns None if the queue is empty.
         """
-        if k is None:
-            if self.observation_queue.empty():
-                return None
+        
+        if self.observation_queue is None or self.observation_queue.empty():
+            return None
+        elif k is None:
             return self.observation_queue.get()
         else:
-            if self.observation_queue.empty():
-                return None
             return self.observation_queue.get_k(k=k)
     
-    def get_all_observations(self) -> list:
+    def get_all_observations(self) -> list[ModuleObs]:
         """
         Get all available observations from the observation queue.
         
         Returns:
             List of ModuleObs instances (oldest first)
         """
-        if self.observation_queue.empty():
+        if self.observation_queue is None or self.observation_queue.empty():
             return []
         return self.observation_queue.get_all()
 
 
+    def enrich_observation(self, obs: ModuleObs) -> ModuleObs:
+        for field_name, proc in self._robot_processors.items():
+            obs[field_name] = proc(obs)
+        return obs
+
+
     def update_observations(self):
-        """Update observations with current module state."""
-        from solarian.conf import settings
 
-        point_0 = time.time_ns()
-        
-        # group sensors by data name, to optimize reading in batches
-        sensors_by_data_name = {}
-        # ObsClass = get_class(settings.OBSERVATION_CLASS)
-        # for sensor_name, sensor_spec in get_class(settings.OBSERVATION_CLASS)[self.name].items():
-        #     for data_name, data_spec in sensor_spec.items():
-        #         if data_spec.computer == DataComputer.ROBOT:
-        #             if data_name not in sensors_by_data_name:
-        #                 sensors_by_data_name[data_name] = []
-        #             sensors_by_data_name[data_name].append(sensor_name)
+        if self.observation_queue is None:
+            raise ValueError("Observation queue is not initialized.")
 
-        # for sensor_name, sensor in self.sensors.items():
+        module_obs_spec = Observation.get_module_obs_spec()
+        if self.name not in module_obs_spec:
+            return
 
-        point_1 = time.time_ns()
+        module_obs_cls = module_obs_spec[self.name].__class__
+        sensor_fields = module_obs_cls.get_sensor_fields_spec()
 
-        # read sensors in batches
         data = {}
-        for data_name, sensor_names in sensors_by_data_name.items():
-            data.update(self.read_sensors(data_name, sensor_names))
+        fields_by_data_class = {}
 
-        point_2 = time.time_ns()
-        manual_profile("get observation 1", (point_1 - point_0))
-        manual_profile("get observation 2", (point_2 - point_1))
+        for field_name, field in sensor_fields.items():
+            if field.data_class not in fields_by_data_class:
+                fields_by_data_class[field.data_class] = []
+            fields_by_data_class[field.data_class].append((field_name, field.sensor_name, field.data_name))
 
-        # add timestamp
-        data['target_time'] = time.time() - self.cfg.receive_latency
+        for data_class, field_list in fields_by_data_class.items():
+            sensor_names = [sensor_name for _, sensor_name, _ in field_list]
+            sensor_data = self.read_sensors(data_class, sensor_names)
+            for field_name, sensor_name, _ in field_list:
+                data[field_name] = {'value': sensor_data[sensor_name], 'timestamp': time.time() - self.cfg.receive_latency}
 
-        obs_class = get_class(settings.OBSERVATION_CLASS)
-        observation = obs_class[self.name](data)
-        self.observation_queue.put(observation)
+        obs = module_obs_cls(data)
+        obs = self.enrich_observation(obs)
 
+        self.observation_queue.put(obs)
 
     def reset(self):
         """Reset the module. Eg: set to home position"""
@@ -622,7 +651,7 @@ class Module(Process):
         Dispatch an action to its registered handler.
         
         Args:
-            action: The Action object from the queue
+            action: The ModuleAction object from the queue
             t_now: Current monotonic time
             
         Returns:
@@ -641,32 +670,34 @@ class Module(Process):
 
     # ========= standard action handlers ============
     @action_handler(ActionType.STOP)
-    def _handle_stop(self, action: Action, t_now: float) -> bool:
+    def _handle_stop(self, action: ModuleAction, t_now: float) -> bool:
         """Handle STOP action - stops the module."""
         if self.verbose:
             print(f"[Module] {self.name}: Received STOP action")
         return False  # Signal to stop
     
     @action_handler(ActionType.SCHEDULE_WAYPOINT)
-    def _handle_schedule_waypoint(self, action: Action, t_now: float) -> bool:
+    def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
         """Handle SCHEDULE_WAYPOINT action - schedules a new waypoint."""
-        target_values = self._extract_target_values(action)
-        target_time = action.target_time
-        # translate global time to monotonic time
-        target_time = time.monotonic() - time.time() + target_time
+
+        # # TO DO: do it in a more elegant way
+        # target_values = [data['value'] for data in action.to_dict()['data'].values()]
+        # target_time = list(action.to_dict()['data'].values())[0]['timestamp']
+        # # translate global time to monotonic time
+        # target_time = time.monotonic() - time.time() + target_time
         
-        self._interp = self._interp.schedule_waypoint(
-            value=target_values,
-            time=target_time,
-            curr_time=t_now,
-            last_waypoint_time=self._last_waypoint_time,
-            **self._speed_kwargs
-        )
-        self._last_waypoint_time = target_time
+        # self._interp = self._interp.schedule_waypoint(
+        #     value=target_values,
+        #     time=target_time,
+        #     curr_time=t_now,
+        #     last_waypoint_time=self._last_waypoint_time,
+        #     **self._speed_kwargs
+        # )
+        # self._last_waypoint_time = target_time
         return True
     
     @action_handler(ActionType.RESTART_PUT)
-    def _handle_restart_put(self, action: Action, t_now: float) -> bool:
+    def _handle_restart_put(self, action: ModuleAction, t_now: float) -> bool:
         """Handle RESTART_PUT action - restarts the put timing."""
         self._t_start = action.target_time - time.time() + time.monotonic()
         self._iter_idx = 1
@@ -681,16 +712,16 @@ class Module(Process):
             # get initial values based on interpolator type
             curr_values = self.get_initial_action_values()
             curr_t = time.monotonic()
-            
+
             # Initialize runtime state
-            self._interp = self._create_interpolator(
-                times=[curr_t],
-                values=[curr_values]
+            self.interp = self._create_interpolator(
+                times=np.array([curr_t]),
+                values=np.array([curr_values])
             )
-            self._last_waypoint_time = curr_t
-            self._speed_kwargs = self._get_max_speed_kwargs()
-            self._t_start = time.monotonic()
-            self._iter_idx = 0
+            self.last_waypoint_time = curr_t
+            self.speed_kwargs = self._get_max_speed_kwargs()
+            self.t_start = time.monotonic()
+            self.iter_idx = 0
             
             keep_running = True
 
@@ -705,6 +736,8 @@ class Module(Process):
 
                 # fetch actions from queue
                 try:
+                    if self.action_queue is None:
+                        raise ValueError("Action queue is not initialized.")
                     actions = self.action_queue.get_k(self.commands_per_cycle)
                 except Empty:
                     actions = []
@@ -731,19 +764,19 @@ class Module(Process):
                 print(f"[Module] {self.name} process terminated")
 
     # # ========= abstract methods for subclasses ============
-    # @abstractmethod
-    # def exec_waypoint(self, timestamp: float):
-    #     """
-    #     Execute the current interpolated waypoint values.
+    
+    def exec_waypoint(self, timestamp: float):
+        """
+        Execute the current interpolated waypoint values.
         
-    #     This method is called on every iteration of the control loop.
-    #     Subclasses must implement this to convert interpolated values
-    #     to actuator commands and execute them.
+        This method is called on every iteration of the control loop.
+        Subclasses must implement this to convert interpolated values
+        to actuator commands and execute them.
         
-    #     Args:
-    #         values: Interpolated values from the trajectory interpolator
-    #         timestamp: Current timestamp (monotonic time)
-    #     """
+        Args:
+            values: Interpolated values from the trajectory interpolator
+            timestamp: Current timestamp (monotonic time)
+        """
     
     # @abstractmethod
     # def _extract_target_values(self, action: Action) -> np.ndarray:

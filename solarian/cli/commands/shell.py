@@ -53,6 +53,15 @@ class ShellCommand(BaseCommand):
         controller_cfg = self._load_config("controller", ControllerConfig)
         return ControllerClass(controller_cfg)
 
+    def _create_server(self, settings):
+        """Load the server config and create the server instance for the project."""
+        from solarian.utils import get_class
+        from solarian.core.configs import ServerConfig
+
+        ServerClass = get_class(settings.SERVER_CLASS)
+        server_cfg = self._load_config("server", ServerConfig)
+        return ServerClass(server_cfg)
+
     def handle(self, cfg: DictConfig = None) -> None:
         from solarian.conf import settings
 
@@ -73,8 +82,13 @@ class ShellCommand(BaseCommand):
         namespace['robot'] = robot
 
         # Create the project's controller instance
-        controller = self._create_controller(settings)
+        # controller = self._create_controller(settings)
+        controller = None
         namespace['controller'] = controller
+
+        # Create the project's server instance
+        server = self._create_server(settings)
+        namespace['server'] = server
 
         robot_line = "  robot      - Robot instance\n" if robot is not None else ""
         controller_line = "  controller - Controller instance\n" if controller is not None else ""

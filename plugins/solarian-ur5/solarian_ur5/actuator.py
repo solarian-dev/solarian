@@ -7,7 +7,7 @@ Supports both joint-space and Cartesian-space control.
 
 from typing import Optional
 from solarian.core.servo import Servo
-from solarian.core.data import PosData, SpeedData, DataComputer
+from solarian.core.data import PosData, SpeedData
 from solarian_ur5.bus import UR5Bus
 
 
@@ -29,8 +29,8 @@ class UR5JointActuator(Servo):
     
     bus_class = UR5Bus
 
-    pos = PosData(computer=DataComputer.CONTROLLER)
-    speed = SpeedData(computer=DataComputer.CONTROLLER)
+    pos = PosData()
+    speed = SpeedData()
 
 class UR5CartesianActuator(Servo):
     """
@@ -50,12 +50,12 @@ class UR5CartesianActuator(Servo):
     
     bus_class = UR5Bus
 
-    x = PosData(computer=DataComputer.CONTROLLER)
-    y = PosData(computer=DataComputer.CONTROLLER)
-    z = PosData(computer=DataComputer.CONTROLLER)
-    rx = PosData(computer=DataComputer.CONTROLLER)
-    ry = PosData(computer=DataComputer.CONTROLLER)
-    rz = PosData(computer=DataComputer.CONTROLLER)
+    x = PosData()
+    y = PosData()
+    z = PosData()
+    rx = PosData()
+    ry = PosData()
+    rz = PosData()
     
 
 # Backward compatibility alias

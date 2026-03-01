@@ -3,7 +3,7 @@ import numpy as np
 from enum import IntEnum
 from typing import Callable
 
-from .data import Data, ImageData, DataComputer
+from .data import Data, ImageData
 
 
 class ActionType(IntEnum):
@@ -52,7 +52,7 @@ class ActuatorField:
 
     The reference is a ``Data`` instance from the robot tree, e.g.
     ``MyRobot.arm.elbow_flex.pos``.  It carries schema information
-    (dtype, shape, computer) and is used at runtime to wrap raw values.
+    (dtype, shape) and is used at runtime to wrap raw values.
 
     """
 
@@ -66,10 +66,6 @@ class ActuatorField:
     @property
     def shape(self):
         return self.source.shape
-
-    @property
-    def computer(self):
-        return self.source.computer
 
     @property
     def value(self):

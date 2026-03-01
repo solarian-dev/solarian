@@ -15,14 +15,14 @@ from multiprocessing.managers import SharedMemoryManager
 from solarian.utils import busy_wait
 from solarian.core import Action
 from solarian.core import Observation
-from solarian.core.configs import ControllerConfig, ValueName, ActionValue
+from solarian.core.configs import ControllerConfig, ActionValue
 from solarian.core.message import Message
 from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
 from solarian.core.module import Module
 from solarian.core.module_bus import ModuleBus
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
-from solarian.core.data import DataKind
+from solarian.core.data import ImageData, BoundingBoxData
 
 
 from screeninfo import get_monitors
@@ -101,16 +101,16 @@ class Controller(ABC):
 
         self.shm_manager = SharedMemoryManager()
 
-        example_observation = get_class(settings.OBSERVATION_CLASS).zeros()
+        example_observation = Observation.zeros()
 
-        self.observation_buffers = {}
-        for module_name in self.modules.keys():
-            self.observation_buffers[module_name] = ObservationRingBuffer.create_from_example(
+        # create one module observation buffer per module
+        self.module_observation_buffers = {}
+        for module_name in example_observation.data.keys():
+            self.module_observation_buffers[module_name] = ObservationRingBuffer.create_from_example(
                 shm_manager=self.shm_manager,
                 example_observation=example_observation[module_name],
-                get_max_k=cfg.get_max_k,
                 get_time_budget=0.2,
-                put_desired_frequency=cfg.frequency
+                put_desired_frequency=cfg.fps
             )
 
     def load_module_config(self, module_name: str, module_class: type):
@@ -151,38 +151,15 @@ class Controller(ABC):
     def get_state(self):
         bytes = self.state_socket.recv(zmq.NOBLOCK)
         msg = Message.deserialize(bytes)
-        obs_class = get_class(settings.OBSERVATION_CLASS)
-
-        # decode images into numpy arrays
         raw_obs = msg.data["observation"]
-        for module_name in raw_obs.keys():
-            for sensor_name in raw_obs[module_name].keys():
-                for data_name in raw_obs[module_name][sensor_name].keys():
-                    if obs_class[module_name][sensor_name][data_name].kind == DataKind.IMAGE:
-                        raw_obs[module_name][sensor_name][data_name] = cv2.imdecode(
-                            np.frombuffer(raw_obs[module_name][sensor_name][data_name], dtype=obs_class[module_name][sensor_name][data_name].dtype),
-                            cv2.IMREAD_COLOR
-                        )
-
-        observation = obs_class(raw_obs)
-        # put observation into buffer
-        for module_name in observation.data.keys():
-            self.observation_buffers[module_name].put(observation[module_name])
+        observation = Observation(raw_obs)
+        for module_name, module_observation in observation.items():
+            self.module_observation_buffers[module_name].put(module_observation)
 
         if msg.data.get("click_ack", None) and msg.data["click_ack"] == self.clicked_id:
             print("Click acknowledged", self.clicked_id)
             self.clicked_id = None
             self.clicked_point = None
-
-        # if observation.get("start_pos_ack", None):
-        #     print("Start position acknowledged")
-        #     self.start_pos = False
-                    
-        
-        # Thread-safe update observation
-        # with self.observation_lock:
-        #     self.last_observation = observation
-        #     self.last_msg = msg
 
     def _state_receiver(self):
         """Receive and decode image streams"""
@@ -277,26 +254,26 @@ class Controller(ABC):
         msg.data = {"stop_tracking": True}
         self.action_socket.send(msg.serialize())
 
-    def record_frame(self, dataset, action, task):
+    # def record_frame(self, dataset, action, task):
 
-        # "action": nparray shape 6
-        # "observation.state": nparray shape 6
-        # "observation.images.front": nparray shape (480, 640, 3)
-        # "observation.images.wrist": nparray shape (480, 640, 3)
-        # "task": string
+    #     # "action": nparray shape 6
+    #     # "observation.state": nparray shape 6
+    #     # "observation.images.front": nparray shape (480, 640, 3)
+    #     # "observation.images.wrist": nparray shape (480, 640, 3)
+    #     # "task": string
 
-        self.last_observation = self.observation_buffer.get()
+    #     self.last_observation = self.observation_buffer.get()
         
-        frame = {**self.last_observation.to_lerobot_format(), **action.to_lerobot_format()}
+    #     frame = {**self.last_observation.to_lerobot_format(), **action.to_lerobot_format()}
 
-        # resize images if necessary
-        for key in frame:
-            if key.startswith("observation.images."):
-                img = frame[key]
-                if img.shape[0] != self.cfg.video_res[0] or img.shape[1] != self.cfg.video_res[1]:
-                    frame[key] = cv2.resize(img, (self.cfg.video_res[1], self.cfg.video_res[0]), interpolation=cv2.INTER_AREA)
+    #     # resize images if necessary
+    #     for key in frame:
+    #         if key.startswith("observation.images."):
+    #             img = frame[key]
+    #             if img.shape[0] != self.cfg.video_res[0] or img.shape[1] != self.cfg.video_res[1]:
+    #                 frame[key] = cv2.resize(img, (self.cfg.video_res[1], self.cfg.video_res[0]), interpolation=cv2.INTER_AREA)
         
-        dataset.add_frame(frame, task)
+    #     dataset.add_frame(frame, task)
         
     
     def display_loop(self, episode_time_s):
@@ -353,86 +330,93 @@ class Controller(ABC):
 
         StatusBoard.set("Action", self.last_action)
 
-        self.last_observation = self.observation_buffer.get()
-
-        if self.last_observation is None:
-            return
+        obs_spec = Observation.get_module_obs_spec()
 
         images = {}
-        # add all images in observation
-        for module_name, module_data in self.last_observation.data.items():
-            for sensor_name, sensor_data in module_data.items():
-                if sensor_data.get(ValueName.IMAGE) is not None or sensor_data.get(ValueName.DEPTH_IMAGE) is not None:
-                    images[sensor_name] = sensor_data
-                
-        # Initialize windows once if not already done
-        if not self.windows_initialized:
-            for name, image in images.items():
-                for img_type in [ValueName.IMAGE, ValueName.DEPTH_IMAGE]:
-                    if not img_type in image:
-                        continue
-                    window_name = f"{name} {img_type}"
+        image_bboxes = {}
 
-                    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-                    # Get the resolution of the image
-                    height, width, _ = image[img_type].shape
-                    # Set the size of the window to the resolution of the image
-                    cv2.resizeWindow(window_name, width, height)
-                    cv2.setMouseCallback(window_name, self.mouse_callback)
-                    cv2.moveWindow(window_name, sx + (sw - width)//2, sy + (sh - height)//2)
-                    self.windows_initialized.append(window_name)
-            
+        for module_name, buffer in self.module_observation_buffers.items():
+            module_obs = buffer.get()
+            if module_obs is None:
+                continue
 
-        COLOR = (255, 0, 0)
+            module_obs_cls = type(obs_spec[module_name])
+            sensor_fields = module_obs_cls.get_sensor_fields_spec()
+            calculated_fields = module_obs_cls.get_calculated_fields_spec()
 
-        # board = StatusBoard()
-        # board.set("Observation", self.last_observation)
-        StatusBoard.set("Observation", self.last_observation)
-        
+            all_fields = {**sensor_fields, **calculated_fields}
+            for field_name, field_spec in all_fields.items():
+                if field_spec.data_class is not ImageData:
+                    continue
+                try:
+                    field_data = module_obs[field_name]
+                except KeyError:
+                    continue
+                if field_data is not None and field_data.value is not None:
+                    images[(module_name, field_name)] = field_data.value
 
-        for name, image in images.items():
+            source_to_field = {}
+            for fname, sf in sensor_fields.items():
+                source_to_field[id(sf.source)] = fname
+            for fname, cf in calculated_fields.items():
+                source_to_field[id(cf.output)] = fname
 
-            for img_type in [ValueName.IMAGE, ValueName.DEPTH_IMAGE]:
-                if not img_type in image:
+            for field_name, cf in calculated_fields.items():
+                if cf.data_class is not BoundingBoxData:
+                    continue
+                try:
+                    field_data = module_obs[field_name]
+                except KeyError:
+                    continue
+                if field_data is None or field_data.value is None:
                     continue
 
-                img = image[img_type]
+                bbox_value = field_data.value
+                for inp in cf.inputs:
+                    input_field = source_to_field.get(id(inp))
+                    if input_field and (module_name, input_field) in images:
+                        img_key = (module_name, input_field)
+                        image_bboxes.setdefault(img_key, []).append(bbox_value)
+                        break
 
-                # print("Image: ", image)
-                
-                # Only modify the image if bounding box exists
-                if image.get(ValueName.BOUNDING_BOX, None) is not None and image.get(ValueName.BOUNDING_BOX)[0] != -1:
-                    # Create a copy only when drawing on the image
-                    display_img = img.copy()
-                    # print("bounding box", image[ValueName.BOUNDING_BOX])
-                    x1, y1, x2, y2, depth = image[ValueName.BOUNDING_BOX]
+        if not self.windows_initialized:
+            for (module_name, field_name), img in images.items():
+                window_name = f"{module_name}/{field_name}"
+                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+                height, width = img.shape[:2]
+                cv2.resizeWindow(window_name, width, height)
+                cv2.setMouseCallback(window_name, self.mouse_callback)
+                cv2.moveWindow(window_name, sx + (sw - width)//2, sy + (sh - height)//2)
+                self.windows_initialized.append(window_name)
+
+        BBOX_COLOR = (255, 0, 0)
+
+        for (module_name, field_name), img in images.items():
+            img_key = (module_name, field_name)
+            window_name = f"{module_name}/{field_name}"
+
+            bbox_list = image_bboxes.get(img_key, [])
+            if bbox_list:
+                display_img = img.copy()
+                for bbox in bbox_list:
+                    if all(v == 0 for v in bbox[:4]):
+                        continue
+                    x1, y1, x2, y2 = bbox[:4]
                     cv2.rectangle(display_img,
-                                (int(x1), int(y1)), 
-                                (int(x2), int(y2)), 
-                                COLOR, 2)
-                    cv2.putText(display_img, f"Depth: {depth:.3f}", 
-                                (int(x1), int(y1) + 15), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 
-                                0.9, (0, 255, 0), 2)
-                else:
-                    display_img = img
-                    
-                display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
-                # Convert color only once before display
-                # if img_type == ValueName.IMAGE:
-                #     display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
-                # else:
-                #     display_img_bgr = colorize_depth(display_img, True)
-                
-                # Show frames
-                cv2.imshow(name + " " + str(img_type), display_img_bgr)
-            
-            # No need to call getWindowProperty every time since windows are created once
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                return False
+                                (int(x1), int(y1)),
+                                (int(x2), int(y2)),
+                                BBOX_COLOR, 2)
+            else:
+                display_img = img
 
-    def control_loop(self, dataset=None, episode_time_s=None, single_task=None):
+            display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
+            cv2.imshow(window_name, display_img_bgr)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            return False
+
+    def control_loop(self, dataset=None, episode_time_s=120, single_task=None):
         try:
             timestamp = 0
             start_episode_t = time.perf_counter()
@@ -568,131 +552,131 @@ class Controller(ABC):
             module.write_calibration()
 
 
-    def get_sync_obs(self) -> dict:
-        """
-        Timestamp alignment policy
-        We assume the cameras used for obs are always [0, k - 1], where k is the number of robots
-        All other cameras, find corresponding frame with the nearest timestamp
-        All low-dim observations, interpolate with respect to 'current' time
-        """
+    # def get_sync_obs(self) -> dict:
+    #     """
+    #     Timestamp alignment policy
+    #     We assume the cameras used for obs are always [0, k - 1], where k is the number of robots
+    #     All other cameras, find corresponding frame with the nearest timestamp
+    #     All low-dim observations, interpolate with respect to 'current' time
+    #     """
 
-        "observat`ion dict"
-        # assert self.is_ready
+    #     "observat`ion dict"
+    #     # assert self.is_ready
 
-        # get data
-        # 60 Hz, camera_calibrated_timestamp
-        k = math.ceil(
-            self.cfg.camera_obs_horizon * self.cfg.camera_down_sample_steps \
-            * (60 / self.frequency)) + 2 # here 2 is adjustable, typically 1 should be enough
-        # print('==>k  ', k, self.camera_obs_horizon, self.camera_down_sample_steps, self.frequency)
-        self.last_camera_data = self.camera.get(
-            k=k, 
-            out=self.last_camera_data)
+    #     # get data
+    #     # 60 Hz, camera_calibrated_timestamp
+    #     k = math.ceil(
+    #         self.cfg.camera_obs_horizon * self.cfg.camera_down_sample_steps \
+    #         * (60 / self.frequency)) + 2 # here 2 is adjustable, typically 1 should be enough
+    #     # print('==>k  ', k, self.camera_obs_horizon, self.camera_down_sample_steps, self.frequency)
+    #     self.last_camera_data = self.camera.get(
+    #         k=k, 
+    #         out=self.last_camera_data)
 
-        # both have more than n_obs_steps data
-        last_robots_data = list()
-        last_grippers_data = list()
-        # 125/500 hz, robot_receive_timestamp
-        for robot in self.robots:
-            last_robots_data.append(robot.get_all_state())
-        # 30 hz, gripper_receive_timestamp
-        for gripper in self.grippers:
-            last_grippers_data.append(gripper.get_all_state())
+    #     # both have more than n_obs_steps data
+    #     last_robots_data = list()
+    #     last_grippers_data = list()
+    #     # 125/500 hz, robot_receive_timestamp
+    #     for robot in self.robots:
+    #         last_robots_data.append(robot.get_all_state())
+    #     # 30 hz, gripper_receive_timestamp
+    #     for gripper in self.grippers:
+    #         last_grippers_data.append(gripper.get_all_state())
 
-        # select align_camera_idx
-        num_obs_cameras = len(self.robots)
-        align_camera_idx = None
-        running_best_error = np.inf
+    #     # select align_camera_idx
+    #     num_obs_cameras = len(self.robots)
+    #     align_camera_idx = None
+    #     running_best_error = np.inf
    
-        for camera_idx in range(num_obs_cameras):
-            this_error = 0
-            this_timestamp = self.last_camera_data[camera_idx]['timestamp'][-1]
-            for other_camera_idx in range(num_obs_cameras):
-                if other_camera_idx == camera_idx:
-                    continue
-                other_timestep_idx = -1
-                while True:
-                    if self.last_camera_data[other_camera_idx]['timestamp'][other_timestep_idx] < this_timestamp:
-                        this_error += this_timestamp - self.last_camera_data[other_camera_idx]['timestamp'][other_timestep_idx]
-                        break
-                    other_timestep_idx -= 1
-            if align_camera_idx is None or this_error < running_best_error:
-                running_best_error = this_error
-                align_camera_idx = camera_idx
+    #     for camera_idx in range(num_obs_cameras):
+    #         this_error = 0
+    #         this_timestamp = self.last_camera_data[camera_idx]['timestamp'][-1]
+    #         for other_camera_idx in range(num_obs_cameras):
+    #             if other_camera_idx == camera_idx:
+    #                 continue
+    #             other_timestep_idx = -1
+    #             while True:
+    #                 if self.last_camera_data[other_camera_idx]['timestamp'][other_timestep_idx] < this_timestamp:
+    #                     this_error += this_timestamp - self.last_camera_data[other_camera_idx]['timestamp'][other_timestep_idx]
+    #                     break
+    #                 other_timestep_idx -= 1
+    #         if align_camera_idx is None or this_error < running_best_error:
+    #             running_best_error = this_error
+    #             align_camera_idx = camera_idx
 
-        last_timestamp = self.last_camera_data[align_camera_idx]['timestamp'][-1]
-        dt = 1 / self.frequency
+    #     last_timestamp = self.last_camera_data[align_camera_idx]['timestamp'][-1]
+    #     dt = 1 / self.frequency
 
-        # align camera obs timestamps
-        camera_obs_timestamps = last_timestamp - (
-            np.arange(self.camera_obs_horizon)[::-1] * self.camera_down_sample_steps * dt)
-        camera_obs = dict()
-        for camera_idx, value in self.last_camera_data.items():
-            this_timestamps = value['timestamp']
-            this_idxs = list()
-            for t in camera_obs_timestamps:
-                nn_idx = np.argmin(np.abs(this_timestamps - t))
-                # if np.abs(this_timestamps - t)[nn_idx] > 1.0 / 120 and camera_idx != 3:
-                #     print('ERROR!!!  ', camera_idx, len(this_timestamps), nn_idx, (this_timestamps - t)[nn_idx-1: nn_idx+2])
-                this_idxs.append(nn_idx)
-            # remap key
-            camera_obs[f'camera{camera_idx}_rgb'] = value['color'][this_idxs]
+    #     # align camera obs timestamps
+    #     camera_obs_timestamps = last_timestamp - (
+    #         np.arange(self.camera_obs_horizon)[::-1] * self.camera_down_sample_steps * dt)
+    #     camera_obs = dict()
+    #     for camera_idx, value in self.last_camera_data.items():
+    #         this_timestamps = value['timestamp']
+    #         this_idxs = list()
+    #         for t in camera_obs_timestamps:
+    #             nn_idx = np.argmin(np.abs(this_timestamps - t))
+    #             # if np.abs(this_timestamps - t)[nn_idx] > 1.0 / 120 and camera_idx != 3:
+    #             #     print('ERROR!!!  ', camera_idx, len(this_timestamps), nn_idx, (this_timestamps - t)[nn_idx-1: nn_idx+2])
+    #             this_idxs.append(nn_idx)
+    #         # remap key
+    #         camera_obs[f'camera{camera_idx}_rgb'] = value['color'][this_idxs]
 
-        # obs_data to return (it only includes camera data at this stage)
-        obs_data = dict(camera_obs)
+    #     # obs_data to return (it only includes camera data at this stage)
+    #     obs_data = dict(camera_obs)
 
-        # include camera timesteps
-        obs_data['timestamp'] = camera_obs_timestamps
+    #     # include camera timesteps
+    #     obs_data['timestamp'] = camera_obs_timestamps
 
-        # align robot obs
-        robot_obs_timestamps = last_timestamp - (
-            np.arange(self.robot_obs_horizon)[::-1] * self.robot_down_sample_steps * dt)
-        for robot_idx, last_robot_data in enumerate(last_robots_data):
-            robot_pose_interpolator = PoseInterpolator(
-                t=last_robot_data['robot_timestamp'], 
-                x=last_robot_data['ActualTCPPose'])
-            robot_pose = robot_pose_interpolator(robot_obs_timestamps)
-            robot_obs = {
-                f'robot{robot_idx}_eef_pos': robot_pose[...,:3],
-                f'robot{robot_idx}_eef_rot_axis_angle': robot_pose[...,3:]
-            }
-            # update obs_data
-            obs_data.update(robot_obs)
+    #     # align robot obs
+    #     robot_obs_timestamps = last_timestamp - (
+    #         np.arange(self.robot_obs_horizon)[::-1] * self.robot_down_sample_steps * dt)
+    #     for robot_idx, last_robot_data in enumerate(last_robots_data):
+    #         robot_pose_interpolator = PoseInterpolator(
+    #             t=last_robot_data['robot_timestamp'], 
+    #             x=last_robot_data['ActualTCPPose'])
+    #         robot_pose = robot_pose_interpolator(robot_obs_timestamps)
+    #         robot_obs = {
+    #             f'robot{robot_idx}_eef_pos': robot_pose[...,:3],
+    #             f'robot{robot_idx}_eef_rot_axis_angle': robot_pose[...,3:]
+    #         }
+    #         # update obs_data
+    #         obs_data.update(robot_obs)
 
-        # align gripper obs
-        gripper_obs_timestamps = last_timestamp - (
-            np.arange(self.gripper_obs_horizon)[::-1] * self.gripper_down_sample_steps * dt)
-        for robot_idx, last_gripper_data in enumerate(last_grippers_data):
-            # align gripper obs
-            gripper_interpolator = get_interp1d(
-                t=last_gripper_data['gripper_timestamp'],
-                x=last_gripper_data['gripper_position'][...,None]
-            )
-            gripper_obs = {
-                f'robot{robot_idx}_gripper_width': gripper_interpolator(gripper_obs_timestamps)
-            }
+    #     # align gripper obs
+    #     gripper_obs_timestamps = last_timestamp - (
+    #         np.arange(self.gripper_obs_horizon)[::-1] * self.gripper_down_sample_steps * dt)
+    #     for robot_idx, last_gripper_data in enumerate(last_grippers_data):
+    #         # align gripper obs
+    #         gripper_interpolator = get_interp1d(
+    #             t=last_gripper_data['gripper_timestamp'],
+    #             x=last_gripper_data['gripper_position'][...,None]
+    #         )
+    #         gripper_obs = {
+    #             f'robot{robot_idx}_gripper_width': gripper_interpolator(gripper_obs_timestamps)
+    #         }
 
-            # update obs_data
-            obs_data.update(gripper_obs)
+    #         # update obs_data
+    #         obs_data.update(gripper_obs)
 
-        # accumulate obs
-        if self.obs_accumulator is not None:
-            for robot_idx, last_robot_data in enumerate(last_robots_data):
-                self.obs_accumulator.put(
-                    data={
-                        f'robot{robot_idx}_eef_pose': last_robot_data['ActualTCPPose'],
-                        f'robot{robot_idx}_joint_pos': last_robot_data['ActualQ'],
-                        f'robot{robot_idx}_joint_vel': last_robot_data['ActualQd'],
-                    },
-                    timestamps=last_robot_data['robot_timestamp']
-                )
+    #     # accumulate obs
+    #     if self.obs_accumulator is not None:
+    #         for robot_idx, last_robot_data in enumerate(last_robots_data):
+    #             self.obs_accumulator.put(
+    #                 data={
+    #                     f'robot{robot_idx}_eef_pose': last_robot_data['ActualTCPPose'],
+    #                     f'robot{robot_idx}_joint_pos': last_robot_data['ActualQ'],
+    #                     f'robot{robot_idx}_joint_vel': last_robot_data['ActualQd'],
+    #                 },
+    #                 timestamps=last_robot_data['robot_timestamp']
+    #             )
 
-            for robot_idx, last_gripper_data in enumerate(last_grippers_data):
-                self.obs_accumulator.put(
-                    data={
-                        f'robot{robot_idx}_gripper_width': last_gripper_data['gripper_position'][...,None]
-                    },
-                    timestamps=last_gripper_data['gripper_timestamp']
-                )
+    #         for robot_idx, last_gripper_data in enumerate(last_grippers_data):
+    #             self.obs_accumulator.put(
+    #                 data={
+    #                     f'robot{robot_idx}_gripper_width': last_gripper_data['gripper_position'][...,None]
+    #                 },
+    #                 timestamps=last_gripper_data['gripper_timestamp']
+    #             )
 
-        return obs_data
+    #     return obs_data

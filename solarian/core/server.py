@@ -1,15 +1,12 @@
 import zmq
 import threading
 import time
-import cv2
-import numpy as np
 
-from solarian.perception.vision.image_processor import ImageProcessor
 from solarian.core.message import Message
-from solarian.core.configs import ValueName, ServerConfig
+from solarian.core.configs import ServerConfig
+from solarian.core.data import DataComputer
 from solarian.core import Observation
 from solarian.utils import StatusBoard
-from solarian.conf import settings
 
 # TO DO: rename state to observation, rename cmd to action
 
@@ -19,8 +16,6 @@ class RelayServer:
         self.running = False
         self.cfg = cfg
         self.captured_click = None
-
-        self.image_processor_lock = threading.Lock()
         
         # Setup action relay (Client → Relay → Robot)
         self.client_cmd_receiver = self.context.socket(zmq.PULL)
@@ -45,36 +40,31 @@ class RelayServer:
         self.client_state_sender.setsockopt(zmq.LINGER, 0)
         self.client_state_sender.bind(f"tcp://*:{self.cfg.connection.state_sender_port}")  # Clients subscribe here
 
-        if self.cfg.image_processing and self.cfg.tracking_model:
-            self.image_processor = ImageProcessor(self.cfg.tracking_model, self.cfg.depth_model, self.cfg.ref_x, self.cfg.ref_y)
+        self._processors = Observation.create_processors(DataComputer.SERVER)
 
     def _action_relay(self):
-        """Forward actions from clients to robot"""
+        """Forward actions from clients to robot, dispatching events to server processors."""
         while self.running:
             try:
                 bytes = self.client_cmd_receiver.recv(zmq.NOBLOCK)
                 try:
                     msg = Message.deserialize(bytes)
-                    # print("Message received (relay): ", msg)
-                    
-                    # TODO use enumeration instead of string for message
-                    if self.cfg.image_processing and "stop_tracking" in msg.data:
-                        with self.image_processor_lock:
-                            self.image_processor.stop_tracking()
-                    elif self.cfg.image_processing and "click" in msg.data:
-                        # print(f"Tracking point (relay): {msg.data['click']['point']}")
-                        with self.image_processor_lock:
-                            self.image_processor.track_object(msg.data["click"]["point"])
+
+                    if "stop_tracking" in msg.data:
+                        for proc in self._processors.values():
+                            proc.on_event("stop_tracking")
+                    elif "click" in msg.data:
+                        for proc in self._processors.values():
+                            proc.on_event("click", msg.data["click"]["point"])
                         self.captured_click = msg.data["click"]["id"]
                     else:
                         self.captured_click = None
-                    
-                    # Reserialize before sending
+
                     self.robot_cmd_sender.send(msg.serialize())
-                    
+
                 except Exception as e:
                     print(f"Error processing message: {e}")
-                    
+
             except zmq.Again:
                 time.sleep(0.001)
             except Exception as e:
@@ -82,60 +72,33 @@ class RelayServer:
                 time.sleep(0.001)
 
     def _state_relay(self):
-        """Forward images from robot to clients"""
+        """Forward observations from robot to clients, computing server-side fields."""
         while self.running:
             try:
                 bytes = self.robot_state_receiver.recv(zmq.NOBLOCK)
-                msg = Message.deserialize(bytes)
-                # print("Message state received (relay): ", msg)
-                if self.cfg.image_processing:
-                    # print("Processing image")
-                    start_time = time.time_ns()
-                    msg = self.process_image(msg, self.cfg.image_processing)
-                    end_time = time.time_ns()
-                    # print(f"Image processing time: {(end_time - start_time) / 1e6} ms")
-                    StatusBoard.set("Image processing time (ms)", (end_time - start_time) / 1e6)
 
+                msg = Message.deserialize(bytes)
+                if self.captured_click is not None:
+                    msg.data["click_ack"] = self.captured_click
+                
+                if self._processors:
+                    obs_data = msg.data.get("observation")
+                    if obs_data is None:    
+                        start_time = time.time_ns()
+                        observation = Observation(obs_data)
+                        observation = self.enrich_observation(observation)
+                        msg.data["observation"] = observation.to_dict()
+                        elapsed_ms = (time.time_ns() - start_time) / 1e6
+                        StatusBoard.set("Server observation enrichment time (ms)", elapsed_ms)
                 self.client_state_sender.send(msg.serialize())
             except zmq.Again:
                 time.sleep(0.001)
-            # except Exception as e:
-            #     print(f"Error in image relay: {e}")
-            #     time.sleep(0.001)
 
-    def process_image(self, msg: Message, cams_to_process):
-        obs_data = msg.data["observation"]
-        observation = Observation.model_validate(obs_data)
-
-        for module_name in observation.keys():
-            for sensor_name in observation[module_name].keys():
-                if observation[module_name][sensor_name].get(ValueName.IMAGE) is not None and sensor_name in cams_to_process:
-                    # if image is not empty and has to be processed
-
-                    # decode image
-                    frame = cv2.imdecode(np.frombuffer(observation[module_name][sensor_name][ValueName.IMAGE], dtype=np.uint8),
-                        cv2.IMREAD_COLOR)
-
-                    # process image
-                    with self.image_processor_lock:
-                        data = self.image_processor.process_image(frame)
-
-                    observation[module_name][sensor_name][ValueName.BOUNDING_BOX] = data[ValueName.BOUNDING_BOX]
-                    print("Data: ", data)
-
-                    # if there is depth image and required in observation space, then encode it and send it
-                    if data[ValueName.DEPTH_IMAGE] is not None and ValueName.DEPTH_IMAGE:
-                        print("Encoding depth image")
-                        encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.cfg.img_compression_quality]
-                        encoded_img = cv2.imencode('.jpeg', data[ValueName.DEPTH_IMAGE], encode_params)[1].tobytes()
-                        print("Encoded depth image", type(encoded_img))
-                        observation[module_name][sensor_name][ValueName.DEPTH_IMAGE] = encoded_img 
-
-        if self.captured_click is not None:
-            msg.data["click_ack"] = self.captured_click
-
-        msg.data["observation"] = observation
-        return msg
+    def enrich_observation(self, observation: Observation) -> Observation:
+        """Enrich the observation by running server-side processors."""
+        for (module_name, field_name), proc in self._processors.items():
+            observation[module_name][field_name] = proc(observation[module_name])
+        return observation
 
     def start(self):
         self.running = True

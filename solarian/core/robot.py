@@ -84,15 +84,7 @@ class Robot(ABC):
     def __new__(cls, *args, **kwargs):
         if Robot._instance is None:
             Robot._instance = super().__new__(cls)
-        return Robot._instance
-
-    # @classmethod
-    # def items(cls):
-    #     for module_name in cls.module_names():
-    #         for actuator_name in cls[module_name].actuator_names():
-    #             for data_name in cls[module_name][actuator_name].data_names():
-    #                 yield module_name, actuator_name, data_name, cls[module_name][actuator_name][data_name]
-            
+        return Robot._instance   
 
     """Base class with common robot functionality"""
     def __init__(self, cfg: RobotConfig):
@@ -151,10 +143,10 @@ class Robot(ABC):
                 module_class = val.__class__
                 module_cfg = self.load_module_config(name, module_class)
 
-                # create module's observation queue
+                # create module's observation queue (one per ModuleObs)
                 self.observation_queues[name] = ObservationQueue(
                     shm_manager=self.shm_manager,
-                    example_obs=example_observation,
+                    example_obs=example_observation[name],
                     buffer_size=1024,
                 )
                 # create module's action queue
@@ -221,79 +213,17 @@ class Robot(ABC):
         except zmq.Again:
             return None
 
-    # def _action_receiver(self):
-    #     """Thread for receiving actions"""
-    #     while self.running:
-    #         try:
-    #             bytes = self.action_socket.recv(zmq.NOBLOCK)
-    #             msg = Message.deserialize(bytes)
-    #             action = Action.model_validate(msg.data["action"])
-    #             self.current_action = action
-    #             if self.verbose:
-    #                 latency = (time.time_ns() - msg.controller_timestamp)/1e6
-    #                 # print(f"Received action: {action}")
-    #                 print(f"action latency: {latency:.2f}ms")
-    #             with self.observation_lock:
-    #                 self.process_action(action)
-    #             # print("Action processed")
-    #         except zmq.Again:
-    #         # except Exception as e:
-    #             # print(f"Error in action receiver: {e}")
-    #             time.sleep(0.001)
-
     @profile
     def send_observation(self, observation: Observation):
         if observation is None:
             return
         msg = Message()
         msg.robot_timestamp = time.time_ns()
-
-        raw_obs = {}
-
-        # Encode images as JPEG
-        for module_name, module_obs in observation.items():
-            raw_obs[module_name] = {}
-            for sensor_name, sensor_obs in module_obs.items():
-                raw_obs[module_name][sensor_name] = {}
-                for data_name, data in sensor_obs.items():
-                    
-                    if isinstance(data, ImageData):
-                        img = data.value
-                        if img is None:
-                            continue
-                        encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.cfg.img_compression_quality]
-                        encoded_img = cv2.imencode('.jpeg', img, encode_params)[1].tobytes()
-                        raw_obs[module_name][sensor_name][data_name] = encoded_img
-                        # print image size
-                        # print("-----------------------------------------------")
-                        # print(f"Image size: {len(encoded_img)/1024:.2f} kb")
-                        # print("Compression time: ", time.time() - start_time)
-                        # print("-----------------------------------------------")
-                    else:
-                        raw_obs[module_name][sensor_name][data_name] = data.value
+        observation.compress()
+        raw_obs = observation.to_dict()
                 
         msg.data = {"observation": raw_obs}
         self.state_socket.send(msg.serialize())
-
-    # def _state_publisher(self):
-    #     """Thread for capturing and sending state observation"""
-    #     print("State publisher started")
-    #     while self.running:
-    #         # Get and send observation
-            
-
-    #         self.get_action()
-
-    #         # print("Getting observation in robot.py")
-    #         with self.observation_lock:
-    #             observation = self.get_observation()
-    #         # print("Observation:", observation)
-
-    #         self.send_observation(observation)
-
-    #         # print("Observation sent", observation)
-    #         time.sleep(0.01)
-
     
     def control_loop(self):
         print("Control loop started")
@@ -307,31 +237,15 @@ class Robot(ABC):
 
                 if action is not None:
                     self.process_action(action)
-            
 
                 observation = self.get_observation()
 
-                # board = StatusBoard()
-                # board.set("Observation", observation)
                 StatusBoard.set("Observation", observation)
                 StatusBoard.set("Action", self.current_action)
-                # print("Observation:", observation)
-                # if 'arm' in observation.data and 'wrist' in observation.data['arm'] and 'image' in observation.data['arm']['wrist'] and type(observation.data['arm']['wrist']['image']) is np.ndarray:
-                #     print("Image is numpy array")
-                # else:
-                #     print("Image is not numpy array")
-                #     exit(1)
-
+                
                 if not observation.is_empty():
-                    # print("Sending observation:", observation)
                     self.send_observation(observation)
 
-                # # Wait for next frame
-                # if self.cfg.fps is not None:
-                #     dt_s = (time.time_ns() - start_loop_t)/1e9
-                #     busy_wait((1.0 / self.cfg.fps) - dt_s)
-
-                # print("Observation sent", observation)
                 time.sleep(0.001)
         except KeyboardInterrupt:
             print("\nKeyboardInterrupt: Shutting down robot...")
@@ -466,9 +380,8 @@ class Robot(ABC):
     def get_observation(self) -> Observation:
         """Create an observation with current robot state.
         Returns:
-            Observation: Contains camera images and actuator readings organized by groups
+            Observation: Contains ModuleObs readings organized by module
         """
-        # creates empty observation
         obs_data = {}
         for module_name, obs_queue in self.observation_queues.items():
             if not obs_queue.empty():
