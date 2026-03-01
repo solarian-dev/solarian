@@ -49,8 +49,6 @@ class Data(BaseModel):
         """
         Auto-uncompress on access (SIDE EFFECT).
         """
-        if self.is_compressed:
-            self.uncompress()
         return self.payload
 
     @value.setter
@@ -59,8 +57,12 @@ class Data(BaseModel):
         Setting value sets uncompressed state.
         """
         self.payload = v
-        self.is_compressed = False
-        self.compression_codec = None
+        if type(v) == bytes:
+            self.is_compressed = True
+            self.uncompress()
+        else:
+            self.is_compressed = False
+            self.compression_codec = None
 
     def compress(self) -> None:
         if self.is_compressed:

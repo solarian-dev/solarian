@@ -141,44 +141,41 @@ class ModuleAction:
 
     def __init__(self, action_type: ActionType = ActionType.STOP, data: dict = {}):
         self.action_type = action_type
-        self.data = data if data is not None else {}
+        data = data if data is not None else {}
         self._fields = {}
 
         actual_cls = type(self)._resolve_class()
-        actuator_fields = actual_cls.get_actuator_fields()
-        valid_keys = set(actuator_fields)
+        actuator_fields_spec = actual_cls.get_actuator_fields_spec()
+        valid_keys = set(actuator_fields_spec)
 
-        for key in self.data:
+        for key in data:
             if key not in valid_keys:
                 raise ValueError(
                     f"Invalid module action key '{key}' for {actual_cls.__name__}. "
                     f"Valid keys: {sorted(valid_keys)}"
                 )
-            if not isinstance(self.data[key], dict):
+            if not isinstance(data[key], dict):
                 raise ValueError(
                     f"Invalid module action value for '{key}' in {actual_cls.__name__}. "
                     f"Value must be a dictionary."
                 )
-            if not set(self.data[key].keys()).issubset(['value', 'timestamp']):
+            if not set(data[key].keys()).issubset(['value', 'timestamp']):
                 raise ValueError(
                     f"Invalid module action value for '{key}' in {actual_cls.__name__}. "
                     f"Value must be a dictionary with keys 'value' and 'timestamp'."
                 )
 
-        for name, actuator_fields in actuator_fields.items():
-            if name in self.data:
-                self._fields[name] = actuator_fields.source.duplicate(self.data[name])
+            self._fields[key] = actuator_fields_spec[key].source.duplicate(data[key])
+
+        self.is_compressed = False
     # -- Schema introspection ----------------------------------------------
 
     @classmethod
-    def get_actuator_fields(cls):
+    def get_actuator_fields_spec(cls):
         return {
             name: attr for name, attr in cls.__dict__.items()
             if isinstance(attr, ActuatorField)
         }
-
-    def get_data(self):
-        return self._fields
 
     # -- Item / attribute access -------------------------------------------
 
@@ -197,14 +194,10 @@ class ModuleAction:
     @classmethod
     def __class_getitem__(cls, item):
         cls = cls._resolve_class()
-        actuator_fields = cls.get_actuator_fields()
-        if item in actuator_fields:
-            return actuator_fields[item]
+        actuator_fields_spec = cls.get_actuator_fields_spec()
+        if item in actuator_fields_spec:
+            return actuator_fields_spec[item]
         return getattr(cls, item)
-
-    # -- Iteration ---------------------------------------------------------
-
-
             
     # -- Factory -----------------------------------------------------------
 
@@ -212,31 +205,27 @@ class ModuleAction:
     def zeros(cls):
         cls = cls._resolve_class()
         data = {}
-        for name, actuator_fields in cls.get_actuator_fields().items():
-            data[name] = actuator_fields.source.duplicate().to_dict()
-        return cls(action_type=ActionType.SCHEDULE_WAYPOINT, data=data)
+        for name, actuator_fields_spec in cls.get_actuator_fields_spec().items():
+            data[name] = actuator_fields_spec.source.duplicate().to_dict()
+        return cls(action_type=ActionType.STOP, data=data)
 
     # -- Dict interface ----------------------------------------------------
 
-    def is_empty(self):
-        if not self.data:
-            return True
-        return all(v is None for v in self.data.values())
-
     def to_dict(self):
-        return {'data': self.data, 'action_type': self.action_type}
+        data = {name: field.to_dict() for name, field in self._fields.items()}
+        return {'data': data, 'action_type': self.action_type}
 
     # -- Compression -------------------------------------------------------
 
     def compress(self):
         for field in self._fields.values():
             field.compress()
-        return self
+        self.is_compressed = True
 
     def uncompress(self):
         for field in self._fields.values():
             field.uncompress()
-        return self
+        self.is_compressed = False
 
 
 class Action:
@@ -258,71 +247,47 @@ class Action:
 
 
     def __init__(self, data: dict = {}):
-        self.data = data
+        data = data if data is not None else {}
+        self._module_actions = {}
 
         actual_cls = type(self)._resolve_class()
-        module_actions = actual_cls.get_module_actions()
-        valid_keys = set(module_actions.keys())
+        module_actions_spec = actual_cls.get_module_actions_spec()
+        valid_keys = set(module_actions_spec.keys())
 
-        for key in self.data:
+        for key in data:
             if key not in valid_keys:
                 raise ValueError(
                     f"Invalid action key '{key}' for {actual_cls.__name__}. "
                     f"Valid keys: {sorted(valid_keys)}"
                 )
 
-            if not isinstance(self.data[key], dict):
+            if not isinstance(data[key], dict):
                 raise ValueError(
                     f"Invalid action value for '{key}' in {actual_cls.__name__}. "
                     f"Value must be a dictionary."
                 )
-            # if not set(self.data[key].keys()).issubset(['data', 'action_type']):
-            #     raise ValueError(
-            #         f"Invalid action value for '{key}' in {actual_cls.__name__}. "
-            #         f"Value must be a dictionary with keys 'data' and 'action_type'."
-            #     )
-            if set(self.data[key].keys()) != set(['data', 'action_type']):
+
+            if set(data[key].keys()) != set(['data', 'action_type']):
                 raise ValueError(
                     f"Invalid action value for '{key}' in {actual_cls.__name__}. "
                     f"Value must be a dictionary with keys 'data' and 'action_type'."
                 )
             
-        self._module_actions = {
-            name: module_actions[name].__class__(
-                data=self.data[name]['data'],
-                action_type=self.data[name]['action_type'],
+            self._module_actions[key] = module_actions_spec[key].__class__(
+                data=data[key]["data"],
+                action_type=data[key]['action_type'],
             )
-            for name in data.keys()
-        }
+
+    # -- Schema introspection ----------------------------------------------
 
     @classmethod
-    def get_module_actions(cls):
+    def get_module_actions_spec(cls):
         return {
             name: attr for name, attr in cls.__dict__.items()
             if isinstance(attr, ModuleAction)
         }
 
-    @classmethod
-    def zeros(cls):
-        cls = cls._resolve_class()
-        data = {}
-        for name, module_action in cls.get_module_actions().items():
-            data[name] = module_action.zeros().to_dict()
-        return cls(data)
-
-    
-    def compress(self):
-        for module_action in self._module_actions.values():
-            module_action.compress()
-        return self
-
-    
-    def uncompress(self):
-        for module_action in self._module_actions.values():
-            module_action.uncompress()
-        return self
-
-     # -- Item / attribute access -------------------------------------------
+    # -- Item / attribute access -------------------------------------------
 
     def __getattribute__(self, name):
         try:
@@ -339,7 +304,36 @@ class Action:
     @classmethod
     def __class_getitem__(cls, item):
         cls = cls._resolve_class()
-        module_actions = cls.get_module_actions()
-        if item in module_actions:
-            return module_actions[item]
+        module_actions_spec = cls.get_module_actions_spec()
+        if item in module_actions_spec:
+            return module_actions_spec[item]
         return getattr(cls, item)
+
+    # -- Factory -----------------------------------------------------------
+
+    @classmethod
+    def zeros(cls):
+        cls = cls._resolve_class()
+        data = {}
+        for name, module_action_spec in cls.get_module_actions_spec().items():
+            data[name] = module_action_spec.zeros().to_dict()
+        return cls(data)
+
+    # -- Dict interface ----------------------------------------------------
+
+    def to_dict(self):
+        return {name: module_action.to_dict() for name, module_action in self._module_actions.items()}
+
+    # -- Compression -------------------------------------------------------
+
+    def compress(self):
+        for module_action in self._module_actions.values():
+            module_action.compress()
+        self.is_compressed = True
+
+    def uncompress(self):
+        for module_action in self._module_actions.values():
+            module_action.uncompress()
+        self.is_compressed = False
+
+    

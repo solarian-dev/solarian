@@ -36,6 +36,7 @@ class SharedMemoryQueue:
         
         self.buffer_size = buffer_size
         self.array_specs = array_specs
+        self.array_spec_map = {spec.name: spec for spec in array_specs}
         self.write_counter = write_counter
         self.read_counter = read_counter
         self.shared_arrays = shared_arrays
@@ -87,7 +88,38 @@ class SharedMemoryQueue:
     def clear(self):
         self.read_counter.store(self.write_counter.load())
     
+    def _validate_data(self, data: Dict[str, Union[np.ndarray, numbers.Number]]):
+        expected_keys = set(self.array_spec_map.keys())
+        actual_keys = set(data.keys())
+
+        missing = expected_keys - actual_keys
+        if missing:
+            raise KeyError(f'Missing keys: {missing}')
+
+        extra = actual_keys - expected_keys
+        if extra:
+            raise KeyError(f'Unexpected keys: {extra}')
+
+        for key, value in data.items():
+            spec = self.array_spec_map[key]
+            if isinstance(value, np.ndarray):
+                if value.shape != spec.shape:
+                    raise ValueError(
+                        f'Key {key!r}: expected shape {spec.shape}, got {value.shape}')
+                if value.dtype != spec.dtype:
+                    raise TypeError(
+                        f'Key {key!r}: expected dtype {spec.dtype}, got {value.dtype}')
+            elif isinstance(value, numbers.Number):
+                if spec.shape != ():
+                    raise ValueError(
+                        f'Key {key!r}: expected array with shape {spec.shape}, got scalar')
+            else:
+                raise TypeError(
+                    f'Key {key!r}: unsupported type {type(value)}')
+
     def put(self, data: Dict[str, Union[np.ndarray, numbers.Number]]):
+        self._validate_data(data)
+
         read_count = self.read_counter.load()
         write_count = self.write_counter.load()
         n_data = write_count - read_count

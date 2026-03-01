@@ -76,30 +76,156 @@ class CalculatedField:
 
 
 # ---------------------------------------------------------------------------
+# ModuleObs
+# ---------------------------------------------------------------------------
+
+class ModuleObs:
+    """
+    Groups sensor fields for a single module: schema (class-level) + data container (instances).
+
+    Subclass with ``SensorField`` and ``CalculatedField`` instances::
+
+        class MyArmObs(ModuleObs):
+            shoulder_pan_pos = SensorField(MyRobot.arm.shoulder_pan.pos)
+            shoulder_lift_pos = SensorField(MyRobot.arm.shoulder_lift.pos)
+            elbow_flex_pos = SensorField(MyRobot.arm.elbow_flex.pos)
+
+    When a concrete subclass is defined it auto-registers so that calls to
+    ``ModuleObs.zeros()`` on the base class transparently delegate to it.
+    """
+
+    _active_subclass = None
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        ModuleObs._active_subclass = cls
+
+    @classmethod
+    def _resolve_class(cls):
+        if cls is ModuleObs and ModuleObs._active_subclass is not None:
+            return ModuleObs._active_subclass
+        return cls
+
+    # -- Init --------------------------------------------------------------
+
+    def __init__(self, data=None):
+        data = data if data is not None else {}
+        self._fields = {}
+
+        actual_cls = type(self)._resolve_class()
+        sensor_fields_spec = actual_cls.get_sensor_fields_spec()
+        calculated_fields_spec = actual_cls.get_calculated_fields_spec()
+        valid_keys = set(sensor_fields_spec) | set(calculated_fields_spec)
+
+        for key in data:
+            if key not in valid_keys:
+                raise ValueError(
+                    f"Invalid module obs key '{key}' for {actual_cls.__name__}. "
+                    f"Valid keys: {sorted(valid_keys)}"
+                )
+            if not isinstance(data[key], dict):
+                raise ValueError(
+                    f"Invalid module obs value for '{key}' in {actual_cls.__name__}. "
+                    f"Value must be a dictionary."
+                )
+            if not set(data[key].keys()).issubset(['value', 'timestamp']):
+                raise ValueError(
+                    f"Invalid module obs value for '{key}' in {actual_cls.__name__}. "
+                    f"Value must be a dictionary with keys 'value' and 'timestamp'."
+                )
+
+            if key in sensor_fields_spec:
+                self._fields[key] = sensor_fields_spec[key].source.duplicate(data[key])
+            elif key in calculated_fields_spec:
+                self._fields[key] = calculated_fields_spec[key].output.duplicate(data[key])
+
+        self.is_compressed = False
+
+    # -- Schema introspection ----------------------------------------------
+
+    @classmethod
+    def get_sensor_fields_spec(cls):
+        return {
+            name: attr for name, attr in cls.__dict__.items()
+            if isinstance(attr, SensorField)
+        }
+
+    @classmethod
+    def get_calculated_fields_spec(cls):
+        return {
+            name: attr for name, attr in cls.__dict__.items()
+            if isinstance(attr, CalculatedField)
+        }
+
+    # -- Item / attribute access -------------------------------------------
+
+    def __getattribute__(self, name):
+        try:
+            fields = object.__getattribute__(self, '_fields')
+        except AttributeError:
+            return object.__getattribute__(self, name)
+        if name in fields:
+            return fields[name]
+        return object.__getattribute__(self, name)
+
+    def __getitem__(self, name):
+        return self._fields[name]
+
+    @classmethod
+    def __class_getitem__(cls, item):
+        cls = cls._resolve_class()
+        sensor_fields_spec = cls.get_sensor_fields_spec()
+        calculated_fields_spec = cls.get_calculated_fields_spec()
+        if item in sensor_fields_spec:
+            return sensor_fields_spec[item]
+        if item in calculated_fields_spec:
+            return calculated_fields_spec[item]
+        return getattr(cls, item)
+
+    # -- Factory -----------------------------------------------------------
+
+    @classmethod
+    def zeros(cls):
+        cls = cls._resolve_class()
+        data = {}
+        for name, sf_spec in cls.get_sensor_fields_spec().items():
+            data[name] = sf_spec.source.duplicate().to_dict()
+        for name, cf_spec in cls.get_calculated_fields_spec().items():
+            data[name] = cf_spec.output.zeros().to_dict()
+        return cls(data)
+
+    # -- Dict interface ----------------------------------------------------
+
+    def to_dict(self):
+        return {name: field.to_dict() for name, field in self._fields.items()}
+
+    # -- Compression -------------------------------------------------------
+
+    def compress(self):
+        for field in self._fields.values():
+            field.compress()
+        self.is_compressed = True
+
+    def uncompress(self):
+        for field in self._fields.values():
+            field.uncompress()
+        self.is_compressed = False
+
+
+# ---------------------------------------------------------------------------
 # Observation
 # ---------------------------------------------------------------------------
 
 class Observation:
     """
-    Top-level observation: schema (class-level) + data container (instances).
+    Top-level Observation: groups ``ModuleObs`` instances.
 
-    Subclass with ``SensorField`` and ``CalculatedField`` instances::
+    Subclass with ``ModuleObs`` instances::
 
         class MyObservation(Observation):
-            shoulder_pan_pos = SensorField(MyRobot.arm.shoulder_pan.pos)
-            shoulder_pan_speed = SensorField(MyRobot.arm.shoulder_pan.speed)
-            shoulder_lift_pos = SensorField(MyRobot.arm.shoulder_lift.pos)
-            shoulder_lift_speed = SensorField(MyRobot.arm.shoulder_lift.speed)
-            elbow_flex_pos = SensorField(MyRobot.arm.elbow_flex.pos)
-            elbow_flex_speed = SensorField(MyRobot.arm.elbow_flex.speed)
-            wrist_flex_pos = SensorField(MyRobot.arm.wrist_flex.pos)
-            wrist_flex_speed = SensorField(MyRobot.arm.wrist_flex.speed)
-            wrist_yaw_pos = SensorField(MyRobot.arm.wrist_yaw.pos)
-            wrist_yaw_speed = SensorField(MyRobot.arm.wrist_yaw.speed)
-            wrist_roll_pos = SensorField(MyRobot.arm.wrist_roll.pos)
-            wrist_roll_speed = SensorField(MyRobot.arm.wrist_roll.speed)
-            gripper_pos = SensorField(MyRobot.gripper.gripper_actuator.pos)
-            image = SensorField(MyRobot.camera.camera.image)
+            arm = MyArmObs()
+            gripper = MyGripperObs()
+            gripper_camera = MyCameraObs()
 
     When a concrete subclass is defined it auto-registers so that calls to
     ``Observation.zeros()`` or ``Observation.compress()`` on the base class
@@ -121,115 +247,85 @@ class Observation:
     # -- Init --------------------------------------------------------------
 
     def __init__(self, data=None):
-        self.data = data if data is not None else {}
-        self._fields = {}
-
+        data = data if data is not None else {}
+        self._module_obs = {}
+        
         actual_cls = type(self)._resolve_class()
-        sensor_fields = actual_cls.get_sensor_fields()
-        calculated_fields = actual_cls.get_calculated_fields()
-        valid_keys = set(sensor_fields) | set(calculated_fields)
+        module_obs_spec = actual_cls.get_module_obs_spec()
+        valid_keys = set(module_obs_spec.keys())
 
-        for key in self.data:
+        for key in data:
             if key not in valid_keys:
                 raise ValueError(
                     f"Invalid observation key '{key}' for {actual_cls.__name__}. "
                     f"Valid keys: {sorted(valid_keys)}"
                 )
-            if not isinstance(self.data[key], dict):
+            if not isinstance(data[key], dict):
                 raise ValueError(
                     f"Invalid observation value for '{key}' in {actual_cls.__name__}. "
                     f"Value must be a dictionary."
                 )
-            if not set(self.data[key].keys()).issubset(['value', 'timestamp']):
-                raise ValueError(
-                    f"Invalid observation value for '{key}' in {actual_cls.__name__}. "
-                    f"Value must be a dictionary with keys 'value' and 'timestamp'."
-                )
 
-        for name, sensor_fields in sensor_fields.items():
-            if name in self.data:    
-                self._fields[name] = sensor_fields.source.duplicate(self.data[name])
-        for name, calculated_fields in calculated_fields.items():
-            if name in self.data:
-                self._fields[name] = calculated_fields.output.duplicate(self.data[name])
+            self._module_obs[key] = module_obs_spec[key].__class__(data=data[key])
+        self.is_compressed = False
+
+
     # -- Schema introspection ----------------------------------------------
 
     @classmethod
-    def get_sensor_fields(cls):
+    def get_module_obs_spec(cls):
+        cls = cls._resolve_class()
         return {
             name: attr for name, attr in cls.__dict__.items()
-            if isinstance(attr, SensorField)
+            if isinstance(attr, ModuleObs)
         }
-
-    @classmethod
-    def get_calculated_fields(cls):
-        return {
-            name: attr for name, attr in cls.__dict__.items()
-            if isinstance(attr, CalculatedField)
-        }
-
-    def get_data(self):
-        return self._fields
 
     # -- Item / attribute access -------------------------------------------
 
     def __getattribute__(self, name):
         try:
-            return self._fields[name]
-        except:
-            try:
-                return object.__getattribute__(self, name)
-            except AttributeError:
-                raise AttributeError(f"Observation has no attribute {name}, available attributes: {list(self._fields.keys())}")
+            obs = object.__getattribute__(self, '_module_obs')
+        except AttributeError:
+            return object.__getattribute__(self, name)
+        if name in obs:
+            return obs[name]
+        return object.__getattribute__(self, name)
 
     def __getitem__(self, name):
-        return self._fields[name]
+        return self._module_obs[name] 
 
     @classmethod
     def __class_getitem__(cls, item):
         cls = cls._resolve_class()
-        sensor_fields = cls.get_sensor_fields()
-        calculated_fields = cls.get_calculated_fields()
-        if item in sensor_fields:
-            return sensor_fields[item]
-        if item in calculated_fields:
-            return calculated_fields[item]
+        module_obs_spec = cls.get_module_obs_spec()
+        if item in module_obs_spec:
+            return module_obs_spec[item]
         return getattr(cls, item)
 
-    # -- Iteration ---------------------------------------------------------
-
-
-            
     # -- Factory -----------------------------------------------------------
 
     @classmethod
     def zeros(cls):
         cls = cls._resolve_class()
         data = {}
-        for name, sensor_fields in cls.get_sensor_fields().items():
-            data[name] = sensor_fields.source.duplicate().to_dict()
-        for name, calculated_fields in cls.get_calculated_fields().items():
-            data[name] = calculated_fields.output.zeros().to_dict()
+        for name, module_obs_spec in cls.get_module_obs_spec().items():
+            data[name] = module_obs_spec.zeros().to_dict()
         return cls(data)
 
     # -- Dict interface ----------------------------------------------------
 
-    def is_empty(self):
-        if not self.data:
-            return True
-        return all(v is None for v in self.data.values())
-
     def to_dict(self):
-        return self.data
+        return {name: module_obs.to_dict() for name, module_obs in self._module_obs.items()}
 
     # -- Compression -------------------------------------------------------
 
     def compress(self):
-        for field in self._fields.values():
-            field.compress()
-        return self
+        for module_obs in self._module_obs.values():
+            module_obs.compress()
+        self.is_compressed = True
 
     def uncompress(self):
-        for field in self._fields.values():
-            field.uncompress()
-        return self
+        for module_obs in self._module_obs.values():
+            module_obs.uncompress()
+        self.is_compressed = False
+        

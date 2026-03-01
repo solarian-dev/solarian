@@ -13,7 +13,7 @@ from multiprocessing.managers import SharedMemoryManager
 import numpy as np
 
 from solarian.utils.shared_memory.shared_memory_queue import SharedMemoryQueue, Empty, Full
-from solarian.core.action import Action, ModuleAction
+from solarian.core.action import Action, ActionType, ModuleAction
 
 
 def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
@@ -103,6 +103,8 @@ class ActionQueue:
         buffer_size: Number of actions the queue can hold
     """
     
+    PRESENT_PREFIX = '_present'
+
     def __init__(
         self,
         shm_manager: SharedMemoryManager,
@@ -110,20 +112,24 @@ class ActionQueue:
         buffer_size: int
     ):
         self.buffer_size = buffer_size
-        
-        # Convert example action to flattened dict to define schema
-        # example_dict = self._action_to_flat_dict(example_action)
-        example_dict = example_action.to_dict()
-        
-        # Create underlying SharedMemoryQueue with the flattened schema
+        self._module_action_class = type(example_action)
+
+        actual_cls = self._module_action_class._resolve_class()
+        self._actuator_field_names = list(actual_cls.get_actuator_fields_spec().keys())
+
+        # Build the full-schema flat dict from the example (should come from
+        # zeros() so every field is present).  Append one int8 presence flag
+        # per actuator field so the consumer knows which fields were real.
+        example_dict = flatten_dict(example_action.to_dict())
+        for name in self._actuator_field_names:
+            example_dict[f'{self.PRESENT_PREFIX}.{name}'] = np.int8(1)
+        self._template_flat_dict = example_dict
+
         self._queue = SharedMemoryQueue.create_from_examples(
             shm_manager=shm_manager,
             examples=example_dict,
             buffer_size=buffer_size
         )
-        
-        # Store the Action class for reconstruction
-        self._module_action_class = type(example_action)
     
     @classmethod
     def create_from_example(
@@ -146,18 +152,59 @@ class ActionQueue:
         return cls(shm_manager, example_action, buffer_size)
     
     def _action_to_flat_dict(self, action: ModuleAction) -> Dict[str, Union[np.ndarray, numbers.Number]]:
-        """Convert an Action to a flattened dictionary."""
+        """Convert a ModuleAction to a flattened dictionary.
+
+        Starts from the zero-filled template so every put produces the
+        same key set.  Presence flags are set to 1 only for fields that
+        were actually populated in the action.
+        """
         if action is None:
             return {}
-        # action_dict = action.data
+
         action_dict = action.to_dict()
-        return flatten_dict(action_dict)
-    
+        present_fields = set(action_dict.get('data', {}).keys())
+        flat = flatten_dict(action_dict)
+
+        full = self._template_flat_dict.copy()
+        full.update(flat)
+
+        for name in self._actuator_field_names:
+            full[f'{self.PRESENT_PREFIX}.{name}'] = np.int8(1 if name in present_fields else 0)
+
+        return full
+
+    @staticmethod
+    def _to_native(v):
+        """Convert 0-d numpy arrays back to Python scalars."""
+        if isinstance(v, np.ndarray) and v.ndim == 0:
+            return v.item()
+        return v
+
     def _flat_dict_to_action(self, flat_dict: Dict[str, Any]) -> ModuleAction:
-        """Convert a flattened dictionary back to an ModuleAction."""
-        # nested_dict = unflatten_dict(flat_dict)
-        # return self._action_class(nested_dict)
-        return self._module_action_class(action_type=flat_dict['action_type'], data=flat_dict['data'])
+        """Convert a flattened dictionary back to a ModuleAction.
+
+        Only fields whose presence flag is 1 are included in the
+        reconstructed action.
+        """
+        present_fields = {
+            name for name in self._actuator_field_names
+            if int(flat_dict.get(f'{self.PRESENT_PREFIX}.{name}', 0)) == 1
+        }
+
+        # Strip presence flags and convert 0-d arrays to native scalars
+        data_flat = {
+            k: self._to_native(v) for k, v in flat_dict.items()
+            if not k.startswith(self.PRESENT_PREFIX)
+        }
+        nested = unflatten_dict(data_flat)
+
+        filtered_data = {
+            k: v for k, v in nested.get('data', {}).items()
+            if k in present_fields
+        }
+
+        action_type = ActionType(int(nested['action_type']))
+        return self._module_action_class(action_type=action_type, data=filtered_data)
     
     def qsize(self) -> int:
         """Return the approximate number of actions in the queue."""

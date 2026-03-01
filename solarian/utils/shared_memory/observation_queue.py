@@ -14,30 +14,30 @@ import numpy as np
 
 from solarian.utils.shared_memory.shared_memory_queue import SharedMemoryQueue, Empty, Full
 from solarian.utils.shared_memory.action_queue import flatten_dict, unflatten_dict
-from solarian.core.observation import Observation
+from solarian.core.observation import ModuleObs
 
 
 class ObservationQueue:
     """
-    A shared memory queue for Observation objects.
+    A shared memory queue for ModuleObs objects.
     
-    Converts Observation objects to flattened dictionaries for efficient storage
+    Converts ModuleObs objects to flattened dictionaries for efficient storage
     in SharedMemoryQueue. No pickle serialization overhead.
     
-    Requirements for Observation data:
+    Requirements for ModuleObs data:
     - Values must be numbers, np.ndarray, or nested dicts with same constraints
     - The schema (keys and array shapes) must be consistent across all observations
     
     Args:
         shm_manager: SharedMemoryManager instance
-        example_obs: An example Observation to define the schema
+        example_obs: An example ModuleObs to define the schema
         buffer_size: Number of observations the queue can hold
     """
     
     def __init__(
         self,
         shm_manager: SharedMemoryManager,
-        example_obs: Observation,
+        example_obs: ModuleObs,
         buffer_size: int
     ):
         self.buffer_size = buffer_size
@@ -52,40 +52,27 @@ class ObservationQueue:
             buffer_size=buffer_size
         )
         
-        # Store the ModuleObs class for reconstruction
-        self._obs_class = type(example_obs)
+        self._module_obs_class = type(example_obs)
     
-    # @classmethod
-    # def create_from_example(
-    #     cls,
-    #     shm_manager: SharedMemoryManager,
-    #     example_obs: Observation,
-    #     buffer_size: int = 1024
-    # ) -> "ObservationQueue":
-    #     """
-    #     Create an ObservationQueue from an example Observation.
-        
-    #     Args:
-    #         shm_manager: SharedMemoryManager instance
-    #         example_obs: An example ModuleObs that defines the schema
-    #         buffer_size: Number of observations the queue can hold
-            
-    #     Returns:
-    #         ObservationQueue instance
-    #     """
-    #     return cls(shm_manager, example_obs, buffer_size)
-    
-    def _obs_to_flat_dict(self, obs: Observation) -> Dict[str, Union[np.ndarray, numbers.Number]]:
+    def _obs_to_flat_dict(self, obs: ModuleObs) -> Dict[str, Union[np.ndarray, numbers.Number]]:
         """Convert a ModuleObs to a flattened dictionary."""
         if obs is None:
             return {}
-        obs_dict = obs.data
+        obs_dict = obs.to_dict()
         return flatten_dict(obs_dict)
     
-    def _flat_dict_to_obs(self, flat_dict: Dict[str, Any]) -> Observation:
+    @staticmethod
+    def _to_native(v):
+        """Convert 0-d numpy arrays back to Python scalars."""
+        if isinstance(v, np.ndarray) and v.ndim == 0:
+            return v.item()
+        return v
+
+    def _flat_dict_to_obs(self, flat_dict: Dict[str, Any]) -> ModuleObs:
         """Convert a flattened dictionary back to a ModuleObs."""
-        nested_dict = unflatten_dict(flat_dict)
-        return self._obs_class(nested_dict)
+        native_flat = {k: self._to_native(v) for k, v in flat_dict.items()}
+        nested_dict = unflatten_dict(native_flat)
+        return self._module_obs_class(nested_dict)
     
     def qsize(self) -> int:
         """Return the approximate number of observations in the queue."""
@@ -99,7 +86,7 @@ class ObservationQueue:
         """Clear all observations from the queue."""
         self._queue.clear()
     
-    def put(self, obs: Observation) -> None:
+    def put(self, obs: ModuleObs) -> None:
         """
         Put an observation into the queue.
         
@@ -112,7 +99,7 @@ class ObservationQueue:
         """
         self._queue.put(self._obs_to_flat_dict(obs))
     
-    def get(self) -> Observation:
+    def get(self) -> ModuleObs:
         """
         Get an observation from the queue.
         
@@ -124,7 +111,7 @@ class ObservationQueue:
         """
         return self._flat_dict_to_obs(self._queue.get())
     
-    def get_k(self, k: int) -> List[Observation]:
+    def get_k(self, k: int) -> List[ModuleObs]:
         """
         Get up to k observations from the queue.
         
@@ -148,7 +135,7 @@ class ObservationQueue:
         
         return observations
     
-    def get_all(self) -> List[Observation]:
+    def get_all(self) -> List[ModuleObs]:
         """
         Get all observations from the queue.
         
