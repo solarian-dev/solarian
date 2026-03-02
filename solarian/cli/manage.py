@@ -244,6 +244,9 @@ def main() -> None:
             else:
                 cfg = hydra_cfg
                 
+            from solarian.setup import setup
+            setup()
+
             cmd.handle(cfg)
         # except ValueError as e:
         #     # Handle configuration validation errors

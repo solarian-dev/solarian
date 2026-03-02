@@ -3,6 +3,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
+from solarian.core.configs import ServerConfig
 from solarian.utils import get_class
 
 
@@ -14,7 +15,7 @@ class RunServerCommand(BaseCommand):
         from solarian.conf import settings
 
         """Return the config class for this command."""
-        return get_class(get_class(settings.SERVER_CLASS).config_class)
+        return ServerConfig
 
     def handle(self, cfg: DictConfig) -> None:
         from solarian.conf import settings

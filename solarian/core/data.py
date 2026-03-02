@@ -113,10 +113,7 @@ class Data(BaseModel):
         object.__setattr__(self, 'name', name)
 
     def __get__(self, instance, owner):
-        # print("Data called __get__")
-        # print("Data instance:", instance)
-        # print("Data owner:", owner)
-        if self.path is None:
+        if instance is not None:
             object.__setattr__(self, 'path', (instance.parent.name, instance.name, self.name))
         return self
 

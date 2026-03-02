@@ -1,32 +1,12 @@
-from solarian.core import DataComputer, Data, Observation, ModuleObs, SensorObs, DataKind
-import numpy as np
+from solarian.core.observation import SensorField, ModuleObs, Observation
+from ${project_name}.robot import ${project_name_camel}Robot
 
 
-class JointObs(SensorObs):
-    pos = Data(computer=DataComputer.ROBOT, dtype=int)
-    speed = Data(computer=DataComputer.ROBOT, dtype=int)
+class MyModuleObs(ModuleObs):
+    # define fields here
+    # eg:
+    # shoulder_pan_pos = SensorField(${project_name_camel}Robot.mymodule.shoulder_pan.pos)
+    
 
-class ImageObs(SensorObs):
-    image = Data(shape=(224, 224, 3), computer=DataComputer.ROBOT, dtype=np.uint8, kind=DataKind.IMAGE)
-
-class ArmObs(ModuleObs):
-    shoulder_pan = JointObs()
-    shoulder_lift = JointObs()
-    elbow_flex = JointObs()
-    wrist_flex = JointObs()
-    wrist_yaw = JointObs()
-    wrist_roll = JointObs()
-
-
-class GripperObs(ModuleObs):
-    width = JointObs()
-
-
-class WristCamObs(ModuleObs):
-    image = ImageObs()
-
-
-class MySolarianObservation(Observation):
-    arm = ArmObs()
-    gripper = GripperObs()
-    wrist_cam = WristCamObs()
+class ${project_name_camel}Observation(Observation):
+    arm = MyModuleObs()

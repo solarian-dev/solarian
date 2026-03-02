@@ -11,8 +11,7 @@ class RunRobotCommand(BaseCommand):
 
     def get_config_class(self):
         """Return the config class for this command."""
-        from solarian.conf import settings
-        return get_class(get_class(settings.ROBOT_CLASS).config_class)
+        return RobotConfig
 
     def handle(self, cfg: RobotConfig) -> None:
         from solarian.conf import settings

@@ -7,6 +7,8 @@ commands received from a leader arm or controller.
 
 from solarian.core.module import Module
 
+from solarian_feetech.actuator import FeetechServo
+
 
 class SO100FollowerArmModule(Module):
     """
@@ -22,6 +24,13 @@ class SO100FollowerArmModule(Module):
         - Optimized PID tuning for smooth motion
         - Configurable port via ${actuator_port} variable
     """
+
+    shoulder_pan = FeetechServo()
+    shoulder_lift = FeetechServo()
+    elbow_flex = FeetechServo()
+    wrist_flex = FeetechServo()
+    wrist_roll = FeetechServo()
+    gripper = FeetechServo()
     
     def initialize(self):
         """Initialize the arm with optimal servo settings."""

@@ -100,15 +100,16 @@ class Controller(ABC):
         }
 
         self.shm_manager = SharedMemoryManager()
+        self.shm_manager.start()
 
         example_observation = Observation.zeros()
 
         # create one module observation buffer per module
         self.module_observation_buffers = {}
-        for module_name in example_observation.data.keys():
+        for module_name, module_observation in example_observation.items():
             self.module_observation_buffers[module_name] = ObservationRingBuffer.create_from_example(
                 shm_manager=self.shm_manager,
-                example_observation=example_observation[module_name],
+                example_observation=module_observation,
                 get_time_budget=0.2,
                 put_desired_frequency=cfg.fps
             )
@@ -239,7 +240,7 @@ class Controller(ABC):
         """Send control actions to robot"""
         msg = Message()
         msg.controller_timestamp = time.time_ns()
-        msg.data = {"action": action.data}
+        msg.data = {"action": action.to_dict()}
 
         if self.clicked_point is not None:
             msg.data["click"] = {
@@ -327,9 +328,6 @@ class Controller(ABC):
     
     @profile
     def display(self):
-
-        StatusBoard.set("Action", self.last_action)
-
         obs_spec = Observation.get_module_obs_spec()
 
         images = {}
@@ -428,6 +426,7 @@ class Controller(ABC):
                 self.last_action = self.control_step()
 
                 if self.last_action is not None:
+                    StatusBoard.set("Action", self.last_action.to_dict())
                     self.send_action(self.last_action)
 
                 # if "reset_policy" in events and events["reset_policy"]:

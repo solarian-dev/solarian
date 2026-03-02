@@ -42,7 +42,7 @@ class ModuleBus():
             self.component_bus_by_port[port] = bus_class(port=port, components=components, calibration=calibration.get(port, None))
 
             try:
-                print(f"Connecting {self.component_bus_by_port[port]} on port", port)
+                print(f"Connecting {self.component_bus_by_port[port].__class__.__name__} on port", port)
                 self.component_bus_by_port[port].connect()
             except Exception as e:
                 print(f"Failed to connect to component bus on port {port}: {e}")

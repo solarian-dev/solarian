@@ -240,10 +240,11 @@ class Robot(ABC):
 
                 observation = self.get_observation()
 
-                StatusBoard.set("Observation", observation)
+                
                 StatusBoard.set("Action", self.current_action)
                 
                 if not observation.is_empty():
+                    StatusBoard.set("Observation", observation.to_dict())
                     self.send_observation(observation)
 
                 time.sleep(0.001)

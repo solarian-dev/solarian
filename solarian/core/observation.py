@@ -20,6 +20,8 @@ class SensorField:
 
     def __init__(self, source: Data):
         self.source = source
+        assert source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
+        self._path = source.path
     
     @property
     def dtype(self):
@@ -39,18 +41,15 @@ class SensorField:
 
     @property
     def data_name(self):
-        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
-        return self.source.path[2]
+        return self._path[2]
 
     @property
     def sensor_name(self):
-        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
-        return self.source.path[1]
+        return self._path[1]
 
     @property
     def module_name(self):
-        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
-        return self.source.path[0]
+        return self._path[0]
 
 
 class CalculatedField:
@@ -399,6 +398,9 @@ class Observation:
 
     def to_dict(self):
         return {name: module_obs.to_dict() for name, module_obs in self._module_obs.items()}
+
+    def is_empty(self):
+        return len(self._module_obs) == 0
 
     # -- Compression -------------------------------------------------------
 

@@ -233,13 +233,7 @@ class Module(Process):
 
         values_dict = self.module_bus.read(data_type, component_names, normalize)
         values = values_dict.values()
-        # Perform calibration transformations if required
-        # if data_name in CALIBRATION_REQUIRED and self.calibrator is not None:
-        #     values = np.array(list(values))
-        #     values = self.calibrator.avoid_rotation_reset(values, component_names, data_name)
-        #     values = self.calibrator.apply_calibration_autocorrect(values, component_names).tolist()
-
-        return {name: value for name, value in zip(component_names, values)}
+        return {name: {'value': value, 'timestamp': time.time()} for name, value in zip(component_names, values)}
 
     def connect_sensors(self):
         for sensor in self.sensors.values():
@@ -541,7 +535,8 @@ class Module(Process):
             sensor_names = [sensor_name for _, sensor_name, _ in field_list]
             sensor_data = self.read_sensors(data_class, sensor_names)
             for field_name, sensor_name, _ in field_list:
-                data[field_name] = {'value': sensor_data[sensor_name], 'timestamp': time.time() - self.cfg.receive_latency}
+                sensor_data[sensor_name]['timestamp'] = time.time() - self.cfg.receive_latency
+                data[field_name] = sensor_data[sensor_name]
 
         obs = module_obs_cls(data)
         obs = self.enrich_observation(obs)
@@ -720,8 +715,8 @@ class Module(Process):
             )
             self.last_waypoint_time = curr_t
             self.speed_kwargs = self._get_max_speed_kwargs()
-            self.t_start = time.monotonic()
-            self.iter_idx = 0
+            self._t_start = time.monotonic()
+            self._iter_idx = 0
             
             keep_running = True
 

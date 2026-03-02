@@ -14,7 +14,7 @@ from multiprocessing.managers import SharedMemoryManager
 import numpy as np
 
 from solarian.utils.shared_memory.shared_memory_ring_buffer import SharedMemoryRingBuffer
-from solarian.core.observation import Observation
+from solarian.core.observation import ModuleObs
 
 
 def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
@@ -112,7 +112,7 @@ class ObservationRingBuffer:
     def __init__(
         self,
         shm_manager: SharedMemoryManager,
-        example_observation: Observation,  # Observation instance
+        example_observation: ModuleObs,  # Observation instance
         get_max_k: int = 32,
         get_time_budget: float = 0.2,
         put_desired_frequency: float = 60
@@ -120,9 +120,9 @@ class ObservationRingBuffer:
         self.get_max_k = get_max_k
         
         # Convert example observation to flattened dict to define schema
-        example_dict = flatten_dict(example_observation.data)
+        example_dict = flatten_dict(example_observation.to_dict())
 
-        self.observation_class: Observation = example_observation.__class__
+        self.module_obs_class = example_observation.__class__
         
         # Create underlying SharedMemoryRingBuffer with the flattened schema
         self._buffer = SharedMemoryRingBuffer.create_from_examples(
@@ -141,7 +141,7 @@ class ObservationRingBuffer:
         """Custom pickle support - exclude any non-picklable attributes."""
         state = self.__dict__.copy()
         # Remove any class references that can't be pickled
-        state.pop('observation_class', None)
+        state.pop('module_obs_class', None)
         return state
     
     def __setstate__(self, state):
@@ -152,17 +152,17 @@ class ObservationRingBuffer:
     def create_from_example(
         cls,
         shm_manager: SharedMemoryManager,
-        example_observation,
+        example_observation: ModuleObs,
         get_max_k: int = 32,
         get_time_budget: float = 0.2,
         put_desired_frequency: float = 60
     ) -> "ObservationRingBuffer":
         """
-        Create an ObservationRingBuffer from an example Observation.
+        Create an ObservationRingBuffer from an example ModuleObs.
         
         Args:
             shm_manager: SharedMemoryManager instance
-            example_observation: An example Observation that defines the schema
+            example_observation: An example ModuleObs that defines the schema
             get_max_k: Maximum number of observations that can be retrieved at once
             get_time_budget: Maximum time for get operations
             put_desired_frequency: Expected frequency of put operations
@@ -186,14 +186,14 @@ class ObservationRingBuffer:
     #     observation_dict = observation.to_dict()
     #     return flatten_dict(observation_dict)
     
-    def _flat_dict_to_observation(self, flat_dict: Dict[str, Any]) -> Observation:
+    def _flat_dict_to_observation(self, flat_dict: Dict[str, Any]) -> ModuleObs:
         """Convert a flattened dictionary back to an Observation.
         
         Args:
             flat_dict: Flattened dictionary from the ring buffer
         """
         nested_dict = unflatten_dict(flat_dict)
-        return self.observation_class(nested_dict)
+        return self.module_obs_class(nested_dict)
     
     @property
     def count(self) -> int:
@@ -204,7 +204,7 @@ class ObservationRingBuffer:
         """Clear the ring buffer."""
         self._buffer.clear()
     
-    def put(self, observation: Observation, wait: bool = True):
+    def put(self, observation: ModuleObs, wait: bool = True):
         """
         Put an observation into the ring buffer.
         
@@ -218,7 +218,7 @@ class ObservationRingBuffer:
         """
         self._buffer.put(flatten_dict(observation.data), wait=wait)
     
-    def get(self) -> Observation:
+    def get(self) -> ModuleObs:
         """
         Get the most recent observation from the ring buffer.
         
@@ -231,7 +231,7 @@ class ObservationRingBuffer:
         flat_dict = self._buffer.get()
         return self._flat_dict_to_observation(flat_dict)
     
-    def get_last_k(self, k: int) -> List[Observation]:
+    def get_last_k(self, k: int) -> List[ModuleObs]:
         """
         Get the last k observations from the ring buffer.
         
@@ -239,7 +239,7 @@ class ObservationRingBuffer:
             k: Number of observations to retrieve (must be <= get_max_k)
             
         Returns:
-            List of Observation instances, oldest first
+            List of ModuleObs instances, oldest first
             
         Raises:
             AssertionError: If k > get_max_k or k > count
@@ -261,7 +261,7 @@ class ObservationRingBuffer:
         Get all available observations from the ring buffer (up to get_max_k).
         
         Returns:
-            List of Observation instances, oldest first
+            List of ModuleObs instances, oldest first
         """
         flat_results = self._buffer.get_all()
         

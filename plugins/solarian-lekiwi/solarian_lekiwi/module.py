@@ -6,6 +6,8 @@ Mobile base module for LeKiwi robot using Feetech STS3215 servos for wheel contr
 
 from solarian.core.module import Module
 
+from solarian_feetech.actuator import FeetechServo
+
 
 class LekiwiBaseModule(Module):
     """
@@ -21,6 +23,10 @@ class LekiwiBaseModule(Module):
         - Front camera sensor
         - Configurable ports via ${actuator_port} and ${front_camera_port} variables
     """
+
+    left_wheel = FeetechServo()
+    back_wheel = FeetechServo()
+    right_wheel = FeetechServo()
     
     def initialize(self):
         """Initialize the mobile base with optimal servo settings."""

@@ -82,13 +82,13 @@ class ShellCommand(BaseCommand):
         namespace['robot'] = robot
 
         # Create the project's controller instance
-        # controller = self._create_controller(settings)
-        controller = None
+        controller = self._create_controller(settings)
+        # controller = None
         namespace['controller'] = controller
 
         # Create the project's server instance
-        server = self._create_server(settings)
-        namespace['server'] = server
+        # server = self._create_server(settings)
+        # namespace['server'] = server
 
         robot_line = "  robot      - Robot instance\n" if robot is not None else ""
         controller_line = "  controller - Controller instance\n" if controller is not None else ""

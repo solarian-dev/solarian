@@ -29,11 +29,13 @@ PROJECT_FILES: Tuple[FileSpec, ...] = (
     # Python package goes into {package_name}/ subdirectory
     FileSpec(Path("__init__.py.tmpl"), Path("{package_name}/__init__.py")),
     FileSpec(Path("robot.py.tmpl"), Path("{package_name}/robot.py")),
-    FileSpec(Path("modules.py.tmpl"), Path("{package_name}/modules.py")),
+    # FileSpec(Path("modules.py.tmpl"), Path("{package_name}/modules.py")),
     FileSpec(Path("controller.py.tmpl"), Path("{package_name}/controller.py")),
     FileSpec(Path("server.py.tmpl"), Path("{package_name}/server.py")),
+    FileSpec(Path("settings.py.tmpl"), Path("{package_name}/settings.py")),
+    
     # conf/
-    FileSpec(Path("conf/settings.py.tmpl"), Path("{package_name}/settings.py")),
+    
     FileSpec(Path("conf/config.yaml.tmpl"), Path("conf/config.yaml")),
     FileSpec(Path("conf/controller.yaml.tmpl"), Path("conf/controller.yaml")),
     FileSpec(Path("conf/record.yaml.tmpl"), Path("conf/record.yaml")),
