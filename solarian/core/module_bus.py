@@ -1,16 +1,8 @@
 from typing import Any, Dict
-from enum import Enum
-import time
 
 from solarian.core.component import Component
 from solarian.core.component_bus import ComponentBus
 from solarian.core.data import Data
-from solarian.utils import manual_profile
-
-
-class TorqueMode(int, Enum):
-    ENABLED = 1
-    DISABLED = 0
 
 
 class ModuleBus():
@@ -75,37 +67,27 @@ class ModuleBus():
                 result.update(data)
         return result
 
-    # def write_pos(self, values: Dict[str, Any]):
-    #     """Write a value to the actuator group."""
-    #     self.write(ValueName.POS, values)
+    def configure(self, params: dict[str, int], component_names: list[str]):
+        """Write raw hardware-level configuration parameters to components."""
+        for port, component_bus in self.component_bus_by_port.items():
+            names_bus = [name for name in component_names if name in self.components_by_port[port]]
+            if names_bus:
+                component_bus.configure(params, names_bus)
 
-    # def write_speed(self, values: Dict[str, Any]):
-    #     """Write a value to the actuator group."""
-    #     self.write(ValueName.SPEED, values)
+    def enable_torque(self, component_names: list[str]):
+        """Enable torque on the specified components."""
+        for port, component_bus in self.component_bus_by_port.items():
+            names_bus = [name for name in component_names if name in self.components_by_port[port]]
+            if names_bus:
+                component_bus.enable_torque(names_bus)
 
-    # def read_pos(self, component_names: list[str]):
-    #     """Read a value from the actuator group."""
-    #     return self.read(ValueName.POS, component_names)
+    def disable_torque(self, component_names: list[str]):
+        """Disable torque on the specified components."""
+        for port, component_bus in self.component_bus_by_port.items():
+            names_bus = [name for name in component_names if name in self.components_by_port[port]]
+            if names_bus:
+                component_bus.disable_torque(names_bus)
 
-    # def read_speed(self, component_names: list[str]):
-    #     """Read a value from the actuator group."""
-    #     return self.read(ValueName.SPEED, component_names)
-
-    # def enable_torque(self, component_names: list[str]):
-    #     """Enable torque for the actuator."""
-    #     self.write(ValueName.TORQUE_ENABLE, {name: TorqueMode.ENABLED for name in component_names})
-        
-    # def disable_torque(self, component_names: list[str]):
-    #     """Disable torque for the actuator."""
-    #     self.write(ValueName.TORQUE_ENABLE, {name: TorqueMode.DISABLED for name in component_names})
-        
-    # TODO, remove hardcoded strings
-    # def set_velocity_mode(self, component_names: list[str]):
-    #     self.write("Operating_Mode", {name: 1 for name in component_names})
-
-    # def set_position_mode(self, component_names: list[str]):
-    #     self.write("Operating_Mode", {name: 0 for name in component_names})
-        
     def is_calibrated(self) -> bool:
         for component_bus in self.component_bus_by_port.values():
             if not component_bus.is_calibrated():

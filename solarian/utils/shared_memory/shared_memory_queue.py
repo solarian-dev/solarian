@@ -117,14 +117,17 @@ class SharedMemoryQueue:
                 raise TypeError(
                     f'Key {key!r}: unsupported type {type(value)}')
 
-    def put(self, data: Dict[str, Union[np.ndarray, numbers.Number]]):
+    def put(self, data: Dict[str, Union[np.ndarray, numbers.Number]], overwrite_oldest: bool = False):
         self._validate_data(data)
 
         read_count = self.read_counter.load()
         write_count = self.write_counter.load()
         n_data = write_count - read_count
         if n_data >= self.buffer_size:
-            raise Full()
+            if overwrite_oldest:
+                self.read_counter.add(1)
+            else:
+                raise Full()
         
         next_idx = write_count % self.buffer_size
 
@@ -169,6 +172,34 @@ class SharedMemoryQueue:
 
         out = self._get_k_impl(k, read_count, out=out)
         self.read_counter.add(k)
+        return out
+
+    def get_latest(self, out=None) -> Dict[str, np.ndarray]:
+        """Return the newest item without consuming any entries.
+
+        Older entries remain available for subsequent get/get_k/get_all calls
+        (e.g. for interpolation).  To prevent torn reads when the writer wraps
+        the ring buffer, the read counter is snapped forward so that at most
+        ``buffer_size - 1`` entries are retained.
+        """
+        write_count = self.write_counter.load()
+        read_count = self.read_counter.load()
+        n_data = write_count - read_count
+        if n_data <= 0:
+            raise Empty()
+
+        if n_data >= self.buffer_size:
+            safe_read = write_count - (self.buffer_size - 1)
+            self.read_counter.store(safe_read)
+
+        if out is None:
+            out = self._allocate_empty()
+
+        newest_idx = (write_count - 1) % self.buffer_size
+        for key, value in self.shared_arrays.items():
+            arr = value.get()
+            np.copyto(out[key], arr[newest_idx])
+
         return out
 
     def get_all(self, out=None) -> Dict[str, np.ndarray]:

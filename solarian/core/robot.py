@@ -110,7 +110,6 @@ class Robot(ABC):
         # Verify connection
         # self._verify_connection()
         
-        self.current_action = None
         self.current_velocity = None
         self.current_arm_state = None
         
@@ -206,7 +205,6 @@ class Robot(ABC):
 
             raw_action = msg.data["action"]
             action = Action(raw_action)
-            self.current_action = action
             # latency = (time.time_ns() - action.controller_timestamp)
             # manual_profile("process_action latency", latency)
             return action
@@ -236,16 +234,15 @@ class Robot(ABC):
                 action = self.get_action()
 
                 if action is not None:
+                    StatusBoard.set("Action", action)
                     self.process_action(action)
+                    
 
                 observation = self.get_observation()
-
-                
-                StatusBoard.set("Action", self.current_action)
                 
                 if not observation.is_empty():
-                    StatusBoard.set("Observation", observation.to_dict())
                     self.send_observation(observation)
+                    StatusBoard.set("Observation", observation)
 
                 time.sleep(0.001)
         except KeyboardInterrupt:
@@ -302,6 +299,7 @@ class Robot(ABC):
 
     def start(self):
         self.running = True
+        StatusBoard()
         for module_name, module in self.modules.items():
             module.start()
 
@@ -389,6 +387,8 @@ class Robot(ABC):
                 obs_data[module_name] = obs_queue.get().to_dict()
         return Observation(obs_data)
                     
+    _process_action_logged = False
+
     # @profile
     def process_action(self, action: Action):
         """Process received action
@@ -396,8 +396,9 @@ class Robot(ABC):
             action (Action): Action to process
         """
         # put action into action queues
-        for module_name in action.data.keys():
-            self.action_queues[module_name].put(action[module_name])
+        for module_name, module_action in action.items():
+            self.action_queues[module_name].put(module_action)
+            StatusBoard.set(f"{module_name} Action Queue Size", self.action_queues[module_name].qsize())
 
     def update(self):
         """Update robot state"""

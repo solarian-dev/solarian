@@ -36,27 +36,17 @@ class SO100FollowerArmModule(Module):
         """Initialize the arm with optimal servo settings."""
         super().initialize()
 
-        # Disable torque to configure settings
-        self.write_actuators("Torque_Enable", 0)
-        self.write_actuators("Lock", 0)
-        
-        # Configure servo communication
-        self.write_actuators("Return_Delay_Time", 0)
-        
-        # Set maximum acceleration for responsive movement
-        # Note: Maximum_Acceleration is not in the official STS3215 Memory Table
-        self.write_actuators("Maximum_Acceleration", 254)
-        self.write_actuators("Acceleration", 254)
-        
-        # Position control mode
-        self.set_actuators_position_mode()
-        
-        # PID tuning for smooth motion (reduced P to avoid shakiness)
-        self.write_actuators("P_Coefficient", 12)
-        self.write_actuators("I_Coefficient", 0)
-        self.write_actuators("D_Coefficient", 32)
-        
-        # Enable torque and lock settings
-        self.write_actuators("Torque_Enable", 1)
-        self.write_actuators("Lock", 1)
+        self.disable_torque()
+
+        self.configure_components({
+            "Return_Delay_Time": 0,
+            "Maximum_Acceleration": 254,
+            "Acceleration": 254,
+            "Operating_Mode": 0,
+            "P_Coefficient": 12,
+            "I_Coefficient": 0,
+            "D_Coefficient": 32,
+        })
+
+        self.enable_torque()
 

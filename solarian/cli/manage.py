@@ -205,7 +205,7 @@ def main() -> None:
     colorama.init()  # Initialize colorama for colored terminal output
     try:
         cmd = CommandRegistry.get_command(subcommand)
-    except Exception as e:
+    except KeyError:
         print(f"Unknown command: {subcommand}")
         sys.exit(1)
     

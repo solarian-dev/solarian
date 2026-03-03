@@ -216,7 +216,7 @@ class ObservationRingBuffer:
             TimeoutError: If wait=False and puts are happening too fast
             TypeError: If the observation contains unsupported types
         """
-        self._buffer.put(flatten_dict(observation.data), wait=wait)
+        self._buffer.put(flatten_dict(observation.to_dict()), wait=wait)
     
     def get(self) -> ModuleObs:
         """

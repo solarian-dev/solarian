@@ -20,7 +20,7 @@ from .component import Component
 from .component_bus import ComponentBus
 
 # core/module_bus.py
-from .module_bus import TorqueMode, ModuleBus
+from .module_bus import ModuleBus
 
 # core/sensor_bus.py
 from .sensor_bus import SensorBus

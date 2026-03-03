@@ -187,6 +187,12 @@ class ModuleAction:
     def __getitem__(self, name):
         return self._fields[name]
 
+    def items(self):
+        return self._fields.items()
+
+    def values(self):
+        return self._fields
+
     @classmethod
     def __class_getitem__(cls, item):
         cls = cls._resolve_class()
@@ -297,6 +303,9 @@ class Action:
     def __getitem__(self, name):
         return self._module_actions[name]
 
+    def items(self):
+        return self._module_actions.items()
+
     @classmethod
     def __class_getitem__(cls, item):
         cls = cls._resolve_class()
@@ -332,4 +341,3 @@ class Action:
             module_action.uncompress()
         self.is_compressed = False
 
-    

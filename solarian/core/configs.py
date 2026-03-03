@@ -77,7 +77,7 @@ class ServoConfig(ActuatorConfig, SensorConfig):
 # A module is composed by joints and bodies
 class ModuleConfig(BaseModel):
     # Process/control loop settings
-    frequency: float = 50.0  # control loop frequency in Hz
+    frequency: float # control loop frequency in Hz
     get_max_k: int = 128  # max number of states to keep in ring buffer
     commands_per_cycle: int = 1  # max commands to process per control loop iteration
     command_queue_size: int = 1024  # size of the command input queue
@@ -151,12 +151,13 @@ class ReplayConfig(ControllerConfig):
     
 class ServerConfig(BaseModel):
     connection: ConnectionConfig
-    image_processing: list[str]
-    tracking_model: str | None
-    depth_model: str | None
-    ref_x: int
-    ref_y: int
     img_compression_quality: int
+    # image_processing: list[str]
+    # tracking_model: str | None
+    # depth_model: str | None
+    # ref_x: int
+    # ref_y: int
+    
 
 # A project is composed by a robot, a server, a controller and a config
 # In its top level config it also points to the classes that implement the robot, server, controller and config

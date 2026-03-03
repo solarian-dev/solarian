@@ -79,6 +79,26 @@ class ComponentBus(abc.ABC):
         """Read calibration parameters from the components."""
         return {}
 
+    def configure(self, params: dict[str, int], component_names: list[str]):
+        """Write raw hardware-level configuration parameters to components.
+
+        Each bus subclass implements this with hardware-specific logic
+        (e.g., writing servo registers, setting camera parameters).
+
+        Args:
+            params: Mapping of parameter names to values (hardware-specific).
+            component_names: Components on this bus to configure.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support configure operations")
+
+    def enable_torque(self, component_names: list[str]):
+        """Enable torque on the specified components. Override in actuator buses."""
+        raise NotImplementedError(f"{type(self).__name__} does not support torque operations")
+
+    def disable_torque(self, component_names: list[str]):
+        """Disable torque on the specified components. Override in actuator buses."""
+        raise NotImplementedError(f"{type(self).__name__} does not support torque operations")
+
     def setup_component(self, component_name: str, configs: Dict[str, Any]):
         """Setup a component on this bus. Override if supported."""
         raise NotImplementedError(f"{type(self).__name__} does not support setup_component")

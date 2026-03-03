@@ -426,7 +426,7 @@ class Controller(ABC):
                 self.last_action = self.control_step()
 
                 if self.last_action is not None:
-                    StatusBoard.set("Action", self.last_action.to_dict())
+                    StatusBoard.set("Action", self.last_action)
                     self.send_action(self.last_action)
 
                 # if "reset_policy" in events and events["reset_policy"]:

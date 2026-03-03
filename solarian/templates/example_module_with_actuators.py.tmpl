@@ -28,10 +28,9 @@ class ExampleArmModule(Module):
         """Initialize the arm with optimal servo settings."""
         super().initialize()
         
-        # Configure actuators
-        self.write_actuators("Torque_Enable", 0)
-        self.set_actuators_position_mode()
-        self.write_actuators("Torque_Enable", 1)
+        self.disable_torque()
+        self.configure_components({"Operating_Mode": 0})
+        self.enable_torque()
 
 
 # Example with mixed actuator types

@@ -1,7 +1,9 @@
 import json
 import os
+import sys
 import time
 import inspect
+import threading
 from dataclasses import dataclass, asdict
 from abc import ABC, abstractmethod
 import numpy as np
@@ -14,6 +16,7 @@ from solarian.core.actuator import Actuator
 from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.sensor import Sensor
 from solarian.core.servo import Servo
+from solarian.core.data import Data
 from solarian.core.module_bus import ModuleBus
 from solarian.core.action import Action, ActionType, action_handler, ModuleAction
 from solarian.core.configs import ModuleConfig, InterpolatorType
@@ -245,21 +248,34 @@ class Module(Process):
     #         return np.array([])
     #     return np.array(list(self.module_bus.read(data_type, component_names).values()))
     
-    def write_actuators(self, data_name: str, data: int | float | Dict[str, Any], normalize: bool = True):
+    def write_actuators(self, values: Dict[str, Data], normalize: bool = True):
         """Write calibrated values to the actuators."""
-        if isinstance(data, (int, float)):
-            values = np.array([data] * len(self.actuators))
+        self.module_bus.write(values, normalize)
+
+    def configure_components(self, params: dict[str, int], component_names: list[str] | None = None):
+        """Write raw hardware-level configuration parameters to components.
+
+        Args:
+            params: Mapping of parameter names to values (hardware-specific).
+            component_names: Components to configure. Defaults to all components.
+        """
+        if component_names is None:
+            component_names = list(self.actuators.keys()) + [
+                name for name in self.sensors.keys() if name not in self.actuators
+            ]
+        self.module_bus.configure(params, component_names)
+
+    def enable_torque(self, component_names: list[str] | None = None):
+        """Enable torque on the specified components (actuators by default)."""
+        if component_names is None:
             component_names = list(self.actuators.keys())
-        else:
-            values = np.array(list(data.values()))
-            component_names = list(data.keys())
+        self.module_bus.enable_torque(component_names)
 
-        # Perform reverse calibration transformations if required
-        # if data_name in CALIBRATION_REQUIRED and self.calibrator is not None:
-        #     values = self.calibrator.revert_calibration(values, component_names)
-
-        values_dict = {name: value for name, value in zip(component_names, values)}
-        self.module_bus.write(values_dict, normalize)
+    def disable_torque(self, component_names: list[str] | None = None):
+        """Disable torque on the specified components (actuators by default)."""
+        if component_names is None:
+            component_names = list(self.actuators.keys())
+        self.module_bus.disable_torque(component_names)
 
     def is_calibrated(self) -> bool:
         if self.calibration is None:
@@ -664,43 +680,65 @@ class Module(Process):
             return True
 
     # ========= standard action handlers ============
-    @action_handler(ActionType.STOP)
-    def _handle_stop(self, action: ModuleAction, t_now: float) -> bool:
-        """Handle STOP action - stops the module."""
-        if self.verbose:
-            print(f"[Module] {self.name}: Received STOP action")
-        return False  # Signal to stop
+    # @action_handler(ActionType.STOP)
+    # def _handle_stop(self, action: ModuleAction, t_now: float) -> bool:
+    #     """Handle STOP action - stops the module."""
+    #     if self.verbose:
+    #         print(f"[Module] {self.name}: Received STOP action")
+    #     return False  # Signal to stop
     
-    @action_handler(ActionType.SCHEDULE_WAYPOINT)
-    def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
-        """Handle SCHEDULE_WAYPOINT action - schedules a new waypoint."""
+    # @action_handler(ActionType.SCHEDULE_WAYPOINT)
+    # def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
+    #     """Handle SCHEDULE_WAYPOINT action - schedules a new waypoint."""
 
-        # # TO DO: do it in a more elegant way
-        # target_values = [data['value'] for data in action.to_dict()['data'].values()]
-        # target_time = list(action.to_dict()['data'].values())[0]['timestamp']
-        # # translate global time to monotonic time
-        # target_time = time.monotonic() - time.time() + target_time
+    #     # # TO DO: do it in a more elegant way
+    #     # target_values = [data['value'] for data in action.to_dict()['data'].values()]
+    #     # target_time = list(action.to_dict()['data'].values())[0]['timestamp']
+    #     # # translate global time to monotonic time
+    #     # target_time = time.monotonic() - time.time() + target_time
         
-        # self._interp = self._interp.schedule_waypoint(
-        #     value=target_values,
-        #     time=target_time,
-        #     curr_time=t_now,
-        #     last_waypoint_time=self._last_waypoint_time,
-        #     **self._speed_kwargs
-        # )
-        # self._last_waypoint_time = target_time
-        return True
+    #     # self._interp = self._interp.schedule_waypoint(
+    #     #     value=target_values,
+    #     #     time=target_time,
+    #     #     curr_time=t_now,
+    #     #     last_waypoint_time=self._last_waypoint_time,
+    #     #     **self._speed_kwargs
+    #     # )
+    #     # self._last_waypoint_time = target_time
+    #     return True
     
-    @action_handler(ActionType.RESTART_PUT)
-    def _handle_restart_put(self, action: ModuleAction, t_now: float) -> bool:
-        """Handle RESTART_PUT action - restarts the put timing."""
-        self._t_start = action.target_time - time.time() + time.monotonic()
-        self._iter_idx = 1
-        return True
+    # @action_handler(ActionType.RESTART_PUT)
+    # def _handle_restart_put(self, action: ModuleAction, t_now: float) -> bool:
+    #     """Handle RESTART_PUT action - restarts the put timing."""
+    #     self._t_start = action.target_time - time.time() + time.monotonic()
+    #     self._iter_idx = 1
+    #     return True
+
+    # ========= observation thread ============
+    def _observation_loop(self, stop_event: threading.Event):
+        """Continuously read sensors and publish observations in a dedicated thread.
+
+        Runs as fast as the underlying I/O allows so that the main action
+        loop is never blocked by slow serial-bus reads.
+        """
+        while not stop_event.is_set():
+            try:
+                self.update_observations()
+            except Exception as e:
+                if self.verbose:
+                    print(f"[Module] {self.name}: observation error: {e}")
+                break
 
     # ========= main loop in process ============
     def run(self):
         """Main control loop running in a separate process."""
+        obs_stop = threading.Event()
+        obs_thread = threading.Thread(
+            target=self._observation_loop,
+            args=(obs_stop,),
+            daemon=True,
+        )
+
         try:
             self.reset()
 
@@ -720,28 +758,32 @@ class Module(Process):
             
             keep_running = True
 
+            obs_thread.start()
+
+
             while keep_running:
                 t_now = time.monotonic()
 
-                # Execute current waypoint from interpolator
-                self.exec_waypoint(t_now)
-                
-                # update observations
-                self.update_observations()
-
-                # fetch actions from queue
+                # fetch the newest action, discarding stale entries
+                action = None
                 try:
                     if self.action_queue is None:
                         raise ValueError("Action queue is not initialized.")
-                    actions = self.action_queue.get_k(self.commands_per_cycle)
+                    action = self.action_queue.get_latest()
                 except Empty:
-                    actions = []
-                
-                # dispatch actions via handler registry
-                for action in actions:
-                    keep_running = self._dispatch_action(action, t_now)
-                    if not keep_running:
-                        break
+                    pass
+                except Exception as e:
+                    if self.verbose:
+                        print(f"[Module] {self.name}: action read error: {type(e).__name__}: {e}", flush=True, file=sys.stderr)
+
+                # dispatch action via handler registry
+                if action is not None:
+                    try:
+                        keep_running = self._dispatch_action(action, t_now)
+                    except Exception as e:
+                        import traceback
+                        print(f"[Module] {self.name}: handler error: {type(e).__name__}: {e}", flush=True, file=sys.stderr)
+                        traceback.print_exc(file=sys.stderr)
                     
                 # first loop successful, ready to receive actions
                 if self._iter_idx == 0:
@@ -753,36 +795,14 @@ class Module(Process):
                 t_end = self._t_start + dt * self._iter_idx
                 precise_wait(t_end=t_end, time_func=time.monotonic)
                 
+        except Exception as _run_exc:
+
+            raise
         finally:
+            obs_stop.set()
+            obs_thread.join(timeout=2.0)
             self.ready_event.set()
             if self.verbose:
                 print(f"[Module] {self.name} process terminated")
 
-    # # ========= abstract methods for subclasses ============
     
-    def exec_waypoint(self, timestamp: float):
-        """
-        Execute the current interpolated waypoint values.
-        
-        This method is called on every iteration of the control loop.
-        Subclasses must implement this to convert interpolated values
-        to actuator commands and execute them.
-        
-        Args:
-            values: Interpolated values from the trajectory interpolator
-            timestamp: Current timestamp (monotonic time)
-        """
-    
-    # @abstractmethod
-    # def _extract_target_values(self, action: Action) -> np.ndarray:
-    #     """
-    #     Extract target values from an action for scheduling waypoints.
-        
-    #     Override in subclass to customize how actions are parsed.
-        
-    #     Args:
-    #         action: Action object from input queue
-            
-    #     Returns:
-    #         Target values array for the interpolator
-    #     """
