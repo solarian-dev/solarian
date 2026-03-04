@@ -1,12 +1,13 @@
-# pip install rich
 from rich.live import Live
 from rich.table import Table
-from rich.console import Console
+from rich.console import Console, Group
 from rich.pretty import Pretty
 from rich.json import JSON
 from rich import print as rprint
 import multiprocessing
+import sys
 import threading
+import traceback
 import time
 import os
 import queue
@@ -16,6 +17,7 @@ from rich.console import RenderableType
 from solarian.core.action import Action
 from solarian.core.observation import Observation
 from datetime import datetime
+from solarian.utils.log_buffer import LogBuffer, get_log_queue
 
 
 
@@ -232,7 +234,12 @@ class StatusBoard:
             self.data = {}
             self._local_q = queue.Queue()
             self._mp_q = multiprocessing.Queue()
+            self._log_q = get_log_queue()
+            self._log_buf = LogBuffer(maxlen=500)
             self._creator_pid = os.getpid()
+            self._stop_event = threading.Event()
+            self._stopped_event = threading.Event()
+            self._console = Console()
             self._initialized = True
 
             threading.Thread(target=self.ui_loop, daemon=True).start()
@@ -257,18 +264,43 @@ class StatusBoard:
         except Exception:
             return None, None
 
+    @classmethod
+    def stop(cls):
+        """Stop the live display so exceptions/tracebacks render cleanly."""
+        inst = cls._instance
+        if inst is None:
+            return
+        inst._stop_event.set()
+        inst._stopped_event.wait(timeout=2.0)
+
+    @classmethod
+    def print_exception(cls, exc: BaseException | None = None):
+        """Stop the live display and print an exception traceback cleanly.
+        
+        Must be called from within an ``except`` block so that
+        ``sys.exc_info()`` is available (or pass *exc* explicitly).
+        """
+        cls.stop()
+        console = Console(stderr=True)
+        console.print()
+        if exc is not None:
+            console.print_exception(show_locals=False)
+        elif sys.exc_info()[1] is not None:
+            console.print_exception(show_locals=False)
+        else:
+            traceback.print_exc()
+
     def render(self):
         t = Table(title="Status", expand=True, show_edge=False)
         t.add_column("State"); t.add_column("Value")
         t.add_row("Local time", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
         for k, v in self.data.items():
             t.add_row(k, value_str(v))
-        return t
+        return Group(t, self._log_buf.render())
 
     def ui_loop(self):
-        console = Console()
-        with Live(self.render(), console=console, refresh_per_second=12) as live:
-            while True:
+        with Live(self.render(), console=self._console, refresh_per_second=12) as live:
+            while not self._stop_event.is_set():
                 try:
                     while True:
                         k, v = self._local_q.get_nowait()
@@ -281,8 +313,10 @@ class StatusBoard:
                         self.data[k] = v
                 except queue.Empty:
                     pass
+                self._log_buf.drain(self._log_q)
                 live.update(self.render())
                 time.sleep(0.05)
+        self._stopped_event.set()
 
 
 

@@ -155,19 +155,19 @@ class Data(BaseModel):
 
 
 class PosData(Data):
-    dtype: Type = int
-    payload: int = Field(default=0, alias="value")
+    dtype: Type = float
+    payload: float = Field(default=0.0, alias="value")
 
     if TYPE_CHECKING:
         @property
-        def value(self) -> int: ...
+        def value(self) -> float: ...
         @value.setter
         def value(self, v: Any | None) -> None: ...
 
 
 class SpeedData(Data):
-    dtype: Type = int
-    payload: int = Field(default=0, alias="value")
+    dtype: Type = float
+    payload: float = Field(default=0.0, alias="value")
 
 
 class TorqueEnableData(Data):

@@ -218,20 +218,18 @@ class ActionQueue:
         """Clear all actions from the queue."""
         self._queue.clear()
     
-    def put(self, action: ModuleAction, overwrite_oldest: bool = True) -> None:
+    def put(self, action: ModuleAction) -> None:
         """
         Put an action into the queue.
         
         Args:
             action: An ModuleAction instance to enqueue
-            overwrite_oldest: If True, drop the oldest entry when full
-                instead of raising Full.
             
         Raises:
-            Full: If the queue is full and overwrite_oldest is False
+            Full: If the queue is full
             TypeError: If the action contains unsupported types
         """
-        self._queue.put(self._action_to_flat_dict(action), overwrite_oldest=overwrite_oldest)
+        self._queue.put(self._action_to_flat_dict(action))
     
     def get(self) -> ModuleAction:
         """
@@ -245,18 +243,6 @@ class ActionQueue:
         """
         return self._flat_dict_to_action(self._queue.get())
     
-    def get_latest(self) -> ModuleAction:
-        """
-        Get only the newest action, discarding all older entries.
-        
-        Returns:
-            The most recent ModuleAction in the queue
-            
-        Raises:
-            Empty: If the queue is empty
-        """
-        return self._flat_dict_to_action(self._queue.get_latest())
-
     def get_k(self, k: int) -> List[ModuleAction]:
         """
         Get up to k actions from the queue.

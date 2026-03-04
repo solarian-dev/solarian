@@ -14,12 +14,15 @@ from solarian.core.action import Action
 from .module import Module
 from .module_bus import ModuleBus
 from solarian.core import Observation
-from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard
+from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard, setup_process_logging
 from solarian.core.data import ImageData
 from solarian.utils.shared_memory.observation_queue import ObservationQueue
 from solarian.utils.shared_memory.action_queue import ActionQueue
 from solarian.conf import settings
 from solarian.utils import get_class
+
+import logging
+logger = logging.getLogger("robot")
 
 
 class Robot(ABC):
@@ -223,12 +226,28 @@ class Robot(ABC):
         msg.data = {"observation": raw_obs}
         self.state_socket.send(msg.serialize())
     
+    def _check_module_health(self) -> bool:
+        """Check if any module process has crashed. Returns True if all healthy."""
+        for module_name, module in self.modules.items():
+            err = module.get_error()
+            if err is not None:
+                mod_name, tb_str = err
+                StatusBoard.stop()
+                from rich.console import Console
+                console = Console(stderr=True)
+                console.print()
+                console.print(f"[bold red]Module '{mod_name}' crashed:[/bold red]\n{tb_str}")
+                return False
+        return True
+
     def control_loop(self):
         print("Control loop started")
         try:
             while self.running:
                 start_loop_t = time.time_ns()
-                # Get and send observation
+
+                if not self._check_module_health():
+                    break
 
                 self.update()
                 action = self.get_action()
@@ -236,7 +255,6 @@ class Robot(ABC):
                 if action is not None:
                     StatusBoard.set("Action", action)
                     self.process_action(action)
-                    
 
                 observation = self.get_observation()
                 
@@ -247,6 +265,10 @@ class Robot(ABC):
                 time.sleep(0.001)
         except KeyboardInterrupt:
             print("\nKeyboardInterrupt: Shutting down robot...")
+        except Exception:
+            StatusBoard.print_exception(None)
+        finally:
+            self.running = False
             self.disconnect()
 
     def connect(self):
@@ -299,14 +321,24 @@ class Robot(ABC):
 
     def start(self):
         self.running = True
+        setup_process_logging(logger_name=None)
         StatusBoard()
-        for module_name, module in self.modules.items():
-            module.start()
+        try:
+            for module_name, module in self.modules.items():
+                module.start()
 
-        # Hook for subclasses to start additional threads
-        self.on_start()
+            # Hook for subclasses to start additional threads
+            self.on_start()
 
-        self.control_loop()
+            self.control_loop()
+        except KeyboardInterrupt:
+            StatusBoard.stop()
+            print("\nKeyboardInterrupt: Shutting down robot...")
+        except Exception:
+            StatusBoard.print_exception(None)
+        finally:
+            self.running = False
+            self.disconnect()
         
     def is_calibrated(self):
         for module_name, module in self.modules.items():
@@ -376,6 +408,7 @@ class Robot(ABC):
         #         return False
             
     
+    @profile
     def get_observation(self) -> Observation:
         """Create an observation with current robot state.
         Returns:
@@ -387,9 +420,7 @@ class Robot(ABC):
                 obs_data[module_name] = obs_queue.get().to_dict()
         return Observation(obs_data)
                     
-    _process_action_logged = False
-
-    # @profile
+    @profile
     def process_action(self, action: Action):
         """Process received action
         Args:

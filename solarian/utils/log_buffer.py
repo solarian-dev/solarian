@@ -1,0 +1,130 @@
+import logging
+import multiprocessing
+import os
+import collections
+import queue
+from datetime import datetime
+from typing import Optional
+
+from rich.panel import Panel
+from rich.text import Text
+
+
+LEVEL_STYLES = {
+    logging.DEBUG: "dim",
+    logging.INFO: "green",
+    logging.WARNING: "yellow",
+    logging.ERROR: "bold red",
+    logging.CRITICAL: "bold white on red",
+}
+
+
+class LogRecord:
+    """Lightweight, picklable snapshot of a logging.LogRecord."""
+    __slots__ = ("timestamp", "level", "name", "message", "pid")
+
+    def __init__(self, timestamp: float, level: int, name: str, message: str, pid: int):
+        self.timestamp = timestamp
+        self.level = level
+        self.name = name
+        self.message = message
+        self.pid = pid
+
+    @classmethod
+    def from_logging_record(cls, record: logging.LogRecord) -> "LogRecord":
+        return cls(
+            timestamp=record.created,
+            level=record.levelno,
+            name=record.name,
+            message=record.getMessage(),
+            pid=record.process or os.getpid(),
+        )
+
+
+class LogBuffer:
+    """Thread-safe ring buffer that renders as a Rich Panel.
+
+    Call ``drain(queue)`` periodically to pull :class:`LogRecord` objects from
+    a :class:`multiprocessing.Queue` into the fixed-size buffer.
+    """
+
+    def __init__(self, maxlen: int = 200):
+        self._buf: collections.deque[LogRecord] = collections.deque(maxlen=maxlen)
+
+    def drain(self, q: multiprocessing.Queue):
+        """Move all pending records from *q* into the ring buffer."""
+        while True:
+            try:
+                rec = q.get_nowait()
+                self._buf.append(rec)
+            except (queue.Empty, EOFError):
+                break
+
+    def render(self, max_lines: int = 18) -> Panel:
+        lines = Text()
+        tail = list(self._buf)[-max_lines:]
+        for rec in tail:
+            ts = datetime.fromtimestamp(rec.timestamp).strftime("%H:%M:%S.%f")[:-3]
+            lvl = logging.getLevelName(rec.level)[:4]
+            style = LEVEL_STYLES.get(rec.level, "")
+            line = Text()
+            line.append(f"{ts} ", style="dim")
+            line.append(f"{lvl:<4} ", style=style)
+            line.append(f"[pid {rec.pid}] ", style="dim cyan")
+            line.append(f"{rec.name}: ", style="bold")
+            line.append(rec.message)
+            line.append("\n")
+            lines.append_text(line)
+        return Panel(lines or Text("(no logs yet)", style="dim"), title="Logs", border_style="cyan")
+
+
+class QueueLogHandler(logging.Handler):
+    """A :class:`logging.Handler` that serialises records into a
+    :class:`multiprocessing.Queue` so they can be drained by the
+    :class:`LogBuffer` living in the main process.
+
+    Usage (in any process)::
+
+        handler = QueueLogHandler(log_queue)
+        logging.getLogger().addHandler(handler)
+    """
+
+    def __init__(self, log_queue: multiprocessing.Queue, level: int = logging.NOTSET):
+        super().__init__(level)
+        self._queue = log_queue
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            self._queue.put_nowait(LogRecord.from_logging_record(record))
+        except Exception:
+            self.handleError(record)
+
+
+_log_queue: Optional[multiprocessing.Queue] = None
+
+
+def get_log_queue() -> multiprocessing.Queue:
+    """Return the global log queue, creating it on first call.
+
+    The queue is safe to pass to child processes (it is a
+    :class:`multiprocessing.Queue`).
+    """
+    global _log_queue
+    if _log_queue is None:
+        _log_queue = multiprocessing.Queue()
+    return _log_queue
+
+
+def setup_process_logging(
+    level: int = logging.DEBUG,
+    logger_name: Optional[str] = None,
+):
+    """Wire the given (or root) logger so all records go to the shared log queue.
+
+    Call this once at the top of every child process's ``run()`` / entry-point.
+    """
+    log_q = get_log_queue()
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(level)
+    if not any(isinstance(h, QueueLogHandler) for h in logger.handlers):
+        logger.addHandler(QueueLogHandler(log_q, level))

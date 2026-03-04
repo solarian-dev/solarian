@@ -8,7 +8,8 @@ from dataclasses import dataclass, asdict
 from abc import ABC, abstractmethod
 import numpy as np
 from typing import Dict, List, Tuple, Any, Callable, Union
-from multiprocessing import Process, Event
+import traceback as _tb
+from multiprocessing import Process, Event, Queue as MpQueue
 from solarian.core.calibration import MotorCalibration
 
 from solarian.core.joint import Joint
@@ -22,7 +23,7 @@ from solarian.core.action import Action, ActionType, action_handler, ModuleActio
 from solarian.core.configs import ModuleConfig, InterpolatorType
 from solarian.core.observation import Observation, ModuleObs
 from solarian.core.data import DataComputer, TimestampData
-from solarian.utils import manual_profile, profile
+from solarian.utils import manual_profile, profile, setup_process_logging
 from solarian.utils.shared_memory.shared_memory_queue import Empty
 from solarian.utils.shared_memory.action_queue import ActionQueue
 from solarian.utils.shared_memory.observation_queue import ObservationQueue
@@ -34,9 +35,13 @@ from solarian.utils.trajectory_interpolator import (
 )
 from solarian.utils.precise_sleep import precise_wait
 from solarian.utils import get_class
-
+from solarian.utils.status_board import StatusBoard
 # TODO: remove speed from calibration required
 # CALIBRATION_REQUIRED = [ValueName.POS]
+
+
+import logging
+logger = None
 
 
 class Module(Process):
@@ -130,6 +135,8 @@ class Module(Process):
 
         self.cfg = cfg
         self.name = name if name is not None else self.__class__.__name__
+        global logger
+        logger = logging.getLogger(f"module.{self.name}")
         
         self.observation_queue = observation_queue
         self.action_queue = action_queue
@@ -149,6 +156,7 @@ class Module(Process):
         self.speed_kwargs: dict[str, Any] = {}
         
         self.ready_event = Event()
+        self._error_queue: MpQueue = MpQueue()
 
         self.launch_timeout = self.cfg.launch_timeout
         self.commands_per_cycle = self.cfg.commands_per_cycle
@@ -479,6 +487,16 @@ class Module(Process):
     def is_ready(self):
         return self.ready_event.is_set()
 
+    def get_error(self) -> tuple[str, str] | None:
+        """Return (module_name, traceback_string) if the process crashed, else None.
+        
+        Safe to call from the parent process only.
+        """
+        try:
+            return self._error_queue.get_nowait()
+        except Exception:
+            return None
+
     # ========= context manager ===========
     def __enter__(self):
         self.start()
@@ -732,12 +750,14 @@ class Module(Process):
     # ========= main loop in process ============
     def run(self):
         """Main control loop running in a separate process."""
-        obs_stop = threading.Event()
-        obs_thread = threading.Thread(
-            target=self._observation_loop,
-            args=(obs_stop,),
-            daemon=True,
-        )
+        setup_process_logging(logger_name=None)
+
+        # obs_stop = threading.Event()
+        # obs_thread = threading.Thread(
+        #     target=self._observation_loop,
+        #     args=(obs_stop,),
+        #     daemon=True,
+        # )
 
         try:
             self.reset()
@@ -758,33 +778,32 @@ class Module(Process):
             
             keep_running = True
 
-            obs_thread.start()
+            # obs_thread.start()
 
 
             while keep_running:
                 t_now = time.monotonic()
 
+                self.update_observations()
+
                 # fetch the newest action, discarding stale entries
                 action = None
                 try:
                     if self.action_queue is None:
-                        raise ValueError("Action queue is not initialized.")
-                    action = self.action_queue.get_latest()
+                        logger.error("Action queue is not initialized.")
+                    elif not self.action_queue.empty():
+                        actions = self.action_queue.get_all()
+                        action = actions[-1]
                 except Empty:
                     pass
-                except Exception as e:
-                    if self.verbose:
-                        print(f"[Module] {self.name}: action read error: {type(e).__name__}: {e}", flush=True, file=sys.stderr)
 
                 # dispatch action via handler registry
                 if action is not None:
                     try:
                         keep_running = self._dispatch_action(action, t_now)
                     except Exception as e:
-                        import traceback
-                        print(f"[Module] {self.name}: handler error: {type(e).__name__}: {e}", flush=True, file=sys.stderr)
-                        traceback.print_exc(file=sys.stderr)
-                    
+                        logger.error(f"handler error: {type(e).__name__}: {e}\n{''.join(_tb.format_exception(type(e), e, e.__traceback__))}")
+
                 # first loop successful, ready to receive actions
                 if self._iter_idx == 0:
                     self.ready_event.set()
@@ -796,11 +815,9 @@ class Module(Process):
                 precise_wait(t_end=t_end, time_func=time.monotonic)
                 
         except Exception as _run_exc:
-
-            raise
+            tb_str = _tb.format_exception(type(_run_exc), _run_exc, _run_exc.__traceback__)
+            self._error_queue.put_nowait((self.name, "".join(tb_str)))
         finally:
-            obs_stop.set()
-            obs_thread.join(timeout=2.0)
             self.ready_event.set()
             if self.verbose:
                 print(f"[Module] {self.name} process terminated")

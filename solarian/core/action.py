@@ -215,7 +215,7 @@ class ModuleAction:
 
     def to_dict(self):
         data = {name: field.to_dict() for name, field in self._fields.items()}
-        return {'data': data, 'action_type': self.action_type}
+        return {'data': data, 'action_type': int(self.action_type)}
 
     # -- Compression -------------------------------------------------------
 

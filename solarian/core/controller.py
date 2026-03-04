@@ -154,8 +154,10 @@ class Controller(ABC):
         msg = Message.deserialize(bytes)
         raw_obs = msg.data["observation"]
         observation = Observation(raw_obs)
+        StatusBoard.set("Observation", observation)
         for module_name, module_observation in observation.items():
             self.module_observation_buffers[module_name].put(module_observation)
+            StatusBoard.set(f"{module_name} Observation Buffer Size", self.module_observation_buffers[module_name].count)
 
         if msg.data.get("click_ack", None) and msg.data["click_ack"] == self.clicked_id:
             print("Click acknowledged", self.clicked_id)
@@ -173,10 +175,12 @@ class Controller(ABC):
                 except KeyboardInterrupt:
                     print("\nShutting down state receiver")
                     break
-                # except Exception as e:
-                #     print(f"[ERROR] State receiver failed: {e}")
         except KeyboardInterrupt:
             print("\nShutting down state receiver")
+        except Exception:
+            StatusBoard.print_exception(None)
+        finally:
+            self.running = False
 
     def connect(self):
         """Start receiver threads"""
@@ -301,8 +305,8 @@ class Controller(ABC):
                 manual_profile("display loop latency", (time.time_ns() - start_loop_t))
         except KeyboardInterrupt:
             print("\nKeyboardInterrupt: Shutting down display loop...")
-        except Exception as e:
-            print(f"\nError in display loop: {e}")
+        except Exception:
+            StatusBoard.print_exception(None)
         finally:
             # Clean up OpenCV windows
             if self.windows_initialized:
@@ -429,51 +433,17 @@ class Controller(ABC):
                     StatusBoard.set("Action", self.last_action)
                     self.send_action(self.last_action)
 
-                # if "reset_policy" in events and events["reset_policy"]:
-                #     events["reset_policy"] = False
-                #     log_say(f"Resetting policy", True)
-                #     self.reset()
-                #     while self.start_pos:
-                #         time.sleep(0.033)
-                #     time.sleep(2)
-                #     log_say(f"Policy reset", True)
-
-                # self.last_observation = self.observation_buffer.get()
-
-                # if self.last_observation is not None:
-                    
-                
-                #     self.last_action = self.control_step(self.last_observation)
-
-                #     if self.last_action == ActionValue.STOP:
-                #         self.running = False
-                #         break
-
-                #     self.send_action(self.last_action)
-
-                #     # Add frame to dataset if recording
-                #     if dataset is not None and self.last_observation is not None:
-                #         self.record_frame(dataset, self.last_action, single_task)
-                # else:
-                #     # self.obs_none_count += 1
-                #     # if self.obs_none_count > 1:
-                #     #     raise ValueError("Last observation is None")
-                #     print("Last observation is None")
-
-                # if self.events["exit_early"]:
-                #     # events["exit_early"] = False
-                #     break
-
                 # Wait for next frame
                 if self.cfg.fps is not None:
                     dt_s = (time.time_ns() - start_loop_t)/1e9
                     busy_wait((1.0 / self.cfg.fps) - dt_s)
                 
                 manual_profile("control loop latency", (time.time_ns() - start_loop_t))
-                # print(f"Control loop time elapsed: {(time.time_ns() - start_loop_t)/1e9:.6f} seconds")
                 
         except KeyboardInterrupt:
             print("\nShutting down control loop...")
+        except Exception:
+            StatusBoard.print_exception(None)
         finally:
             self.running = False
 
