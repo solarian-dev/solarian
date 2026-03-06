@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from typing import Dict, List, Tuple, Any, Callable, Union
 import traceback as _tb
-from multiprocessing import Process, Event, Queue as MpQueue
+from multiprocessing import Process, Event, Queue as MpQueue, get_start_method
 from solarian.core.calibration import MotorCalibration
 
 from solarian.core.joint import Joint
@@ -41,7 +41,7 @@ from solarian.utils.status_board import StatusBoard
 
 
 import logging
-logger = None
+logger = logging.getLogger(f"module")
 
 
 class Module(Process):
@@ -127,7 +127,7 @@ class Module(Process):
         return self    
 
 
-    def __init__(self, cfg: ModuleConfig | None = None, name: str | None = None, module_bus: ModuleBus | None = None, observation_queue: ObservationQueue | None = None, action_queue: ActionQueue | None = None):
+    def __init__(self, cfg: ModuleConfig | None = None, name: str | None = None, observation_queue: ObservationQueue | None = None, action_queue: ActionQueue | None = None):
         super().__init__()
 
         if cfg is None:
@@ -135,8 +135,6 @@ class Module(Process):
 
         self.cfg = cfg
         self.name = name if name is not None else self.__class__.__name__
-        global logger
-        logger = logging.getLogger(f"module.{self.name}")
         
         self.observation_queue = observation_queue
         self.action_queue = action_queue
@@ -149,6 +147,7 @@ class Module(Process):
                 self.action_handlers[getattr(method, '_handles_action')] = attr_name
 
         self.verbose = True
+        self.is_connected = False
         
         # Runtime state for the control loop
         self.interp: TrajectoryInterpolator | None = None
@@ -187,13 +186,9 @@ class Module(Process):
                 self.sensors[name] = sensor_class(self.cfg.sensors[name])
                 setattr(self, name, self.sensors[name])
 
-
-        if module_bus is None:
-            self.module_bus = ModuleBus()
-        else:
-            self.module_bus = module_bus
-            self.module_bus.add_components(self.actuators)
-            self.module_bus.add_components(self.sensors)
+        self.module_bus = ModuleBus()
+        self.module_bus.add_components(self.actuators)
+        self.module_bus.add_components(self.sensors)
 
         module_obs_spec = Observation.get_module_obs_spec()
         if self.name in module_obs_spec:
@@ -250,6 +245,19 @@ class Module(Process):
         for sensor in self.sensors.values():
             sensor.connect()
 
+    def connect(self, calibration: dict | None = None):
+        """Connect this module's hardware bus."""
+        if self.is_connected:
+            return
+        self.module_bus.connect(calibration or {})
+        self.is_connected = True
+
+    def disconnect(self):
+        """Disconnect this module's hardware bus."""
+        if not self.is_connected:
+            return
+        self.module_bus.disconnect()
+        self.is_connected = False
     # def read_actuators_np(self, data_type: type, component_names: list[str] | None = None) -> np.ndarray:
     #     """Read raw values from the actuators."""
     #     if self.module_bus is None:
@@ -292,7 +300,7 @@ class Module(Process):
 
     def read_calibration(self) -> dict[str, MotorCalibration]:
         if self.cfg.calibration_file is None:
-            print(f"No calibration required for module {self.name}")
+            logger.error(f"No calibration required for module {self.name}")
             return {}
 
         """Read calibration parameters from the actuators."""
@@ -305,29 +313,31 @@ class Module(Process):
 
     def write_calibration(self) -> None:
         if self.cfg.calibration_file is None:
-            print(f"No calibration required for module {self.name}")
+            logger.error(f"No calibration required for module {self.name}")
             return
 
-        print(f"\nWriting calibration of: {self.name}")
+        logger.info(f"\nWriting calibration of: {self.name}")
 
         self.start_calibration_mode()
 
         self.load_calibration()
 
         if self.calibration is None:
-            raise ValueError(f"No calibration found for module {self.name}")
+            # raise ValueError(f"No calibration found for module {self.name}")
+            logger.error(f"No calibration found for module {self.name}")
+            
 
         for port, actuators in self.actuators_by_port.items():
             port_calibration = {}
             for actuator_name in actuators:
                 port_calibration[actuator_name] = self.calibration[actuator_name]
             self.module_bus.component_bus_by_port[port].write_calibration(port_calibration)
-        print("Calibration written to:", self.name)
+        logger.info("Calibration written to:", self.name)
         self.end_calibration_mode()
     
     def _save_calibration(self, calibration: dict):
         if self.cfg.calibration_file is None:
-            print(f"No calibration required for module {self.name}")
+            logger.error(f"No calibration required for module {self.name}")
             return
         
         if not os.path.exists(os.path.dirname(self.cfg.calibration_file)):
@@ -335,27 +345,27 @@ class Module(Process):
         with open(self.cfg.calibration_file, "w") as f:
             data = {actuator_name: asdict(motor_calib) for actuator_name, motor_calib in calibration.items()}
             json.dump(data, f, indent=4)
-            print(f"Calibration saved for module {self.name}")
+            logger.info(f"Calibration saved for module {self.name}")
 
     def load_calibration(self):
         if self.cfg.calibration_file is None:
-            print(f"No calibration required for module {self.name}")
+            logger.error(f"No calibration required for module {self.name}")
             self.calibration = {}
             return
         
         if not os.path.exists(self.cfg.calibration_file):
-            print(f"Calibration file not found for module {self.name}")
+            logger.error(f"Calibration file not found for module {self.name}")
             self.calibration = None
             return
 
         with open(self.cfg.calibration_file, "r") as f:
             data = json.load(f)
             self.calibration = {actuator_name: MotorCalibration(**calibration) for actuator_name, calibration in data.items()}
-            print(f"Calibration loaded for module {self.name}")
+            logger.info(f"Calibration loaded for module {self.name}")
         
     def calibrate(self) -> None:
         if self.cfg.calibration_file is None:
-            print(f"No calibration required for module {self.name}")
+            logger.error(f"No calibration required for module {self.name}")
             return
 
         print(f"\nRunning calibration of {self}")
@@ -369,7 +379,7 @@ class Module(Process):
             assert isinstance(bus, ActuatorBus)
             homing_offsets.update(bus.set_half_turn_homings(actuator_names))
 
-        print(
+        logger.info(
             f"Move all joints sequentially through their "
             "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
         )
@@ -400,9 +410,9 @@ class Module(Process):
             self.calibration.update(port_calibration)
 
         self._save_calibration(self.calibration)
-        print("Calibration saved to", self.cfg.calibration_file)
+        logger.info("Calibration saved to", self.cfg.calibration_file)
         self.write_calibration()
-        print("Calibration written to actuators")
+        logger.info("Calibration written to actuators")
         self.end_calibration_mode()
 
     def start_calibration_mode(self):
@@ -467,7 +477,7 @@ class Module(Process):
         if wait:
             self.start_wait()
         if self.verbose:
-            print(f"[Module] {self.name} process spawned at {self.pid}")
+            logger.info(f"[Module] {self.name} process spawned at {self.pid}")
 
     def stop(self, wait=True):
         """Stop the module process."""
@@ -478,7 +488,17 @@ class Module(Process):
 
     def start_wait(self):
         self.ready_event.wait(self.launch_timeout)
-        assert self.is_alive()
+        if not self.is_alive():
+            error = self.get_error()
+            if error:
+                mod_name, tb_str = error
+                raise RuntimeError(
+                    f"Module '{mod_name}' process died during startup:\n{tb_str}"
+                )
+            raise RuntimeError(
+                f"Module '{self.name}' process died during startup "
+                f"(exit code {self.exitcode}). Check stderr for details."
+            )
     
     def stop_wait(self):
         self.join()
@@ -547,6 +567,7 @@ class Module(Process):
 
     def update_observations(self):
 
+        # logger.info(f"Updating observations for {self.name}")
         if self.observation_queue is None:
             raise ValueError("Observation queue is not initialized.")
 
@@ -747,32 +768,41 @@ class Module(Process):
                     print(f"[Module] {self.name}: observation error: {e}")
                 break
 
+    def control_step(self):
+        """
+        Control step implementation.
+        
+        Subclasses should implement this method to define the control step logic.
+        
+        Returns:
+            None
+        """
+        pass
+
     # ========= main loop in process ============
     def run(self):
         """Main control loop running in a separate process."""
+
+
+        logger.info(f"Module {self.name} process start method: {get_start_method()}")
         setup_process_logging(logger_name=None)
 
-        # obs_stop = threading.Event()
-        # obs_thread = threading.Thread(
-        #     target=self._observation_loop,
-        #     args=(obs_stop,),
-        #     daemon=True,
-        # )
+        logger.info(f"Starting module {self.name} process")
+
+        # Reconnect hardware in the subprocess — device handles inherited
+        # from the parent (via fork) are not reliably usable (e.g. AVFoundation cameras).
+        # Keep per-port calibration so normalized reads work immediately.
+        calibration = self.get_calibration() or {}
+        self.disconnect()
+        logger.info(f"Module {self.name} process disconnected")
+        self.connect(calibration)
+
+        logger.info(f"Module {self.name} process connected")
 
         try:
             self.reset()
 
-            # get initial values based on interpolator type
-            curr_values = self.get_initial_action_values()
-            curr_t = time.monotonic()
 
-            # Initialize runtime state
-            self.interp = self._create_interpolator(
-                times=np.array([curr_t]),
-                values=np.array([curr_values])
-            )
-            self.last_waypoint_time = curr_t
-            self.speed_kwargs = self._get_max_speed_kwargs()
             self._t_start = time.monotonic()
             self._iter_idx = 0
             
@@ -784,6 +814,8 @@ class Module(Process):
             while keep_running:
                 t_now = time.monotonic()
 
+                self.control_step()
+
                 self.update_observations()
 
                 # fetch the newest action, discarding stale entries
@@ -793,17 +825,18 @@ class Module(Process):
                         logger.error("Action queue is not initialized.")
                     elif not self.action_queue.empty():
                         actions = self.action_queue.get_all()
-                        action = actions[-1]
+                        # action = actions[-1]
+                        # dispatch actions via handler registry
+                        for action in actions:
+                            try:
+                                keep_running = self._dispatch_action(action, t_now)
+                            except Exception as e:
+                                logger.error(f"handler error: {type(e).__name__}: {e}\n{''.join(_tb.format_exception(type(e), e, e.__traceback__))}")
+
                 except Empty:
                     pass
 
-                # dispatch action via handler registry
-                if action is not None:
-                    try:
-                        keep_running = self._dispatch_action(action, t_now)
-                    except Exception as e:
-                        logger.error(f"handler error: {type(e).__name__}: {e}\n{''.join(_tb.format_exception(type(e), e, e.__traceback__))}")
-
+                
                 # first loop successful, ready to receive actions
                 if self._iter_idx == 0:
                     self.ready_event.set()

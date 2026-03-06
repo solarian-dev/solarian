@@ -2,7 +2,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.core.configs import RobotConfig
-from solarian.utils import get_class
+from solarian.utils import get_class, StatusBoard, setup_process_logging
 
 # run-robot is the subcommand, robot is the config name
 @CommandRegistry.register('run-robot', 'robot')
@@ -16,7 +16,8 @@ class RunRobotCommand(BaseCommand):
     def handle(self, cfg: RobotConfig) -> None:
         from solarian.conf import settings
 
-        # Create robot instance (modules are auto-created from annotations + YAML configs)
+        setup_process_logging(logger_name=None)
+        StatusBoard()
         RobotClass = get_class(settings.ROBOT_CLASS)
         robot = RobotClass(cfg)
         robot.connect()

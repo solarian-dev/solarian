@@ -29,7 +29,7 @@ class ComponentBus(abc.ABC):
     @abc.abstractmethod
     def is_connected(self) -> bool:
         """True if the bus is currently connected to the hardware."""
-        pass
+        
 
     @abc.abstractmethod
     def connect(self):
@@ -46,7 +46,6 @@ class ComponentBus(abc.ABC):
         """Read values from components on this bus."""
         pass
 
-    @abc.abstractmethod
     def write_calibration(self, calibration_dict: dict[str, MotorCalibration]) -> dict[str, MotorCalibration]:
         """Write calibration parameters to the actuators and cache them.
 
@@ -56,16 +55,14 @@ class ComponentBus(abc.ABC):
         Returns:
             dict[str, MotorCalibration]: parameters per actuator, it might bound the ranges of motion
         """
-        pass
+        raise NotImplementedError(f"{type(self).__name__} does not support write_calibration")
 
-    @abc.abstractmethod
     def start_calibration_mode(self):
         """Sets the actuators where the arm can be moved manually freely"""
-        pass
+        raise NotImplementedError(f"{type(self).__name__} does not support start_calibration_mode")
 
-    @abc.abstractmethod
     def end_calibration_mode(self):
-        pass
+        raise NotImplementedError(f"{type(self).__name__} does not support end_calibration_mode")
 
     def write(self, values: Dict[str, Data], normalize: bool = True):
         """Write values to components on this bus. Override in writable buses."""

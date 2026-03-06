@@ -4,6 +4,9 @@ from solarian.core.component import Component
 from solarian.core.component_bus import ComponentBus
 from solarian.core.data import Data
 
+import logging
+logger = logging.getLogger(f"module_bus")
+
 
 class ModuleBus():
     """Bus of components across all ports for a module."""
@@ -27,19 +30,19 @@ class ModuleBus():
         for port, components in self.components_by_port.items():
             # get the first component to determine bus type
             first_component = next(iter(components.values()))
+
             
             # Get the bus class directly from the component class
             bus_class = first_component.bus_class
+
+            # logger.info(f"Connecting {components.keys()} on port {port} bus class {bus_class.__name__}")
             # Create the bus instance
             self.component_bus_by_port[port] = bus_class(port=port, components=components, calibration=calibration.get(port, None))
 
-            try:
-                print(f"Connecting {self.component_bus_by_port[port].__class__.__name__} on port", port)
-                self.component_bus_by_port[port].connect()
-            except Exception as e:
-                print(f"Failed to connect to component bus on port {port}: {e}")
-                print("Check if the device is connected and powered.")
-                exit(1)
+            
+            logger.info(f"Connecting {self.component_bus_by_port[port].__class__.__name__} on port {port}")
+            self.component_bus_by_port[port].connect()
+            
     
 
     def disconnect(self):
@@ -47,6 +50,7 @@ class ModuleBus():
             if not bus.is_connected:
                 continue
             bus.disconnect()
+        self.component_bus_by_port = {}
 
     def write(self, values: Dict[str, Data], normalize: bool = True):
         """Write values to components."""

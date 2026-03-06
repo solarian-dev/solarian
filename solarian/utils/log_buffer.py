@@ -51,28 +51,39 @@ class LogBuffer:
     def __init__(self, maxlen: int = 200):
         self._buf: collections.deque[LogRecord] = collections.deque(maxlen=maxlen)
 
-    def drain(self, q: multiprocessing.Queue):
-        """Move all pending records from *q* into the ring buffer."""
+    def drain(self, q: multiprocessing.Queue) -> list[LogRecord]:
+        """Move all pending records from *q* into the ring buffer.
+
+        Returns the list of newly drained records so callers can print them.
+        """
+        new: list[LogRecord] = []
         while True:
             try:
                 rec = q.get_nowait()
                 self._buf.append(rec)
+                new.append(rec)
             except (queue.Empty, EOFError):
                 break
+        return new
 
-    def render(self, max_lines: int = 18) -> Panel:
+    @staticmethod
+    def format_record(rec: "LogRecord") -> Text:
+        ts = datetime.fromtimestamp(rec.timestamp).strftime("%H:%M:%S.%f")[:-3]
+        lvl = logging.getLevelName(rec.level)[:4]
+        style = LEVEL_STYLES.get(rec.level, "")
+        line = Text()
+        line.append(f"{ts} ", style="dim")
+        line.append(f"{lvl:<4} ", style=style)
+        line.append(f"[pid {rec.pid}] ", style="dim cyan")
+        line.append(f"{rec.name}: ", style="bold")
+        line.append(rec.message)
+        return line
+
+    def render(self, max_lines: int = 20) -> Panel:
         lines = Text()
         tail = list(self._buf)[-max_lines:]
         for rec in tail:
-            ts = datetime.fromtimestamp(rec.timestamp).strftime("%H:%M:%S.%f")[:-3]
-            lvl = logging.getLevelName(rec.level)[:4]
-            style = LEVEL_STYLES.get(rec.level, "")
-            line = Text()
-            line.append(f"{ts} ", style="dim")
-            line.append(f"{lvl:<4} ", style=style)
-            line.append(f"[pid {rec.pid}] ", style="dim cyan")
-            line.append(f"{rec.name}: ", style="bold")
-            line.append(rec.message)
+            line = self.format_record(rec)
             line.append("\n")
             lines.append_text(line)
         return Panel(lines or Text("(no logs yet)", style="dim"), title="Logs", border_style="cyan")

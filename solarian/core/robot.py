@@ -1,10 +1,11 @@
 import zmq
 import time
 import threading
-import cv2
 import numpy as np
 import os
+import cv2
 from abc import ABC, abstractmethod
+from typing import Any
 from multiprocessing.managers import SharedMemoryManager
 
 from solarian.core.configs import RobotConfig
@@ -12,7 +13,6 @@ from solarian.core.configs import RobotConfig
 from solarian.core.message import Message
 from solarian.core.action import Action
 from .module import Module
-from .module_bus import ModuleBus
 from solarian.core import Observation
 from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard, setup_process_logging
 from solarian.core.data import ImageData
@@ -121,46 +121,48 @@ class Robot(ABC):
         self.captured_start_pos = False        
         self.connected = False
 
-        # create component bus
-        self.component_bus = ModuleBus()
-
         self.modules = {}
         self.observation_queues = {}
         self.action_queues = {}
-
-        example_observation = Observation.zeros()
-        # example_action = get_class(settings.ACTION_CLASS).zeros()
-        # return
-        example_action = Action.zeros()
+        self.latest_observation_by_module: dict[str, dict] = {}
 
         # IMPORTANT: Store the manager so it doesn't get garbage collected
         # (which would clean up all shared memory before subprocess can access it)
         self.shm_manager = SharedMemoryManager()
         self.shm_manager.start()
 
-        # Create modules from class-level attributes
+        # Phase 1: Create modules from class-level attributes.
+        # This must happen before Observation.zeros() / Action.zeros() so that
+        # sensor descriptors (e.g. ImageData on cameras) are configured with
+        # the correct shapes from their YAML configs.
+        module_configs: dict[str, tuple[type, Any]] = {}
         for name in self.__class__.__dict__:
             val = getattr(self, name, None)
             if isinstance(val, Module):
                 module_class = val.__class__
                 module_cfg = self.load_module_config(name, module_class)
-
-                # create module's observation queue (one per ModuleObs)
-                self.observation_queues[name] = ObservationQueue(
-                    shm_manager=self.shm_manager,
-                    example_obs=example_observation[name],
-                    buffer_size=1024,
-                )
-                # create module's action queue
-                self.action_queues[name] = ActionQueue(
-                    shm_manager=self.shm_manager,
-                    example_action=example_action[name],
-                    buffer_size=1024,
-                )
-                # create module
-                self.modules[name] = module_class(module_cfg, name, self.component_bus, self.observation_queues[name], self.action_queues[name])
-                # override class-level attribute with module instance
+                module_configs[name] = (module_class, module_cfg)
+                self.modules[name] = module_class(module_cfg, name)
                 setattr(self, name, self.modules[name])
+
+        # Phase 2: Build example observations/actions (now with correct shapes).
+        example_observation = Observation.zeros()
+        example_action = Action.zeros()
+
+        # Phase 3: Create shared-memory queues and assign to modules.
+        for name, (module_class, module_cfg) in module_configs.items():
+            self.observation_queues[name] = ObservationQueue(
+                shm_manager=self.shm_manager,
+                example_obs=example_observation[name],
+                buffer_size=1024,
+            )
+            self.action_queues[name] = ActionQueue(
+                shm_manager=self.shm_manager,
+                example_action=example_action[name],
+                buffer_size=1024,
+            )
+            self.modules[name].observation_queue = self.observation_queues[name]
+            self.modules[name].action_queue = self.action_queues[name]
         
 
     def load_module_config(self, module_name: str, module_class: type):
@@ -174,27 +176,27 @@ class Robot(ABC):
     
     def _verify_connection(self, timeout=5000):
         """Verify that we can connect to the relay server"""
-        print(f"Verifying connection to relay server at {self.cfg.connection.ip}...")
+        logger.info(f"Verifying connection to relay server at {self.cfg.connection.ip}...")
         
         # Create a temporary PUSH socket to test connection
         test_socket = self.context.socket(zmq.PUSH)
         test_socket.setsockopt(zmq.LINGER, 0)
-        print(f"Attempting to connect to tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_receiver_port}...")
+        logger.info(f"Attempting to connect to tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_receiver_port}...")
         test_socket.connect(f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_receiver_port}")
         
         try:
             # Try to send a message
-            print("Attempting to send test message...")
+            logger.info("Attempting to send test message...")
             test_socket.send_string("test", zmq.NOBLOCK)
-            print("Test message sent successfully")
+            logger.info("Test message sent successfully")
             time.sleep(1)  # Give it a moment to ensure the message was sent
             return True
         except zmq.ZMQError as e:
-            print(f"ZMQ error occurred: {e}")
+            logger.error(f"ZMQ error occurred: {e}")
             raise ConnectionError(f"ZMQ error while connecting to relay server: {e}")
         finally:
-            print("Successfully connected to relay server")
-            print("Cleaning up test socket...")
+            logger.info("Successfully connected to relay server")
+            logger.info("Cleaning up test socket...")
             test_socket.close()
 
     @profile
@@ -216,6 +218,9 @@ class Robot(ABC):
 
     @profile
     def send_observation(self, observation: Observation):
+        # if hasattr(observation, "wrist_camera") and hasattr(observation.wrist_camera, "image"):
+        #     cv2.imshow("Observation", observation.wrist_camera.image.value)
+        #     cv2.waitKey(1)
         if observation is None:
             return
         msg = Message()
@@ -241,7 +246,7 @@ class Robot(ABC):
         return True
 
     def control_loop(self):
-        print("Control loop started")
+        logger.info("Control loop started")
         try:
             while self.running:
                 start_loop_t = time.time_ns()
@@ -257,14 +262,15 @@ class Robot(ABC):
                     self.process_action(action)
 
                 observation = self.get_observation()
-                
                 if not observation.is_empty():
                     self.send_observation(observation)
-                    StatusBoard.set("Observation", observation)
+                    # Display a merged snapshot (latest per module), while
+                    # transport keeps "new data only" semantics.
+                    StatusBoard.set("Observation", self.get_display_observation())
 
                 time.sleep(0.001)
         except KeyboardInterrupt:
-            print("\nKeyboardInterrupt: Shutting down robot...")
+            logger.info("\nKeyboardInterrupt: Shutting down robot...")
         except Exception:
             StatusBoard.print_exception(None)
         finally:
@@ -272,44 +278,41 @@ class Robot(ABC):
             self.disconnect()
 
     def connect(self):
-        self.calibration = {}
-        # connect to hardware without calibration
-        self.component_bus.connect(self.calibration)
-
         for module_name, module in self.modules.items():
-            # module.load_config()
             module.load_calibration()
 
-            # module requires calibration but no calibration file was found
+            if module.cfg.calibration_file is None:
+                logger.error(f"No calibration required for module {module_name}")
+                continue
+
+            module.connect()
+
             if module.calibration is None:
-                # will start calibration process
                 module.calibrate()
-            
-            # module requires calibration but not yet written to hardware
+
             if not module.is_calibrated():
                 module.write_calibration()
-                
-            # get module calibration grouped by port
-            mod_calib = module.get_calibration()
-            if mod_calib is None:
-                continue
-            self.calibration.update(mod_calib)
 
-        # disconnect and reconnect to hardware with calibration
-        self.component_bus.disconnect()
-        self.component_bus.connect(self.calibration)
-        
+            calibration = module.get_calibration()
+            if calibration:
+                module.disconnect()
+                module.connect(calibration)
+            else:
+                module.disconnect()
+
+            logger.info(f"Calibration loaded for module {module_name}")
+
         self.connected = True
-        print("Robot connected")
+        logger.info("Robot connected")
 
     def initialize(self):
-        if not self.is_connected():
-            raise Exception("Robot not connected, cannot initialize, must call connect() first.")
+        # if not self.is_connected():
+        #     raise Exception("Robot not connected, cannot initialize, must call connect() first.")
         # initialize modules
-        print("Initializing modules")
+        logger.info("Initializing modules")
         for module_name, module in self.modules.items():
             module.initialize()
-        print("Robot initialized")
+        logger.info("Robot initialized")
 
     def on_start(self):
         """Hook method called after observation threads start but before control loop.
@@ -324,6 +327,22 @@ class Robot(ABC):
         setup_process_logging(logger_name=None)
         StatusBoard()
         try:
+            # # Pre-warm hardware drivers that fail after fork().  On macOS,
+            # # AVFoundation's +[AVCaptureDevice initialize] cannot complete
+            # # in a forked child process, causing cv2.VideoCapture to hang.
+            # # Connecting (then disconnecting) here runs +initialize on the
+            # # main thread so the forked child inherits the ready state.
+            # for module in self.modules.values():
+            #     if not module.is_connected:
+            #         module.connect()
+            #         module.disconnect()
+
+            # Release parent-process hardware connections before forking so that
+            # child processes can open their own clean handles (required for e.g.
+            # macOS AVFoundation cameras which only allow one consumer).
+            for module in self.modules.values():
+                module.disconnect()
+
             for module_name, module in self.modules.items():
                 module.start()
 
@@ -333,7 +352,7 @@ class Robot(ABC):
             self.control_loop()
         except KeyboardInterrupt:
             StatusBoard.stop()
-            print("\nKeyboardInterrupt: Shutting down robot...")
+            logger.info("\nKeyboardInterrupt: Shutting down robot...")
         except Exception:
             StatusBoard.print_exception(None)
         finally:
@@ -345,7 +364,6 @@ class Robot(ABC):
             if not module.is_calibrated():
                 return False
         return True
-        # return self.component_bus.is_calibrated()
 
     def is_connected(self):
         return self.connected
@@ -356,8 +374,8 @@ class Robot(ABC):
         self.running = False
         self.action_socket.close()
         self.state_socket.close()
-        if self.component_bus is not None:
-            self.component_bus.disconnect()
+        for module in self.modules.values():
+            module.disconnect()
         self.context.term()
         self.connected = False
 
@@ -411,14 +429,23 @@ class Robot(ABC):
     @profile
     def get_observation(self) -> Observation:
         """Create an observation with current robot state.
+
+        Includes only modules that produced a new sample since the last call.
+
         Returns:
             Observation: Contains ModuleObs readings organized by module
         """
         obs_data = {}
         for module_name, obs_queue in self.observation_queues.items():
             if not obs_queue.empty():
-                obs_data[module_name] = obs_queue.get().to_dict()
+                module_obs = obs_queue.get().to_dict()
+                self.latest_observation_by_module[module_name] = module_obs
+                obs_data[module_name] = module_obs
         return Observation(obs_data)
+
+    def get_display_observation(self) -> Observation:
+        """Create a display snapshot using the latest observation per module."""
+        return Observation(dict(self.latest_observation_by_module))
                     
     @profile
     def process_action(self, action: Action):

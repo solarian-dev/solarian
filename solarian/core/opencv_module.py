@@ -5,7 +5,7 @@ Module for OpenCV cameras.
 """
 
 from solarian.core.module import Module
-from solarian.core.configs import ModuleConfig
+from solarian.core.configs import CameraConfig, ModuleConfig
 from solarian.core.opencv_camera import OpenCVCamera
 
 

@@ -14,8 +14,8 @@ import queue
 import numpy as np
 from rich.panel import Panel
 from rich.console import RenderableType
-from solarian.core.action import Action
-from solarian.core.observation import Observation
+from solarian.core.action import Action, ModuleAction
+from solarian.core.observation import Observation, ModuleObs
 from datetime import datetime
 from solarian.utils.log_buffer import LogBuffer, get_log_queue
 
@@ -96,9 +96,12 @@ def _render_action_panel(
     # Only render field rows if it looks like field -> mapping with "value"
     items = list(data.items()) if isinstance(data, Mapping) else []
     shown = 0
+    last_timestamp = None
     for field, field_payload in items[:max_rows]:
         if isinstance(field_payload, Mapping):
             val = field_payload.get("value", "")
+            if field_payload.get("timestamp") is not None:
+                last_timestamp = field_payload.get("timestamp")
         else:
             # fallback if structure isn't as expected
             val = field_payload
@@ -114,9 +117,10 @@ def _render_action_panel(
         title_parts.append(f"type={action_type}")
     title = "  ".join(title_parts)
 
-    # subtitle = _module_timestamp_label(data) if isinstance(data, Mapping) else None
-    dt = datetime.fromtimestamp(field_payload["timestamp"])
-    subtitle = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    subtitle = None
+    if last_timestamp is not None:
+        dt = datetime.fromtimestamp(last_timestamp)
+        subtitle = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
     return Panel(inner, title=title, subtitle=subtitle, border_style="blue")
 
@@ -136,9 +140,12 @@ def _render_observation_panel(
     # Only render field rows if it looks like field -> mapping with "value"
     items = list(data.items()) if isinstance(data, Mapping) else []
     shown = 0
+    last_timestamp = None
     for field, field_payload in items[:max_rows]:
         if isinstance(field_payload, Mapping):
             val = field_payload.get("value", "")
+            if field_payload.get("timestamp") is not None:
+                last_timestamp = field_payload.get("timestamp")
         else:
             # fallback if structure isn't as expected
             val = field_payload
@@ -152,8 +159,10 @@ def _render_observation_panel(
     title_parts = [module_name]
     title = "  ".join(title_parts)
 
-    dt = datetime.fromtimestamp(field_payload["timestamp"])
-    subtitle = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    subtitle = None
+    if last_timestamp is not None:
+        dt = datetime.fromtimestamp(last_timestamp)
+        subtitle = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
     return Panel(inner, title=title, subtitle=subtitle, border_style="blue")
 
@@ -196,14 +205,41 @@ def render_action_or_observation(
     if not panels:
         return Text("<empty action>", style="dim")
 
-    # Columns keeps it compact horizontally; inside an outer Table cell it will wrap as needed.
+    # In the status table cell, horizontal Columns can crop later panels.
+    # Keep actions compact, but stack observations vertically so every
+    # module (e.g. wrist_camera) remains visible.
+    if isinstance(action, Observation):
+        return Group(*panels)
     return Columns(panels, expand=True, equal=True)
 
+
+def render_module_obs(
+    module_obs: ModuleObs,
+    *,
+    max_rows: int = 6,
+    name: Optional[str] = None,
+) -> RenderableType:
+    module_obs.uncompress()
+    payload = module_obs.to_dict()
+    title = name or type(module_obs).__name__
+    return _render_observation_panel(title, payload, max_rows=max_rows)
+
+
+def render_module_action(
+    module_action: ModuleAction,
+    *,
+    max_rows: int = 6,
+    name: Optional[str] = None,
+) -> RenderableType:
+    module_action.uncompress()
+    payload = module_action.to_dict()
+    title = name or type(module_action).__name__
+    return _render_action_panel(title, payload, max_rows=max_rows)
 
 
 def value_str(value):
     if isinstance(value, np.ndarray):
-        return "<numpy.ndarray> shape={value.shape}"
+        return f"<numpy.ndarray> shape={value.shape}"
     elif isinstance(value, bytes):
         return "<bytes>"
     elif isinstance(value, (float, np.floating)):
@@ -214,6 +250,10 @@ def value_str(value):
         return JSON.from_data(format_floats(value, "{:.3f}"), indent=2)
     elif isinstance(value, Action) or isinstance(value, Observation):
         return render_action_or_observation(value)
+    elif isinstance(value, ModuleObs):
+        return render_module_obs(value)
+    elif isinstance(value, ModuleAction):
+        return render_module_action(value)
     else:
         return str(value)
 
@@ -221,6 +261,17 @@ def value_str(value):
 class StatusBoard:
     _instance = None
     _lock = threading.Lock()
+    _live: bool = True
+
+    @classmethod
+    def configure(cls, *, live: bool = True):
+        """Set display mode before the board is first instantiated.
+
+        Args:
+            live: If True (default), use Rich Live for in-place refresh.
+                  If False, print status snapshots sequentially to stdout.
+        """
+        cls._live = live
 
     def __new__(cls):
         with cls._lock:
@@ -235,14 +286,15 @@ class StatusBoard:
             self._local_q = queue.Queue()
             self._mp_q = multiprocessing.Queue()
             self._log_q = get_log_queue()
-            self._log_buf = LogBuffer(maxlen=500)
+            self._log_buf = LogBuffer(maxlen=1500)
             self._creator_pid = os.getpid()
             self._stop_event = threading.Event()
             self._stopped_event = threading.Event()
             self._console = Console()
             self._initialized = True
 
-            threading.Thread(target=self.ui_loop, daemon=True).start()
+            target = self.ui_loop if self._live else self.ui_loop_plain
+            threading.Thread(target=target, daemon=True).start()
 
     @classmethod
     def set(cls, key, value):
@@ -296,26 +348,42 @@ class StatusBoard:
         t.add_row("Local time", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
         for k, v in self.data.items():
             t.add_row(k, value_str(v))
-        return Group(t, self._log_buf.render())
+        return t
+
+    def _drain_queues(self):
+        try:
+            while True:
+                k, v = self._local_q.get_nowait()
+                self.data[k] = v
+        except queue.Empty:
+            pass
+        try:
+            while True:
+                k, v = self._mp_q.get_nowait()
+                self.data[k] = v
+        except queue.Empty:
+            pass
+        return self._log_buf.drain(self._log_q)
 
     def ui_loop(self):
-        with Live(self.render(), console=self._console, refresh_per_second=12) as live:
+        with Live(self.render(), console=self._console, auto_refresh=False) as live:
             while not self._stop_event.is_set():
-                try:
-                    while True:
-                        k, v = self._local_q.get_nowait()
-                        self.data[k] = v
-                except queue.Empty:
-                    pass
-                try:
-                    while True:
-                        k, v = self._mp_q.get_nowait()
-                        self.data[k] = v
-                except queue.Empty:
-                    pass
-                self._log_buf.drain(self._log_q)
+                new_logs = self._drain_queues()
+                for rec in new_logs:
+                    live.console.print(self._log_buf.format_record(rec))
                 live.update(self.render())
+                live.refresh()
                 time.sleep(0.05)
+        self._stopped_event.set()
+
+    def ui_loop_plain(self):
+        while not self._stop_event.is_set():
+            new_logs = self._drain_queues()
+            for rec in new_logs:
+                self._console.print(self._log_buf.format_record(rec))
+            self._console.print(self.render())
+            self._console.print()
+            time.sleep(1.0)
         self._stopped_event.set()
 
 

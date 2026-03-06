@@ -19,13 +19,15 @@ from solarian.core.configs import ControllerConfig, ActionValue
 from solarian.core.message import Message
 from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
 from solarian.core.module import Module
-from solarian.core.module_bus import ModuleBus
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
 from solarian.core.data import ImageData, BoundingBoxData
 
 
 from screeninfo import get_monitors
+
+import logging
+logger = logging.getLogger(__name__)
 
 try:
     monitors = get_monitors()
@@ -48,6 +50,8 @@ class Controller(ABC):
         
         # Initialize OpenCV windows once
         self.windows_initialized = []
+        self._image_field_keys: list[tuple[str, str]] | None = None
+        self._bbox_field_map: dict[tuple[str, str], list[tuple[str, str]]] | None = None
         
         # action socket
         self.action_socket = self.context.socket(zmq.PUSH)
@@ -65,16 +69,13 @@ class Controller(ABC):
         # Verify connection
         # self._verify_connection()
         
-        self.last_observation = None
+        # self.last_observation = None
         self.last_action = None
         self.obs_none_count = 0
         # self.last_msg = None
         self.observation_lock = threading.Lock()  # Thread-safe image access
         self.running = False
         self.connected = False
-
-        # create component bus
-        self.component_bus = ModuleBus()
 
         self.modules = {}
 
@@ -84,7 +85,7 @@ class Controller(ABC):
             if isinstance(val, Module):
                 module_class = val.__class__
                 module_cfg = self.load_module_config(name, module_class)
-                self.modules[name] = module_class(module_cfg, name, self.component_bus)
+                self.modules[name] = module_class(module_cfg, name)
                 setattr(self, name, self.modules[name])
 
         # Create events dictionary directly instead of using init_keyboard_listener
@@ -102,17 +103,12 @@ class Controller(ABC):
         self.shm_manager = SharedMemoryManager()
         self.shm_manager.start()
 
-        example_observation = Observation.zeros()
-
-        # create one module observation buffer per module
+        # Observation buffers are lazily initialized on the first received
+        # observation so the schema (including image shapes) is derived from
+        # real data rather than from Observation.zeros(), which may have None
+        # payloads for fields whose shapes are only known at runtime.
         self.module_observation_buffers = {}
-        for module_name, module_observation in example_observation.items():
-            self.module_observation_buffers[module_name] = ObservationRingBuffer.create_from_example(
-                shm_manager=self.shm_manager,
-                example_observation=module_observation,
-                get_time_budget=0.2,
-                put_desired_frequency=cfg.fps
-            )
+        self.last_observation = {}
 
     def load_module_config(self, module_name: str, module_class: type):
         """Load module config from YAML using the module's own config class"""
@@ -124,7 +120,7 @@ class Controller(ABC):
 
     def _verify_connection(self, timeout=5000):
         """Verify that we can connect to the relay server"""
-        print(f"Verifying connection to relay server at {self.cfg.connection.ip}...")
+        logger.info(f"Verifying connection to relay server at {self.cfg.connection.ip}...")
         
         # Create a temporary PUSH socket to test connection
         test_socket = self.context.socket(zmq.PUSH)
@@ -134,19 +130,19 @@ class Controller(ABC):
         
         try:
             # Try to send a message
-            print("Attempting to send test message...")
+            logger.info("Attempting to send test message...")
             test_socket.send_string("test", zmq.NOBLOCK)
-            print("Test message sent successfully")
+            logger.info("Test message sent successfully")
             time.sleep(1)  # Give it a moment to ensure the message was sent
             return True
         except zmq.ZMQError as e:
-            print(f"ZMQ error occurred: {e}")
+            logger.error(f"ZMQ error occurred: {e}")
             raise ConnectionError(f"ZMQ error while connecting to relay server: {e}")
         finally:
-            print("Cleaning up test socket...")
+            logger.info("Cleaning up test socket...")
             test_socket.close()
         
-        print("Successfully connected to relay server")
+        logger.info("Successfully connected to relay server")
 
     @profile
     def get_state(self):
@@ -154,13 +150,26 @@ class Controller(ABC):
         msg = Message.deserialize(bytes)
         raw_obs = msg.data["observation"]
         observation = Observation(raw_obs)
-        StatusBoard.set("Observation", observation)
+        
         for module_name, module_observation in observation.items():
-            self.module_observation_buffers[module_name].put(module_observation)
+            self.last_observation[module_name] = module_observation
+
+            if module_name not in self.module_observation_buffers:
+                self.module_observation_buffers[module_name] = ObservationRingBuffer.create_from_example(
+                    shm_manager=self.shm_manager,
+                    example_observation=module_observation,
+                    get_time_budget=0.01,
+                    put_desired_frequency=200
+                )
+            try:
+                self.module_observation_buffers[module_name].put(module_observation, wait=False)
+            except TimeoutError:
+                pass
+            StatusBoard.set(f"{module_name} Observation", module_observation)
             StatusBoard.set(f"{module_name} Observation Buffer Size", self.module_observation_buffers[module_name].count)
 
         if msg.data.get("click_ack", None) and msg.data["click_ack"] == self.clicked_id:
-            print("Click acknowledged", self.clicked_id)
+            logger.info("Click acknowledged", self.clicked_id)
             self.clicked_id = None
             self.clicked_point = None
 
@@ -173,10 +182,10 @@ class Controller(ABC):
                 except zmq.Again:
                     time.sleep(0.001)
                 except KeyboardInterrupt:
-                    print("\nShutting down state receiver")
+                    logger.info("\nShutting down state receiver")
                     break
         except KeyboardInterrupt:
-            print("\nShutting down state receiver")
+            logger.info("\nShutting down state receiver")
         except Exception:
             StatusBoard.print_exception(None)
         finally:
@@ -184,35 +193,30 @@ class Controller(ABC):
 
     def connect(self):
         """Start receiver threads"""
-        self.calibration = {}
-        # connect to hardware without calibration
-        self.component_bus.connect(self.calibration)
-
         for module_name, module in self.modules.items():
-            # module.load_config()
             module.load_calibration()
 
-            # module requires calibration but no calibration file was found
+            if module.cfg.calibration_file is None:
+                logger.error(f"No calibration required for module {module_name}")
+                continue
+
+            module.connect()
+
             if module.calibration is None:
-                # will start calibration process
                 module.calibrate()
-            
-            # module requires calibration but not yet written to hardware
+
             if not module.is_calibrated():
                 module.write_calibration()
-                
-            # get module calibration grouped by port
-            mod_calib = module.get_calibration()
-            if mod_calib is None:
-                continue
-            self.calibration.update(mod_calib)
 
-        # disconnect and reconnect to hardware with calibration
-        self.component_bus.disconnect()
-        self.component_bus.connect(self.calibration)
-        
+            calibration = module.get_calibration()
+            if calibration:
+                module.disconnect()
+                module.connect(calibration)
+            else:
+                module.disconnect()
+
         self.connected = True
-        print("Controller connected")
+        logger.info("Controller connected")
 
     def is_connected(self):
         return self.connected
@@ -221,10 +225,10 @@ class Controller(ABC):
         if not self.is_connected():
             raise Exception("Controller not connected, cannot initialize, must call connect() first.")
         # initialize modules
-        print("Initializing modules")
+        logger.info("Initializing modules")
         for module_name, module in self.modules.items():
             module.initialize()
-        print("Controller initialized")
+        logger.info("Controller initialized")
 
     def disconnect(self):
         """Clean shutdown"""
@@ -287,30 +291,34 @@ class Controller(ABC):
         try:
             while timestamp < episode_time_s and self.running:
                 start_loop_t = time.time_ns()
+
                 result = self.display()
-                
-                # If display returns False, exit the loop
+
                 if result is False:
                     break
-                
+
                 timestamp = time.perf_counter() - start_episode_t
                 if self.events["exit_early"]:
                     break
 
-                # Wait for next frame
+                dt_s = (time.time_ns() - start_loop_t) / 1e9
                 if self.cfg.fps is not None:
-                    dt_s = (time.time_ns() - start_loop_t)/1e9
-                    busy_wait((1.0 / self.cfg.fps) - dt_s)
-                
+                    wait_ms = max(1, int(((1.0 / self.cfg.fps) - dt_s) * 1000))
+                else:
+                    wait_ms = 1
+                key = cv2.waitKey(wait_ms) & 0xFF
+                if key == ord('q'):
+                    break
+
                 manual_profile("display loop latency", (time.time_ns() - start_loop_t))
         except KeyboardInterrupt:
-            print("\nKeyboardInterrupt: Shutting down display loop...")
+            logger.info("\nKeyboardInterrupt: Shutting down display loop...")
         except Exception:
             StatusBoard.print_exception(None)
         finally:
             # Clean up OpenCV windows
             if self.windows_initialized:
-                print("Cleaning up OpenCV windows...")
+                logger.info("Cleaning up OpenCV windows...")
                 for name in self.windows_initialized:
                     try:
                         cv2.destroyWindow(name)
@@ -325,37 +333,26 @@ class Controller(ABC):
     # Mouse callback function
     def mouse_callback(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
-            print(f"Clicked at (x={x}, y={y})")
+            logger.info(f"Clicked at (x={x}, y={y})")
             self.clicked_point = (x, y)
             # generate random alphanumeric id
             self.clicked_id = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
     
-    @profile
-    def display(self):
+    def _build_display_schema(self):
+        """Build and cache the mapping of image/bbox fields per module."""
         obs_spec = Observation.get_module_obs_spec()
+        image_keys: list[tuple[str, str]] = []
+        bbox_map: dict[tuple[str, str], list[tuple[str, str]]] = {}
 
-        images = {}
-        image_bboxes = {}
-
-        for module_name, buffer in self.module_observation_buffers.items():
-            module_obs = buffer.get()
-            if module_obs is None:
-                continue
-
-            module_obs_cls = type(obs_spec[module_name])
+        for module_name, module_obs_instance in obs_spec.items():
+            module_obs_cls = type(module_obs_instance)
             sensor_fields = module_obs_cls.get_sensor_fields_spec()
             calculated_fields = module_obs_cls.get_calculated_fields_spec()
 
             all_fields = {**sensor_fields, **calculated_fields}
             for field_name, field_spec in all_fields.items():
-                if field_spec.data_class is not ImageData:
-                    continue
-                try:
-                    field_data = module_obs[field_name]
-                except KeyError:
-                    continue
-                if field_data is not None and field_data.value is not None:
-                    images[(module_name, field_name)] = field_data.value
+                if field_spec.data_class is ImageData:
+                    image_keys.append((module_name, field_name))
 
             source_to_field = {}
             for fname, sf in sensor_fields.items():
@@ -366,20 +363,51 @@ class Controller(ABC):
             for field_name, cf in calculated_fields.items():
                 if cf.data_class is not BoundingBoxData:
                     continue
-                try:
-                    field_data = module_obs[field_name]
-                except KeyError:
-                    continue
-                if field_data is None or field_data.value is None:
-                    continue
-
-                bbox_value = field_data.value
                 for inp in cf.inputs:
                     input_field = source_to_field.get(id(inp))
-                    if input_field and (module_name, input_field) in images:
+                    if input_field:
                         img_key = (module_name, input_field)
-                        image_bboxes.setdefault(img_key, []).append(bbox_value)
+                        bbox_map.setdefault(img_key, []).append(
+                            (module_name, field_name)
+                        )
                         break
+
+        self._image_field_keys = image_keys
+        self._bbox_field_map = bbox_map
+
+    @profile
+    def display(self):
+        if self._image_field_keys is None or self._bbox_field_map is None:
+            self._build_display_schema()
+        assert self._image_field_keys is not None and self._bbox_field_map is not None
+
+        images = {}
+        image_bboxes = {}
+
+        for module_name, field_name in self._image_field_keys:
+            module_obs = self.last_observation.get(module_name)
+            if module_obs is None:
+                continue
+            try:
+                field_data = module_obs[field_name]
+            except KeyError:
+                continue
+            if field_data is not None and field_data.value is not None:
+                images[(module_name, field_name)] = field_data.value
+
+        for img_key, bbox_fields in self._bbox_field_map.items():
+            if img_key not in images:
+                continue
+            module_obs = self.last_observation.get(img_key[0])
+            if module_obs is None:
+                continue
+            for bbox_module, bbox_field in bbox_fields:
+                try:
+                    field_data = module_obs[bbox_field]
+                except KeyError:
+                    continue
+                if field_data is not None and field_data.value is not None:
+                    image_bboxes.setdefault(img_key, []).append(field_data.value)
 
         if not self.windows_initialized:
             for (module_name, field_name), img in images.items():
@@ -411,12 +439,7 @@ class Controller(ABC):
             else:
                 display_img = img
 
-            display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
-            cv2.imshow(window_name, display_img_bgr)
-
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            return False
+            cv2.imshow(window_name, np.ascontiguousarray(display_img[:, :, ::-1]))
 
     def control_loop(self, dataset=None, episode_time_s=120, single_task=None):
         try:
@@ -441,7 +464,7 @@ class Controller(ABC):
                 manual_profile("control loop latency", (time.time_ns() - start_loop_t))
                 
         except KeyboardInterrupt:
-            print("\nShutting down control loop...")
+            logger.info("\nShutting down control loop...")
         except Exception:
             StatusBoard.print_exception(None)
         finally:
@@ -473,13 +496,13 @@ class Controller(ABC):
             episode_time_s = float("inf")
 
         self.running = True
-        print("Starting state receiver")
+        logger.info("Starting state receiver")
 
 
         threading.Thread(target=self._state_receiver, daemon=True).start()
 
         # spin control loop in a separate thread
-        print("Starting control loop")
+        logger.info("Starting control loop")
         # TO DO: control loop should be implemented as a process instead of a thread
         t = threading.Thread(target=self.control_loop, args=(dataset, episode_time_s + 1, single_task), daemon=True)
         t.start()

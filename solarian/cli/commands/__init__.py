@@ -111,6 +111,11 @@ CommandRegistry.register_lazy(
     help="Detects devices connected to the computer (port and name).",
 )
 CommandRegistry.register_lazy(
+    "list-cameras",
+    module_path=f"{_pkg}.list_cameras",
+    help="Detects and lists all cameras available on the system.",
+)
+CommandRegistry.register_lazy(
     "shell",
     module_path=f"{_pkg}.shell",
     help="Open an interactive Python shell with project settings loaded.",

@@ -5,6 +5,14 @@ import os
 import re
 import argparse
 from pathlib import Path
+
+if sys.platform == "darwin":
+    # Suppress harmless Objective-C warning when forking processes that later
+    # use AVFoundation (e.g. OpenCV cameras).  The camera is only opened in
+    # the child process, so the fork is safe — the runtime check is a false
+    # positive.  Switching to the 'spawn' start method would also fix this but
+    # requires all multiprocessing objects to be fully picklable.
+    os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
 from hydra import initialize, compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 import colorama
@@ -94,6 +102,7 @@ def _build_command_list() -> str:
         "train": "Training & Data",
         "dataset2lerobot": "Training & Data",
         "detect-device": "Utilities",
+        "list-cameras": "Utilities",
         "shell": "Utilities",
     }
 
@@ -182,7 +191,7 @@ def main() -> None:
     subcommand = args.subcommand
 
     # Commands that don't need Hydra config or project settings
-    no_hydra_commands = ['add-module', 'create-project']
+    no_hydra_commands = ['add-module', 'create-project', 'list-cameras']
 
     # Resolve settings.py location (skip for commands that don't need it)
     if subcommand not in no_hydra_commands:

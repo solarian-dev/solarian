@@ -5,7 +5,7 @@ import time
 import pickle
 import os
 
-multiprocessing.set_start_method('fork')
+# multiprocessing.set_start_method('fork')
 
 
 class Dataset:

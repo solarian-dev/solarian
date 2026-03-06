@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import sys
 from typing import Any, Dict, TYPE_CHECKING
 from enum import Enum
 
-import cv2
 import numpy as np
 
 from solarian.core.sensor_bus import SensorBus
@@ -12,14 +12,22 @@ from solarian.core.configs import CameraConfig
 from solarian.core.data import Data, ImageData
 
 if TYPE_CHECKING:
+    import cv2
     from solarian.core.opencv_camera import OpenCVCamera
 
 
-BACKEND = {
-    "linux": cv2.CAP_V4L2,
-    "darwin": cv2.CAP_AVFOUNDATION,
-    "win32": cv2.CAP_MSMF,
-}[__import__("sys").platform]
+import logging
+logger = logging.getLogger(f"opencv_camera_bus")
+
+_BACKEND_MAP = {
+    "linux": "CAP_V4L2",
+    "darwin": "CAP_AVFOUNDATION",
+    "win32": "CAP_MSMF",
+}
+
+def _get_backend():
+    import cv2
+    return getattr(cv2, _BACKEND_MAP[sys.platform])
 
 
 class Rotation(int, Enum):
@@ -52,23 +60,31 @@ class OpenCVCameraBus(SensorBus):
         return self.capture is not None and self.capture.isOpened()
 
     def connect(self):
+        import cv2
+
+        logger.info(f"OpenCVCameraBus connecting {self.components.keys()} on port {self.port}")
         cfg = next(iter(self.components.values())).cfg
-        assert isinstance(cfg, CameraConfig)
+        # logger.info(f"Config: {cfg}, class: {type(cfg)}")
 
         if isinstance(self.port, str) and self.port.startswith('/dev/'):
             port = self.port
         else:
             port = int(self.port)
 
-        self.capture = cv2.VideoCapture(port, BACKEND)
+        backend = _get_backend()
+        logger.info(f"OpenCVCameraBus opening camera on port {port} with backend {backend}")
+        self.capture = cv2.VideoCapture(port, backend)
+
+        logger.info("Camera opened")
+
         self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*cfg.video_format))
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(cfg.width))
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(cfg.height))
         self.capture.set(cv2.CAP_PROP_FPS, float(cfg.fps))
 
         if not self.capture.isOpened():
-            print(f"Error: Could not open camera with platform backend: {self.port}")
-            print("Trying with default backend...")
+            logger.error(f"Error: Could not open camera with platform backend: {self.port}")
+            logger.error("Trying with default backend...")
             self.capture = cv2.VideoCapture(port)
 
         if not self.capture.isOpened():
@@ -80,7 +96,7 @@ class OpenCVCameraBus(SensorBus):
         fps = self.capture.get(cv2.CAP_PROP_FPS)
         width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f"Camera opened: port={self.port}, {width}x{height} @ {fps:.1f} fps")
+        logger.info(f"Camera opened: port={self.port}, {width}x{height} @ {fps:.1f} fps")
 
     def disconnect(self):
         if self.capture is not None:
@@ -88,6 +104,8 @@ class OpenCVCameraBus(SensorBus):
             self.capture = None
 
     def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
+        import cv2
+
         if not issubclass(data_type, ImageData):
             raise ValueError(f"OpenCVCameraBus only supports ImageData, got {data_type}")
 
@@ -104,7 +122,6 @@ class OpenCVCameraBus(SensorBus):
                 raise ValueError("Could not decode frame from camera")
 
         cfg = next(iter(self.components.values())).cfg
-        assert isinstance(cfg, CameraConfig)
         processed = frame
 
         if cfg.color_mode == ColorMode.RGB.value:
