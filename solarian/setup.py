@@ -27,8 +27,11 @@ def _find_package_name(project_path: Path) -> str | None:
     return None
 
 
-def setup():
-    """Auto-discover and import all project modules.
+_ALL_MODULES = ("robot", "observation", "action", "controller", "server")
+
+
+def setup(modules=None):
+    """Auto-discover and import project modules.
 
     Derives the project package from ``SOLARIAN_PROJECT_PATH`` and imports
     conventional modules in dependency order:
@@ -42,6 +45,15 @@ def setup():
     Only modules whose ``.py`` file actually exists are imported, so
     projects that omit some of these are fine.
 
+    Parameters
+    ----------
+    modules : tuple[str, ...] | None
+        Which conventional modules to import.  ``None`` (the default) means
+        *all* modules — backward-compatible with the previous behaviour.
+        Pass an explicit tuple to restrict imports, e.g.
+        ``("robot", "observation", "action")`` for robot-side commands.
+        An empty tuple skips all project-module imports.
+
     Idempotent — safe to call multiple times.
     """
     global _is_setup
@@ -54,7 +66,13 @@ def setup():
     if package is None:
         return
 
-    for module_name in ("robot", "observation", "action", "controller", "server"):
+    if modules is not None:
+        wanted = set(modules)
+        to_import = [m for m in _ALL_MODULES if m in wanted]
+    else:
+        to_import = list(_ALL_MODULES)
+
+    for module_name in to_import:
         module_file = project_path / package / f"{module_name}.py"
         if module_file.exists():
             importlib.import_module(f"{package}.{module_name}")

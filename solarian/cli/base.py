@@ -9,6 +9,7 @@ class _LazyCommand(NamedTuple):
     module_path: str  # e.g. "solarian.cli.commands.run_robot"
     help: str
     config_name: Optional[str]
+    setup_modules: Optional[tuple] = None
 
 
 class CommandRegistry:
@@ -27,12 +28,20 @@ class CommandRegistry:
 
     @classmethod
     def register_lazy(cls, name: str, *, module_path: str,
-                      help: str = "", config_name: str = None):
-        """Register a command by metadata only — no import happens until the command is run."""
+                      help: str = "", config_name: str = None,
+                      setup_modules: Optional[tuple] = None):
+        """Register a command by metadata only — no import happens until the command is run.
+
+        ``setup_modules`` controls which project-level modules (robot,
+        observation, action, controller, server) are imported during
+        ``setup()``.  *None* means all modules (backward-compatible
+        default); an empty tuple means none.
+        """
         cls._lazy_commands[name] = _LazyCommand(
             module_path=module_path,
             help=help,
             config_name=config_name,
+            setup_modules=setup_modules,
         )
         cls._config_names[name] = config_name
 
@@ -77,6 +86,13 @@ class CommandRegistry:
         if name in cls._commands:
             return getattr(cls._commands[name], 'help', '')
         return ''
+
+    @classmethod
+    def get_setup_modules(cls, name: str) -> Optional[tuple]:
+        """Return the setup_modules declared for *name*, or None (= all)."""
+        if name in cls._lazy_commands:
+            return cls._lazy_commands[name].setup_modules
+        return None
 
 class BaseCommand(ABC):
     help = ""  # Command help text

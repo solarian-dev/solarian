@@ -191,7 +191,7 @@ def main() -> None:
     subcommand = args.subcommand
 
     # Commands that don't need Hydra config or project settings
-    no_hydra_commands = ['add-module', 'create-project', 'list-cameras']
+    no_hydra_commands = ['add-module', 'create-project', 'list-cameras', 'detect-device']
 
     # Resolve settings.py location (skip for commands that don't need it)
     if subcommand not in no_hydra_commands:
@@ -254,7 +254,8 @@ def main() -> None:
                 cfg = hydra_cfg
                 
             from solarian.setup import setup
-            setup()
+            setup_modules = CommandRegistry.get_setup_modules(subcommand)
+            setup(modules=setup_modules)
 
             cmd.handle(cfg)
         # except ValueError as e:
