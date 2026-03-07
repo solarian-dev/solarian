@@ -4,7 +4,7 @@ from omegaconf import DictConfig, OmegaConf
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
 from solarian.cli import BaseCommand, CommandRegistry
-from solarian.utils import get_class, is_headless
+from solarian.utils import get_class
 from solarian.core.configs import RecordConfig
 from solarian.utils import log_say
 from solarian.core.dataset import Dataset

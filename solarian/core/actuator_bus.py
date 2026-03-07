@@ -7,7 +7,6 @@ from solarian.core.component import Component
 from solarian.core.actuator import Actuator
 from solarian.core.component_bus import ComponentBus
 from solarian.utils.general import enter_pressed
-from solarian.utils.status_board import StatusBoard
 
 
 class ActuatorBus(ComponentBus):
@@ -83,6 +82,7 @@ class ActuatorBus(ComponentBus):
             # print(f"{'NAME':<15} | {'MIN':>6} | {'POS':>6} | {'MAX':>6}")
             # for motor in actuator_names:
             #     print(f"{motor:<15} | {mins[motor]:>6} | {positions[motor]:>6} | {maxes[motor]:>6}")
+            from solarian.utils.status_board import StatusBoard
             StatusBoard.set("MIN", mins)
             StatusBoard.set("POS", positions)
             StatusBoard.set("MAX", maxes)

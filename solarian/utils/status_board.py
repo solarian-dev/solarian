@@ -1,3 +1,10 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from solarian.core.action import Action, ModuleAction
+    from solarian.core.observation import Observation, ModuleObs
+
 from rich.live import Live
 from rich.table import Table
 from rich.console import Console, Group
@@ -14,8 +21,6 @@ import queue
 import numpy as np
 from rich.panel import Panel
 from rich.console import RenderableType
-from solarian.core.action import Action, ModuleAction
-from solarian.core.observation import Observation, ModuleObs
 from datetime import datetime
 from solarian.utils.log_buffer import LogBuffer, get_log_queue, remove_fallback_handlers
 
@@ -178,6 +183,9 @@ def render_action_or_observation(
     Render an Action with multiple modules (arm/base/...) into a compact Rich renderable
     suitable for a single Table cell.
     """
+    from solarian.core.action import Action
+    from solarian.core.observation import Observation
+
     action.uncompress()
     payload = action.to_dict()
 
@@ -238,6 +246,9 @@ def render_module_action(
 
 
 def value_str(value):
+    from solarian.core.action import Action, ModuleAction
+    from solarian.core.observation import Observation, ModuleObs
+
     if isinstance(value, np.ndarray):
         return f"<numpy.ndarray> shape={value.shape}"
     elif isinstance(value, bytes):
