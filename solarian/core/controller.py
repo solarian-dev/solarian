@@ -1,6 +1,5 @@
 import os
 import threading
-import torch
 import time
 import zmq
 import cv2
@@ -46,7 +45,11 @@ class Controller(ABC):
         self.clicked_point = None
         self.clicked_id = None
 
-        self.device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+        try:
+            import torch
+            self.device = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+        except ImportError:
+            self.device = 'cpu'
         
         # Initialize OpenCV windows once
         self.windows_initialized = []

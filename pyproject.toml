@@ -9,8 +9,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
 
-    
-
     # Communication
     "pyzmq==26.4.0",
     "msgpack==1.1.0",
@@ -29,7 +27,6 @@ dependencies = [
 
     # Data processing
     "opencv-python==4.12.0.88",
-    "ultralytics==8.3.179",
     "numpy==2.2.6",
     "scipy>=1.15",
     "pandas",
@@ -39,37 +36,31 @@ dependencies = [
     "pillow",
     "imageio==2.34.0",
     "imageio-ffmpeg",
-    "einops==0.8.1",
-    "easydict==1.13",
-
-    # AI
-    "torch==2.8.0",
-    "torchcodec==0.7",
-    "torchvision==0.23",
-    "datasets==3.6.0",
-    #"xformers==0.0.31.post1",
-    
-    # Simulation
-    "gymnasium==0.29.1",
-    "mujoco==3.3.2",
-    "dm_control==1.0.30",
-
-    # Hardware now installed in plugins
-    # "feetech-servo-sdk>=1.0.0",
-    # "dynamixel-sdk>=3.7.31",
-    # "ur-rtde==1.5.6; platform_system != 'Darwin' or platform_machine != 'arm64'",
-
-    # Logging
-    "wandb>=0.22.3",
 
     # Other
     "cmake==4.0.3",
     "threadpoolctl==3.2",
+]
 
-
-    # "lerobot (>=0.1,<0.2)",
-    # "openpi_client @ git+https://github.com/Physical-Intelligence/openpi.git#subdirectory=packages/openpi-client",
-    
+[project.optional-dependencies]
+ai = [
+    "torch==2.8.0",
+    "torchvision==0.23",
+    "torchcodec==0.7; platform_machine != 'aarch64'",
+    "datasets==3.6.0",
+    "ultralytics==8.3.179",
+    "einops==0.8.1",
+    "easydict==1.13",
+    "wandb>=0.22.3",
+    #"xformers==0.0.31.post1",
+]
+sim = [
+    "gymnasium==0.29.1",
+    "mujoco==3.3.2",
+    "dm_control==1.0.30",
+]
+all = [
+    "solarian[ai,sim]",
 ]
 
 [project.scripts]

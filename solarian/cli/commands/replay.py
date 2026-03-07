@@ -1,6 +1,5 @@
 import time
 import threading
-import torch
 from omegaconf import DictConfig, OmegaConf
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 
