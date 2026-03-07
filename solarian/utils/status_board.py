@@ -17,7 +17,7 @@ from rich.console import RenderableType
 from solarian.core.action import Action, ModuleAction
 from solarian.core.observation import Observation, ModuleObs
 from datetime import datetime
-from solarian.utils.log_buffer import LogBuffer, get_log_queue
+from solarian.utils.log_buffer import LogBuffer, get_log_queue, remove_fallback_handlers
 
 
 
@@ -293,6 +293,8 @@ class StatusBoard:
             self._console = Console()
             self._initialized = True
 
+            remove_fallback_handlers()
+
             target = self.ui_loop if self._live else self.ui_loop_plain
             threading.Thread(target=target, daemon=True).start()
 
@@ -323,22 +325,43 @@ class StatusBoard:
         if inst is None:
             return
         inst._stop_event.set()
-        inst._stopped_event.wait(timeout=2.0)
+        inst._stopped_event.wait(timeout=5.0)
 
     @classmethod
     def print_exception(cls, exc: BaseException | None = None):
         """Stop the live display and print an exception traceback cleanly.
-        
-        Must be called from within an ``except`` block so that
-        ``sys.exc_info()`` is available (or pass *exc* explicitly).
+
+        The traceback is captured eagerly (before stopping the display) so
+        that ``sys.exc_info()`` is still available in the calling thread.
+        Output goes to the *same* console / stream the StatusBoard uses so
+        that Rich's ANSI cursor movements from the Live display cannot
+        overwrite the error message.
         """
-        cls.stop()
-        console = Console(stderr=True)
-        console.print()
+        from rich.traceback import Traceback
+        from solarian.utils.profiling import suppress_atexit_summary
+
+        suppress_atexit_summary()
+
         if exc is not None:
-            console.print_exception(show_locals=False)
+            tb = Traceback.from_exception(
+                type(exc), exc, exc.__traceback__, show_locals=False,
+            )
         elif sys.exc_info()[1] is not None:
-            console.print_exception(show_locals=False)
+            tb = Traceback(show_locals=False)
+        else:
+            tb = None
+
+        cls.stop()
+
+        inst = cls._instance
+        if inst is not None and inst._stopped_event.is_set():
+            console = inst._console
+        else:
+            console = Console()
+
+        console.print()
+        if tb is not None:
+            console.print(tb)
         else:
             traceback.print_exc()
 
@@ -348,7 +371,7 @@ class StatusBoard:
         t.add_row("Local time", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
         for k, v in self.data.items():
             t.add_row(k, value_str(v))
-        return t
+        return Group(t, self._log_buf.render())
 
     def _drain_queues(self):
         try:
@@ -366,25 +389,34 @@ class StatusBoard:
         return self._log_buf.drain(self._log_q)
 
     def ui_loop(self):
-        with Live(self.render(), console=self._console, auto_refresh=False) as live:
+        try:
+            with Live(self.render(), console=self._console, auto_refresh=False) as live:
+                while not self._stop_event.is_set():
+                    new_logs = self._drain_queues()
+                    for rec in new_logs:
+                        live.console.print(self._log_buf.format_record(rec))
+                    live.update(self.render())
+                    live.refresh()
+                    time.sleep(0.05)
+                # Final drain + render so the last snapshot is fully up-to-date
+                # before Live.__exit__ prints it permanently.
+                self._drain_queues()
+                live.update(self.render())
+                live.refresh()
+        finally:
+            self._stopped_event.set()
+
+    def ui_loop_plain(self):
+        try:
             while not self._stop_event.is_set():
                 new_logs = self._drain_queues()
                 for rec in new_logs:
-                    live.console.print(self._log_buf.format_record(rec))
-                live.update(self.render())
-                live.refresh()
-                time.sleep(0.05)
-        self._stopped_event.set()
-
-    def ui_loop_plain(self):
-        while not self._stop_event.is_set():
-            new_logs = self._drain_queues()
-            for rec in new_logs:
-                self._console.print(self._log_buf.format_record(rec))
-            self._console.print(self.render())
-            self._console.print()
-            time.sleep(1.0)
-        self._stopped_event.set()
+                    self._console.print(self._log_buf.format_record(rec))
+                self._console.print(self.render())
+                self._console.print()
+                time.sleep(1.0)
+        finally:
+            self._stopped_event.set()
 
 
 

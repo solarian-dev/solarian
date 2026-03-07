@@ -1,20 +1,11 @@
-from solarian.core.configs import PosValue
-from solarian.core import ModuleAction, Action
+from solarian.core.action import ModuleAction, Action, ActuatorField
+from ${project_name}.robot import ${project_name_camel}Robot
 
 # Example arm module action
 class ArmAction(ModuleAction):
-    shoulder_pan: PosValue = PosValue()
-    shoulder_lift: PosValue = PosValue()
-    elbow_flex: PosValue = PosValue()
-    wrist_flex: PosValue = PosValue()
-    wrist_yaw: PosValue = PosValue()
-    wrist_roll: PosValue = PosValue()
-
-# Example gripper module action
-class GripperAction(ModuleAction):
-    width: PosValue = PosValue()
+    shoulder_pan = ActuatorField(${project_name_camel}Robot.arm.shoulder_pan.pos)
+    
 
 # Define your Action class here
 class ${project_name_camel}Action(Action):
-    arm: ArmAction | None = None
-    gripper: GripperAction | None = None
+    arm = ArmAction()

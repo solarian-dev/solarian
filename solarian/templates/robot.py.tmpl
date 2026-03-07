@@ -1,11 +1,9 @@
 from solarian.core import Robot
 
 # Import module classes from your local modules or third party module plugins
-# from ${project_name}.modules.mymodule import MyModule
+from ${project_name}.modules.example_module import ArmModule
 
 # Define your robot here
 class ${project_name_camel}Robot(Robot):
-    pass
-    
     # Define robot modules, eg:
-    # mymodule: UR5ArmModule
+    arm = ArmModule()

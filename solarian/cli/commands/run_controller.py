@@ -3,7 +3,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.core.configs import ControllerConfig
-from solarian.utils import get_class
+from solarian.utils import get_class, StatusBoard
 
 
 @CommandRegistry.register('run-controller', 'controller')
@@ -18,9 +18,13 @@ class RunTeleopCommand(BaseCommand):
     def handle(self, cfg: DictConfig) -> None:
         from solarian.conf import settings
 
-        # Create controller instance
         ControllerClass = get_class(settings.CONTROLLER_CLASS)
         controller = ControllerClass(cfg)
-        controller.connect()
-        controller.initialize()
-        controller.start()
+        try:
+            controller.connect()
+            controller.initialize()
+            controller.start()
+        except KeyboardInterrupt:
+            StatusBoard.stop()
+        except Exception:
+            StatusBoard.print_exception()

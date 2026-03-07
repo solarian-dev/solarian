@@ -4,7 +4,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.core.configs import ServerConfig
-from solarian.utils import get_class
+from solarian.utils import get_class, StatusBoard
 
 
 @CommandRegistry.register('run-server', 'server')
@@ -20,8 +20,11 @@ class RunServerCommand(BaseCommand):
     def handle(self, cfg: DictConfig) -> None:
         from solarian.conf import settings
 
-        # Create server instance
         ServerClass = get_class(settings.SERVER_CLASS)
         server = ServerClass(cfg)
-        server.start()
-        
+        try:
+            server.start()
+        except KeyboardInterrupt:
+            StatusBoard.stop()
+        except Exception:
+            StatusBoard.print_exception()

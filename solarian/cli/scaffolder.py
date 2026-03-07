@@ -32,8 +32,10 @@ PROJECT_FILES: Tuple[FileSpec, ...] = (
     # FileSpec(Path("modules.py.tmpl"), Path("{package_name}/modules.py")),
     FileSpec(Path("controller.py.tmpl"), Path("{package_name}/controller.py")),
     FileSpec(Path("server.py.tmpl"), Path("{package_name}/server.py")),
+    FileSpec(Path("action.py.tmpl"), Path("{package_name}/action.py")),
+    FileSpec(Path("observation.py.tmpl"), Path("{package_name}/observation.py")),
     FileSpec(Path("settings.py.tmpl"), Path("{package_name}/settings.py")),
-    
+    FileSpec(Path("example_module.py.tmpl"), Path("{package_name}/modules/example_module.py")),
     # conf/
     
     FileSpec(Path("conf/config.yaml.tmpl"), Path("conf/config.yaml")),
@@ -93,6 +95,13 @@ def scaffold_project(project_name: str, target_dir: Path | None = None, force: b
         )
     project_root.mkdir(parents=True, exist_ok=True)
 
+    # create a modules directory
+    modules_dir = project_root / project_name / "modules"
+    modules_dir.mkdir(parents=True, exist_ok=True)
+    # create a __init__.py file in the modules directory
+    (modules_dir / "__init__.py").touch()
+    # create a module.py file in the modules directory
+
     ctx = {
         "project_name": project_name,
         "package_name": project_name.replace("-", "_"),
@@ -131,7 +140,9 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print(f"  │   ├── robot.py")
     print(f"  │   ├── modules.py")
     print(f"  │   ├── controller.py")
-    print(f"  │   └── server.py")
+    print(f"  │   ├── server.py")
+    print(f"  │   ├── action.py")
+    print(f"  │   └── observation.py")
     print(f"  └── conf/")
     print(f"      ├── config.yaml")
     print(f"      ├── robot.yaml")

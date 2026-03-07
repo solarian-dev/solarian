@@ -13,6 +13,7 @@ from solarian.core.configs import RobotConfig
 from solarian.core.message import Message
 from solarian.core.action import Action
 from .module import Module
+from .bus_server import BusServer, BusClient
 from solarian.core import Observation
 from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard, setup_process_logging
 from solarian.core.data import ImageData
@@ -122,6 +123,7 @@ class Robot(ABC):
         self.connected = False
 
         self.modules = {}
+        self._bus_servers: list[BusServer] = []
         self.observation_queues = {}
         self.action_queues = {}
         self.latest_observation_by_module: dict[str, dict] = {}
@@ -172,8 +174,87 @@ class Robot(ABC):
         yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
         module_cfg = load_config_yaml(yaml_path, module_class.config_class)
         return module_cfg
-    
-    
+
+    def _detect_shared_ports(self) -> dict[str, list[str]]:
+        """Return ports that are referenced by two or more modules.
+
+        Returns:
+            ``{port: [module_name, ...]}`` for every port used by >1 module.
+        """
+        port_to_modules: dict[str, list[str]] = {}
+        for name, module in self.modules.items():
+            for port in module.module_bus.components_by_port:
+                port_to_modules.setdefault(port, []).append(name)
+        return {p: names for p, names in port_to_modules.items() if len(names) > 1}
+
+    def _start_shared_bus_servers(self):
+        """For every port shared by multiple modules, start a ``BusServer``
+        and inject ``BusClient`` proxies into the modules' ``ModuleBus``.
+        """
+        from multiprocessing.connection import Pipe
+
+        shared_ports = self._detect_shared_ports()
+        if not shared_ports:
+            return
+
+        for port, module_names in shared_ports.items():
+            # Collect every component on this port across all modules
+            all_components: dict = {}
+            all_calibration: dict = {}
+            bus_class = None
+
+            for mod_name in module_names:
+                module = self.modules[mod_name]
+                components = module.module_bus.components_by_port[port]
+                all_components.update(components)
+
+                if bus_class is None:
+                    bus_class = next(iter(components.values())).bus_class
+
+                calibration = module.get_calibration() or {}
+                if port in calibration:
+                    all_calibration.update(calibration[port])
+
+            assert bus_class is not None
+
+            # One Pipe per module: (server_end, client_end)
+            pipes: dict[str, tuple] = {}
+            for mod_name in module_names:
+                server_conn, client_conn = Pipe()
+                pipes[mod_name] = (server_conn, client_conn)
+
+            server = BusServer(
+                port=port,
+                bus_class=bus_class,
+                components=all_components,
+                calibration=all_calibration or None,
+                server_conns={n: p[0] for n, p in pipes.items()},
+            )
+            server.start()
+            server.ready_event.wait(timeout=30)
+
+            if not server.is_alive():
+                err = server.get_error()
+                if err:
+                    _name, tb_str = err
+                    raise RuntimeError(f"BusServer on {port} died during startup:\n{tb_str}")
+                raise RuntimeError(f"BusServer on {port} died during startup (check stderr)")
+
+            self._bus_servers.append(server)
+
+            # Hand each module a BusClient proxy for this port
+            for mod_name in module_names:
+                client = BusClient(
+                    client_conn=pipes[mod_name][1],
+                    port=port,
+                    components=self.modules[mod_name].module_bus.components_by_port[port],
+                )
+                self.modules[mod_name].module_bus.override_port_bus(port, client)
+
+            logger.info(
+                f"BusServer started on {port} serving modules: {module_names}"
+            )
+
     def _verify_connection(self, timeout=5000):
         """Verify that we can connect to the relay server"""
         logger.info(f"Verifying connection to relay server at {self.cfg.connection.ip}...")
@@ -231,58 +312,46 @@ class Robot(ABC):
         msg.data = {"observation": raw_obs}
         self.state_socket.send(msg.serialize())
     
-    def _check_module_health(self) -> bool:
-        """Check if any module process has crashed. Returns True if all healthy."""
+    def _check_module_health(self):
+        """Raise if any module process or bus server has crashed."""
         for module_name, module in self.modules.items():
             err = module.get_error()
             if err is not None:
                 mod_name, tb_str = err
-                StatusBoard.stop()
-                from rich.console import Console
-                console = Console(stderr=True)
-                console.print()
-                console.print(f"[bold red]Module '{mod_name}' crashed:[/bold red]\n{tb_str}")
-                return False
-        return True
+                raise RuntimeError(f"Module '{mod_name}' crashed:\n{tb_str}")
+        for srv in self._bus_servers:
+            err = srv.get_error()
+            if err is not None:
+                name, tb_str = err
+                raise RuntimeError(f"BusServer '{name}' crashed:\n{tb_str}")
 
     def control_loop(self):
         logger.info("Control loop started")
-        try:
-            while self.running:
-                start_loop_t = time.time_ns()
+        while self.running:
+            start_loop_t = time.time_ns()
 
-                if not self._check_module_health():
-                    break
+            self._check_module_health()
 
-                self.update()
-                action = self.get_action()
+            self.update()
+            action = self.get_action()
 
-                if action is not None:
-                    StatusBoard.set("Action", action)
-                    self.process_action(action)
+            if action is not None:
+                StatusBoard.set("Action", action)
+                self.process_action(action)
 
-                observation = self.get_observation()
-                if not observation.is_empty():
-                    self.send_observation(observation)
-                    # Display a merged snapshot (latest per module), while
-                    # transport keeps "new data only" semantics.
-                    StatusBoard.set("Observation", self.get_display_observation())
+            observation = self.get_observation()
+            if not observation.is_empty():
+                self.send_observation(observation)
+                StatusBoard.set("Observation", self.get_display_observation())
 
-                time.sleep(0.001)
-        except KeyboardInterrupt:
-            logger.info("\nKeyboardInterrupt: Shutting down robot...")
-        except Exception:
-            StatusBoard.print_exception(None)
-        finally:
-            self.running = False
-            self.disconnect()
+            time.sleep(0.001)
 
     def connect(self):
         for module_name, module in self.modules.items():
             module.load_calibration()
 
             if module.cfg.calibration_file is None:
-                logger.error(f"No calibration required for module {module_name}")
+                logger.info(f"No calibration required for module {module_name}")
                 continue
 
             module.connect()
@@ -324,24 +393,21 @@ class Robot(ABC):
 
     def start(self):
         self.running = True
+        self._bus_servers = []
         setup_process_logging(logger_name=None)
-        StatusBoard()
+        
         try:
-            # # Pre-warm hardware drivers that fail after fork().  On macOS,
-            # # AVFoundation's +[AVCaptureDevice initialize] cannot complete
-            # # in a forked child process, causing cv2.VideoCapture to hang.
-            # # Connecting (then disconnecting) here runs +initialize on the
-            # # main thread so the forked child inherits the ready state.
-            # for module in self.modules.values():
-            #     if not module.is_connected:
-            #         module.connect()
-            #         module.disconnect()
-
             # Release parent-process hardware connections before forking so that
             # child processes can open their own clean handles (required for e.g.
             # macOS AVFoundation cameras which only allow one consumer).
             for module in self.modules.values():
                 module.disconnect()
+
+            # For every port shared by 2+ modules, spin up a BusServer that
+            # owns the real serial connection and hand each module a BusClient
+            # proxy.  Modules keep their own processes; they just talk to the
+            # server instead of opening the port themselves.
+            self._start_shared_bus_servers()
 
             for module_name, module in self.modules.items():
                 module.start()
@@ -350,11 +416,6 @@ class Robot(ABC):
             self.on_start()
 
             self.control_loop()
-        except KeyboardInterrupt:
-            StatusBoard.stop()
-            logger.info("\nKeyboardInterrupt: Shutting down robot...")
-        except Exception:
-            StatusBoard.print_exception(None)
         finally:
             self.running = False
             self.disconnect()
@@ -375,7 +436,14 @@ class Robot(ABC):
         self.action_socket.close()
         self.state_socket.close()
         for module in self.modules.values():
+            if module.is_alive():
+                module.terminate()
+                module.join(timeout=5)
             module.disconnect()
+        for srv in getattr(self, '_bus_servers', []):
+            if srv.is_alive():
+                srv.terminate()
+                srv.join(timeout=5)
         self.context.term()
         self.connected = False
 

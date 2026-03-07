@@ -15,6 +15,9 @@ class ModuleBus():
         self.components = []
         self.components_by_port: Dict[str, Dict[str, Component]] = {}
         self.component_bus_by_port: Dict[str, ComponentBus] = {}
+        # Ports mapped here use a pre-created bus (e.g. a BusClient proxy)
+        # instead of opening the hardware directly.
+        self._port_bus_overrides: Dict[str, ComponentBus] = {}
         
     def add_components(self, components: Dict[str, Component]):
         for name, component in components.items():
@@ -25,28 +28,35 @@ class ModuleBus():
                 self.components_by_port[component.cfg.port] = {}
             self.components_by_port[component.cfg.port][name] = component
 
+    def override_port_bus(self, port: str, bus: ComponentBus):
+        """Use *bus* for *port* instead of creating one from the component's bus_class.
+
+        This is set by the Robot when a BusServer is used for a shared port.
+        The override survives disconnect/connect cycles.
+        """
+        self._port_bus_overrides[port] = bus
+
     def connect(self, calibration: Dict[str, Any] = {}):
         self.component_bus_by_port = {}
         for port, components in self.components_by_port.items():
-            # get the first component to determine bus type
+            if port in self._port_bus_overrides:
+                bus = self._port_bus_overrides[port]
+                self.component_bus_by_port[port] = bus
+                if not bus.is_connected:
+                    bus.connect()
+                logger.info(f"Using shared bus proxy on port {port}")
+                continue
+
             first_component = next(iter(components.values()))
-
-            
-            # Get the bus class directly from the component class
             bus_class = first_component.bus_class
-
-            # logger.info(f"Connecting {components.keys()} on port {port} bus class {bus_class.__name__}")
-            # Create the bus instance
             self.component_bus_by_port[port] = bus_class(port=port, components=components, calibration=calibration.get(port, None))
-
-            
             logger.info(f"Connecting {self.component_bus_by_port[port].__class__.__name__} on port {port}")
             self.component_bus_by_port[port].connect()
-            
-    
 
     def disconnect(self):
-        for bus in self.component_bus_by_port.values():
+        for port, bus in self.component_bus_by_port.items():
+            if port in self._port_bus_overrides:
+                continue  # server owns the lifecycle
             if not bus.is_connected:
                 continue
             bus.disconnect()

@@ -76,6 +76,7 @@ class Controller(ABC):
         self.observation_lock = threading.Lock()  # Thread-safe image access
         self.running = False
         self.connected = False
+        self._thread_error = None
 
         self.modules = {}
 
@@ -109,6 +110,10 @@ class Controller(ABC):
         # payloads for fields whose shapes are only known at runtime.
         self.module_observation_buffers = {}
         self.last_observation = {}
+
+        # cv2 keyboard simulation state (char → monotonic timestamp)
+        self._held_keys: dict[str, float] = {}
+        self._held_keys_last_seen: dict[str, float] = {}
 
     def load_module_config(self, module_name: str, module_class: type):
         """Load module config from YAML using the module's own config class"""
@@ -181,13 +186,9 @@ class Controller(ABC):
                     self.get_state() 
                 except zmq.Again:
                     time.sleep(0.001)
-                except KeyboardInterrupt:
-                    logger.info("\nShutting down state receiver")
-                    break
-        except KeyboardInterrupt:
-            logger.info("\nShutting down state receiver")
-        except Exception:
-            StatusBoard.print_exception(None)
+        except Exception as e:
+            if self._thread_error is None:
+                self._thread_error = e
         finally:
             self.running = False
 
@@ -307,18 +308,13 @@ class Controller(ABC):
                 else:
                     wait_ms = 1
                 key = cv2.waitKey(wait_ms) & 0xFF
+                self._process_cv2_key(key)
                 if key == ord('q'):
                     break
 
                 manual_profile("display loop latency", (time.time_ns() - start_loop_t))
-        except KeyboardInterrupt:
-            logger.info("\nKeyboardInterrupt: Shutting down display loop...")
-        except Exception:
-            StatusBoard.print_exception(None)
         finally:
-            # Clean up OpenCV windows
             if self.windows_initialized:
-                logger.info("Cleaning up OpenCV windows...")
                 for name in self.windows_initialized:
                     try:
                         cv2.destroyWindow(name)
@@ -462,11 +458,9 @@ class Controller(ABC):
                     busy_wait((1.0 / self.cfg.fps) - dt_s)
                 
                 manual_profile("control loop latency", (time.time_ns() - start_loop_t))
-                
-        except KeyboardInterrupt:
-            logger.info("\nShutting down control loop...")
-        except Exception:
-            StatusBoard.print_exception(None)
+        except Exception as e:
+            if self._thread_error is None:
+                self._thread_error = e
         finally:
             self.running = False
 
@@ -479,6 +473,53 @@ class Controller(ABC):
         """
         pass
 
+    # -- Keyboard simulation from cv2.waitKey --------------------------------
+    # cv2.waitKey only reports which key is down on a given frame; it has no
+    # release event.  We synthesise on_key_press / on_key_release by tracking
+    # timing and accounting for the OS initial key-repeat delay.
+
+    # Long grace window that covers the OS repeat delay (~400-500 ms on macOS).
+    _KEY_INITIAL_GRACE_S = 0.6
+    # Once OS repeat is flowing, release quickly after the last event.
+    _KEY_REPEAT_TIMEOUT_S = 0.15
+
+    def _process_cv2_key(self, key_code: int):
+        """Called every display-loop frame with the raw cv2.waitKey result."""
+        now = time.monotonic()
+
+        # Register key-down for detected key
+        if key_code != 0xFF:
+            try:
+                char = chr(key_code).lower()
+            except (ValueError, OverflowError):
+                char = None
+            if char is not None:
+                if char not in self._held_keys:
+                    self._held_keys[char] = now
+                    self.on_key_press(char)
+                self._held_keys_last_seen[char] = now
+
+        # Check for releases
+        for char in list(self._held_keys):
+            first = self._held_keys[char]
+            last = self._held_keys_last_seen[char]
+            held_duration = now - first
+            since_last_event = now - last
+            if held_duration < self._KEY_INITIAL_GRACE_S:
+                continue
+            if since_last_event > self._KEY_REPEAT_TIMEOUT_S:
+                del self._held_keys[char]
+                del self._held_keys_last_seen[char]
+                self.on_key_release(char)
+
+    def on_key_press(self, char: str):
+        """Called once when a key is first pressed. Override in subclasses."""
+        pass
+
+    def on_key_release(self, char: str):
+        """Called once when a key is considered released. Override in subclasses."""
+        pass
+
     def start(self, dataset=None, episode_time_s=None, single_task=None):
         """Implements the control loop
         
@@ -489,21 +530,17 @@ class Controller(ABC):
             single_task (str, optional): Single task to run. Defaults to None.
         """
 
-        # if events is None:
-        #     events = {"exit_early": False}
-
         if episode_time_s is None:
             episode_time_s = float("inf")
 
         self.running = True
+        self._thread_error = None
         logger.info("Starting state receiver")
-
 
         threading.Thread(target=self._state_receiver, daemon=True).start()
 
         # spin control loop in a separate thread
         logger.info("Starting control loop")
-        # TO DO: control loop should be implemented as a process instead of a thread
         t = threading.Thread(target=self.control_loop, args=(dataset, episode_time_s + 1, single_task), daemon=True)
         t.start()
         
@@ -511,11 +548,16 @@ class Controller(ABC):
         self.on_start()
         
         # run display loop in main thread
-        print("Starting display loop")
-        self.display_loop(episode_time_s)
+        logger.info("Starting display loop")
+        try:
+            self.display_loop(episode_time_s)
+        finally:
+            self.running = False
+            t.join(timeout=5.0)
+            self.events["exit_early"] = False
 
-        t.join()
-        self.events["exit_early"] = False
+        if self._thread_error is not None:
+            raise self._thread_error
 
 
     @abstractmethod

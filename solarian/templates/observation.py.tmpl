@@ -2,11 +2,10 @@ from solarian.core.observation import SensorField, ModuleObs, Observation
 from ${project_name}.robot import ${project_name_camel}Robot
 
 
-class MyModuleObs(ModuleObs):
+class ArmObs(ModuleObs):
     # define fields here
-    # eg:
-    # shoulder_pan_pos = SensorField(${project_name_camel}Robot.mymodule.shoulder_pan.pos)
+    shoulder_pan_pos = SensorField(${project_name_camel}Robot.arm.shoulder_pan.pos)
     
 
 class ${project_name_camel}Observation(Observation):
-    arm = MyModuleObs()
+    arm = ArmObs()

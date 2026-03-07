@@ -34,6 +34,9 @@ from .message import Message
 # core/module.py
 from .module import Module
 
+# core/bus_server.py
+from .bus_server import BusServer, BusClient
+
 # core/observation.py
 from .observation import Observation
 

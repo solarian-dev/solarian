@@ -17,9 +17,13 @@ class RunRobotCommand(BaseCommand):
         from solarian.conf import settings
 
         setup_process_logging(logger_name=None)
-        StatusBoard()
         RobotClass = get_class(settings.ROBOT_CLASS)
         robot = RobotClass(cfg)
-        robot.connect()
-        robot.initialize()
-        robot.start()
+        try:
+            robot.connect()
+            robot.initialize()
+            robot.start()
+        except KeyboardInterrupt:
+            StatusBoard.stop()
+        except Exception:
+            StatusBoard.print_exception()

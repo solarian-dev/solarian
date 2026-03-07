@@ -6,20 +6,63 @@ from typing import Callable
 from .data import Data, ImageData
 
 
-class ActionType(IntEnum):
-    """
-    Standard action types supported by all modules.
+# class ActionType(IntEnum):
+#     """
+#     Standard action types supported by all modules.
     
-    Modules can extend this by creating their own IntEnum that starts
-    numbering from CUSTOM_START to avoid conflicts.
-    """
+#     Modules can extend this by creating their own IntEnum that starts
+#     numbering from CUSTOM_START to avoid conflicts.
+#     """
+#     STOP = 0
+#     SCHEDULE_WAYPOINT = 1
+#     RESTART_PUT = 2
+    
+#     # Reserve range for future standard actions
+#     # Custom module actions should start from this value
+#     CUSTOM_START = 100
+
+class ActionType:
+    _registry: dict[int, str] = {}
+    
     STOP = 0
     SCHEDULE_WAYPOINT = 1
     RESTART_PUT = 2
-    
-    # Reserve range for future standard actions
-    # Custom module actions should start from this value
     CUSTOM_START = 100
+
+    def __init__(self, value: int = 0):
+        self._value = int(value)
+
+    def __int__(self):
+        return self._value
+
+    def __eq__(self, other):
+        if isinstance(other, ActionType):
+            return self._value == other._value
+        if isinstance(other, int):
+            return self._value == other
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(self._value)
+
+    def __repr__(self):
+        name = self._registry.get(self._value)
+        if name:
+            return f"ActionType({name}={self._value})"
+        return f"ActionType({self._value})"
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        for name, val in vars(cls).items():
+            if isinstance(val, int) and not name.startswith('_'):
+                if val < ActionType.CUSTOM_START and name not in vars(ActionType):
+                    raise ValueError(f"{name}={val} conflicts with reserved range")
+                ActionType._registry[val] = f"{cls.__name__}.{name}"
+
+    @classmethod
+    def name_of(cls, value: int) -> str:
+        return cls._registry.get(value, f"UNKNOWN({value})")
+
 
 
 def action_handler(action_type: int):
@@ -135,7 +178,7 @@ class ModuleAction:
 
     # -- Init --------------------------------------------------------------
 
-    def __init__(self, action_type: ActionType = ActionType.STOP, data: dict = {}):
+    def __init__(self, action_type: "int | ActionType" = ActionType.STOP, data: dict = {}):
         self.action_type = action_type
         data = data if data is not None else {}
         self._fields = {}

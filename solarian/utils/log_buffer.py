@@ -1,6 +1,7 @@
 import logging
 import multiprocessing
 import os
+import sys
 import collections
 import queue
 from datetime import datetime
@@ -111,6 +112,15 @@ class QueueLogHandler(logging.Handler):
             self.handleError(record)
 
 
+class FallbackStreamHandler(logging.StreamHandler):
+    """StreamHandler used as a console fallback before StatusBoard takes over.
+
+    Identified by class so it can be selectively removed once the
+    StatusBoard starts draining the log queue.
+    """
+    pass
+
+
 _log_queue: Optional[multiprocessing.Queue] = None
 
 
@@ -129,13 +139,45 @@ def get_log_queue() -> multiprocessing.Queue:
 def setup_process_logging(
     level: int = logging.DEBUG,
     logger_name: Optional[str] = None,
+    log_queue: Optional[multiprocessing.Queue] = None,
+    install_fallback: bool = True,
 ):
     """Wire the given (or root) logger so all records go to the shared log queue.
 
-    Call this once at the top of every child process's ``run()`` / entry-point.
+    Args:
+        log_queue: Explicit queue to use.  Pass the parent's queue into child
+            processes so they share the same pipe instead of creating a new one.
+        install_fallback: If *True* (default), add a :class:`FallbackStreamHandler`
+            so logs are visible on stderr before the :class:`StatusBoard` takes
+            over.  Set to *False* in subprocesses where the parent already
+            drains the queue via the StatusBoard.
     """
+    if log_queue is not None:
+        global _log_queue
+        _log_queue = log_queue
     log_q = get_log_queue()
     logger = logging.getLogger(logger_name)
     logger.setLevel(level)
     if not any(isinstance(h, QueueLogHandler) for h in logger.handlers):
         logger.addHandler(QueueLogHandler(log_q, level))
+    if install_fallback and not any(isinstance(h, FallbackStreamHandler) for h in logger.handlers):
+        fmt = logging.Formatter(
+            "%(asctime)s.%(msecs)03d %(levelname)-4.4s [pid %(process)d] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+        sh = FallbackStreamHandler(sys.stderr)
+        sh.setLevel(level)
+        sh.setFormatter(fmt)
+        logger.addHandler(sh)
+
+
+def remove_fallback_handlers(logger_name: Optional[str] = None):
+    """Remove all :class:`FallbackStreamHandler` instances from the logger.
+
+    Called by :class:`StatusBoard` when it starts draining the log queue so
+    that log lines are no longer duplicated on the console.
+    """
+    logger = logging.getLogger(logger_name)
+    for h in logger.handlers[:]:
+        if isinstance(h, FallbackStreamHandler):
+            logger.removeHandler(h)

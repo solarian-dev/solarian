@@ -23,7 +23,7 @@ from solarian.core.action import Action, ActionType, action_handler, ModuleActio
 from solarian.core.configs import ModuleConfig, InterpolatorType
 from solarian.core.observation import Observation, ModuleObs
 from solarian.core.data import DataComputer, TimestampData
-from solarian.utils import manual_profile, profile, setup_process_logging
+from solarian.utils import manual_profile, profile, setup_process_logging, get_log_queue
 from solarian.utils.shared_memory.shared_memory_queue import Empty
 from solarian.utils.shared_memory.action_queue import ActionQueue
 from solarian.utils.shared_memory.observation_queue import ObservationQueue
@@ -185,6 +185,8 @@ class Module(Process):
                 sensor_class = value.__class__
                 self.sensors[name] = sensor_class(self.cfg.sensors[name])
                 setattr(self, name, self.sensors[name])
+
+        self._log_queue = get_log_queue()
 
         self.module_bus = ModuleBus()
         self.module_bus.add_components(self.actuators)
@@ -785,7 +787,7 @@ class Module(Process):
 
 
         logger.info(f"Module {self.name} process start method: {get_start_method()}")
-        setup_process_logging(logger_name=None)
+        setup_process_logging(logger_name=None, log_queue=self._log_queue, install_fallback=False)
 
         logger.info(f"Starting module {self.name} process")
 
@@ -828,10 +830,7 @@ class Module(Process):
                         # action = actions[-1]
                         # dispatch actions via handler registry
                         for action in actions:
-                            try:
-                                keep_running = self._dispatch_action(action, t_now)
-                            except Exception as e:
-                                logger.error(f"handler error: {type(e).__name__}: {e}\n{''.join(_tb.format_exception(type(e), e, e.__traceback__))}")
+                            keep_running = self._dispatch_action(action, t_now)
 
                 except Empty:
                     pass
