@@ -6,19 +6,25 @@ import atexit
 
 func_stats = defaultdict(list)
 verbose = False
+_suppress_atexit = False
 
 @atexit.register
 def print_stats():
-    if not func_stats:
+    if _suppress_atexit or not func_stats:
         return
     print("\n=== Function Profiling Summary ===")
-    # print in order of function name
     for func_name, times in sorted(func_stats.items(), key=lambda item: item[0]):
         min_time = min(times)
         max_time = max(times)
         avg_time = sum(times) / len(times)
         print(f"- {func_name}: called {len(times)} times | "
               f"min={min_time:.6f}ms, max={max_time:.6f}ms, avg={avg_time:.6f}ms")
+
+
+def suppress_atexit_summary():
+    """Prevent the profiling summary from printing at exit."""
+    global _suppress_atexit
+    _suppress_atexit = True
 
 
 def profile(func):
