@@ -1,4 +1,6 @@
 import os
+import select
+import sys
 import threading
 import time
 import zmq
@@ -22,17 +24,17 @@ from solarian.conf import settings
 from solarian.core.data import ImageData, BoundingBoxData
 
 
-from screeninfo import get_monitors
-
 import logging
 logger = logging.getLogger(__name__)
 
+sw, sh, sx, sy = 0, 0, 0, 0
 try:
+    from screeninfo import get_monitors
     monitors = get_monitors()
     m = monitors[0]
     sw, sh, sx, sy = m.width, m.height, m.x, m.y
-except:
-    print("No monitors found.")
+except Exception:
+    pass
 
 
 class Controller(ABC):
@@ -273,6 +275,42 @@ class Controller(ABC):
     #     dataset.add_frame(frame, task)
         
     
+    def _headless_loop(self, episode_time_s):
+        """Main loop for headless mode — no cv2 GUI, reads keypresses from stdin."""
+        import tty
+        import termios
+
+        timestamp = 0
+        start_episode_t = time.perf_counter()
+
+        old_settings = termios.tcgetattr(sys.stdin)
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+            logger.info("Headless mode — press 'q' to quit")
+
+            while timestamp < episode_time_s and self.running:
+                start_loop_t = time.time_ns()
+                timestamp = time.perf_counter() - start_episode_t
+
+                if self.events["exit_early"]:
+                    break
+
+                if select.select([sys.stdin], [], [], 0)[0]:
+                    ch = sys.stdin.read(1).lower()
+                    self.on_key_press(ch)
+                    self.on_key_release(ch)
+                    if ch == 'q':
+                        break
+
+                dt_s = (time.time_ns() - start_loop_t) / 1e9
+                sleep_s = (1.0 / self.cfg.fps) - dt_s if self.cfg.fps else 0.01
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
+
+                manual_profile("headless loop latency", (time.time_ns() - start_loop_t))
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+
     def display_loop(self, episode_time_s):
         timestamp = 0
         start_episode_t = time.perf_counter()
@@ -534,14 +572,22 @@ class Controller(ABC):
         # Hook for subclasses to start additional threads
         self.on_start()
         
-        # run display loop in main thread
-        logger.info("Starting display loop")
-        try:
-            self.display_loop(episode_time_s)
-        finally:
-            self.running = False
-            t.join(timeout=5.0)
-            self.events["exit_early"] = False
+        if self.cfg.headless:
+            logger.info("Starting headless loop (no display)")
+            try:
+                self._headless_loop(episode_time_s)
+            finally:
+                self.running = False
+                t.join(timeout=5.0)
+                self.events["exit_early"] = False
+        else:
+            logger.info("Starting display loop")
+            try:
+                self.display_loop(episode_time_s)
+            finally:
+                self.running = False
+                t.join(timeout=5.0)
+                self.events["exit_early"] = False
 
         if self._thread_error is not None:
             raise self._thread_error

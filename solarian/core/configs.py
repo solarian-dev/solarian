@@ -118,6 +118,7 @@ class ControllerConfig(BaseModel):
     system2_api_key: str
     policy_path: str
     device: str
+    headless: bool = False
     connection: ConnectionConfig
     modules: dict[str, ModuleConfig]
 
