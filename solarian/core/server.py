@@ -44,11 +44,15 @@ class RelayServer:
 
     def _action_relay(self):
         """Forward actions from clients to robot, dispatching events to server processors."""
+        poller = zmq.Poller()
+        poller.register(self.client_cmd_receiver, zmq.POLLIN)
         while self.running:
             try:
-                bytes = self.client_cmd_receiver.recv(zmq.NOBLOCK)
+                if not poller.poll(timeout=1):
+                    continue
+                raw = self.client_cmd_receiver.recv()
                 try:
-                    msg = Message.deserialize(bytes)
+                    msg = Message.deserialize(raw)
 
                     if "stop_tracking" in msg.data:
                         for proc in self._processors.values():
@@ -65,19 +69,21 @@ class RelayServer:
                 except Exception as e:
                     print(f"Error processing message: {e}")
 
-            except zmq.Again:
-                time.sleep(0.001)
             except Exception as e:
                 print(f"Error in action relay: {e}")
                 time.sleep(0.001)
 
     def _state_relay(self):
         """Forward observations from robot to clients, computing server-side fields."""
+        poller = zmq.Poller()
+        poller.register(self.robot_state_receiver, zmq.POLLIN)
         while self.running:
             try:
-                bytes = self.robot_state_receiver.recv(zmq.NOBLOCK)
+                if not poller.poll(timeout=1):
+                    continue
+                raw = self.robot_state_receiver.recv()
 
-                msg = Message.deserialize(bytes)
+                msg = Message.deserialize(raw)
                 if self.captured_click is not None:
                     msg.data["click_ack"] = self.captured_click
                 
@@ -92,7 +98,7 @@ class RelayServer:
                         StatusBoard.set("Server observation enrichment time (ms)", elapsed_ms)
                 self.client_state_sender.send(msg.serialize())
             except zmq.Again:
-                time.sleep(0.001)
+                pass
 
     def enrich_observation(self, observation: Observation) -> Observation:
         """Enrich the observation by running server-side processors."""

@@ -314,17 +314,19 @@ class Robot(ABC):
     def control_loop(self):
         logger.info("Control loop started")
         threading.Thread(target=self._observation_sender, daemon=True).start()
+
+        poller = zmq.Poller()
+        poller.register(self.action_socket, zmq.POLLIN)
+
         while self.running:
             self._check_module_health()
-
             self.update()
-            action = self.get_action()
 
-            if action is not None:
-                StatusBoard.set("Action", action)
-                self.process_action(action)
-
-            time.sleep(0.001)
+            if poller.poll(timeout=1):
+                action = self.get_action()
+                if action is not None:
+                    StatusBoard.set("Action", action)
+                    self.process_action(action)
 
     def connect(self):
         for module_name, module in self.modules.items():
