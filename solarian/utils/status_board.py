@@ -33,7 +33,9 @@ def format_floats(obj, fmt="{:.3f}"):
         return {k: format_floats(v, fmt) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [format_floats(x, fmt) for x in obj]
-    return obj
+    if isinstance(obj, (int, bool, str, type(None))):
+        return obj
+    return str(obj)
 
 
 # def render_action(action: Action, *, max_rows: int = 6) -> RenderableType:
@@ -124,7 +126,7 @@ def _render_action_panel(
 
     subtitle = None
     if last_timestamp is not None:
-        dt = datetime.fromtimestamp(last_timestamp)
+        dt = datetime.fromtimestamp(float(last_timestamp))
         subtitle = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
     return Panel(inner, title=title, subtitle=subtitle, border_style="blue")
@@ -166,7 +168,7 @@ def _render_observation_panel(
 
     subtitle = None
     if last_timestamp is not None:
-        dt = datetime.fromtimestamp(last_timestamp)
+        dt = datetime.fromtimestamp(float(last_timestamp))
         subtitle = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
     return Panel(inner, title=title, subtitle=subtitle, border_style="blue")
@@ -250,6 +252,11 @@ def value_str(value):
     from solarian.core.observation import Observation, ModuleObs
 
     if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return f"{value.item():.3f}"
+        if value.size <= 10:
+            with np.printoptions(precision=3, suppress=True):
+                return str(value)
         return f"<numpy.ndarray> shape={value.shape}"
     elif isinstance(value, bytes):
         return "<bytes>"

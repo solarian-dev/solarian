@@ -128,13 +128,33 @@ class Data(BaseModel):
     #         d.value = value
     #     return d
 
-    # receives a dictionary of data and returns a new Data instance
     def duplicate(self, data: dict = {}):
         d = self.model_copy()
-        # set values 
         for name, value in data.items():
             setattr(d, name, value)
+        if d.payload is not None and not d.is_compressed:
+            d.payload = d._coerce_payload(d.payload)
         return d
+
+    def _coerce_payload(self, value):
+        """Coerce *value* to the type declared by ``dtype`` / ``shape``."""
+        if self.shape is not None:
+            if not isinstance(value, np.ndarray):
+                raise TypeError(
+                    f"{type(self).__name__} expects ndarray with shape "
+                    f"{self.shape}, got {type(value).__name__}"
+                )
+            return value
+        # Scalar: convert numpy scalars / compatible types to dtype
+        if isinstance(value, self.dtype):
+            return value
+        try:
+            return self.dtype(value.item() if isinstance(value, np.generic) else value)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise TypeError(
+                f"{type(self).__name__} expects {self.dtype.__name__}, "
+                f"got {type(value).__name__} ({value!r})"
+            ) from exc
 
     # -----------------------
     # Overridable hooks

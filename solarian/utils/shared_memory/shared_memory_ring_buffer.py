@@ -167,7 +167,7 @@ class SharedMemoryRingBuffer:
                 shape=shape, dtype=spec.dtype)
         return result
 
-    def get(self, out=None) -> Dict[str, np.ndarray]:
+    def get(self, out=None) -> Dict[str, Union[np.ndarray, numbers.Number]]:
         if out is None:
             out = self._allocate_empty()
         start_time = time.monotonic()
@@ -176,6 +176,10 @@ class SharedMemoryRingBuffer:
         for key, value in self.shared_arrays.items():
             arr = value.get()
             np.copyto(out[key], arr[curr_idx])
+        # Convert 0-d arrays back to Python scalars
+        for key in out:
+            if out[key].ndim == 0:
+                out[key] = out[key].item()
         end_time = time.monotonic()
         dt = end_time - start_time
         if dt > self.get_time_budget:

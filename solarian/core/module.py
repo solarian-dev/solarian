@@ -26,7 +26,7 @@ from solarian.core.data import DataComputer, TimestampData
 from solarian.utils import manual_profile, profile, setup_process_logging, get_log_queue
 from solarian.utils.shared_memory.shared_memory_queue import Empty
 from solarian.utils.shared_memory.action_queue import ActionQueue
-from solarian.utils.shared_memory.observation_queue import ObservationQueue
+from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
 from solarian.utils.trajectory_interpolator import (
     TrajectoryInterpolator,
     ScalarTrajectoryInterpolator,
@@ -127,7 +127,7 @@ class Module(Process):
         return self    
 
 
-    def __init__(self, cfg: ModuleConfig | None = None, name: str | None = None, observation_queue: ObservationQueue | None = None, action_queue: ActionQueue | None = None):
+    def __init__(self, cfg: ModuleConfig | None = None, name: str | None = None, observation_buffer: ObservationRingBuffer | None = None, action_queue: ActionQueue | None = None):
         super().__init__()
 
         if cfg is None:
@@ -136,7 +136,7 @@ class Module(Process):
         self.cfg = cfg
         self.name = name if name is not None else self.__class__.__name__
         
-        self.observation_queue = observation_queue
+        self.observation_buffer = observation_buffer
         self.action_queue = action_queue
 
         # Build action handler registry from @action_handler decorated methods
@@ -194,9 +194,10 @@ class Module(Process):
 
         module_obs_spec = Observation.get_module_obs_spec()
         if self.name in module_obs_spec:
-            module_obs_cls = module_obs_spec[self.name].__class__
-            self._robot_processors = module_obs_cls.create_processors(DataComputer.ROBOT)
+            self._module_obs_cls = module_obs_spec[self.name].__class__
+            self._robot_processors = self._module_obs_cls.create_processors(DataComputer.ROBOT)
         else:
+            self._module_obs_cls = None
             self._robot_processors = {}
 
 
@@ -531,7 +532,7 @@ class Module(Process):
     # ========= receive APIs =============
     def get_observation(self, k: int | None = None) -> Union[ModuleObs, list, None]:
         """
-        Get observation(s) from the observation queue.
+        Get observation(s) from the observation buffer.
         
         Args:
             k: If None, return the next observation (FIFO).
@@ -539,26 +540,26 @@ class Module(Process):
                
         Returns:
             ModuleObs if k is None, otherwise list of ModuleObs (oldest first).
-            Returns None if the queue is empty.
+            Returns None if the buffer is empty.
         """
         
-        if self.observation_queue is None or self.observation_queue.empty():
+        if self.observation_buffer is None or self.observation_buffer.count == 0:
             return None
         elif k is None:
-            return self.observation_queue.get()
+            return self.observation_buffer.get()
         else:
-            return self.observation_queue.get_k(k=k)
+            return self.observation_buffer.get_last_k(k=k)
     
     def get_all_observations(self) -> list[ModuleObs]:
         """
-        Get all available observations from the observation queue.
+        Get all available observations from the observation buffer.
         
         Returns:
-            List of ModuleObs instances (oldest first)
+            List of ModuleObs instances (newest first)
         """
-        if self.observation_queue is None or self.observation_queue.empty():
+        if self.observation_buffer is None or self.observation_buffer.count == 0:
             return []
-        return self.observation_queue.get_all()
+        return self.observation_buffer.get_last_k(k=self.observation_buffer.count)
 
 
     def enrich_observation(self, obs: ModuleObs) -> ModuleObs:
@@ -569,16 +570,13 @@ class Module(Process):
 
     def update_observations(self):
 
-        # logger.info(f"Updating observations for {self.name}")
-        if self.observation_queue is None:
-            raise ValueError("Observation queue is not initialized.")
+        if self.observation_buffer is None:
+            raise ValueError("Observation buffer is not initialized.")
 
-        module_obs_spec = Observation.get_module_obs_spec()
-        if self.name not in module_obs_spec:
+        if self._module_obs_cls is None:
             return
 
-        module_obs_cls = module_obs_spec[self.name].__class__
-        sensor_fields = module_obs_cls.get_sensor_fields_spec()
+        sensor_fields = self._module_obs_cls.get_sensor_fields_spec()
 
         data = {}
         fields_by_data_class = {}
@@ -595,10 +593,10 @@ class Module(Process):
                 sensor_data[sensor_name]['timestamp'] = time.time() - self.cfg.receive_latency
                 data[field_name] = sensor_data[sensor_name]
 
-        obs = module_obs_cls(data)
+        obs = self._module_obs_cls(data)
         obs = self.enrich_observation(obs)
 
-        self.observation_queue.put(obs)
+        self.observation_buffer.put(obs)
 
     def reset(self):
         """Reset the module. Eg: set to home position"""
@@ -709,7 +707,7 @@ class Module(Process):
         Returns:
             bool: True to continue running, False to stop
         """
-        handler_name = self.action_handlers.get(action.action_type)
+        handler_name = self.action_handlers.get(int(action.action_type))
         
         if handler_name:
             handler = getattr(self, handler_name)

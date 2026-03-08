@@ -369,7 +369,12 @@ class Observation:
         return object.__getattribute__(self, name)
 
     def __getitem__(self, name):
+        if name not in self._module_obs:
+            return None
         return self._module_obs[name]
+
+    def __setitem__(self, name, value):
+        self._module_obs[name] = value
 
 
     def items(self):

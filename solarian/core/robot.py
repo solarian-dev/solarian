@@ -17,7 +17,7 @@ from .bus_server import BusServer, BusClient
 from solarian.core import Observation
 from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard, setup_process_logging
 from solarian.core.data import ImageData
-from solarian.utils.shared_memory.observation_queue import ObservationQueue
+from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
 from solarian.utils.shared_memory.action_queue import ActionQueue
 from solarian.conf import settings
 from solarian.utils import get_class
@@ -32,31 +32,6 @@ class Robot(ABC):
 
     # Override in subclasses to use a custom config class (must extend ModuleConfig)
     config_class: type = RobotConfig
-    
-
-    # def __init_subclass__(cls):
-    #     super().__init_subclass__()
-
-    #     # 1) enforce required fields + types
-    #     req = getattr(Robot, "__annotations__", {})
-    #     for field, expected_type in req.items():
-    #         if not hasattr(cls, field):
-    #             raise TypeError(f"{cls.__name__} must declare '{field}: {expected_type}'")
-    #         value = getattr(cls, field)
-    #         if not isinstance(value, expected_type):
-    #             raise TypeError(
-    #                 f"{cls.__name__}.{field} must be {expected_type.__name__}, "
-    #                 f"got {type(value).__name__}"
-                # )
-
-        # # 2) enforce at least one Module
-        # modules = {
-        #     name: value for name, value in cls.__dict__.items()
-        #     if isinstance(value, Module)
-        # }
-        # if not modules:
-        #     raise TypeError(f"{cls.__name__} must declare at least one Module")
-
     
     @classmethod
     def module_names(cls):
@@ -108,7 +83,7 @@ class Robot(ABC):
 
         #self.control_lock = threading.Lock()
         self.observation_lock = threading.Lock()
-        self.last_observation = None
+        self.last_observation = Observation({})
         self.windows_initialized = False
 
         # Verify connection
@@ -124,9 +99,8 @@ class Robot(ABC):
 
         self.modules = {}
         self._bus_servers: list[BusServer] = []
-        self.observation_queues = {}
+        self.observation_buffers = dict[str, ObservationRingBuffer]()
         self.action_queues = {}
-        self.latest_observation_by_module: dict[str, dict] = {}
 
         # IMPORTANT: Store the manager so it doesn't get garbage collected
         # (which would clean up all shared memory before subprocess can access it)
@@ -151,19 +125,20 @@ class Robot(ABC):
         example_observation = Observation.zeros()
         example_action = Action.zeros()
 
-        # Phase 3: Create shared-memory queues and assign to modules.
+        # Phase 3: Create shared-memory buffers and queues and assign to modules.
         for name, (module_class, module_cfg) in module_configs.items():
-            self.observation_queues[name] = ObservationQueue(
+            self.observation_buffers[name] = ObservationRingBuffer.create_from_example(
                 shm_manager=self.shm_manager,
-                example_obs=example_observation[name],
-                buffer_size=1024,
+                example_observation=example_observation[name],
+                get_time_budget=0.2,
+                put_desired_frequency=200
             )
             self.action_queues[name] = ActionQueue(
                 shm_manager=self.shm_manager,
                 example_action=example_action[name],
                 buffer_size=1024,
             )
-            self.modules[name].observation_queue = self.observation_queues[name]
+            self.modules[name].observation_buffer = self.observation_buffers[name]
             self.modules[name].action_queue = self.action_queues[name]
         
 
@@ -299,16 +274,12 @@ class Robot(ABC):
 
     @profile
     def send_observation(self, observation: Observation):
-        # if hasattr(observation, "wrist_camera") and hasattr(observation.wrist_camera, "image"):
-        #     cv2.imshow("Observation", observation.wrist_camera.image.value)
-        #     cv2.waitKey(1)
         if observation is None:
             return
         msg = Message()
         msg.robot_timestamp = time.time_ns()
         observation.compress()
         raw_obs = observation.to_dict()
-                
         msg.data = {"observation": raw_obs}
         self.state_socket.send(msg.serialize())
     
@@ -340,10 +311,8 @@ class Robot(ABC):
                 self.process_action(action)
 
             observation = self.get_observation()
-            if not observation.is_empty():
-                self.send_observation(observation)
-                StatusBoard.set("Observation", self.get_display_observation())
-
+            self.send_observation(observation)
+            StatusBoard.set("Observation", observation)
             time.sleep(0.001)
 
     def connect(self):
@@ -504,17 +473,20 @@ class Robot(ABC):
             Observation: Contains ModuleObs readings organized by module
         """
         obs_data = {}
-        for module_name, obs_queue in self.observation_queues.items():
-            if not obs_queue.empty():
-                module_obs = obs_queue.get().to_dict()
-                self.latest_observation_by_module[module_name] = module_obs
-                obs_data[module_name] = module_obs
+        for module_name, obs_buffer in self.observation_buffers.items():
+            if obs_buffer.count == 0:
+                continue
+            module_obs = obs_buffer.get().to_dict()
+            obs_data[module_name] = module_obs
         return Observation(obs_data)
 
-    def get_display_observation(self) -> Observation:
-        """Create a display snapshot using the latest observation per module."""
-        return Observation(dict(self.latest_observation_by_module))
-                    
+        # for module_name, obs_buffer in self.observation_buffers.items():
+        #     if obs_buffer.count == 0:
+        #         continue
+        #     module_obs = obs_buffer.get()
+        #     self.last_observation[module_name] = module_obs
+        # return self.last_observation
+
     @profile
     def process_action(self, action: Action):
         """Process received action

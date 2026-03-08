@@ -8,7 +8,7 @@ import math
 import string
 import numpy as np
 from abc import ABC, abstractmethod
-from multiprocessing.managers import SharedMemoryManager
+
 
 
 from solarian.utils import busy_wait
@@ -16,7 +16,6 @@ from solarian.core import Action
 from solarian.core import Observation
 from solarian.core.configs import ControllerConfig, ActionValue
 from solarian.core.message import Message
-from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
 from solarian.core.module import Module
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
@@ -104,15 +103,11 @@ class Controller(ABC):
             "reset_policy": False
         }
 
-        self.shm_manager = SharedMemoryManager()
-        self.shm_manager.start()
-
         # Observation buffers are lazily initialized on the first received
         # observation so the schema (including image shapes) is derived from
         # real data rather than from Observation.zeros(), which may have None
         # payloads for fields whose shapes are only known at runtime.
-        self.module_observation_buffers = {}
-        self.last_observation = {}
+        self.last_observation = Observation({})
 
         # cv2 keyboard simulation state (char → monotonic timestamp)
         self._held_keys: dict[str, float] = {}
@@ -162,19 +157,8 @@ class Controller(ABC):
         for module_name, module_observation in observation.items():
             self.last_observation[module_name] = module_observation
 
-            if module_name not in self.module_observation_buffers:
-                self.module_observation_buffers[module_name] = ObservationRingBuffer.create_from_example(
-                    shm_manager=self.shm_manager,
-                    example_observation=module_observation,
-                    get_time_budget=0.01,
-                    put_desired_frequency=200
-                )
-            try:
-                self.module_observation_buffers[module_name].put(module_observation, wait=False)
-            except TimeoutError:
-                pass
-            StatusBoard.set(f"{module_name} Observation", module_observation)
-            StatusBoard.set(f"{module_name} Observation Buffer Size", self.module_observation_buffers[module_name].count)
+            
+        StatusBoard.set(f"Observation", self.last_observation)
 
         if msg.data.get("click_ack", None) and msg.data["click_ack"] == self.clicked_id:
             logger.info("Click acknowledged", self.clicked_id)
@@ -384,7 +368,7 @@ class Controller(ABC):
         image_bboxes = {}
 
         for module_name, field_name in self._image_field_keys:
-            module_obs = self.last_observation.get(module_name)
+            module_obs = self.last_observation[module_name]
             if module_obs is None:
                 continue
             try:
@@ -397,7 +381,7 @@ class Controller(ABC):
         for img_key, bbox_fields in self._bbox_field_map.items():
             if img_key not in images:
                 continue
-            module_obs = self.last_observation.get(img_key[0])
+            module_obs = self.last_observation[img_key[0]]
             if module_obs is None:
                 continue
             for bbox_module, bbox_field in bbox_fields:

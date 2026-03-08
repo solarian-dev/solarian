@@ -67,7 +67,7 @@ CommandRegistry.register_lazy(
     module_path=f"{_pkg}.run_controller",
     help="Teleop client that connects to a relay server",
     config_name="controller",
-    setup_modules=("controller",),
+    setup_modules=("controller", "observation", "action"),
 )
 CommandRegistry.register_lazy(
     "calibrate-controller",
