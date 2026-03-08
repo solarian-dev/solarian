@@ -814,24 +814,22 @@ class Module(Process):
             while keep_running:
                 t_now = time.monotonic()
 
-                self.control_step()
-
-                self.update_observations()
-
-                # fetch the newest action, discarding stale entries
+                # Drain actions first so control_step() sees the latest target
                 action = None
                 try:
                     if self.action_queue is None:
                         logger.error("Action queue is not initialized.")
                     elif not self.action_queue.empty():
                         actions = self.action_queue.get_all()
-                        # action = actions[-1]
-                        # dispatch actions via handler registry
                         for action in actions:
                             keep_running = self._dispatch_action(action, t_now)
 
                 except Empty:
                     pass
+
+                self.control_step()
+
+                self.update_observations()
 
                 
                 # first loop successful, ready to receive actions

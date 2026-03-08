@@ -296,11 +296,25 @@ class Robot(ABC):
                 name, tb_str = err
                 raise RuntimeError(f"BusServer '{name}' crashed:\n{tb_str}")
 
+    def _observation_sender(self):
+        """Send observations to the server in a dedicated thread.
+
+        Decoupled from the action loop so that image compression on slower
+        hardware (e.g. Raspberry Pi) does not block action delivery.
+        """
+        while self.running:
+            try:
+                observation = self.get_observation()
+                self.send_observation(observation)
+                StatusBoard.set("Observation", observation)
+            except Exception as e:
+                logger.error(f"Observation sender error: {e}")
+            time.sleep(0.005)
+
     def control_loop(self):
         logger.info("Control loop started")
+        threading.Thread(target=self._observation_sender, daemon=True).start()
         while self.running:
-            start_loop_t = time.time_ns()
-
             self._check_module_health()
 
             self.update()
@@ -310,9 +324,6 @@ class Robot(ABC):
                 StatusBoard.set("Action", action)
                 self.process_action(action)
 
-            observation = self.get_observation()
-            self.send_observation(observation)
-            StatusBoard.set("Observation", observation)
             time.sleep(0.001)
 
     def connect(self):
