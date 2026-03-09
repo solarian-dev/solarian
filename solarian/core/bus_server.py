@@ -133,7 +133,7 @@ class BusServer(Process):
                         bus.disconnect()
                 except Exception:
                     pass
-            logger.info(f"BusServer on {self._port} terminated")
+            # logger.info(f"BusServer on {self._port} terminated")
 
 
 # ======================================================================

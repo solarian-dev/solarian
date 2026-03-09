@@ -226,9 +226,7 @@ class Robot(ABC):
                 )
                 self.modules[mod_name].module_bus.override_port_bus(port, client)
 
-            logger.info(
-                f"BusServer started on {port} serving modules: {module_names}"
-            )
+            # logger.info(f"BusServer started on {port} serving modules: {module_names}")
 
     def _verify_connection(self, timeout=5000):
         """Verify that we can connect to the relay server"""
@@ -377,12 +375,16 @@ class Robot(ABC):
         self.running = True
         self._bus_servers = []
         setup_process_logging(logger_name=None)
+
+        StatusBoard()
+        status_mp_q = StatusBoard.get_mp_queue()
         
         try:
             # Release parent-process hardware connections before forking so that
             # child processes can open their own clean handles (required for e.g.
             # macOS AVFoundation cameras which only allow one consumer).
             for module in self.modules.values():
+                module._status_mp_q = status_mp_q
                 module.disconnect()
 
             # For every port shared by 2+ modules, spin up a BusServer that

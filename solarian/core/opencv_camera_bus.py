@@ -62,7 +62,7 @@ class OpenCVCameraBus(SensorBus):
     def connect(self):
         import cv2
 
-        logger.info(f"OpenCVCameraBus connecting {self.components.keys()} on port {self.port}")
+        # logger.info(f"OpenCVCameraBus connecting {self.components.keys()} on port {self.port}")
         cfg = next(iter(self.components.values())).cfg
         # logger.info(f"Config: {cfg}, class: {type(cfg)}")
 
@@ -72,10 +72,10 @@ class OpenCVCameraBus(SensorBus):
             port = int(self.port)
 
         backend = _get_backend()
-        logger.info(f"OpenCVCameraBus opening camera on port {port} with backend {backend}")
+        # logger.info(f"OpenCVCameraBus opening camera on port {port} with backend {backend}")
         self.capture = cv2.VideoCapture(port, backend)
 
-        logger.info("Camera opened")
+        # logger.info("Camera opened")
 
         self.capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*cfg.video_format))
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(cfg.width))
@@ -96,7 +96,7 @@ class OpenCVCameraBus(SensorBus):
         fps = self.capture.get(cv2.CAP_PROP_FPS)
         width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        logger.info(f"Camera opened: port={self.port}, {width}x{height} @ {fps:.1f} fps")
+        # logger.info(f"Camera opened: port={self.port}, {width}x{height} @ {fps:.1f} fps")
 
     def disconnect(self):
         if self.capture is not None:

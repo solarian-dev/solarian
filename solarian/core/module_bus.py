@@ -44,13 +44,13 @@ class ModuleBus():
                 self.component_bus_by_port[port] = bus
                 if not bus.is_connected:
                     bus.connect()
-                logger.info(f"Using shared bus proxy on port {port}")
+                # logger.info(f"Using shared bus proxy on port {port}")
                 continue
 
             first_component = next(iter(components.values()))
             bus_class = first_component.bus_class
             self.component_bus_by_port[port] = bus_class(port=port, components=components, calibration=calibration.get(port, None))
-            logger.info(f"Connecting {self.component_bus_by_port[port].__class__.__name__} on port {port}")
+            # logger.info(f"Connecting {self.component_bus_by_port[port].__class__.__name__} on port {port}")
             self.component_bus_by_port[port].connect()
 
     def disconnect(self):

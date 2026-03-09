@@ -280,6 +280,7 @@ class StatusBoard:
     _instance = None
     _lock = threading.Lock()
     _live: bool = True
+    _child_q: "multiprocessing.Queue | None" = None
 
     @classmethod
     def configure(cls, *, live: bool = True):
@@ -317,14 +318,31 @@ class StatusBoard:
             threading.Thread(target=target, daemon=True).start()
 
     @classmethod
+    def get_mp_queue(cls) -> "multiprocessing.Queue | None":
+        """Return the multiprocessing queue for passing to child processes."""
+        inst = cls._instance
+        if inst is not None and hasattr(inst, '_mp_q'):
+            return inst._mp_q
+        return None
+
+    @classmethod
+    def init_child(cls, mp_q: "multiprocessing.Queue"):
+        """Register the parent's mp queue so a child process can send updates."""
+        cls._child_q = mp_q
+
+    @classmethod
     def set(cls, key, value):
         inst = cls._instance
-        if inst is None or not hasattr(inst, '_initialized') or not inst._initialized:
+        if inst is not None and hasattr(inst, '_initialized') and inst._initialized:
+            if os.getpid() == inst._creator_pid:
+                inst._local_q.put((key, value))
+            else:
+                inst._mp_q.put((key, value))
+        elif cls._child_q is not None:
+            cls._child_q.put((key, value))
+        elif multiprocessing.parent_process() is None:
             inst = StatusBoard()
-        if os.getpid() == inst._creator_pid:
             inst._local_q.put((key, value))
-        else:
-            inst._mp_q.put((key, value))
 
     @classmethod
     def get(cls):

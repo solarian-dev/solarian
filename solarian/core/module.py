@@ -783,6 +783,9 @@ class Module(Process):
     def run(self):
         """Main control loop running in a separate process."""
 
+        status_mp_q = getattr(self, '_status_mp_q', None)
+        if status_mp_q is not None:
+            StatusBoard.init_child(status_mp_q)
 
         logger.info(f"Module {self.name} process start method: {get_start_method()}")
         setup_process_logging(logger_name=None, log_queue=self._log_queue, install_fallback=False)
