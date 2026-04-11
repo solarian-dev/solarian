@@ -351,6 +351,10 @@ class ThinkProcess(Process):
             print(f"[Think] Unknown skill: {skill_name}")
             return
 
+        
+        # if the skill is digital, launch it here as a separate process
+        # otherwise add o action queues to run in robot.
+        
         skill = cls(
             name=skill_name,
             observation_buffers=self.observation_buffers,

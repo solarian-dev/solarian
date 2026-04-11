@@ -1,9 +1,10 @@
+import logging
 import time
 from omegaconf import DictConfig, OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.core.configs import ControllerConfig
-from solarian.utils import get_class, StatusBoard
+from solarian.utils import get_class, StatusBoard, setup_process_logging
 
 
 @CommandRegistry.register('run-controller', 'controller')
@@ -18,6 +19,8 @@ class RunTeleopCommand(BaseCommand):
     def handle(self, cfg: DictConfig) -> None:
         from solarian.conf import settings
 
+        log_level = getattr(logging, getattr(settings, 'LOG_LEVEL', 'INFO'), logging.INFO)
+        setup_process_logging(level=log_level, logger_name=None)
         ControllerClass = get_class(settings.CONTROLLER_CLASS)
         controller = ControllerClass(cfg)
         try:

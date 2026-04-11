@@ -189,7 +189,10 @@ def render_action_or_observation(
     from solarian.core.observation import Observation
 
     action.uncompress()
-    payload = action.to_dict()
+    if isinstance(action, Action):
+        payload = action.to_dict()["data"]
+    else:
+        payload = action.to_dict()
 
     # Decide module iteration order
     module_names = list(payload.keys())

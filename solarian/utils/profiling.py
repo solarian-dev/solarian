@@ -62,3 +62,14 @@ def manual_profile(func_name, elapsed):
     func_stats[func_name].append(elapsed)
     if verbose:
         print(f"Function '{func_name}' took {elapsed:.6f} ms.")
+
+
+def get_stats_snapshot() -> dict[str, list[float]]:
+    """Return a plain-dict copy of the current per-function timing data."""
+    return dict(func_stats)
+
+
+def merge_stats(other: dict[str, list[float]]):
+    """Merge timing data (e.g. from a child process) into the global stats."""
+    for name, times in other.items():
+        func_stats[name].extend(times)

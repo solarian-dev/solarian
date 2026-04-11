@@ -19,7 +19,7 @@ import logging
 import traceback as _tb
 from multiprocessing import Process, Event, Queue as MpQueue
 from multiprocessing.connection import Connection, Pipe, wait as conn_wait
-from typing import Any, Dict, TYPE_CHECKING
+from typing import Any, Dict, cast, TYPE_CHECKING
 
 from solarian.core.component_bus import ComponentBus
 from solarian.core.data import Data
@@ -95,7 +95,7 @@ class BusServer(Process):
             while True:
                 # Block until at least one client sends a request
                 try:
-                    ready = conn_wait(conn_list, timeout=1.0)
+                    ready = cast(list[Connection], conn_wait(conn_list, timeout=1.0))
                 except OSError:
                     break
 

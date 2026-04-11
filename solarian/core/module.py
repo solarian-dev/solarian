@@ -24,6 +24,7 @@ from solarian.core.configs import ModuleConfig, InterpolatorType
 from solarian.core.observation import Observation, ModuleObs
 from solarian.core.data import DataComputer, TimestampData
 from solarian.utils import manual_profile, profile, setup_process_logging, get_log_queue
+from solarian.utils.profiling import get_stats_snapshot, merge_stats as merge_profiling_stats
 from solarian.utils.shared_memory.shared_memory_queue import Empty
 from solarian.utils.shared_memory.action_queue import ActionQueue
 from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
@@ -38,6 +39,8 @@ from solarian.utils import get_class
 from solarian.utils.status_board import StatusBoard
 # TODO: remove speed from calibration required
 # CALIBRATION_REQUIRED = [ValueName.POS]
+
+from solarian.utils import profile, manual_profile
 
 
 import logging
@@ -156,6 +159,7 @@ class Module(Process):
         
         self.ready_event = Event()
         self._error_queue: MpQueue = MpQueue()
+        self._profiling_queue: MpQueue = MpQueue()
 
         self.launch_timeout = self.cfg.launch_timeout
         self.commands_per_cycle = self.cfg.commands_per_cycle
@@ -165,7 +169,12 @@ class Module(Process):
         self.actuators = {}
         self.sensors = {}
         self.actuators_by_port = {}
-        for name, value in self.__class__.__dict__.items():
+        class_attrs = {}
+        for cls in reversed(type(self).__mro__):
+            for name, value in cls.__dict__.items():
+                if isinstance(value, (Actuator, Sensor)):
+                    class_attrs[name] = value
+        for name, value in class_attrs.items():
             if isinstance(value, Actuator):
                 # create actuator
                 actuator_class = value.__class__
@@ -419,10 +428,12 @@ class Module(Process):
         self.end_calibration_mode()
 
     def start_calibration_mode(self):
+        print(f"Starting calibration mode for {self.name}")
         for port, actuator_names in self.actuators_by_port.items():
             self.module_bus.component_bus_by_port[port].start_calibration_mode()
 
     def end_calibration_mode(self):
+        print(f"Ending calibration mode for {self.name}")
         for port, actuator_names in self.actuators_by_port.items():
             self.module_bus.component_bus_by_port[port].end_calibration_mode()
 
@@ -814,6 +825,9 @@ class Module(Process):
             # obs_thread.start()
 
 
+            t_last_control_step = time.monotonic()
+
+
             while keep_running:
                 t_now = time.monotonic()
 
@@ -830,6 +844,8 @@ class Module(Process):
                 except Empty:
                     pass
 
+                manual_profile("control_step", time.monotonic() - t_last_control_step)
+                t_last_control_step = time.monotonic()
                 self.control_step()
 
                 self.update_observations()
@@ -850,6 +866,10 @@ class Module(Process):
             self._error_queue.put_nowait((self.name, "".join(tb_str)))
         finally:
             self.ready_event.set()
+            try:
+                self._profiling_queue.put_nowait(get_stats_snapshot())
+            except Exception:
+                pass
             if self.verbose:
                 print(f"[Module] {self.name} process terminated")
 

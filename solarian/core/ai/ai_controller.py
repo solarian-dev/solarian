@@ -165,21 +165,24 @@ class AIController(Controller):
         """
         # action_class = get_class(settings.ACTION_CLASS)
         # action_class = Action
-        merged = Action.zeros()
+        # merged = Action.zeros()
 
-        while not self.action_queue.empty():
-            try:
-                # try to get the action from the action queue, without blocking
-                action_data = self.action_queue.get_nowait()
-            except Exception:
-                break
+        # while not self.action_queue.empty():
+        #     try:
+        #         # try to get the action from the action queue, without blocking
+        #         action_data = self.action_queue.get_nowait()
+        #     except Exception:
+        #         break
 
-            if isinstance(action_data, dict):
-                _deep_merge(merged.data, action_data)
-            elif isinstance(action_data, Action):
-                _deep_merge(merged.data, action_data.data)
+        #     if isinstance(action_data, dict):
+        #         _deep_merge(merged.data, action_data)
+        #     elif isinstance(action_data, Action):
+        #         _deep_merge(merged.data, action_data.data)
 
-        return merged
+        # return merged
+        if not self.action_queue.empty():
+            return self.action_queue.get_nowait()
+        return None
 
     def on_start(self):
         """

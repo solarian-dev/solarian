@@ -8,6 +8,7 @@ and Cartesian-space control.
 from solarian.core.module import Module
 from solarian.core.configs import ModuleConfig
 from solarian_ur5.actuator import UR5JointActuator, UR5CartesianActuator
+from solarian.core.calibration import MotorCalibration
 
 
 class UR5ArmConfig(ModuleConfig):
@@ -38,7 +39,15 @@ class UR5ArmModule(Module):
     wrist_yaw = UR5JointActuator()
     wrist_roll = UR5JointActuator()
     
-    # Optional: Cartesian-space actuators (uncomment if needed)
-    cartesian = UR5CartesianActuator()
+    # Cartesian-space actuators
+    x = UR5CartesianActuator()
+    y = UR5CartesianActuator()
+    z = UR5CartesianActuator()
+    rx = UR5CartesianActuator()
+    ry = UR5CartesianActuator()
+    rz = UR5CartesianActuator()
 
+
+    def read_calibration(self) -> dict[str, MotorCalibration]:
+        return self.calibration
 

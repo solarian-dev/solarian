@@ -1,26 +1,24 @@
 import zmq
 import time
 import threading
-import numpy as np
 import os
-import cv2
 from abc import ABC, abstractmethod
 from typing import Any
 from multiprocessing.managers import SharedMemoryManager
 
 from solarian.core.configs import RobotConfig
-# from .observation import Observation
 from solarian.core.message import Message
 from solarian.core.action import Action
 from .module import Module
 from .bus_server import BusServer, BusClient
 from solarian.core import Observation
 from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard, setup_process_logging
+from solarian.utils.profiling import merge_stats as merge_profiling_stats
 from solarian.core.data import ImageData
 from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
 from solarian.utils.shared_memory.action_queue import ActionQueue
 from solarian.conf import settings
-from solarian.utils import get_class
+from solarian.core.action import ActionType, ModuleAction
 
 import logging
 logger = logging.getLogger("robot")
@@ -127,19 +125,31 @@ class Robot(ABC):
 
         # Phase 3: Create shared-memory buffers and queues and assign to modules.
         for name, (module_class, module_cfg) in module_configs.items():
+            module_obs = example_observation[name]
+            module_act = example_action[name]
+            assert module_obs is not None, f"No observation defined for module '{name}'"
+            assert module_act is not None, f"No action defined for module '{name}'"
+
             self.observation_buffers[name] = ObservationRingBuffer.create_from_example(
                 shm_manager=self.shm_manager,
-                example_observation=example_observation[name],
+                example_observation=module_obs,
                 get_time_budget=0.2,
                 put_desired_frequency=200
             )
             self.action_queues[name] = ActionQueue(
                 shm_manager=self.shm_manager,
-                example_action=example_action[name],
+                example_action=module_act,
                 buffer_size=1024,
             )
             self.modules[name].observation_buffer = self.observation_buffers[name]
             self.modules[name].action_queue = self.action_queues[name]
+
+        # Build action handler registry from @action_handler decorated methods
+        self.action_handlers: dict[int, str] = {}
+        for attr_name in dir(self):
+            method = getattr(type(self), attr_name, None)
+            if callable(method) and hasattr(method, '_handles_action'):
+                self.action_handlers[getattr(method, '_handles_action')] = attr_name
         
 
     def load_module_config(self, module_name: str, module_class: type):
@@ -263,7 +273,7 @@ class Robot(ABC):
                 return None
 
             raw_action = msg.data["action"]
-            action = Action(raw_action)
+            action = Action(action_type=ActionType(raw_action["action_type"]), data=raw_action["data"])
             # latency = (time.time_ns() - action.controller_timestamp)
             # manual_profile("process_action latency", latency)
             return action
@@ -311,7 +321,7 @@ class Robot(ABC):
 
     def control_loop(self):
         logger.info("Control loop started")
-        threading.Thread(target=self._observation_sender, daemon=True).start()
+        
 
         poller = zmq.Poller()
         poller.register(self.action_socket, zmq.POLLIN)
@@ -399,6 +409,7 @@ class Robot(ABC):
             # Hook for subclasses to start additional threads
             self.on_start()
 
+            threading.Thread(target=self._observation_sender, daemon=True).start()
             self.control_loop()
         finally:
             self.running = False
@@ -423,6 +434,11 @@ class Robot(ABC):
             if module.is_alive():
                 module.terminate()
                 module.join(timeout=5)
+            try:
+                child_stats = module._profiling_queue.get_nowait()
+                merge_profiling_stats(child_stats)
+            except Exception:
+                pass
             module.disconnect()
         for srv in getattr(self, '_bus_servers', []):
             if srv.is_alive():
@@ -433,49 +449,7 @@ class Robot(ABC):
 
     def display(self):
         pass
-        # images = {}
-        # # add all images in observation
-        # for module_name, module_data in self.last_observation.data.items():
-        #     for sensor_name, sensor_data in module_data.items():
-        #         if sensor_data.get(ValueName.IMAGE) is not None:
-        #             images[sensor_name] = sensor_data
-
-        # # Initialize windows once if not already done
-        # if not self.windows_initialized:
-        #     for name in images.keys():
-        #         cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-                
-        #     self.windows_initialized = True
-
-        # COLOR = (255, 0, 0)
-
-        # for name, image in images.items():
-        #     img = image[ValueName.IMAGE]
-            
-        #     # Check if the image is encoded (bytes) and decode it
-        #     if isinstance(img, bytes):
-        #         # Decode the JPEG image
-        #         print("Decoding image for", name)
-        #         img = cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR)
-        #         if img is None:
-        #             print(f"Failed to decode image for {name}")
-        #             continue
-        #     elif not isinstance(img, np.ndarray):
-        #         print(f"Unsupported image type for {name}: {type(img)}")
-        #         continue                
-        #     # Print debug info
-        #     # print(f"Image type: {type(img)}, shape: {img.shape if hasattr(img, 'shape') else 'unknown'}")
-            
-        #     # Convert color only once before display
-        #     display_img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-        #     # Show frames
-        #     cv2.imshow(name, display_img_bgr)
-            
-        #     # No need to call getWindowProperty every time since windows are created once
-        #     key = cv2.waitKey(1) & 0xFF
-        #     if key == ord('q'):
-        #         return False
+        
             
     
     @profile
@@ -508,10 +482,14 @@ class Robot(ABC):
         Args:
             action (Action): Action to process
         """
-        # put action into action queues
-        for module_name, module_action in action.items():
-            self.action_queues[module_name].put(module_action)
-            StatusBoard.set(f"{module_name} Action Queue Size", self.action_queues[module_name].qsize())
+
+        if action.action_type == ActionType.MODULE_ACTION:
+            # put module actions into action queues
+            for module_name, module_action in action.items():
+                self.action_queues[module_name].put(module_action)
+                StatusBoard.set(f"{module_name} Action Queue Size", self.action_queues[module_name].qsize())
+        else:
+            self._dispatch_action(action, time.monotonic())
 
     def update(self):
         """Update robot state"""
@@ -528,3 +506,26 @@ class Robot(ABC):
         for module_name, module in self.modules.items():
             module.write_calibration()
         
+
+     # ========= action dispatch system ============
+    def _dispatch_action(self, action: Action, t_now: float) -> bool:
+        """
+        Dispatch an action to its registered handler.
+        
+        Args:
+            action: The Action object from the queue
+            t_now: Current monotonic time
+            
+        Returns:
+            bool: True to continue running, False to stop
+        """
+        handler_name = self.action_handlers.get(int(action.action_type))
+        
+        if handler_name:
+            handler = getattr(self, handler_name)
+            return handler(action, t_now)
+        else:
+            # Unknown action - log warning but continue
+            if self.verbose:
+                print(f"[Robot] Unknown action type {action.action_type}, ignoring")
+            return True

@@ -10,6 +10,9 @@ import platform
 import sys
 from typing import Any, Dict
 from solarian.core.data import Data, PosData
+import logging
+logger = logging.getLogger(__name__)
+
 try:
     import rtde_control
     import rtde_receive
@@ -27,12 +30,13 @@ from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.actuator import Actuator
 
 
+FREQ = 120
 KP = 2.0                             # proportional gain [1/s]; tune 1.0–4.0
-MAX_JOINT_SPEED = 0.5                # rad/s cap (per joint)
+MAX_JOINT_SPEED = 1.0                # rad/s cap (per joint)
 ACC = 1.0                            # acceleration cap for speedj
 SAFE_MARGIN = math.radians(2.0)      # keep some distance from joint limits (in rad)
-DT = 1.0 / 30                        # time step for P controller
-LOOKAHEAD = 0.1                       # s (0.03–0.2 typical)
+DT = 1.0 / FREQ                        # time step for P controller
+LOOKAHEAD = 0.08                       # s (0.03–0.2 typical)
 GAIN = 300                            # unitless (start 100–600 on CB3)
 
 # UR5 (CB3/e-Series) soft limits (approx; adjust to your exact model if needed)
@@ -114,8 +118,8 @@ class UR5Bus(ActuatorBus):
 
     def disconnect(self):
         self.connected = False
-        self.rtde_c.close()
-        self.rtde_r.close()
+        self.rtde_c.disconnect()
+        self.rtde_r.disconnect()
 
     def read(self, data_type, component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         values = {}
@@ -144,13 +148,12 @@ class UR5Bus(ActuatorBus):
             raw_values[name] = value.value
         if normalize:
             raw_values = self._unnormalize(raw_values)
-            
+
         # first joint values
         names = [name for name in raw_values.keys() if name in self.joint_names2ids.keys()]
         if names:
             q_now = self.rtde_r.getActualQ()
             q_target = [clamp_joint_value(raw_values[name], j) if name in raw_values else q_now[j] for name, j in self.joint_names2ids.items()]
-            
             try:
                 self.rtde_c.servoJ(q_target,
                                 MAX_JOINT_SPEED,
@@ -189,11 +192,14 @@ class UR5Bus(ActuatorBus):
         return calibration_dict
 
     def start_calibration_mode(self):
+        print(f"Starting calibration mode for {self.port}")
         # Enable freedrive (gravity compensation)
-        self.rtde_c.freedriveMode()
+        result = self.rtde_c.teachMode()
+        print(f"Result of freedriveMode: {result}")
+        print("freedrive status:", self.rtde_c.getFreedriveStatus())
 
     def end_calibration_mode(self):
-        self.rtde_c.endFreedriveMode()
+        self.rtde_c.endTeachMode()
 
 
     def set_half_turn_homings(self, actuator_names: list[str]) -> Dict[str, int]:
@@ -203,6 +209,6 @@ class UR5Bus(ActuatorBus):
         for name, pos in actual_positions.items():
             if name not in self.calibration:
                 self.calibration[name] = {}
-            self.calibration[name]["homing_offset"] = -pos
-            half_turn_homings[name] = -pos
+            self.calibration[name]["homing_offset"] = pos
+            half_turn_homings[name] = pos
         return half_turn_homings

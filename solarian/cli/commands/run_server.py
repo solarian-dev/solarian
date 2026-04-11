@@ -1,10 +1,11 @@
+import logging
 import time
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.core.configs import ServerConfig
-from solarian.utils import get_class, StatusBoard
+from solarian.utils import get_class, StatusBoard, setup_process_logging
 
 
 @CommandRegistry.register('run-server', 'server')
@@ -20,6 +21,8 @@ class RunServerCommand(BaseCommand):
     def handle(self, cfg: DictConfig) -> None:
         from solarian.conf import settings
 
+        log_level = getattr(logging, getattr(settings, 'LOG_LEVEL', 'INFO'), logging.INFO)
+        setup_process_logging(level=log_level, logger_name=None)
         ServerClass = get_class(settings.SERVER_CLASS)
         server = ServerClass(cfg)
         try:

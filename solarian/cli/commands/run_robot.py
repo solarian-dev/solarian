@@ -1,3 +1,4 @@
+import logging
 from omegaconf import DictConfig, OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
@@ -16,7 +17,8 @@ class RunRobotCommand(BaseCommand):
     def handle(self, cfg: RobotConfig) -> None:
         from solarian.conf import settings
 
-        setup_process_logging(logger_name=None)
+        log_level = getattr(logging, getattr(settings, 'LOG_LEVEL', 'INFO'), logging.INFO)
+        setup_process_logging(level=log_level, logger_name=None)
         RobotClass = get_class(settings.ROBOT_CLASS)
         robot = RobotClass(cfg)
         try:

@@ -96,7 +96,7 @@ class ActuatorBus(ComponentBus):
 
         return mins, maxes
 
-    def _normalize(self, values: dict[str, int]) -> dict[str, float]:
+    def _normalize(self, values: dict[str, float]) -> dict[str, float]:
         if not self.calibration:
             raise RuntimeError(f"{self} has no calibration registered.")
 
@@ -131,7 +131,7 @@ class ActuatorBus(ComponentBus):
 
         return normalized_values
 
-    def _unnormalize(self, values: dict[str, int]) -> dict[str, int]:
+    def _unnormalize(self, values: dict[str, float]) -> dict[str, float]:
         if not self.calibration:
             raise RuntimeError(f"{self} has no calibration registered.")
 
@@ -150,11 +150,11 @@ class ActuatorBus(ComponentBus):
             if cfg.mode == MotorNormMode.RANGE_M100_100.value:
                 val = -val if drive_mode else val
                 bounded_val = min(100.0, max(-100.0, val))
-                unnormalized_values[name] = int(((bounded_val + 100) / 200) * (max_ - min_) + min_)
+                unnormalized_values[name] = ((bounded_val + 100) / 200) * (max_ - min_) + min_
             elif cfg.mode == MotorNormMode.RANGE_0_100.value:
                 val = 100 - val if drive_mode else val
                 bounded_val = min(100.0, max(0.0, val))
-                unnormalized_values[name] = int((bounded_val / 100) * (max_ - min_) + min_)
+                unnormalized_values[name] = (bounded_val / 100) * (max_ - min_) + min_
             # elif cfg.mode is MotorNormMode.DEGREES:
             #     mid = (min_ + max_) / 2
             #     max_res = self.model_resolution_table[self._id_to_model(id_)] - 1

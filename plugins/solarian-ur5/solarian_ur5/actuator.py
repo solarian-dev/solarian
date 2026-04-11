@@ -50,12 +50,7 @@ class UR5CartesianActuator(Servo):
     
     bus_class = UR5Bus
 
-    x = PosData()
-    y = PosData()
-    z = PosData()
-    rx = PosData()
-    ry = PosData()
-    rz = PosData()
+    pos = PosData()
     
 
 # Backward compatibility alias

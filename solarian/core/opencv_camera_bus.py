@@ -63,7 +63,7 @@ class OpenCVCameraBus(SensorBus):
         import cv2
 
         # logger.info(f"OpenCVCameraBus connecting {self.components.keys()} on port {self.port}")
-        cfg = next(iter(self.components.values())).cfg
+        cfg: CameraConfig = next(iter(self.components.values())).cfg  # type: ignore[assignment]
         # logger.info(f"Config: {cfg}, class: {type(cfg)}")
 
         if isinstance(self.port, str) and self.port.startswith('/dev/'):
@@ -121,7 +121,7 @@ class OpenCVCameraBus(SensorBus):
             if frame is None:
                 raise ValueError("Could not decode frame from camera")
 
-        cfg = next(iter(self.components.values())).cfg
+        cfg: CameraConfig = next(iter(self.components.values())).cfg  # type: ignore[assignment]
         processed = frame
 
         if cfg.color_mode == ColorMode.RGB.value:

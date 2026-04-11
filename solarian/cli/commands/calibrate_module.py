@@ -1,61 +1,71 @@
-import time
-import serial.tools.list_ports
-from omegaconf import DictConfig, OmegaConf
+import os
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.utils import get_class
-from solarian.core.configs import RobotConfig
+from solarian.core.module import Module
+
+
+def _collect_modules_from_class(cls) -> dict[str, type]:
+    """Return {name: ModuleSubclass} for all Module descriptors on *cls*."""
+    modules = {}
+    for name in cls.__dict__:
+        val = getattr(cls, name, None)
+        if isinstance(val, Module):
+            modules[name] = val.__class__
+    return modules
 
 
 @CommandRegistry.register('calibrate-module', 'robot')
 class CalibrateModuleCommand(BaseCommand):
     help = 'Calibrate module device.'
 
-    def get_config_class(self):
-        """Return the config class for this command."""
-        return RobotConfig
-
-    def handle(self, cfg: RobotConfig) -> None:
+    def handle(self, cfg) -> None:
         from solarian.conf import settings
-        
-        # List all available modules
-        print("\n=== Available Modules ===")
-        if not hasattr(settings, 'MODULE_CLASSES') or not settings.MODULE_CLASSES:
-            print("No modules are configured in settings.MODULE_CLASSES")
+        from solarian.utils.configs import load_config_yaml
+
+        conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
+
+        all_modules: dict[str, tuple[type, str]] = {}
+
+        for class_attr, source_label in [
+            ("ROBOT_CLASS", "Robot"),
+            ("CONTROLLER_CLASS", "Controller"),
+        ]:
+            class_path = getattr(settings, class_attr, None)
+            if not class_path:
+                continue
+            parent_cls = get_class(class_path)
+            for name, module_cls in _collect_modules_from_class(parent_cls).items():
+                all_modules[name] = (module_cls, source_label)
+
+        if not all_modules:
+            print("No modules found in the project's Robot or Controller classes.")
             return
-        
-        module_names = list(settings.MODULE_CLASSES.keys())
-        for idx, module_name in enumerate(module_names, 1):
-            module_class_path = settings.MODULE_CLASSES[module_name]
-            print(f"{idx}. {module_name} ({module_class_path})")
-        
-        # Ask user to select a module
-        print("\n=== Select Module to Setup ===")
+
+        module_entries = list(all_modules.items())
+
+        print("\n=== Available Modules ===")
+        for idx, (name, (module_cls, source)) in enumerate(module_entries, 1):
+            print(f"{idx}. {name} ({module_cls.__name__}, {source})")
+
+        print("\n=== Select Module to Calibrate ===")
         while True:
-            user_input = input(f"Enter module number (1-{len(module_names)}): ").strip()
-            
-            # Check if input is a number
+            user_input = input(f"Enter module number (1-{len(module_entries)}): ").strip()
             if user_input.isdigit():
                 idx = int(user_input)
-                if 1 <= idx <= len(module_names):
-                    module_name = module_names[idx - 1]
+                if 1 <= idx <= len(module_entries):
                     break
                 else:
-                    print(f"Invalid number. Please enter a number between 1 and {len(module_names)}")
+                    print(f"Invalid number. Please enter a number between 1 and {len(module_entries)}")
             else:
-                print(f"Invalid module number. Please enter a number between 1 and {len(module_names)}")
-        
-        print(f"\nCalibrating module: {idx}")
-        
-        # Proceed with module setup
+                print(f"Invalid input. Please enter a number between 1 and {len(module_entries)}")
 
-        # create module instance
-        module_name = module_names[idx - 1]
-        module_class_path = settings.MODULE_CLASSES[module_name]
-        module_class = get_class(module_class_path)
-        module = module_class(cfg.modules[module_name], module_name)
+        module_name, (module_class, _) = module_entries[idx - 1]
+        print(f"\nCalibrating module: {module_name}")
+
+        yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
+        module_cfg = load_config_yaml(yaml_path, module_class.config_class)
+
+        module = module_class(module_cfg, module_name)
         module.connect()
         module.calibrate()
-        
-    
-    

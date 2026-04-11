@@ -25,8 +25,9 @@ class ActionType:
     _registry: dict[int, str] = {}
     
     STOP = 0
-    SCHEDULE_WAYPOINT = 1
-    RESTART_PUT = 2
+    MODULE_ACTION = 1
+    SCHEDULE_WAYPOINT = 2
+    RESTART_PUT = 3
     CUSTOM_START = 100
 
     def __init__(self, value: int = 0):
@@ -291,7 +292,8 @@ class Action:
         return cls
 
 
-    def __init__(self, data: dict = {}):
+    def __init__(self, action_type: "int | ActionType" = ActionType.STOP, data: dict = {}):
+        self.action_type = action_type
         data = data if data is not None else {}
         self._module_actions = {}
 
@@ -299,29 +301,31 @@ class Action:
         module_actions_spec = actual_cls.get_module_actions_spec()
         valid_keys = set(module_actions_spec.keys())
 
-        for key in data:
-            if key not in valid_keys:
-                raise ValueError(
-                    f"Invalid action key '{key}' for {actual_cls.__name__}. "
-                    f"Valid keys: {sorted(valid_keys)}"
-                )
+        if action_type == ActionType.MODULE_ACTION:
+            for key in data:
+                if key not in valid_keys:
+                    raise ValueError(
+                        f"Invalid action key '{key}' for {actual_cls.__name__}. "
+                        f"Valid keys: {sorted(valid_keys)}"
+                    )
 
-            if not isinstance(data[key], dict):
-                raise ValueError(
-                    f"Invalid action value for '{key}' in {actual_cls.__name__}. "
-                    f"Value must be a dictionary."
-                )
+                if not isinstance(data[key], dict):
+                    raise ValueError(
+                        f"Invalid action value for '{key}' in {actual_cls.__name__}. "
+                        f"Value must be a dictionary."
+                    )
 
-            if set(data[key].keys()) != set(['data', 'action_type']):
-                raise ValueError(
-                    f"Invalid action value for '{key}' in {actual_cls.__name__}. "
-                    f"Value must be a dictionary with keys 'data' and 'action_type'."
+                if set(data[key].keys()) != set(['data', 'action_type']):
+                    raise ValueError(
+                        f"Invalid action value for '{key}' in {actual_cls.__name__}. "
+                        f"Value must be a dictionary with keys 'data' and 'action_type'."
+                    )
+                
+                self._module_actions[key] = module_actions_spec[key].__class__(
+                    data=data[key]["data"],
+                    action_type=data[key]['action_type'],
                 )
-            
-            self._module_actions[key] = module_actions_spec[key].__class__(
-                data=data[key]["data"],
-                action_type=data[key]['action_type'],
-            )
+        
 
     # -- Schema introspection ----------------------------------------------
 
@@ -365,12 +369,12 @@ class Action:
         data = {}
         for name, module_action_spec in cls.get_module_actions_spec().items():
             data[name] = module_action_spec.zeros().to_dict()
-        return cls(data)
+        return cls(action_type=ActionType.MODULE_ACTION, data=data)
 
     # -- Dict interface ----------------------------------------------------
 
     def to_dict(self):
-        return {name: module_action.to_dict() for name, module_action in self._module_actions.items()}
+        return {"action_type": int(self.action_type), "data": {name: module_action.to_dict() for name, module_action in self._module_actions.items()}}
 
     # -- Compression -------------------------------------------------------
 
