@@ -17,6 +17,25 @@ different robots.
 
 A typical module would be a robot arm, robot leg, robot base, etc.
 
+
+## Creating a Module
+
+To create a module, you need to subclass the Module class and define the actuators and sensors.
+
+```python
+from solarian.core.module import Module
+from solarian_feetech.actuator import FeetechServo
+
+class MyArmModule(Module):
+    shoulder_pan = FeetechServo()
+    shoulder_lift = FeetechServo()
+    elbow_flex = FeetechServo()
+    wrist_flex = FeetechServo()
+    wrist_roll = FeetechServo()
+```
+
+
+
 ## See Also
 - [Body](/bodies): Bodies are the physical components of a robot module, 
 encapsulating its actuators and sensors.

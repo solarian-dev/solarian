@@ -16,34 +16,36 @@ conf_dev
 conf_test
 
 # Projects
-ur5
-lekiwi
+projects/lekiwi_old
+projects/ur5
+projects/my_solarian
+projects/so100
+projects/lekiwi
 
+plugins/solarian-feetech
+plugins/solarian-dynamixel
 
 # Ignore WIP
 examples
-# examples/assets
-# examples/other
-notebooks
+examples/assets
+examples/other
+examples/umi_code
+placeholder
 test_code
-old_code
 webrtc
 commands.sh
-track.py
-gd.py
 .cache
 backups
 datasets
-view_parquet.ipynb
 notes.txt
-proto/cli
-pyproject3-39.toml
+
 
 # Apple
 .DS_Store
 
 # VS Code
 .vscode
+pyrightconfig.json
 
 # HPC
 nautilus/*.yaml

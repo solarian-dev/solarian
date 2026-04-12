@@ -1,0 +1,20 @@
+train_dataset: null
+val_dataset: null
+val_percentage: 0.2
+job_name: ${project_name}_train
+resume: false
+batch_size: 16
+steps: 100000
+log_freq: 100
+save_freq: 10000
+num_workers: 4
+wandb:
+    enable: false
+    project: ${project_name}
+    disable_artifact: true
+model:
+    n_obs_steps: 1
+    chunk_size: 100
+    n_action_steps: 100
+    use_vae: true
+    temporal_ensemble_coeff: null

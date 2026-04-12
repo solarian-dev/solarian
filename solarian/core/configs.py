@@ -1,0 +1,303 @@
+from pydantic import BaseModel, Field, field_validator, model_validator, ValidationError, ConfigDict
+from enum import Enum
+from typing import Tuple, Optional, List, Union, Literal, Any, Dict, Set
+import os
+from pathlib import Path
+import numpy as np
+
+
+def _convert_numpy_to_float(v):
+    """Convert numpy types to Python float."""
+    if isinstance(v, np.ndarray):
+        return float(v.item()) if v.size == 1 else float(v)
+    if isinstance(v, (np.floating, np.integer)):
+        return float(v)
+    return v
+
+def _convert_numpy_to_int(v):
+    """Convert numpy types to Python int (for enum coercion)."""
+    if isinstance(v, np.ndarray):
+        return int(v.item()) if v.size == 1 else int(v)
+    if isinstance(v, (np.floating, np.integer)):
+        return int(v)
+    return v
+
+class ActionValue(str, Enum):
+    STOP = "stop"
+    RESET = "reset"
+    REWIND = "rewind"
+
+
+class InterpolatorType(str, Enum):
+    """Types of trajectory interpolators for modules."""
+    POSE = "pose"       # 6D Cartesian with Slerp for rotation
+    JOINT = "joint"     # N-dim joint space, linear interpolation
+    SCALAR = "scalar"   # 1D value, linear interpolation
+    
+    def __str__(self):
+        return self.value
+
+
+class ComponentConfig(BaseModel):
+    id: int = 0
+    port: str
+    configs: dict[str, Any] = {}
+
+class SensorConfig(ComponentConfig):
+    fps: int
+    width: int
+    height: int
+    rotation: int | None
+    channels: int
+    color_mode: str
+    video_format: str
+    resize_width: int | None
+    resize_height: int | None
+
+class CameraConfig(SensorConfig):
+    fps: int
+    width: int
+    height: int
+    rotation: int | None
+    channels: int
+    color_mode: str
+    video_format: str
+    resize_width: int | None
+    resize_height: int | None
+
+class ActuatorConfig(ComponentConfig):
+    model: str
+    # TODO validate mode string value
+    mode: str
+    
+
+class ServoConfig(ActuatorConfig, SensorConfig):
+    pass
+
+# A module is composed by joints and bodies
+class ModuleConfig(BaseModel):
+    # Process/control loop settings
+    frequency: float # control loop frequency in Hz
+    get_max_k: int = 128  # max number of states to keep in ring buffer
+    commands_per_cycle: int = 1  # max commands to process per control loop iteration
+    command_queue_size: int = 1024  # size of the command input queue
+    launch_timeout: float = 3.0  # timeout for process launch in seconds
+
+    actuators: dict[str, ActuatorConfig] = {}
+    sensors: dict[str, SensorConfig] = {}
+
+    receive_latency: float = 0.0  # latency in seconds for receiving data from sensors
+    
+    calibration_file: str | None = None
+    # gripper_open_degree: Optional[float] = 30
+    
+    # # Interpolator settings
+    interpolator_type: InterpolatorType = InterpolatorType.JOINT
+    max_speed: float | list[float] = 1.0  # max speed for interpolation (single or per-joint)
+
+class ConnectionConfig(BaseModel):
+    connection_id: str = "connection_1"
+    ip: str
+    action_sender_port: int
+    action_receiver_port: int
+    state_sender_port: int
+    state_receiver_port: int
+
+# A robot is composed by multiple modules, eg: arms, legs, base, etc.
+class RobotConfig(BaseModel):
+    img_compression_quality: int
+    connection: ConnectionConfig
+    fps: int
+
+class ControllerConfig(BaseModel):
+    fps: int
+    tps: int
+    system2_model: str
+    system2_prompt: str
+    system2_base_url: str
+    system2_api_key: str
+    policy_path: str
+    device: str
+    headless: bool = False
+    connection: ConnectionConfig
+    modules: dict[str, ModuleConfig]
+
+class RecordConfig(ControllerConfig):
+    repo_id: str
+    num_episodes: int
+    episode_time_s: float
+    reset_time_s: float
+    
+    reset_period: int
+    play_sounds: bool
+    display_cameras: bool
+    tasks: list[str] | None
+    tags: str | None
+    private: bool
+    num_image_writer_processes: int
+    num_image_writer_threads_per_camera: int
+    start_episode: int
+    video: bool
+    
+    video_res: list[int]
+
+class ReplayConfig(ControllerConfig):
+    repo_id: str
+    episodes: list[int]
+    reset_time_s: float
+    reset_period: int
+    play_sounds: bool
+    display_cameras: bool
+    batch_size: int
+    
+class ServerConfig(BaseModel):
+    connection: ConnectionConfig
+    img_compression_quality: int
+    # image_processing: list[str]
+    # tracking_model: str | None
+    # depth_model: str | None
+    # ref_x: int
+    # ref_y: int
+    
+
+# A project is composed by a robot, a server, a controller and a config
+# In its top level config it also points to the classes that implement the robot, server, controller and config
+class ProjectConfig(BaseModel):
+    name: str
+    controller: ControllerConfig
+    server: ServerConfig
+    robot: RobotConfig
+
+class ConfigBaseModel(BaseModel):
+    """Base model with enhanced error handling for configs"""
+    
+    def parse_with_friendly_errors(self, data):
+        """Parse config data with user-friendly error messages"""
+        try:
+            return self.model_validate(data)
+        except ValidationError as e:
+            # Get the config filename if possible
+            config_path = os.environ.get("SOLARIAN_CURRENT_CONFIG", "")
+            
+            # Format a user-friendly error message
+            error_msg = f"Configuration Error in {self.__class__.__name__}:\n"
+            error_msg += f"  {str(e)}\n"
+            
+            if config_path:
+                error_msg += f"  Please check your configuration file: {config_path}\n"
+                
+            # Re-raise with the friendly message
+            raise ValueError(error_msg) from e
+
+
+class LoggerConfig(ConfigBaseModel):
+    type: Literal['wandb'] | None = None
+    
+class TrainLoggerConfig(ConfigBaseModel):
+    type: Literal['none', 'wandb']
+    project: str
+    notes: str | None = None
+    log_artifact: bool = False
+
+class WandBLoggerConfig(TrainLoggerConfig):
+    entity: str | None = None
+    run_id: str | None = None
+    mode: str | None = None
+    project: str = Field(..., description="The WandB project name to log to")
+    
+    @field_validator('project')
+    @classmethod
+    def validate_project(cls, v):
+        if not v:
+            raise ValueError("WandB project name cannot be empty")
+        return v
+
+class SchedulerConfig(ConfigBaseModel):
+    type: Literal['cosine'] | None = None
+    
+class PrecisionConfig(ConfigBaseModel):
+    amp_enabled: bool = False # Use mixed precision training and enable grad scaler
+    init_scale: float = 2 ** 16
+    growth_interval: int = 2000
+    growth_factor: float = 2.0
+
+class TrainOptimizerConfig(ConfigBaseModel):
+    pass
+
+class AdamOptimizerConfig(TrainOptimizerConfig):
+    type: Literal['adam'] = 'adam'
+    lr: float = 2e-5
+    betas: tuple[float, float] = (0.9, 0.999)
+    eps: float = 1e-8
+    weight_decay: float = 0.0001
+    
+class AdamWOptimizerConfig(TrainOptimizerConfig):
+    type: Literal['adamw'] = 'adamw'
+    lr: float = 2e-5
+    betas: tuple[float, float] = (0.9, 0.999)
+    eps: float = 1e-8
+    weight_decay: float = 0.0001
+    
+class ModelConfig(ConfigBaseModel):
+    type: Literal['act', 'diffusion'] = 'act'
+
+class ACTConfig(ModelConfig):
+    n_obs_steps: int = 1
+    chunk_size: int = 100
+    n_action_steps: int = 100
+    use_vae: bool = True
+    temporal_ensemble_coeff: float | None = None
+
+class TrainConfig(ConfigBaseModel):
+    train_dataset: str
+    val_dataset: str | None = None
+    output_dir: str | None = None
+    val_percentage: float | None = None
+
+    policy_path: str | None = None
+    job_name: str
+    resume: bool
+    batch_size: int
+    image_channels: int
+    steps: int
+    num_workers: int
+    log_freq: int
+    val_freq: int
+    save_freq: int
+    
+    optimizer: Union[AdamOptimizerConfig, AdamWOptimizerConfig] = Field(discriminator="type")
+    scheduler: SchedulerConfig
+    precision: PrecisionConfig
+    logger: TrainLoggerConfig = Field(discriminator="type")
+    model: ModelConfig = Field(discriminator="type")
+    
+    @model_validator(mode='after')
+    def validate_policy_path_when_resuming(cls, values) -> 'TrainConfig':
+        """Validate that policy_path is provided when resuming"""
+        if values.resume and not values.policy_path:
+            raise ValueError("policy_path must be specified when resume is true")
+        return values
+    
+    @field_validator('logger')
+    @classmethod
+    def validate_logger_config(cls, v):
+        """Validate the logger configuration"""
+        if v.type == "wandb":
+            if not hasattr(v, 'project') or not v.project:
+                raise ValueError("logger.project must be specified when logger is enabled with type 'wandb'")
+        return v
+    
+    def to_tags(self) -> list[str]:
+        tags = [
+            f"lr:{self.optimizer.lr}",
+            f"batch_size:{self.batch_size}",
+            f"train_dataset:{self.train_dataset}",
+            f"val_dataset:{self.val_dataset if self.val_dataset else self.train_dataset}",
+            f"policy:{'act' if type(self.model) == ACTConfig else 'unknown'}",
+        ]
+        return tags
+
+
+
+class SetupModuleConfig(ConfigBaseModel):
+    module_name: str

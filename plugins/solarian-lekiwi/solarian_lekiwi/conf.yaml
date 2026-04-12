@@ -1,0 +1,60 @@
+type: lekiwi
+calibration_file: .cache/calibration/lekiwi_base.json
+bodies:
+    base:
+        mass: 1
+        inertia: 1
+        sensors:
+            front:
+                port: ${front_camera_port}
+                fps: 30
+                width: 1920
+                height: 1080
+                resize_width: 960
+                resize_height: 540
+                rotation: 0
+                channels: 3
+                color_mode: rgb
+                video_format: MJPG
+                type: opencv
+    left_wheel:
+        mass: 1
+        inertia: 1
+    back_wheel:
+        mass: 1
+        inertia: 1
+    right_wheel:
+        mass: 1
+        inertia: 1
+joints:
+    left_wheel:
+        parent_body: base
+        child_body: left_wheel
+        actuators:
+            left_wheel:
+                id: 7
+                model: sts3215
+                port: ${actuator_port}
+                type: feetech
+                mode: range_m100_100
+    back_wheel:
+        parent_body: base
+        child_body: back_wheel
+        actuators:
+            back_wheel:
+                id: 8
+                model: sts3215
+                port: ${actuator_port}
+                type: feetech
+                mode: range_m100_100
+    right_wheel:
+        parent_body: base
+        child_body: right_wheel
+        actuators:
+            right_wheel:
+                id: 9
+                model: sts3215
+                port: ${actuator_port}
+                type: feetech
+                mode: range_m100_100
+

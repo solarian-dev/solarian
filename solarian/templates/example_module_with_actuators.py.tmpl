@@ -1,0 +1,50 @@
+"""
+Example: How to define a module using actuators from plugin packages
+
+Import actuator classes directly from their packages for full IDE support.
+"""
+
+from solarian.core.module import Module
+
+# Import actuator classes directly from their packages
+from solarian_feetech.actuator import FeetechServo
+from solarian_dynamixel.actuator import DynamixelServo
+from solarian_ur5.actuator import UR5JointActuator
+
+
+class ExampleArmModule(Module):
+    """
+    Example arm module using Feetech servos.
+    """
+    
+    shoulder_pan: FeetechServo = FeetechServo(id=1, model="sts3215")
+    shoulder_lift: FeetechServo = FeetechServo(id=2, model="sts3215")
+    elbow_flex: FeetechServo = FeetechServo(id=3, model="sts3215")
+    wrist_flex: FeetechServo = FeetechServo(id=4, model="sts3215")
+    wrist_roll: FeetechServo = FeetechServo(id=5, model="sts3215")
+    gripper: FeetechServo = FeetechServo(id=6, model="sts3215")
+    
+    def initialize(self):
+        """Initialize the arm with optimal servo settings."""
+        super().initialize()
+        
+        self.disable_torque()
+        self.configure_components({"Operating_Mode": 0})
+        self.enable_torque()
+
+
+# Example with mixed actuator types
+class MixedActuatorModule(Module):
+    """
+    Example showing how to use different actuator types in one module.
+    """
+    
+    # Feetech servos for the arm
+    shoulder: FeetechServo = FeetechServo(id=1, model="sts3215")
+    elbow: FeetechServo = FeetechServo(id=2, model="sts3215")
+    
+    # Dynamixel for the gripper
+    gripper: DynamixelServo = DynamixelServo(id=1, model="xl330-m077")
+    
+    # UR5 for the base
+    base_joint: UR5JointActuator = UR5JointActuator(id=0, model="ur5")

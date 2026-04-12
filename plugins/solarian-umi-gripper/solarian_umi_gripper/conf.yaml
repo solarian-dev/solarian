@@ -1,0 +1,8 @@
+calibration_file: .cache/calibration/umi_evo_gripper.json
+actuators:
+    gripper_actuator:
+        id: 1
+        model: sts3215
+        port: /dev/ttyACM1
+        mode: range_m100_100
+

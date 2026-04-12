@@ -1,0 +1,100 @@
+export const metadata = {
+  title: 'Intro to Robotics',
+  description:
+    'Brief introduction to robot manipulators and their kinematics.',
+}
+
+
+# Manipulator and End Effector
+
+A manipulator is a mechanical structure consisting of rigid **bodies** connected together through **joints**.
+
+The first body in the structure is called the **base**, typically fixed in the environment.
+
+The last body in the structure is called **end-effector** (EE).
+
+In general a manipulator has *n* joints and *n+1* links, including its base and end-effector.
+
+--> Drawing of Manipulator here
+
+
+You might use a particular type of end effector depending on the task to be done. 
+Examples of end-effectors are:
+
+- **Gripper**  (eg: parallel, claw, suction), useful to grab objects.
+- **Tools** (eg: screwdriver, welding tool, painting tool, etc.)
+
+
+--> Drawing of End Effector types
+
+
+## Manipulator Configuration
+
+A manipulator configuration is a unique configuration of its bodies.
+
+The configuration of each body of the manipulator can be described with six parameters:
+- 3 parameters to describe the position of a point of the body (x, y, z)
+- 3 parameters to describe the body's orientation (rotation angles)
+
+That would mean that we need 6 x *n* parameters if the manipulator has *n* bodies.
+
+## Joints and Degrees of Freedom (DOFs)
+
+Since the bodies are connected through the joints, those joints add constraints on
+how the bodies can move.
+
+Typically a joint is of two common types:
+- **Revolute joint** (a hinge that produces rotation between two bodies)
+- **Prismatic joint** (a linear translation betwen two bodies)
+
+Each of those joints have what is called 1 **degree of freedom** (**DOF**) which adds 5
+constraints on how the bodies move between each other.
+
+As a result, the 6 x *n* degrees of freedom are reduced by 5 x *n* constraints which
+results in *n* DOFs for the entire manipulator of *n* joints and *n + 1* bodies.
+
+So we just need *n* parameters to describe the manipulator configuration, which
+are basically the values of the *n* joint positions.
+
+
+## Joint Coordinates vs Task Coordinates
+
+The *n* joint positions (described as vector **q**) form the **joint space** of the manipulator. 
+These *n* coordinates that describe the manipulator configuration are known as **joint coordinates**.
+
+The cooridnates that describe the end-effector configuration are called the **task coordinates**
+(**x**, **y**, **z**, **alpha**, **beta**, **gamma**).
+
+
+## Forward Kinematics
+
+The relationship that maps joint configurations to end effector configurations is called
+Forward Kinematics.
+
+(x, y, z, alpha, beta, gamma) = forward_kinematics(q)
+
+
+## Movile Manipulators
+
+A **mobile manipulator** is a manipulator that is mounted on a mobile base.
+
+Examples of mobile bases are:
+- wheeled bases (eg: 2-wheeled base, 3-wheeled base, 4-wheeled base)
+- legged bases (eg: biped robot, quadruped robot, etc.)
+
+The mobile base is typically used to move the manipulator to the desired location,
+and the manipulator is used to perform tasks on the objects.
+
+--> Drawing of Mobile Manipulator here
+
+
+## Mobile Manipulator Configuration
+
+The configuration of a mobile manipulator is the same as the configuration of a manipulator,
+but it also includes the configuration of the mobile base.
+
+The configuration of the mobile base is described with 3 parameters:
+- the position of the mobile base (x, y, z)
+- the orientation of the mobile base (alpha, beta, gamma)
+
+

@@ -1,0 +1,25 @@
+from solarian.core.module import Module
+from solarian_feetech.actuator import FeetechServo
+from solarian.core.action import ActionType, ModuleAction, action_handler
+
+
+class ArmModule(Module):
+    # declare actuators and sensors
+    shoulder_pan = FeetechServo()
+    
+    def control_step(self):
+        # implement control actions here, example:
+        if self.next_position is not None:
+            self.write_actuators(self.next_position)
+            self.next_position = None
+
+    # handle received particular action types, example:
+    @action_handler(ActionType.SCHEDULE_WAYPOINT)
+    def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
+        self.next_position = action.values()
+        return True
+
+    def initialize(self):
+        # initialize the module settings here, example:
+        self.next_position = None
+        

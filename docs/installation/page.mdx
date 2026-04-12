@@ -1,21 +1,121 @@
 export const metadata = {
   title: 'Quickstart',
   description:
-    'This guide will get you all set up and ready to use the Protocol API. We’ll cover how to get started an API client and how to make your first API request.',
+    'This guide will get you all set up and ready to use the Solariancol API. We’ll cover how to get started an API client and how to make your first API request.',
 }
 
 # Quickstart
 
-This guide will get you all set up and ready to use the Protocol API. We'll cover how to get started using one of our API clients and how to make your first API request. We'll also look at where to go next to find all the information you need to take full advantage of our powerful REST API. {{ className: 'lead' }}
+The following is a guide on how to install and run a solarian project.
+
+
+## Installation
+
+### Create a conda environment:
+
+```bash
+conda create -n solarian python=3.10
+```
+
+### Activate the environment:
+
+```bash
+conda activate solarian
+```
+
+### Install FFmpeg
+
+```bash
+conda install ffmpeg=7.1.1 -c conda-forge
+```
+
+### Clone Solarian repository
+
+```bash
+git clone https://github.com/solarian-dev/solarian.git
+cd solarian
+```
+
+### Install dependencies:
+
+With pip:
+
+```bash
+pip install -e .
+```
+
+With uv (faster; use the same conda env):
+
+```bash
+# Install uv once: curl -LsSf https://astral.sh/uv/install.sh | sh
+conda activate solarian   # or your env name
+uv pip install -e .
+```
+
+uv uses whichever Python is active, so packages are installed into your conda env.
+
+
+
+### macOS (Darwin) on Apple Silicon (arm64)
+
+You will need to install separate extra requirements to install atomics library from source:
+
+```bash
+pip install -r requirements-macos-arm64.txt
+```
+
+### Install xformers
+
+```bash
+pip install xformers==0.0.31.post1
+```
+
+
+## Creating a project
+
+
+## Running
+
+### Running server
+
+Within your project directory, run the following command:
+
+```bash
+solarian run-server
+```
+
+You can configure to run the server in a different machine by setting the `ip` parameter in the `conf/connection/localhost.yaml` file.
+
+### Running robot
+
+Within your project directory, run the following command:
+
+```bash
+solarian run-robot
+```
+
+### Running controller
+
+Within your project directory, run the following command:
+
+```bash
+solarian run-controller
+```
+
+
+
+
+
+This guide will get you all set up and ready to use the Solariancol API. We'll cover how to get started using one of our API clients and how to make your first API request. We'll also look at where to go next to find all the information you need to take full advantage of our powerful REST API. {{ className: 'lead' }}
 
 <Note>
-  Before you can make requests to the Protocol API, you will need to grab your
+  Before you can make requests to the Solariancol API, you will need to grab your
   API key from your dashboard. You find it under [Settings &raquo; API](#).
 </Note>
 
 ## Choose your client
 
-Before making your first API request, you need to pick which API client you will use. In addition to good ol' cURL HTTP requests, Protocol offers clients for JavaScript, Python, and PHP. In the following example, you can see how to install each client.
+Before making your first API request, you need to pick which API client you will use. In addition to good ol' cURL HTTP requests, Solariancol offers clients for JavaScript, Python, and PHP. In the following example, you can see how to install each client.
 
 <CodeGroup>
 
@@ -25,17 +125,17 @@ curl --version
 ```
 
 ```bash {{ language: 'js' }}
-# Install the Protocol JavaScript SDK
+# Install the Solariancol JavaScript SDK
 npm install @example/protocol-api --save
 ```
 
 ```bash {{ language: 'python' }}
-# Install the Protocol Python SDK
+# Install the Solariancol Python SDK
 pip install protocol_api
 ```
 
 ```bash {{ language: 'php' }}
-# Install the Protocol PHP SDK
+# Install the Solariancol PHP SDK
 composer require protocol/sdk
 ```
 
@@ -49,7 +149,7 @@ composer require protocol/sdk
 
 ## Making your first API request
 
-After picking your preferred client, you are ready to make your first call to the Protocol API. Below, you can see how to send a GET request to the Conversations endpoint to get a list of all your conversations. In the cURL example, results are limited to ten conversations, the default page length for each client.
+After picking your preferred client, you are ready to make your first call to the Solariancol API. Below, you can see how to send a GET request to the Conversations endpoint to get a list of all your conversations. In the cURL example, results are limited to ten conversations, the default page length for each client.
 
 <CodeGroup tag="GET" label="/v1/conversations">
 
@@ -76,7 +176,7 @@ client.conversations.list()
 ```
 
 ```php
-$client = new \Protocol\ApiClient($token);
+$client = new \Solariancol\ApiClient($token);
 
 $client->conversations->list();
 ```
@@ -91,8 +191,8 @@ $client->conversations->list();
 
 ## What's next?
 
-Great, you're now set up with an API client and have made your first request to the API. Here are a few links that might be handy as you venture further into the Protocol API:
+Great, you're now set up with an API client and have made your first request to the API. Here are a few links that might be handy as you venture further into the Solariancol API:
 
-- [Grab your API key from the Protocol dashboard](#)
+- [Grab your API key from the Solariancol dashboard](#)
 - [Check out the Conversations endpoint](/conversations)
-- [Learn about the different error messages in Protocol](/errors)
+- [Learn about the different error messages in Solariancol](/errors)

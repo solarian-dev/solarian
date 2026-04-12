@@ -1,12 +1,12 @@
 export const metadata = {
   title: 'Commands',
   description:
-    'Proto has multiple management commands.',
+    'Solarian has multiple management commands.',
 }
 
 # Commands
 
-Proto has multiple management commands. The following are the most common ones:
+Solarian has multiple management commands. The following are the most common ones:
 
 - `train`: Trains a model.
 - `detect-device`: Detects devices connected to the computer (port and name).
@@ -15,10 +15,10 @@ Proto has multiple management commands. The following are the most common ones:
 
 # Creating a new command
 
-To create a new command, you need to create a new file in the `proto/management/commands` directory.
+To create a new command, you need to create a new file in the `solarian/cli/commands` directory.
 
 ```python
-from proto.management import BaseCommand, CommandRegistry
+from solarian.cli import BaseCommand, CommandRegistry
 
 @CommandRegistry.register('my-command')
 class MyCommand(BaseCommand):
