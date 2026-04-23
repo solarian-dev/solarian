@@ -124,6 +124,9 @@ class BusServer(Process):
 
         except Exception as exc:
             tb_str = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+            logger.exception(
+                "BusServer on %s crashed: %s", self._port, exc
+            )
             self._error_queue.put_nowait(("bus_server", tb_str))
         finally:
             self.ready_event.set()

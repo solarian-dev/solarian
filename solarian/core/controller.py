@@ -10,6 +10,12 @@ import math
 import string
 import numpy as np
 from abc import ABC, abstractmethod
+from multiprocessing.managers import SharedMemoryManager
+
+try:
+    from pynput import keyboard as _pynput_keyboard
+except Exception:  # pragma: no cover - pynput is optional / may fail to import on some platforms
+    _pynput_keyboard = None
 
 
 
@@ -22,6 +28,9 @@ from solarian.core.module import Module
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
 from solarian.core.data import ImageData, BoundingBoxData
+from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
+from solarian.utils.shared_memory.skill_status_buffer import SkillStatusBuffer
+from solarian.utils.configs import load_config_yaml
 
 
 import logging
@@ -105,23 +114,106 @@ class Controller(ABC):
             "reset_policy": False
         }
 
-        # Observation buffers are lazily initialized on the first received
-        # observation so the schema (including image shapes) is derived from
-        # real data rather than from Observation.zeros(), which may have None
-        # payloads for fields whose shapes are only known at runtime.
         self.last_observation = Observation({})
 
-        # cv2 keyboard simulation state (char → monotonic timestamp)
-        self._held_keys: dict[str, float] = {}
-        self._held_keys_last_seen: dict[str, float] = {}
+        # Shared-memory infrastructure mirroring what Robot owns on its side.
+        # The controller keeps a per-module ObservationRingBuffer so downstream
+        # consumers (e.g. ThinkProcess and skill processes) can read the
+        # latest observation without draining the buffer; the buffer is a
+        # ring and simply overwrites itself on each new ``put``.
+        # ``skill_status_buffer`` collects status transitions the robot
+        # forwards inside its state messages.
+        self.shm_manager = SharedMemoryManager()
+        self.shm_manager.start()
+
+        self.skill_status_buffer = SkillStatusBuffer(
+            shm_manager=self.shm_manager,
+            get_max_k=64,
+            get_time_budget=0.2,
+            put_desired_frequency=60,
+        )
+
+        # Build observation buffers eagerly — same pattern as Robot.__init__.
+        # We import the Robot class via ``settings.ROBOT_CLASS`` and
+        # instantiate its modules (schema-only, no hardware connections) so
+        # that class-level data descriptors (e.g. ``OpenCVCamera.rgb_image.shape``)
+        # are populated before we call ``Observation.zeros()``.
+        self.observation_buffers: dict[str, ObservationRingBuffer] = {}
+        self._setup_remote_observation_schema()
+        self._create_observation_buffers()
+
+        # Global keyboard listener (pynput) that delivers real OS key-down
+        # / key-up events to the on_key_press / on_key_release hooks.
+        # Started in :meth:`start`, stopped when ``start`` returns.
+        self._keyboard_listener = None
+        # Tracks which chars pynput currently reports as held, so we can
+        # filter out OS auto-repeat and only fire :meth:`on_key_press`
+        # once per physical press.
+        self._keyboard_held: set[str] = set()
 
     def load_module_config(self, module_name: str, module_class: type):
         """Load module config from YAML using the module's own config class"""
-        from solarian.utils.configs import load_config_yaml
         conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
         yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
         module_cfg = load_config_yaml(yaml_path, module_class.config_class)
         return module_cfg
+
+    def _setup_remote_observation_schema(self) -> None:
+        """Instantiate the Robot's modules schema-only so that class-level
+        data descriptors are populated with correct shapes.
+
+        The Controller does not own the remote Robot's modules, but it needs
+        to know their observation schemas to create matching shared-memory
+        buffers.  Instantiating a module with its YAML config populates
+        class-level descriptors such as ``OpenCVCamera.rgb_image.shape`` —
+        which is all that ``Observation.zeros()`` needs downstream.
+
+        No hardware is opened here; ``Module.connect()`` is never called.
+        """
+        try:
+            robot_cls = get_class(settings.ROBOT_CLASS)
+        except Exception as e:
+            logger.warning(f"Could not resolve ROBOT_CLASS: {e}")
+            return
+
+        for name, attr in list(robot_cls.__dict__.items()):
+            if not isinstance(attr, Module):
+                continue
+            if name in self.modules:
+                continue
+            module_class = type(attr)
+            try:
+                module_cfg = self.load_module_config(name, module_class)
+            except FileNotFoundError:
+                logger.warning(
+                    f"No config file for remote module '{name}', "
+                    f"observation schema for it will be inferred from "
+                    f"the first incoming observation"
+                )
+                continue
+            # Schema-only: instantiate for its side-effect of mutating
+            # class-level data descriptors.  The instance itself is
+            # discarded.
+            module_class(module_cfg, name)
+
+    def _create_observation_buffers(self) -> None:
+        """Create a shared-memory ``ObservationRingBuffer`` for every module
+        declared in the active ``Observation`` subclass."""
+        example_observation = Observation.zeros()
+        for name, module_obs in example_observation.items():
+            if name in self.observation_buffers:
+                continue
+            try:
+                self.observation_buffers[name] = ObservationRingBuffer.create_from_example(
+                    shm_manager=self.shm_manager,
+                    example_observation=module_obs,
+                    get_time_budget=0.2,
+                    put_desired_frequency=120,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Could not create observation buffer for '{name}': {e}"
+                )
 
     def _verify_connection(self, timeout=5000):
         """Verify that we can connect to the relay server"""
@@ -153,19 +245,54 @@ class Controller(ABC):
     def get_state(self):
         bytes = self.state_socket.recv(zmq.NOBLOCK)
         msg = Message.deserialize(bytes)
-        raw_obs = msg.data["observation"]
-        observation = Observation(raw_obs)
-        
-        for module_name, module_observation in observation.items():
-            self.last_observation[module_name] = module_observation
 
-            
-        StatusBoard.set(f"Observation", self.last_observation)
+        if "observation" in msg.data:
+            raw_obs = msg.data["observation"]
+            observation = Observation(raw_obs)
+
+            for module_name, module_observation in observation.items():
+                self.last_observation[module_name] = module_observation
+                self._put_module_observation(module_name, module_observation)
+
+            StatusBoard.set("Observation", self.last_observation)
+
+        if "skill_status" in msg.data:
+            for rec in msg.data["skill_status"]:
+                try:
+                    self.skill_status_buffer.put(
+                        skill_id=int(rec["skill_id"]),
+                        status=int(rec["status"]),
+                        timestamp=float(rec["timestamp"]),
+                        wait=False,
+                    )
+                except Exception as e:
+                    logger.warning(f"skill_status_buffer.put failed: {e}")
 
         if msg.data.get("click_ack", None) and msg.data["click_ack"] == self.clicked_id:
             logger.info("Click acknowledged", self.clicked_id)
             self.clicked_id = None
             self.clicked_point = None
+
+    def _put_module_observation(self, module_name: str, module_observation) -> None:
+        """Push *module_observation* into its ``ObservationRingBuffer``.
+
+        The buffer is a ring and overwrites itself, so reads by the think
+        process or skills never drain it — they all see the latest entry.
+        """
+        buffer = self.observation_buffers.get(module_name)
+        if buffer is None:
+            logger.debug(
+                f"No observation buffer for module '{module_name}' "
+                f"(not declared in Observation schema); dropping."
+            )
+            return
+
+        try:
+            buffer.put(module_observation, wait=False)
+        except Exception as e:
+            logger.warning(
+                f"observation_buffers['{module_name}'].put failed: {e}"
+            )
 
     def _state_receiver(self):
         """Receive and decode image streams"""
@@ -234,7 +361,7 @@ class Controller(ABC):
         self.running = False
 
     @profile
-    def send_action(self, action: Action):
+    def _send_action(self, action: Action):
         """Send control actions to robot"""
         msg = Message()
         msg.controller_timestamp = time.time_ns()
@@ -297,8 +424,10 @@ class Controller(ABC):
 
                 if select.select([sys.stdin], [], [], 0)[0]:
                     ch = sys.stdin.read(1).lower()
-                    self.on_key_press(ch)
-                    self.on_key_release(ch)
+                    # Headless cbreak mode has no release event, so every
+                    # character read is treated as a full click (down+up).
+                    self._dispatch_key_press(ch)
+                    self._dispatch_key_release(ch)
                     if ch == 'q':
                         break
 
@@ -332,8 +461,12 @@ class Controller(ABC):
                     wait_ms = max(1, int(((1.0 / self.cfg.fps) - dt_s) * 1000))
                 else:
                     wait_ms = 1
+                # cv2.waitKey is still needed to pump the cv2 event loop
+                # (without it, imshow windows go unresponsive).  Key events
+                # themselves are delivered via the pynput listener started
+                # in :meth:`start`, so we only use the return value to
+                # notice the 'q' quit shortcut while a cv2 window is focused.
                 key = cv2.waitKey(wait_ms) & 0xFF
-                self._process_cv2_key(key)
                 if key == ord('q'):
                     break
 
@@ -475,7 +608,7 @@ class Controller(ABC):
 
                 if self.last_action is not None:
                     StatusBoard.set("Action", self.last_action)
-                    self.send_action(self.last_action)
+                    self._send_action(self.last_action)
 
                 # Wait for next frame
                 if self.cfg.fps is not None:
@@ -498,51 +631,114 @@ class Controller(ABC):
         """
         pass
 
-    # -- Keyboard simulation from cv2.waitKey --------------------------------
-    # cv2.waitKey only reports which key is down on a given frame; it has no
-    # release event.  We synthesise on_key_press / on_key_release by tracking
-    # timing and accounting for the OS initial key-repeat delay.
+    # -- Keyboard handling ---------------------------------------------------
+    # We use pynput for global OS-level key-down / key-up events instead of
+    # cv2.waitKey synthesis.  cv2 reports key events inconsistently across
+    # platforms (especially on macOS with the cocoa backend, where we saw
+    # per-frame bursts of synthesised releases), so bypassing it entirely
+    # gives reliable one-press-one-release semantics.
 
-    # Long grace window that covers the OS repeat delay (~400-500 ms on macOS).
-    _KEY_INITIAL_GRACE_S = 0.6
-    # Once OS repeat is flowing, release quickly after the last event.
-    _KEY_REPEAT_TIMEOUT_S = 0.15
+    @staticmethod
+    def _pynput_char(key) -> str | None:
+        """Return the lowercase character for a pynput key, or ``None`` for
+        non-character keys (arrows, modifiers, function keys, ...)."""
+        try:
+            char = key.char
+        except AttributeError:
+            return None
+        if not char:
+            return None
+        return char.lower()
 
-    def _process_cv2_key(self, key_code: int):
-        """Called every display-loop frame with the raw cv2.waitKey result."""
-        now = time.monotonic()
+    def _on_pynput_press(self, key) -> None:
+        char = self._pynput_char(key)
+        logger.debug("pynput press: key=%r char=%r held=%r", key, char, self._keyboard_held)
+        if char is None:
+            return
+        # Filter OS auto-repeat: only fire on the rising edge.
+        if char in self._keyboard_held:
+            return
+        self._keyboard_held.add(char)
+        self._dispatch_key_press(char)
 
-        # Register key-down for detected key
-        if key_code != 0xFF:
-            try:
-                char = chr(key_code).lower()
-            except (ValueError, OverflowError):
-                char = None
-            if char is not None:
-                if char not in self._held_keys:
-                    self._held_keys[char] = now
-                    self.on_key_press(char)
-                self._held_keys_last_seen[char] = now
+    def _on_pynput_release(self, key) -> None:
+        char = self._pynput_char(key)
+        logger.debug("pynput release: key=%r char=%r held=%r", key, char, self._keyboard_held)
+        if char is None:
+            return
+        # We deliberately do NOT gate release on having seen a matching
+        # press: pynput on macOS occasionally reports slightly different
+        # ``key.char`` values for the same physical key across press and
+        # release (e.g. during IME / dead-key / layout transitions), and
+        # swallowing those releases is worse than letting a stray one
+        # through.  ``_keyboard_held`` is still used to suppress auto-
+        # repeat presses.
+        self._keyboard_held.discard(char)
+        self._dispatch_key_release(char)
 
-        # Check for releases
-        for char in list(self._held_keys):
-            first = self._held_keys[char]
-            last = self._held_keys_last_seen[char]
-            held_duration = now - first
-            since_last_event = now - last
-            if held_duration < self._KEY_INITIAL_GRACE_S:
-                continue
-            if since_last_event > self._KEY_REPEAT_TIMEOUT_S:
-                del self._held_keys[char]
-                del self._held_keys_last_seen[char]
-                self.on_key_release(char)
+    def _start_keyboard_listener(self) -> None:
+        """Start a daemon pynput listener that routes global keyboard
+        events through :meth:`on_key_press` / :meth:`on_key_release`.
+        """
+        if self._keyboard_listener is not None:
+            return
+        if _pynput_keyboard is None:
+            logger.warning(
+                "pynput is not available; keyboard hooks (on_key_press / "
+                "on_key_release) will not be invoked in this controller."
+            )
+            return
+        try:
+            listener = _pynput_keyboard.Listener(
+                on_press=self._on_pynput_press,
+                on_release=self._on_pynput_release,
+            )
+            listener.daemon = True
+            listener.start()
+            self._keyboard_listener = listener
+            logger.info("pynput keyboard listener started")
+        except Exception:
+            logger.exception("Failed to start pynput keyboard listener")
+            self._keyboard_listener = None
+
+    def _stop_keyboard_listener(self) -> None:
+        listener = self._keyboard_listener
+        if listener is None:
+            return
+        self._keyboard_listener = None
+        try:
+            listener.stop()
+        except Exception:
+            logger.debug("pynput listener.stop() raised", exc_info=True)
+        self._keyboard_held.clear()
+
+    def _dispatch_key_press(self, char: str) -> None:
+        logger.debug("dispatching on_key_press(%r)", char)
+        try:
+            self.on_key_press(char)
+        except Exception:
+            logger.exception("on_key_press(%r) raised", char)
+
+    def _dispatch_key_release(self, char: str) -> None:
+        logger.debug("dispatching on_key_release(%r)", char)
+        try:
+            self.on_key_release(char)
+        except Exception:
+            logger.exception("on_key_release(%r) raised", char)
 
     def on_key_press(self, char: str):
-        """Called once when a key is first pressed. Override in subclasses."""
+        """Called once when *char* transitions from released to pressed.
+
+        Override in subclasses.  OS auto-repeat while the key is held does
+        not re-fire this hook.
+        """
         pass
 
     def on_key_release(self, char: str):
-        """Called once when a key is considered released. Override in subclasses."""
+        """Called once when *char* transitions from pressed to released.
+
+        Override in subclasses.
+        """
         pass
 
     def start(self, dataset=None, episode_time_s=None, single_task=None):
@@ -568,26 +764,35 @@ class Controller(ABC):
         logger.info("Starting control loop")
         t = threading.Thread(target=self.control_loop, args=(dataset, episode_time_s + 1, single_task), daemon=True)
         t.start()
-        
+
+        # Global keyboard listener — provides real OS key-down / key-up
+        # events to the on_key_press / on_key_release hooks.  Skipped in
+        # headless mode where we read from stdin instead.
+        if not self.cfg.headless:
+            self._start_keyboard_listener()
+
         # Hook for subclasses to start additional threads
         self.on_start()
-        
-        if self.cfg.headless:
-            logger.info("Starting headless loop (no display)")
-            try:
-                self._headless_loop(episode_time_s)
-            finally:
-                self.running = False
-                t.join(timeout=5.0)
-                self.events["exit_early"] = False
-        else:
-            logger.info("Starting display loop")
-            try:
-                self.display_loop(episode_time_s)
-            finally:
-                self.running = False
-                t.join(timeout=5.0)
-                self.events["exit_early"] = False
+
+        try:
+            if self.cfg.headless:
+                logger.info("Starting headless loop (no display)")
+                try:
+                    self._headless_loop(episode_time_s)
+                finally:
+                    self.running = False
+                    t.join(timeout=5.0)
+                    self.events["exit_early"] = False
+            else:
+                logger.info("Starting display loop")
+                try:
+                    self.display_loop(episode_time_s)
+                finally:
+                    self.running = False
+                    t.join(timeout=5.0)
+                    self.events["exit_early"] = False
+        finally:
+            self._stop_keyboard_listener()
 
         if self._thread_error is not None:
             raise self._thread_error

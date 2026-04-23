@@ -7,12 +7,12 @@ Architecture overview::
     │                                                                  │
     │  Controller base class                                           │
     │    ├─ _state_receiver thread → observation_buffers (shared mem)  │
-    │    ├─ control_loop thread    → control_step() → send_action()   │
+    │    ├─ control_loop thread    → control_step() → _send_action()  │
     │    └─ display_loop (main thread)                                 │
     │                                                                  │
     │  AIController                                                    │
     │    ├─ action_queue    (mp.Queue)  ← skills push actions here    │
-    │    ├─ skills_obs_queue(mp.Queue)  ← skills push status here     │
+    │    ├─ skill_status_buffer(mp.Queue)  ← skills push status here     │
     │    └─ user_msg_queue  (mp.Queue)  ← user pushes commands here   │
     │                                                                  │
     │  control_step():                                                 │
@@ -22,24 +22,26 @@ Architecture overview::
     │    spawns ThinkProcess                                           │
     └──────────────────────────────────────────────────────────────────┘
 
-    ┌─────────────── ThinkProcess (separate process, 5 Hz) ───────────┐
-    │  1. Read latest image from observation_buffers (shared mem)      │
-    │  2. perceive(image, command) → structured scene via VLM          │
-    │  3. Drain skills_obs_queue → skill status history                │
-    │  4. Drain user_msg_queue → latest command                        │
-    │  5. decide(scene, user_msg, skills_obs) → skills to start/stop  │
-    │  6. Launch / stop Skill processes accordingly                    │
+    ┌─────────────── ThinkProcess (separate process, ~2 Hz) ──────────┐
+    │  1. Drain skill_status_buffer → skill status history             │
+    │  2. Drain user_msg_queue → latest command                        │
+    │  3. Read latest image + proprioception from observation_buffers  │
+    │  4. decide(image, proprio, user_msg, skills_obs)                 │
+    │         → skills to start/stop via a VLM call                    │
+    │  5. Launch / stop Skill processes accordingly                    │
     └──────────────────────────────────────────────────────────────────┘
 
     ┌────────────── Skill Processes (per-skill frequency) ────────────┐
     │  - Read observations from shared observation_buffers             │
     │  - Execute skill logic (diffusion policies, motion planners …)  │
     │  - put_action() → controller's action_queue                     │
-    │  - put_skill_obs() → think process's skills_obs_queue           │
+    │  - put_skill_obs() → think process's skill_status_buffer           │
     └──────────────────────────────────────────────────────────────────┘
 """
 
-import time
+import logging
+import sys
+import threading
 import multiprocessing
 from multiprocessing import Queue
 from typing import Dict, Any, Optional
@@ -47,10 +49,19 @@ from typing import Dict, Any, Optional
 from solarian.core.controller import Controller
 from solarian.core.action import Action
 from solarian.core.configs import ControllerConfig
-from solarian.utils import get_class
+from solarian.utils import get_class, StatusBoard
 from solarian.conf import settings
-from solarian.core.ai.system1.think import ThinkProcess
-# from solarian.core.ai.system2.skill import Skill, SkillStatus
+from solarian.core.ai.system1.skill import Skill, SkillRunner
+from solarian.core.ai.system2.think import ThinkProcess
+from solarian.utils.shared_memory.action_queue import ActionQueue
+
+try:
+    from pynput import keyboard as _pynput_keyboard
+except Exception:  # pragma: no cover - pynput is optional
+    _pynput_keyboard = None
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -83,8 +94,8 @@ class AIController(Controller):
 
     * :meth:`on_start` spawns a :class:`ThinkProcess` in a separate OS
       process.  The think process reads camera images from the shared
-      observation buffers, runs VLM-based perception (``perceive``) and
-      decision-making (``decide``), and manages skill lifecycles.
+      observation buffers along with proprioceptive sensor data, runs
+      VLM-based decision-making (``decide``), and manages skill lifecycles.
 
     * **Skills** (subclasses of :class:`~solarian.control.ai.system2.skill.Skill`)
       run as individual processes at their own frequencies.  They read
@@ -96,31 +107,98 @@ class AIController(Controller):
         from solarian.control.ai.ai_controller import AIController
         from my_project.skills import PickSkill, PlaceSkill
 
-        ctrl = AIController(cfg, available_skills={
-            "pick": PickSkill,
-            "place": PlaceSkill,
-        })
+        class MyAIController(AIController):
+            pick  = PickSkill()
+            place = PlaceSkill()
+
+        ctrl = MyAIController(cfg)
         ctrl.connect()
         ctrl.initialize()
         ctrl.send_user_message("Pick up the red cup and place it on the saucer")
         ctrl.start()
 
+    The registry passed to the think process is built from every ``Skill``
+    instance declared as a class attribute on the subclass; the attribute
+    name becomes the skill name.
+
+    Prompt templates
+    ----------------
+
+    Subclasses drive the VLM with two ``str.format``-style class
+    attributes, which are read by ``__init__`` and handed to the
+    :class:`ThinkProcess`:
+
+    * ``system_prompt`` — the VLM ``system`` message.
+    * ``user_prompt`` — the VLM ``user`` message.
+
+    Both templates support:
+
+    * ``{user_msg}``, ``{available_skills}``, ``{active_skills}``,
+      ``{prev_decide}`` — context strings built by the think process.
+    * ``{module_name.field_name}`` — latest value of the corresponding
+      observation field (e.g. ``{arm.x}``, ``{arm.shoulder_pan}``).
+    * ``{module_name.field_name[k]}`` — value at step ``k`` back in the
+      observation ring buffer: ``[0]`` = latest, ``[-1]`` = previous,
+      ``[-2]`` = two steps before, and so on.  Format specs compose
+      normally, e.g. ``{arm.x[-1]:.2f}``.
+    * Literal braces must be escaped as ``{{`` / ``}}``.
+
     Args:
         cfg: Controller configuration (includes VLM model, connection, etc.).
-        available_skills: Registry mapping skill names to ``Skill`` subclasses
-            that the think process is allowed to launch.
     """
+
+    # Default prompts.  Subclasses should override ``system_prompt`` and
+    # ``user_prompt`` to tailor wording and reference their own
+    # observation fields (see the class docstring for supported syntax).
+    system_prompt: str = (
+        "You are a robot skill orchestrator.\n"
+        "You will be provided with the current USER COMMAND, the list of "
+        "AVAILABLE SKILLS and their descriptions, the CURRENTLY ACTIVE "
+        "skills, and a summary of the PREVIOUS decide() call.\n\n"
+        "Decide which skills to start or stop in order to make progress "
+        "on the user command.\n\n"
+        "Return ONLY valid JSON matching this schema:\n"
+        "{{\n"
+        '  "skills_to_start": [{{"skill_name": "...", "params": {{...}}}}],\n'
+        '  "skills_to_stop": ["skill_name", ...],\n'
+        '  "reasoning": "..."\n'
+        "}}\n\n"
+        "Rules:\n"
+        "- No explanation outside the JSON. No markdown.\n"
+        "- Only reference skills from the available skills list.\n"
+        "- Consider currently active skills before deciding.\n"
+        "- If no action is needed, return empty lists.\n"
+        "- 'reasoning' MUST be a SINGLE short sentence (<=120 chars), no\n"
+        "  newlines, no bullet points, no restating the schema.\n"
+    )
+
+    user_prompt: str = (
+        "User command: {user_msg}\n\n"
+        "Available skills:\n{available_skills}\n\n"
+        "Currently active skills:\n{active_skills}\n\n"
+        "Previous decide() call:\n{prev_decide}\n\n"
+        "Decide which skills to start or stop.\n"
+    )
 
     def __init__(
         self,
         cfg: ControllerConfig,
-        available_skills: Optional[Dict[str, type]] = None,
     ):
         super().__init__(cfg)
 
-        # Inter-process communication queues
-        self.action_queue: Queue = multiprocessing.Queue()
-        self.skills_obs_queue: Queue = multiprocessing.Queue()
+        # Inter-process communication queues.
+        # ``observation_buffers`` and ``skill_status_buffer`` come from the
+        # base ``Controller`` (shared memory).  ``action_queue`` is a
+        # shared-memory :class:`ActionQueue` that the think process pushes
+        # top-level :class:`Action` objects into — either as skill-launch
+        # actions destined for the robot / server, or controller-side
+        # actions produced by skills running locally.  ``control_step``
+        # drains it.  ``user_msg_queue`` carries natural-language commands.
+        self.action_queue: ActionQueue = ActionQueue(
+            shm_manager=self.shm_manager,
+            buffer_size=256,
+            max_payload_bytes=8192,
+        )
         self.user_msg_queue: Queue = multiprocessing.Queue()
 
         # Shared event to coordinate shutdown
@@ -135,69 +213,307 @@ class AIController(Controller):
             "timeout_s": 10.0,
         }
 
-        # Skill registry — think process can only launch skills listed here
-        self.available_skills: Dict[str, type] = available_skills or {}
+        # Skill registry — collect every ``Skill`` instance declared as a
+        # class attribute on this subclass (mirrors how ``Robot`` collects
+        # modules).  The attribute name becomes the skill name used by the
+        # think process / VLM.  Each entry carries enough metadata for the
+        # think process to decide how to dispatch the skill:
+        #
+        #     {"cls": SkillClass, "runner": SkillRunner, "action_type": int | None}
+        #
+        # Controller-side skills are spawned as subprocesses; robot/server
+        # skills are launched by pushing an ``Action`` with the declared
+        # ``action_type`` onto ``self.action_queue``.
+        self.available_skills: Dict[str, Dict[str, Any]] = self._collect_available_skills()
+
+        self._stdin_thread: Optional[threading.Thread] = None
+
+        # Interactive prompt capture driven by the pynput listener that the
+        # base ``Controller`` already runs.  Pressing Enter toggles
+        # ``_prompt_active``; while active every key is consumed by the
+        # prompt (so teleop hooks like ``on_key_press`` do not fire).  The
+        # current buffer is mirrored on the shared ``StatusBoard`` so the
+        # operator can see what they are typing.
+        self._prompt_active: bool = False
+        self._prompt_buffer: str = ""
+        self._prompt_lock = threading.Lock()
 
         self._think_process = ThinkProcess(
             observation_buffers=self.observation_buffers,
             action_queue=self.action_queue,
-            skills_obs_queue=self.skills_obs_queue,
+            skill_status_buffer=self.skill_status_buffer,
             user_msg_queue=self.user_msg_queue,
             vlm_config=self.vlm_config,
             available_skills=self.available_skills,
+            system_prompt=type(self).system_prompt,
+            user_prompt=type(self).user_prompt,
             running_event=self._running_event,
             frequency=self.cfg.tps,
         )
 
     # ------------------------------------------------------------------
+    # Skill discovery
+    # ------------------------------------------------------------------
+
+    def _collect_available_skills(self) -> Dict[str, Dict[str, Any]]:
+        """Collect skills declared as class attributes on this subclass.
+
+        Every ``Skill`` instance found on a class in this ``AIController``'s
+        MRO (walked leaf → root, with subclass attributes taking priority)
+        becomes an entry keyed by its attribute name.  The stored value is a
+        dict with the class, runner, and (optional) remote ``action_type``
+        read from the template instance — the think process uses these to
+        decide whether to launch the skill locally or to push an
+        :class:`Action` onto ``self.action_queue`` for the robot / server to
+        handle.
+
+        Example::
+
+            from solarian.core.ai.system1.skill import SkillRunner
+
+            class UR5AIController(AIController):
+                gripper_skill = MoveGripperSkill(
+                    runner=SkillRunner.ROBOT,
+                    action_type=UR5ActionType.MOVE_GRIPPER,
+                )
+                arm_skill = MoveArmSkill(
+                    runner=SkillRunner.ROBOT,
+                    action_type=UR5ActionType.MOVE_ARM,
+                )
+                policy_skill = PolicyEvalSkill(runner=SkillRunner.CONTROLLER)
+
+            ctrl = UR5AIController(cfg)
+            # ctrl.available_skills == {
+            #     "gripper_skill": {
+            #         "cls": MoveGripperSkill,
+            #         "runner": SkillRunner.ROBOT,
+            #         "action_type": UR5ActionType.MOVE_GRIPPER,
+            #     },
+            #     ...
+            # }
+        """
+        skills: Dict[str, Dict[str, Any]] = {}
+        for klass in type(self).__mro__:
+            if klass is AIController or klass is object:
+                continue
+            for attr_name, attr_value in klass.__dict__.items():
+                if attr_name.startswith("_"):
+                    continue
+                if attr_name in skills:
+                    continue
+                if isinstance(attr_value, Skill):
+                    skills[attr_name] = {
+                        "cls": type(attr_value),
+                        "runner": attr_value.runner,
+                        "action_type": attr_value.action_type,
+                        "skill_id": (
+                            int(attr_value.skill_id)
+                            if getattr(attr_value, "skill_id", 0)
+                            else None
+                        ),
+                        "docstring": (type(attr_value).__doc__ or "").strip(),
+                    }
+        return skills
+
+    # ------------------------------------------------------------------
     # Controller interface
     # ------------------------------------------------------------------
 
-    def control_step(self) -> Action:
+    def control_step(self) -> Optional[Action]:
         """
-        Drain the action queue and merge all pending skill actions into one.
+        Pop the next :class:`Action` from the shared-memory ``action_queue``.
 
-        Actions targeting different modules are combined.  For the same
-        module / actuator / data key the most recently queued value wins.
+        The queue carries both skill-launch actions (destined for the
+        robot / server) pushed by the think process, and controller-side
+        actions pushed by locally-running skills.  The control loop picks
+        them up one at a time and forwards them to the robot via
+        ``_send_action``.
 
         Returns:
-            A single ``Action`` instance ready to send to the robot.
+            The next pending ``Action``, or ``None`` if the queue is empty.
         """
-        # action_class = get_class(settings.ACTION_CLASS)
-        # action_class = Action
-        # merged = Action.zeros()
-
-        # while not self.action_queue.empty():
-        #     try:
-        #         # try to get the action from the action queue, without blocking
-        #         action_data = self.action_queue.get_nowait()
-        #     except Exception:
-        #         break
-
-        #     if isinstance(action_data, dict):
-        #         _deep_merge(merged.data, action_data)
-        #     elif isinstance(action_data, Action):
-        #         _deep_merge(merged.data, action_data.data)
-
-        # return merged
-        if not self.action_queue.empty():
-            return self.action_queue.get_nowait()
-        return None
+        if self.action_queue.empty():
+            return None
+        try:
+            return self.action_queue.get()
+        except Exception:
+            return None
 
     def on_start(self):
         """
         Launch the :class:`ThinkProcess` in a separate OS process.
 
         Called automatically by ``Controller.start()`` after the state
-        receiver and control loop threads are running.
+        receiver and control loop threads are running.  Observation
+        buffers are created eagerly in ``Controller.__init__`` so they
+        are already populated when the think process is spawned.
         """
-        print("[AIController] Launching think process")
+        logger.info(
+            f"Launching think process with observation buffers: "
+            f"{list(self.observation_buffers.keys())}"
+        )
         self._running_event.set()
         self._think_process.start()
-        print(
-            f"[AIController] Think process started "
-            f"(PID: {self._think_process.pid})"
+        logger.info(
+            f"Think process started (PID: {self._think_process.pid})"
         )
+
+        # Prefer the pynput-driven prompt capture when a global keyboard
+        # listener is running (non-headless + pynput available).  Fall back
+        # to a line-buffered stdin reader only in headless mode or when
+        # pynput failed to import, since the stdin path requires the user
+        # to keep the controller terminal focused and steals keystrokes
+        # from anything the base ``Controller`` might do with them.
+        if self.cfg.headless or _pynput_keyboard is None:
+            self._start_stdin_reader()
+        else:
+            self._publish_prompt_status()
+
+    # ------------------------------------------------------------------
+    # Pynput-driven interactive prompt
+    # ------------------------------------------------------------------
+
+    PROMPT_STATUS_KEY = "user prompt"
+
+    def _on_pynput_press(self, key) -> None:
+        """Intercept global key presses.
+
+        While the prompt is active every key is consumed here and routed
+        into the prompt buffer, so the base ``Controller._on_pynput_press``
+        never dispatches to ``on_key_press`` (which keyboard-teleop
+        subclasses use to drive the robot).  Outside of prompt mode we
+        delegate to the base implementation, with the one exception that
+        a bare ``Enter`` press opens the prompt.
+        """
+        if _pynput_keyboard is not None and key == _pynput_keyboard.Key.enter:
+            if self._prompt_active:
+                self._submit_prompt()
+            else:
+                self._start_prompt()
+            return
+
+        if self._prompt_active:
+            self._handle_prompt_key(key)
+            return
+
+        super()._on_pynput_press(key)
+
+    def _on_pynput_release(self, key) -> None:
+        """Swallow releases while the prompt is capturing input.
+
+        Keyboard-teleop subclasses act in ``on_key_release``; suppressing
+        releases during prompt mode prevents the robot from reacting to
+        the characters being typed.
+        """
+        if self._prompt_active:
+            return
+        super()._on_pynput_release(key)
+
+    def _start_prompt(self) -> None:
+        with self._prompt_lock:
+            self._prompt_active = True
+            self._prompt_buffer = ""
+        logger.info("User-prompt capture started (type, then press Enter to submit, Esc to cancel)")
+        self._publish_prompt_status()
+
+    def _submit_prompt(self) -> None:
+        with self._prompt_lock:
+            message = self._prompt_buffer.strip()
+            self._prompt_active = False
+            self._prompt_buffer = ""
+        if message:
+            logger.info(f"User command received: {message!r}")
+            self.send_user_message(message)
+        else:
+            logger.info("Empty user prompt, ignored")
+        self._publish_prompt_status()
+
+    def _cancel_prompt(self) -> None:
+        with self._prompt_lock:
+            self._prompt_active = False
+            self._prompt_buffer = ""
+        logger.info("User-prompt capture cancelled")
+        self._publish_prompt_status()
+
+    def _handle_prompt_key(self, key) -> None:
+        """Apply a single key event to the prompt buffer (prompt is active)."""
+        if _pynput_keyboard is None:
+            return
+
+        if key == _pynput_keyboard.Key.esc:
+            self._cancel_prompt()
+            return
+
+        if key == _pynput_keyboard.Key.backspace:
+            with self._prompt_lock:
+                self._prompt_buffer = self._prompt_buffer[:-1]
+            self._publish_prompt_status()
+            return
+
+        if key == _pynput_keyboard.Key.space:
+            with self._prompt_lock:
+                self._prompt_buffer += " "
+            self._publish_prompt_status()
+            return
+
+        char = getattr(key, "char", None)
+        if char and char.isprintable():
+            with self._prompt_lock:
+                self._prompt_buffer += char
+            self._publish_prompt_status()
+
+    def _publish_prompt_status(self) -> None:
+        if self._prompt_active:
+            text = f"> {self._prompt_buffer}\u258f"  # thin caret at end
+        else:
+            text = "(press Enter to type a command)"
+        try:
+            StatusBoard.set(self.PROMPT_STATUS_KEY, text)
+        except Exception:
+            logger.debug("StatusBoard.set failed for user-prompt row", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Stdin reader (fallback for headless / missing pynput)
+    # ------------------------------------------------------------------
+
+    def _start_stdin_reader(self):
+        """Start a daemon thread that reads newline-terminated commands
+        from stdin and pushes them onto ``user_msg_queue``."""
+        if self._stdin_thread is not None and self._stdin_thread.is_alive():
+            return
+        if not sys.stdin or not sys.stdin.readable():
+            logger.warning("stdin is not readable; user-command input disabled")
+            return
+
+        t = threading.Thread(
+            target=self._stdin_reader_loop,
+            name="AIController-stdin-reader",
+            daemon=True,
+        )
+        t.start()
+        self._stdin_thread = t
+        logger.info(
+            "User-command input ready — type a command and press Enter "
+            "to send it to the think process."
+        )
+
+    def _stdin_reader_loop(self):
+        """Blocking read-line loop; exits when the controller stops."""
+        while self._running_event.is_set():
+            try:
+                line = sys.stdin.readline()
+            except Exception as exc:
+                logger.warning(f"stdin read failed, stopping reader: {exc}")
+                return
+            if line == "":
+                # EOF (e.g. stdin closed / piped input ended)
+                logger.info("stdin closed; user-command input stopped")
+                return
+            message = line.strip()
+            if not message:
+                continue
+            logger.info(f"User command received: {message!r}")
+            self.send_user_message(message)
 
     # ------------------------------------------------------------------
     # Public API
@@ -219,5 +535,5 @@ class AIController(Controller):
             self._think_process.join(timeout=5.0)
             if self._think_process.is_alive():
                 self._think_process.terminate()
-                print("[AIController] Think process terminated forcefully")
+                logger.warning("Think process terminated forcefully")
         super().stop()

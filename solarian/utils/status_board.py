@@ -87,6 +87,65 @@ def _module_timestamp_label(data: Mapping[str, Any]) -> Optional[str]:
     return f"t={ts[0]}" if len(set(ts)) == 1 else "t=mixed"
 
 
+def _action_type_label(action_type: Any) -> str:
+    """Format an action_type as 'Name=value' using the ActionType registry."""
+    if action_type is None:
+        return ""
+    try:
+        from solarian.core.action import ActionType
+        value = int(action_type)
+    except (TypeError, ValueError):
+        return f"type={action_type}"
+    name = ActionType._registry.get(value)
+    if name:
+        return f"{name}={value}"
+    return f"type={value}"
+
+
+def _build_fields_renderable(
+    items: list,
+    *,
+    max_rows: int,
+) -> tuple[RenderableType, Optional[Any]]:
+    """Render a list of (field, payload) items as one or more side-by-side
+    tables so long field lists overflow into additional columns instead of
+    being truncated under '+N more'.
+
+    Returns the renderable plus the most recent timestamp seen (or None).
+    """
+    last_timestamp = None
+    total = len(items)
+    if total == 0:
+        inner = Table(box=None, show_header=False, pad_edge=False)
+        inner.add_column("field", style="cyan", no_wrap=True)
+        inner.add_column("value", justify="right")
+        return inner, None
+
+    num_cols = max(1, (total + max_rows - 1) // max_rows)
+    rows_per_col = (total + num_cols - 1) // num_cols
+
+    sub_tables: list[Table] = []
+    for col_idx in range(num_cols):
+        start = col_idx * rows_per_col
+        end = min(start + rows_per_col, total)
+        sub = Table(box=None, show_header=False, pad_edge=False)
+        sub.add_column("field", style="cyan", no_wrap=True)
+        sub.add_column("value", justify="right")
+        for field, field_payload in items[start:end]:
+            if isinstance(field_payload, Mapping):
+                val = field_payload.get("value", "")
+                if field_payload.get("timestamp") is not None:
+                    last_timestamp = field_payload.get("timestamp")
+            else:
+                val = field_payload
+            sub.add_row(str(field), value_str(val))
+        sub_tables.append(sub)
+
+    if len(sub_tables) == 1:
+        return sub_tables[0], last_timestamp
+    return Columns(sub_tables, expand=True, equal=False, padding=(0, 2)), last_timestamp
+
+
 def _render_action_panel(
     module_name: str,
     module_payload: Mapping[str, Any],
@@ -96,32 +155,13 @@ def _render_action_panel(
     data = module_payload.get("data") or {}
     action_type = module_payload.get("action_type", None)
 
-    inner = Table(box=None, show_header=False, pad_edge=False)
-    inner.add_column("field", style="cyan", no_wrap=True)
-    inner.add_column("value", justify="right")
-
-    # Only render field rows if it looks like field -> mapping with "value"
     items = list(data.items()) if isinstance(data, Mapping) else []
-    shown = 0
-    last_timestamp = None
-    for field, field_payload in items[:max_rows]:
-        if isinstance(field_payload, Mapping):
-            val = field_payload.get("value", "")
-            if field_payload.get("timestamp") is not None:
-                last_timestamp = field_payload.get("timestamp")
-        else:
-            # fallback if structure isn't as expected
-            val = field_payload
-        inner.add_row(str(field), value_str(val))
-        shown += 1
+    inner, last_timestamp = _build_fields_renderable(items, max_rows=max_rows)
 
-    if len(items) > max_rows:
-        inner.add_row("…", f"+{len(items) - max_rows} more")
-
-    # Title/subtitle
     title_parts = [module_name]
-    if action_type is not None:
-        title_parts.append(f"type={action_type}")
+    label = _action_type_label(action_type)
+    if label:
+        title_parts.append(label)
     title = "  ".join(title_parts)
 
     subtitle = None
@@ -140,31 +180,10 @@ def _render_observation_panel(
 ) -> RenderableType:
     data = module_payload
 
-    inner = Table(box=None, show_header=False, pad_edge=False)
-    inner.add_column("field", style="cyan", no_wrap=True)
-    inner.add_column("value", justify="right")
-
-    # Only render field rows if it looks like field -> mapping with "value"
     items = list(data.items()) if isinstance(data, Mapping) else []
-    shown = 0
-    last_timestamp = None
-    for field, field_payload in items[:max_rows]:
-        if isinstance(field_payload, Mapping):
-            val = field_payload.get("value", "")
-            if field_payload.get("timestamp") is not None:
-                last_timestamp = field_payload.get("timestamp")
-        else:
-            # fallback if structure isn't as expected
-            val = field_payload
-        inner.add_row(str(field), value_str(val))
-        shown += 1
+    inner, last_timestamp = _build_fields_renderable(items, max_rows=max_rows)
 
-    if len(items) > max_rows:
-        inner.add_row("…", f"+{len(items) - max_rows} more")
-
-    # Title/subtitle
-    title_parts = [module_name]
-    title = "  ".join(title_parts)
+    title = module_name
 
     subtitle = None
     if last_timestamp is not None:
@@ -172,6 +191,33 @@ def _render_observation_panel(
         subtitle = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
     return Panel(inner, title=title, subtitle=subtitle, border_style="blue")
+
+
+def _render_raw_action_panel(
+    action_type: Any,
+    payload: Any,
+    *,
+    max_rows: int,
+) -> RenderableType:
+    """Render an Action whose payload is NOT MODULE_ACTION-shaped.
+
+    Non-module actions (e.g. skill-launch actions) carry arbitrary JSON-y
+    params in ``action.data`` instead of the nested
+    ``{module: {"data": {...}, "action_type": ...}}`` structure used by
+    MODULE_ACTION. Render them as a flat key/value table.
+    """
+    if isinstance(payload, Mapping):
+        items = list(payload.items())
+        inner, _ = _build_fields_renderable(items, max_rows=max_rows)
+    else:
+        inner = Table(box=None, show_header=False, pad_edge=False)
+        inner.add_column("field", style="cyan", no_wrap=True)
+        inner.add_column("value", justify="right")
+        inner.add_row("value", value_str(payload))
+
+    label = _action_type_label(action_type)
+    title = f"action  {label}" if label else "action"
+    return Panel(inner, title=title, border_style="magenta")
 
 
 def render_action_or_observation(
@@ -185,17 +231,23 @@ def render_action_or_observation(
     Render an Action with multiple modules (arm/base/...) into a compact Rich renderable
     suitable for a single Table cell.
     """
-    from solarian.core.action import Action
+    from solarian.core.action import Action, ActionType
     from solarian.core.observation import Observation
 
     action.uncompress()
     if isinstance(action, Action):
-        payload = action.to_dict()["data"]
+        action_dict = action.to_dict()
+        action_type = action_dict.get("action_type")
+        payload = action_dict["data"]
+        # Non-MODULE_ACTION payloads are free-form dicts (skill-launch
+        # params etc.) — don't try to interpret them as per-module actions.
+        if action_type != int(ActionType.MODULE_ACTION):
+            return _render_raw_action_panel(action_type, payload, max_rows=max_rows)
     else:
         payload = action.to_dict()
 
     # Decide module iteration order
-    module_names = list(payload.keys())
+    module_names = list(payload.keys()) if isinstance(payload, Mapping) else []
     if module_order:
         order = [m for m in module_order if m in module_names]
         rest = [m for m in module_names if m not in order]
@@ -208,10 +260,15 @@ def render_action_or_observation(
 
     panels: list[RenderableType] = []
     for name in module_names:
+        module_payload = payload[name]
         if isinstance(action, Action):
-            panels.append(_render_action_panel(name, payload[name], max_rows=max_rows))
+            if not isinstance(module_payload, Mapping):
+                # Defensive fallback: malformed module payload.
+                panels.append(_render_raw_action_panel(name, module_payload, max_rows=max_rows))
+                continue
+            panels.append(_render_action_panel(name, module_payload, max_rows=max_rows))
         elif isinstance(action, Observation):
-            panels.append(_render_observation_panel(name, payload[name], max_rows=max_rows))
+            panels.append(_render_observation_panel(name, module_payload, max_rows=max_rows))
         else:
             raise ValueError(f"Unknown action type: {type(action)}")
 

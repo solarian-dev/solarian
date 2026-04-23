@@ -202,6 +202,13 @@ class ModuleObs:
     def __setitem__(self, name, value):
         self._fields[name] = value
 
+    def items(self):
+        """Iterate ``(field_name, Data)`` pairs, mirroring
+        :meth:`Observation.items`.  ``Data`` is whatever the
+        ``SensorField`` / ``CalculatedField`` declared (e.g.
+        :class:`ImageData`, :class:`PosData`)."""
+        return self._fields.items()
+
     @classmethod
     def __class_getitem__(cls, item):
         cls = cls._resolve_class()

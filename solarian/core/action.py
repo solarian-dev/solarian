@@ -296,6 +296,9 @@ class Action:
         self.action_type = action_type
         data = data if data is not None else {}
         self._module_actions = {}
+        # Raw payload kept so non-MODULE_ACTION actions (e.g. skill-launch
+        # actions) can carry arbitrary params through the wire.
+        self.data = data
 
         actual_cls = type(self)._resolve_class()
         module_actions_spec = actual_cls.get_module_actions_spec()
@@ -374,7 +377,11 @@ class Action:
     # -- Dict interface ----------------------------------------------------
 
     def to_dict(self):
-        return {"action_type": int(self.action_type), "data": {name: module_action.to_dict() for name, module_action in self._module_actions.items()}}
+        if self.action_type == ActionType.MODULE_ACTION:
+            data = {name: module_action.to_dict() for name, module_action in self._module_actions.items()}
+        else:
+            data = self.data
+        return {"action_type": int(self.action_type), "data": data}
 
     # -- Compression -------------------------------------------------------
 

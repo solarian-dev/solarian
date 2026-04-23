@@ -138,15 +138,40 @@ class ObservationRingBuffer:
         # Instead, get() returns plain dicts which can be converted by the caller.
     
     def __getstate__(self):
-        """Custom pickle support - exclude any non-picklable attributes."""
+        """Custom pickle support.
+
+        ``module_obs_class`` may be a class loaded from a project-local
+        module (e.g. ``ur5.observation.ArmObs``) whose direct class
+        reference is not always picklable across the spawn boundary
+        (notably when the project package was loaded via
+        ``importlib.util.spec_from_file_location``).  We therefore
+        serialise the class by its ``(__module__, __qualname__)``
+        instead and re-import it in :meth:`__setstate__`.
+        """
         state = self.__dict__.copy()
-        # Remove any class references that can't be pickled
-        state.pop('module_obs_class', None)
+        cls = state.pop('module_obs_class', None)
+        if cls is not None:
+            state['_module_obs_class_ref'] = (cls.__module__, cls.__qualname__)
         return state
-    
+
     def __setstate__(self, state):
-        """Custom unpickle support."""
+        """Custom unpickle support — re-imports ``module_obs_class``."""
+        ref = state.pop('_module_obs_class_ref', None)
         self.__dict__.update(state)
+        if ref is not None:
+            import importlib
+            try:
+                mod = importlib.import_module(ref[0])
+                obj = mod
+                for part in ref[1].split('.'):
+                    obj = getattr(obj, part)
+                self.module_obs_class = obj
+            except (ImportError, AttributeError):
+                # Fall back to whatever ModuleObs subclass was registered
+                # during the child's import phase.  This keeps ``get()``
+                # usable even if the exact class is not reachable.
+                from solarian.core.observation import ModuleObs
+                self.module_obs_class = ModuleObs._resolve_class()
     
     @classmethod
     def create_from_example(

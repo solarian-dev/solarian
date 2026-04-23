@@ -26,7 +26,7 @@ from solarian.core.data import DataComputer, TimestampData
 from solarian.utils import manual_profile, profile, setup_process_logging, get_log_queue
 from solarian.utils.profiling import get_stats_snapshot, merge_stats as merge_profiling_stats
 from solarian.utils.shared_memory.shared_memory_queue import Empty
-from solarian.utils.shared_memory.action_queue import ActionQueue
+from solarian.utils.shared_memory.action_queue import ModuleActionQueue
 from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
 from solarian.utils.trajectory_interpolator import (
     TrajectoryInterpolator,
@@ -130,7 +130,7 @@ class Module(Process):
         return self    
 
 
-    def __init__(self, cfg: ModuleConfig | None = None, name: str | None = None, observation_buffer: ObservationRingBuffer | None = None, action_queue: ActionQueue | None = None):
+    def __init__(self, cfg: ModuleConfig | None = None, name: str | None = None, observation_buffer: ObservationRingBuffer | None = None, action_queue: ModuleActionQueue | None = None):
         super().__init__()
 
         if cfg is None:
@@ -862,8 +862,13 @@ class Module(Process):
                 precise_wait(t_end=t_end, time_func=time.monotonic)
                 
         except Exception as _run_exc:
-            tb_str = _tb.format_exception(type(_run_exc), _run_exc, _run_exc.__traceback__)
-            self._error_queue.put_nowait((self.name, "".join(tb_str)))
+            tb_str = "".join(
+                _tb.format_exception(type(_run_exc), _run_exc, _run_exc.__traceback__)
+            )
+            logger.exception(
+                "Module '%s' crashed: %s", self.name, _run_exc
+            )
+            self._error_queue.put_nowait((self.name, tb_str))
         finally:
             self.ready_event.set()
             try:

@@ -1,15 +1,27 @@
 """
-ActionQueue - A shared memory queue specialized for Action objects.
+Shared-memory FIFO queues for actions.
 
-This provides a clean API for sending/receiving Action objects between
-processes by flattening the Action dict structure for SharedMemoryQueue storage.
+Two classes are exposed:
 
-No pickle serialization - just dict flattening for efficiency.
+* :class:`ModuleActionQueue` — one queue per robot module.  Stores
+  :class:`ModuleAction` instances with a fixed schema derived from an
+  example action (flat ``dict[str, np.ndarray | number]``).  Used by the
+  robot to deliver per-module actuator commands to modules with zero
+  pickle overhead.
+
+* :class:`ActionQueue` — one queue for the top-level :class:`Action`
+  objects that flow from the think process to the controller's
+  ``control_step``/``control_loop``.  Because these actions may carry
+  arbitrary skill-launch ``params`` (non-``MODULE_ACTION`` types), the
+  payload is serialized with ``msgpack`` into a fixed-size ``uint8``
+  buffer stored in the underlying :class:`SharedMemoryQueue`.
 """
 
-from typing import Dict, Any, List, Union
+from typing import Dict, Any, List, Optional, Union
 import numbers
 from multiprocessing.managers import SharedMemoryManager
+
+import msgpack
 import numpy as np
 
 from solarian.utils.shared_memory.shared_memory_queue import SharedMemoryQueue, Empty, Full
@@ -86,20 +98,20 @@ def unflatten_dict(d: Dict[str, Any], sep: str = '.') -> Dict[str, Any]:
     return result
 
 
-class ActionQueue:
+class ModuleActionQueue:
     """
-    A shared memory queue for Action objects.
-    
-    Converts Action objects to flattened dictionaries for efficient storage
-    in SharedMemoryQueue. No pickle serialization overhead.
-    
-    Requirements for Action data:
+    A shared memory queue for :class:`ModuleAction` objects (one queue per module).
+
+    Converts ``ModuleAction`` objects to flattened dictionaries for efficient
+    storage in :class:`SharedMemoryQueue`. No pickle serialization overhead.
+
+    Requirements for action data:
     - Values must be numbers, np.ndarray, or nested dicts with same constraints
     - The schema (keys and array shapes) must be consistent across all actions
-    
+
     Args:
         shm_manager: SharedMemoryManager instance
-        example_action: An example Action to define the schema
+        example_action: An example ``ModuleAction`` to define the schema
         buffer_size: Number of actions the queue can hold
     """
     
@@ -108,7 +120,7 @@ class ActionQueue:
     def __init__(
         self,
         shm_manager: SharedMemoryManager,
-        example_action: ModuleAction,  # Action instance
+        example_action: ModuleAction,
         buffer_size: int
     ):
         self.buffer_size = buffer_size
@@ -137,17 +149,9 @@ class ActionQueue:
         shm_manager: SharedMemoryManager,
         example_action,
         buffer_size: int = 1024
-    ) -> "ActionQueue":
+    ) -> "ModuleActionQueue":
         """
-        Create an ActionQueue from an example Action.
-        
-        Args:
-            shm_manager: SharedMemoryManager instance
-            example_action: An example Action that defines the schema
-            buffer_size: Number of actions the queue can hold
-            
-        Returns:
-            ActionQueue instance
+        Create a :class:`ModuleActionQueue` from an example ``ModuleAction``.
         """
         return cls(shm_manager, example_action, buffer_size)
     
@@ -288,4 +292,112 @@ class ActionQueue:
             flat_dict = {key: values[i] for key, values in flat_results.items()}
             actions.append(self._flat_dict_to_action(flat_dict))
         
+        return actions
+
+
+class ActionQueue:
+    """Shared-memory FIFO queue for top-level :class:`Action` objects.
+
+    Unlike :class:`ModuleActionQueue`, the payload schema of a top-level
+    ``Action`` is not fixed — skill-launch actions carry arbitrary ``data``
+    (e.g. ``{"target_pos": [...]}``) that does not match ``Action.zeros()``.
+    Rather than trying to unify all possible schemas, the action is serialized
+    with ``msgpack`` into a fixed-size ``uint8`` buffer stored in the
+    underlying :class:`SharedMemoryQueue`.
+
+    Args:
+        shm_manager: Live :class:`SharedMemoryManager` used to allocate the
+            backing shared memory.
+        buffer_size: Number of actions the queue can hold.
+        max_payload_bytes: Maximum serialized size of a single action.
+        action_class: Concrete :class:`Action` subclass used to reconstruct
+            actions on ``get``.  Defaults to whichever ``Action`` subclass has
+            been registered via ``Action._active_subclass`` (usually the
+            project's ``Action`` class).
+    """
+
+    def __init__(
+        self,
+        shm_manager: SharedMemoryManager,
+        buffer_size: int = 256,
+        max_payload_bytes: int = 8192,
+        action_class: Optional[type] = None,
+    ):
+        self.buffer_size = buffer_size
+        self.max_payload_bytes = int(max_payload_bytes)
+        self._action_class = action_class or Action._resolve_class()
+
+        example = {
+            "payload_len": np.int64(0),
+            "payload": np.zeros(self.max_payload_bytes, dtype=np.uint8),
+        }
+        self._queue = SharedMemoryQueue.create_from_examples(
+            shm_manager=shm_manager,
+            examples=example,
+            buffer_size=buffer_size,
+        )
+
+    @classmethod
+    def create(
+        cls,
+        shm_manager: SharedMemoryManager,
+        buffer_size: int = 256,
+        max_payload_bytes: int = 8192,
+        action_class: Optional[type] = None,
+    ) -> "ActionQueue":
+        return cls(shm_manager, buffer_size, max_payload_bytes, action_class)
+
+    def qsize(self) -> int:
+        return self._queue.qsize()
+
+    def empty(self) -> bool:
+        return self._queue.empty()
+
+    def clear(self):
+        self._queue.clear()
+
+    def _encode(self, action: Action) -> Dict[str, Any]:
+        payload = msgpack.packb(action.to_dict(), use_bin_type=True)
+        n = len(payload)
+        if n > self.max_payload_bytes:
+            raise ValueError(
+                f"Serialized Action is {n}B, exceeds max_payload_bytes="
+                f"{self.max_payload_bytes}."
+            )
+        buf = np.zeros(self.max_payload_bytes, dtype=np.uint8)
+        buf[:n] = np.frombuffer(payload, dtype=np.uint8)
+        return {"payload_len": np.int64(n), "payload": buf}
+
+    def _decode(self, row: Dict[str, Any]) -> Action:
+        n = int(row["payload_len"])
+        payload = bytes(np.asarray(row["payload"], dtype=np.uint8)[:n].tobytes())
+        d = msgpack.unpackb(payload, raw=False)
+        action_type = int(d.get("action_type", 0))
+        data = d.get("data", {}) or {}
+        return self._action_class(action_type=action_type, data=data)
+
+    def put(self, action: Action) -> None:
+        """Enqueue an ``Action``.  Raises :class:`queue.Full` if full."""
+        self._queue.put(self._encode(action))
+
+    def get(self) -> Action:
+        """Dequeue a single ``Action``.  Raises :class:`queue.Empty` if empty."""
+        return self._decode(self._queue.get())
+
+    def get_k(self, k: int) -> List[Action]:
+        rows = self._queue.get_k(k)
+        n_items = len(rows[next(iter(rows))])
+        actions: List[Action] = []
+        for i in range(n_items):
+            row = {key: values[i] for key, values in rows.items()}
+            actions.append(self._decode(row))
+        return actions
+
+    def get_all(self) -> List[Action]:
+        rows = self._queue.get_all()
+        n_items = len(rows[next(iter(rows))])
+        actions: List[Action] = []
+        for i in range(n_items):
+            row = {key: values[i] for key, values in rows.items()}
+            actions.append(self._decode(row))
         return actions
