@@ -26,7 +26,7 @@ Architecture overview::
     │  1. Drain skill_status_buffer → skill status history             │
     │  2. Drain user_msg_queue → latest command                        │
     │  3. Read latest image + proprioception from observation_buffers  │
-    │  4. decide(image, proprio, user_msg, skills_obs)                 │
+    │  4. decide(image, user_msg, skills_status)                       │
     │         → skills to start/stop via a VLM call                    │
     │  5. Launch / stop Skill processes accordingly                    │
     └──────────────────────────────────────────────────────────────────┘
@@ -35,7 +35,7 @@ Architecture overview::
     │  - Read observations from shared observation_buffers             │
     │  - Execute skill logic (diffusion policies, motion planners …)  │
     │  - put_action() → controller's action_queue                     │
-    │  - put_skill_obs() → think process's skill_status_buffer           │
+    │  - put_skill_status() → think process's skill_status_buffer      │
     └──────────────────────────────────────────────────────────────────┘
 """
 
@@ -44,7 +44,7 @@ import sys
 import threading
 import multiprocessing
 from multiprocessing import Queue
-from typing import Dict, Any, Optional
+from typing import Callable, Dict, Any, Optional
 
 from solarian.core.controller import Controller
 from solarian.core.action import Action
@@ -124,8 +124,8 @@ class AIController(Controller):
     Prompt templates
     ----------------
 
-    Subclasses drive the VLM with two ``str.format``-style class
-    attributes, which are read by ``__init__`` and handed to the
+    Subclasses drive the VLM with two Jinja2-template class attributes,
+    which are read by ``__init__`` and handed to the
     :class:`ThinkProcess`:
 
     * ``system_prompt`` — the VLM ``system`` message.
@@ -133,15 +133,61 @@ class AIController(Controller):
 
     Both templates support:
 
-    * ``{user_msg}``, ``{available_skills}``, ``{active_skills}``,
-      ``{prev_decide}`` — context strings built by the think process.
-    * ``{module_name.field_name}`` — latest value of the corresponding
-      observation field (e.g. ``{arm.x}``, ``{arm.shoulder_pan}``).
-    * ``{module_name.field_name[k]}`` — value at step ``k`` back in the
-      observation ring buffer: ``[0]`` = latest, ``[-1]`` = previous,
-      ``[-2]`` = two steps before, and so on.  Format specs compose
-      normally, e.g. ``{arm.x[-1]:.2f}``.
-    * Literal braces must be escaped as ``{{`` / ``}}``.
+    * ``{{ user_msg }}``, ``{{ available_skills }}``,
+      ``{{ active_skills }}``, ``{{ prev_decide }}``,
+      ``{{ recent_skills_status }}`` — context strings built by the
+      think process.
+    * ``{{ module_name.field_name }}`` — latest value of the
+      corresponding observation field (e.g. ``{{ arm.x }}``,
+      ``{{ arm.shoulder_pan }}``).
+    * ``{{ module_name.field_name[k] }}`` — value at step ``k`` back in
+      the observation ring buffer: ``[0]`` = latest, ``[-1]`` =
+      previous, ``[-2]`` = two steps before, and so on.  These are
+      consecutive entries of the ring buffer (one control-loop tick
+      apart), NOT snapshots of prior ``decide()`` calls — use
+      ``prev_obs.*`` for that.
+    * ``{{ prev_obs.module_name.field_name }}`` — the latest value of
+      the field at the time of the *previous* ``decide()`` call.
+      Useful to tell whether the last action had the intended effect
+      (the previous ring-buffer entry is only one control-tick old and
+      will usually be indistinguishable from the latest value).
+      ``{{ has_prev_obs }}`` is ``False`` on the first call; guard
+      ``prev_obs`` accesses with
+      ``{% if has_prev_obs %}...{% endif %}``.
+    * ``{{ delta_obs.module_name.field_name }}`` — same shape as
+      ``prev_obs``, but holds ``now - prev`` for every numeric field
+      (silently dropped for non-numeric fields).  Handy for giving the
+      VLM the *change* since the previous decide() call directly,
+      without having to subtract in the template.  ``{{ has_delta_obs }}``
+      mirrors ``{{ has_prev_obs }}`` and should be used as the same
+      guard.
+    * ``{{ stagnation_warning }}`` — a short English warning emitted
+      once the same start/stop decision has been returned multiple
+      times in a row, so the prompt can nudge the VLM to try a
+      different action.  Renders as ``"(no stagnation detected)"``
+      otherwise.
+    * ``{{ expr | filter_name }}`` — pipe the resolved value through a
+      function registered in ``prompt_filters`` (see below), or through
+      the built-in ``fmt(spec)`` filter which applies a Python format
+      spec.  Filters are applied left to right::
+
+          {{ gripper.gripper[0] | cm | fmt('.2f') }}     # → "4.00"
+          {{ arm.x | cm | fmt('.2f') }}                  # latest, 2 dp
+
+      When a filter receives a field without an index (``arm.x`` vs
+      ``arm.x[0]``), the latest value is auto-unwrapped before the
+      filter runs, so filters stay ignorant of the view machinery.
+    * Literal JSON braces inside the template don't need escaping —
+      only Jinja's ``{{ ... }}`` / ``{% ... %}`` / ``{# ... #}``
+      delimiters are interpreted.
+
+    Filters are registered by overriding the ``prompt_filters`` class
+    attribute::
+
+        class UR5AIController(AIController):
+            prompt_filters = {
+                "cm": lambda v: v * 100.0,  # meters → centimeters
+            }
 
     Args:
         cfg: Controller configuration (includes VLM model, connection, etc.).
@@ -158,11 +204,11 @@ class AIController(Controller):
         "Decide which skills to start or stop in order to make progress "
         "on the user command.\n\n"
         "Return ONLY valid JSON matching this schema:\n"
-        "{{\n"
-        '  "skills_to_start": [{{"skill_name": "...", "params": {{...}}}}],\n'
+        "{\n"
+        '  "skills_to_start": [{"skill_name": "...", "params": {...}}],\n'
         '  "skills_to_stop": ["skill_name", ...],\n'
         '  "reasoning": "..."\n'
-        "}}\n\n"
+        "}\n\n"
         "Rules:\n"
         "- No explanation outside the JSON. No markdown.\n"
         "- Only reference skills from the available skills list.\n"
@@ -173,12 +219,16 @@ class AIController(Controller):
     )
 
     user_prompt: str = (
-        "User command: {user_msg}\n\n"
-        "Available skills:\n{available_skills}\n\n"
-        "Currently active skills:\n{active_skills}\n\n"
-        "Previous decide() call:\n{prev_decide}\n\n"
+        "User command: {{ user_msg }}\n\n"
+        "Available skills:\n{{ available_skills }}\n\n"
+        "Currently active skills:\n{{ active_skills }}\n\n"
+        "Previous decide() call:\n{{ prev_decide }}\n\n"
         "Decide which skills to start or stop.\n"
     )
+
+    # Filter registry for the ``| filter`` pipe syntax in prompts.
+    # Subclasses override this to register their own transforms.
+    prompt_filters: Dict[str, Callable[[Any], Any]] = {}
 
     def __init__(
         self,
@@ -204,13 +254,53 @@ class AIController(Controller):
         # Shared event to coordinate shutdown
         self._running_event = multiprocessing.Event()
 
-        # VLM configuration extracted from the controller config
+        # VLM configuration extracted from the controller config.
+        # ``temperature`` is non-zero on purpose: with temperature=0 the
+        # VLM renders near-identical prompts to near-identical outputs,
+        # which is great for reproducibility but causes the think loop
+        # to get stuck repeating a decision that isn't working.  A
+        # little sampling noise lets it escape those fixed points
+        # without meaningfully hurting reliability.
         self.vlm_config: Dict[str, Any] = {
             "model": cfg.system2_model,
             "base_url": cfg.system2_base_url,
             "api_key": cfg.system2_api_key,
-            "temperature": 0.0,
+            "temperature": 0.3,
             "timeout_s": 10.0,
+            # When True, the think process mirrors each frame it sends
+            # to the VLM (already cropped / colour-corrected / resized
+            # / annotated) into an OpenCV window for live debugging.
+            # Off by default because it requires a display; set via
+            # ``self.vlm_config["debug_show_annotated_image"] = True``
+            # in a subclass constructor or at runtime before ``start()``.
+            "debug_show_annotated_image": False,
+            # Image preparation pipeline knobs.  Defaults assume the
+            # observation image is RGB (as published by ModuleObs) and
+            # is captured by a fisheye / circular lens with black
+            # border around the illuminated disc — both true for the
+            # UR5 wrist camera.  Override to False if your camera
+            # delivers BGR natively or fills the whole frame.
+            "image_is_rgb": True,
+            "image_crop_black_borders": True,
+            "image_draw_coordinate_grid": True,
+            # Overlay the cyan target_bbox rectangle + green-L / red-R
+            # finger-tip markers from the previous decide()'s
+            # ``observation`` onto the current image.  Only meaningful
+            # when the VLM's schema actually emits target_bbox +
+            # left_finger_tip + right_finger_tip (e.g. the old bbox
+            # schema); with a simpler ``next_move``-only schema,
+            # subclasses should set this to False so the overlay
+            # function does not draw stale / unrelated markers.
+            "image_annotate_prev_obs": True,
+            # Declarative ``{move_name: skill_spec | list | None}`` map
+            # that translates a VLM-emitted ``next_move`` string into
+            # concrete ``skills_to_start`` entries inside
+            # ``ThinkProcess.decide()``.  Keys are case-insensitive;
+            # ``None`` means "no skill this call" (e.g. DONE).  When
+            # this map is empty the decision passes through unchanged
+            # and the VLM is expected to emit ``skills_to_start``
+            # directly, as before.
+            "action_map": {},
         }
 
         # Skill registry — collect every ``Skill`` instance declared as a
@@ -247,6 +337,7 @@ class AIController(Controller):
             available_skills=self.available_skills,
             system_prompt=type(self).system_prompt,
             user_prompt=type(self).user_prompt,
+            prompt_filters=dict(type(self).prompt_filters or {}),
             running_event=self._running_event,
             frequency=self.cfg.tps,
         )
