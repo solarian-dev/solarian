@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.spatial.transform as st
-from umi.common.pose_util import pose_to_mat, mat_to_pose
+from solarian.core.ai.system1.umi.common.pose_util import pose_to_mat, mat_to_pose
 
 
 def solve_table_collision(ee_pose, gripper_width, height_threshold):
