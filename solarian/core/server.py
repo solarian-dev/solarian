@@ -26,6 +26,12 @@ class RelayServer:
         self.robot_cmd_sender = self.context.socket(zmq.PUSH)
         self.robot_cmd_sender.setsockopt(zmq.CONFLATE, 1)
         self.robot_cmd_sender.setsockopt(zmq.LINGER, 0)
+        # IMMEDIATE=1 makes PUSH only enqueue to completed connections, so a
+        # controller talking to the relay while no robot is attached won't
+        # accumulate a stale message that hits the next robot to connect
+        # (which previously caused the robot to auto-launch the last
+        # controller-issued skill on startup).
+        self.robot_cmd_sender.setsockopt(zmq.IMMEDIATE, 1)
         self.robot_cmd_sender.bind(f"tcp://*:{self.cfg.connection.action_sender_port}")  # Robot connects here
 
         # Setup image relay (Robot → Relay → Client)

@@ -349,7 +349,22 @@ class Robot(ABC):
 
     def control_loop(self):
         logger.info("Control loop started")
-        
+
+        # Drop any action that was already sitting in the relay's CONFLATE
+        # buffer when we connected.  Without this, a stale actions from a
+        # previous controller session would be
+        # dispatched as the very first action of the new session, silently
+        # launching skills the operator did not request.
+        drained = 0
+        while True:
+            stale = self.get_action()
+            if stale is None:
+                break
+            drained += 1
+        if drained:
+            logger.warning(
+                "Discarded %d stale action(s) at control-loop start", drained
+            )
 
         poller = zmq.Poller()
         poller.register(self.action_socket, zmq.POLLIN)

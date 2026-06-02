@@ -12,10 +12,40 @@ import numpy as np
 from abc import ABC, abstractmethod
 from multiprocessing.managers import SharedMemoryManager
 
-try:
-    from pynput import keyboard as _pynput_keyboard
-except Exception:  # pragma: no cover - pynput is optional / may fail to import on some platforms
-    _pynput_keyboard = None
+# pynput is imported lazily inside ``_start_keyboard_listener`` instead of
+# at module load. On macOS ``pynput.keyboard`` transitively initializes
+# ``Quartz`` / ``AppKit`` / ``AVFoundation`` (``AVCaptureDevice``,
+# ``NSResponder``, ...) the moment it's imported. Once those Obj-C classes
+# have been ``+initialize``'d in a process, any subsequent ``fork()`` of
+# that process aborts the child the moment it touches Cocoa (Apple's
+# hard-coded fork-safety net; not bypassed by
+# ``OBJC_DISABLE_INITIALIZE_FORK_SAFETY``). Importing this module in a
+# parent process that later forks camera / robot / gripper workers (as
+# UMI's eval_real.py does on macOS) therefore breaks those forks unless
+# the pynput load is deferred until after the forks. ``None`` here is the
+# "not yet loaded" sentinel; the lazy loader below replaces it with the
+# real module the first time ``_start_keyboard_listener`` runs, or with
+# ``False`` if pynput is not installed / fails to import.
+_pynput_keyboard = None
+_PYNPUT_TRIED = False
+
+
+def _get_pynput_keyboard():
+    """Return ``pynput.keyboard`` (cached), or ``None`` if unavailable.
+
+    Deferred so that merely importing this module does NOT initialize
+    Cocoa in the parent process; see comment above.
+    """
+    global _pynput_keyboard, _PYNPUT_TRIED
+    if _PYNPUT_TRIED:
+        return _pynput_keyboard
+    _PYNPUT_TRIED = True
+    try:
+        from pynput import keyboard as _kb
+        _pynput_keyboard = _kb
+    except Exception:  # pragma: no cover - pynput is optional / may fail on some platforms
+        _pynput_keyboard = None
+    return _pynput_keyboard
 
 
 
@@ -36,14 +66,40 @@ from solarian.utils.configs import load_config_yaml
 import logging
 logger = logging.getLogger(__name__)
 
+# Monitor geometry used to center cv2 windows. Resolved lazily on first
+# use via ``_get_screen_geometry()`` because ``screeninfo`` on macOS
+# imports ``pyobjc`` (AppKit / Foundation / Cocoa) at module load, which
+# then breaks any subsequent fork() in the parent process (Apple's
+# AppKit fork-safety net; not bypassed by
+# ``OBJC_DISABLE_INITIALIZE_FORK_SAFETY``). Importing this module in a
+# parent that later forks workers (e.g. UMI's eval_real.py on macOS)
+# would therefore poison every camera/visualizer worker. Defaults
+# (0,0,0,0) center against the top-left corner, which the code already
+# tolerated as the "no screeninfo" fallback.
 sw, sh, sx, sy = 0, 0, 0, 0
-try:
-    from screeninfo import get_monitors
-    monitors = get_monitors()
-    m = monitors[0]
-    sw, sh, sx, sy = m.width, m.height, m.x, m.y
-except Exception:
-    pass
+_SCREEN_GEOMETRY_RESOLVED = False
+
+
+def _get_screen_geometry():
+    """Populate ``sw, sh, sx, sy`` lazily from ``screeninfo.get_monitors``.
+
+    Safe to call repeatedly; the ``screeninfo`` import (and the Cocoa init
+    it triggers on macOS) happens at most once, and only AFTER the caller
+    has chosen to do so -- typically inside a controller method that runs
+    well after any fork()ed worker processes have been started.
+    """
+    global sw, sh, sx, sy, _SCREEN_GEOMETRY_RESOLVED
+    if _SCREEN_GEOMETRY_RESOLVED:
+        return sw, sh, sx, sy
+    _SCREEN_GEOMETRY_RESOLVED = True
+    try:
+        from screeninfo import get_monitors
+        monitors = get_monitors()
+        m = monitors[0]
+        sw, sh, sx, sy = m.width, m.height, m.x, m.y
+    except Exception:
+        pass
+    return sw, sh, sx, sy
 
 
 class Controller(ABC):
@@ -564,13 +620,16 @@ class Controller(ABC):
                     image_bboxes.setdefault(img_key, []).append(field_data.value)
 
         if not self.windows_initialized:
+            # Resolve screen geometry lazily (see module-level
+            # `_get_screen_geometry` for the fork-safety rationale).
+            _sw, _sh, _sx, _sy = _get_screen_geometry()
             for (module_name, field_name), img in images.items():
                 window_name = f"{module_name}/{field_name}"
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
                 height, width = img.shape[:2]
                 cv2.resizeWindow(window_name, width, height)
                 cv2.setMouseCallback(window_name, self.mouse_callback)
-                cv2.moveWindow(window_name, sx + (sw - width)//2, sy + (sh - height)//2)
+                cv2.moveWindow(window_name, _sx + (_sw - width)//2, _sy + (_sh - height)//2)
                 self.windows_initialized.append(window_name)
 
         BBOX_COLOR = (255, 0, 0)
@@ -682,14 +741,15 @@ class Controller(ABC):
         """
         if self._keyboard_listener is not None:
             return
-        if _pynput_keyboard is None:
+        pynput_keyboard = _get_pynput_keyboard()
+        if pynput_keyboard is None:
             logger.warning(
                 "pynput is not available; keyboard hooks (on_key_press / "
                 "on_key_release) will not be invoked in this controller."
             )
             return
         try:
-            listener = _pynput_keyboard.Listener(
+            listener = pynput_keyboard.Listener(
                 on_press=self._on_pynput_press,
                 on_release=self._on_pynput_release,
             )
