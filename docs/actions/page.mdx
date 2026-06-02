@@ -1,16 +1,136 @@
 export const metadata = {
   title: 'Actions',
   description:
-    'Actions are the commands that you can send to the robot.',
+    'Action is the typed schema of every command sent to the robot. It groups per-module ModuleAction subclasses, carries an action type that controls routing, and is the same object you record, replay, and emit from policies.',
 }
 
 # Actions
 
-Action encapsulates robot control commands.
+An **Action** is the typed command the controller sends to the robot each tick. Actions flow from the controller through the relay server to the robot, and they are the same Python object you record alongside observations, replay, and emit from a learned policy. {{ className: 'lead' }}
 
-It stores structured actuator-level commands (e.g., position, speed) across multiple robot modules.
+Defined in [`solarian/core/action.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/action.py).
 
+## What is an Action?
 
-## See Also
-[Observation](/observations): Counterpart to Action, stores sensor readings in the same hierarchical format. Used together in imitation learning loops.
-[Action](/actions): The Action class.
+An `Action` is a top-level container that carries:
+
+- An **action type** (`action.action_type`) — an integer that tells the robot how to dispatch the action (see [Action Types](/docs/action-types)).
+- For `MODULE_ACTION`, a dictionary of [`ModuleAction`](#moduleaction) instances keyed by module name.
+- For other action types, an arbitrary `data` dictionary that's forwarded as-is.
+
+```text
+Action(action_type=MODULE_ACTION)
+ ├── arm: ArmAction
+ │    ├── shoulder_pan: PosData
+ │    └── shoulder_lift: PosData
+ └── gripper: GripperAction
+      └── pos: PosData
+```
+
+The structure mirrors your `Robot`: every `ModuleAction` attribute matches a `Module` attribute on the robot.
+
+## ModuleAction
+
+Subclass `ModuleAction` and bind each field to a `Data` reference on your `Robot`:
+
+```python
+from solarian.core.action import ModuleAction, ActuatorField
+from myrobot.robot import MyRobot
+
+class ArmAction(ModuleAction):
+    shoulder_pan = ActuatorField(MyRobot.arm.shoulder_pan.pos)
+    shoulder_lift = ActuatorField(MyRobot.arm.shoulder_lift.pos)
+    elbow_flex = ActuatorField(MyRobot.arm.elbow_flex.pos)
+    wrist_flex = ActuatorField(MyRobot.arm.wrist_flex.pos)
+    wrist_roll = ActuatorField(MyRobot.arm.wrist_roll.pos)
+```
+
+Each `ActuatorField` carries the dtype/shape of its bound `Data` so that values are validated and shaped correctly at runtime.
+
+## Action
+
+Subclass `Action` and attach `ModuleAction` instances. The attribute name on `Action` must match the module name on `Robot`:
+
+```python
+from solarian.core.action import Action
+
+class MyAction(Action):
+    arm = ArmAction()
+    gripper = GripperAction()
+```
+
+`MyAction` knows how to serialize to a dict, validate incoming data, and produce a zero-initialized example via `MyAction.zeros()`.
+
+## Declaring actuator fields
+
+An `ActuatorField` binds an action field to a single `Data` point on a `Robot`:
+
+```python
+from solarian.core.action import ActuatorField
+
+class ArmAction(ModuleAction):
+    shoulder_pan = ActuatorField(MyRobot.arm.shoulder_pan.pos)
+    # the field name (`shoulder_pan`) must match the actuator name on the module
+```
+
+Use the introspection helpers if you need to walk the schema:
+
+```python
+ArmAction.get_actuator_fields_spec()
+# {'shoulder_pan': ActuatorField(...), 'shoulder_lift': ActuatorField(...), ...}
+```
+
+## Building an action
+
+The recommended pattern is to start from `MyAction.zeros()` and overwrite the fields you care about:
+
+```python
+from solarian.core.action import ActionType
+from myrobot.action import MyAction
+
+action = MyAction.zeros()
+action.action_type = ActionType.MODULE_ACTION
+action.arm.shoulder_pan.value = 0.42
+action.arm.shoulder_lift.value = -0.1
+action.gripper.pos.value = 0.0
+```
+
+`MyAction.zeros()` walks every declared `ModuleAction` and `ActuatorField`, allocates the right `Data` subtype for each, and returns a fully populated container with `action_type=STOP`.
+
+## Sending actions from a controller
+
+Inside `Controller.control_step()`, return an `Action` and Solarian will serialize and push it for you:
+
+```python
+class MyController(Controller):
+    def control_step(self) -> MyAction:
+        action = MyAction.zeros()
+        action.action_type = ActionType.MODULE_ACTION
+        action.arm.shoulder_pan.value = self.target_pan
+        return action
+```
+
+The controller's control loop runs at `cfg.fps`. Each return value goes out over the action socket as a single msgpack-encoded message.
+
+## How the robot routes actions
+
+When the robot receives an `Action`, it looks at `action.action_type`:
+
+- `ActionType.MODULE_ACTION` (`= 1`) — for each `ModuleAction` in `action`, push it onto the corresponding `module.action_queue` (a shared-memory queue). The module's run loop drains the queue each tick and writes to its actuators.
+- Any other type — look up `Robot.action_handlers[action_type]` (built from `@action_handler`-decorated methods on the `Robot` subclass) and dispatch.
+
+For per-module routing of non-`MODULE_ACTION` types, the same `@action_handler` decorator works on `Module` subclasses; the action ends up in the queue and the module dispatches it. See [Action Types](/docs/action-types) for the full list.
+
+## Compression and serialization
+
+`Action` shares its serialization stack with `Observation`. On the wire it's `msgpack(action.to_dict())`. Each `ActuatorField`'s `value` is whatever the underlying `Data` subclass uses (e.g. a `float` for `PosData`).
+
+You generally don't compress actions explicitly — they're small enough that JPEG-style codecs aren't needed.
+
+## See also
+
+- [Action Types](/docs/action-types) — built-in types and how to add your own.
+- [Observations](/docs/observations) — the counterpart that flows the other way.
+- [Modules](/docs/modules) — where actions are dispatched on the robot side.
+- [Controllers](/docs/controllers) — where actions are produced.
+- [Core](/docs/core) — the <code>Data</code> and <code>ActuatorField</code> reference.

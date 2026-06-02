@@ -1,198 +1,152 @@
 export const metadata = {
-  title: 'Quickstart',
+  title: 'Installation',
   description:
-    'This guide will get you all set up and ready to use the Solariancol API. We’ll cover how to get started an API client and how to make your first API request.',
+    'Install Solarian on Linux, macOS, or directly on your robot. Includes optional extras for AI policies and simulation.',
 }
 
-# Quickstart
+# Installation
 
-The following is a guide on how to install and run a solarian project.
+Solarian targets **Python 3.10+**. The recommended setup uses a [conda](https://docs.conda.io/) environment for isolation and either `pip` or [`uv`](https://docs.astral.sh/uv/) for installing packages.
 
+<Note>
+  Solarian uses [ZeroMQ](https://zeromq.org/) for networking, [Hydra](https://hydra.cc/) for configuration, and [PyTorch](https://pytorch.org/) (optional) for AI workloads. The base install gives you everything except the AI and simulation extras.
+</Note>
 
-## Installation
+## 1. Create a Python environment
 
-### Create a conda environment:
+<CodeGroup>
 
-```bash
+```bash {{ title: 'conda' }}
 conda create -n solarian python=3.10
-```
-
-### Activate the environment:
-
-```bash
 conda activate solarian
 ```
 
-### Install FFmpeg
+```bash {{ title: 'venv' }}
+python3.10 -m venv .venv
+source .venv/bin/activate
+```
 
-```bash
+</CodeGroup>
+
+## 2. Install FFmpeg
+
+FFmpeg is required for video encoding (recording, dataset conversion). Install it once via conda or your system package manager:
+
+<CodeGroup>
+
+```bash {{ title: 'conda' }}
 conda install ffmpeg=7.1.1 -c conda-forge
 ```
 
-### Clone Solarian repository
-
-```bash
-git clone https://github.com/solarian-dev/solarian.git
-cd solarian
+```bash {{ title: 'apt (Ubuntu/Debian)' }}
+sudo apt-get install ffmpeg
 ```
 
-### Install dependencies:
+```bash {{ title: 'brew (macOS)' }}
+brew install ffmpeg
+```
 
-With pip:
+</CodeGroup>
 
-```bash
+## 3. Install Solarian
+
+The fastest path is to install from PyPI. To hack on Solarian itself, clone the repository and use an editable install.
+
+<CodeGroup>
+
+```bash {{ title: 'pip' }}
+pip install solarian
+```
+
+```bash {{ title: 'uv (faster)' }}
+# Install uv once: curl -LsSf https://astral.sh/uv/install.sh | sh
+uv pip install solarian
+```
+
+```bash {{ title: 'editable / from source' }}
+git clone https://github.com/solarian-dev/solarian.git
+cd solarian
 pip install -e .
 ```
 
-With uv (faster; use the same conda env):
+</CodeGroup>
+
+After installation you should have two scripts on your `PATH`:
 
 ```bash
-# Install uv once: curl -LsSf https://astral.sh/uv/install.sh | sh
-conda activate solarian   # or your env name
-uv pip install -e .
+solarian --help          # main CLI
+create-solarian --help   # project scaffolder
 ```
 
-uv uses whichever Python is active, so packages are installed into your conda env.
+## 4. (Optional) Install extras
 
+Solarian ships three optional dependency groups:
 
+<CodeGroup>
 
-### macOS (Darwin) on Apple Silicon (arm64)
+```bash {{ title: 'AI (PyTorch + datasets)' }}
+pip install "solarian[ai]"
+```
 
-You will need to install separate extra requirements to install atomics library from source:
+```bash {{ title: 'Simulation (MuJoCo)' }}
+pip install "solarian[sim]"
+```
+
+```bash {{ title: 'Everything' }}
+pip install "solarian[all]"
+```
+
+</CodeGroup>
+
+The `ai` extra installs PyTorch, torchvision, datasets, ultralytics, einops, openai, and Weights & Biases. The `sim` extra installs gymnasium, MuJoCo, and dm_control.
+
+## Platform-specific notes
+
+### macOS on Apple Silicon (arm64)
+
+The `atomics` package needs to be built from source on Apple Silicon. From a checked-out source tree:
 
 ```bash
 pip install -r requirements-macos-arm64.txt
 ```
 
-### Install xformers
+If you also installed the `ai` extra, install `xformers` separately for compatible wheels:
 
 ```bash
 pip install xformers==0.0.31.post1
 ```
 
+### Linux (Ubuntu / Debian)
 
-## Creating a project
-
-
-## Running
-
-### Running server
-
-Within your project directory, run the following command:
+Make sure you have build tooling and CUDA (if you intend to run policies on a GPU):
 
 ```bash
-solarian run-server
+sudo apt-get install build-essential cmake libusb-1.0-0
 ```
 
-You can configure to run the server in a different machine by setting the `ip` parameter in the `conf/connection/localhost.yaml` file.
+For real-time control, lower the kernel scheduler latency or run Solarian with `chrt`/`nice`. See the [Modules](/docs/modules) page for guidance on per-module rates.
 
-### Running robot
+### On the robot itself
 
-Within your project directory, run the following command:
+Robot-side installs typically only need the base package (no AI, no simulation):
 
 ```bash
-solarian run-robot
+pip install solarian
 ```
 
-### Running controller
+Then run `solarian run-robot` from the project directory. You do **not** need a GUI on the robot — Solarian's robot loop is headless.
 
-Within your project directory, run the following command:
+## Verify the installation
 
 ```bash
-solarian run-controller
+python -c "import solarian; print(solarian.__name__, 'OK')"
+solarian --help
 ```
 
+You should see the Solarian CLI help with grouped command categories (Project, Robot, Controller, Recording & Replay, Training & Data, Utilities).
 
+## Next steps
 
-
-
-This guide will get you all set up and ready to use the Solariancol API. We'll cover how to get started using one of our API clients and how to make your first API request. We'll also look at where to go next to find all the information you need to take full advantage of our powerful REST API. {{ className: 'lead' }}
-
-<Note>
-  Before you can make requests to the Solariancol API, you will need to grab your
-  API key from your dashboard. You find it under [Settings &raquo; API](#).
-</Note>
-
-## Choose your client
-
-Before making your first API request, you need to pick which API client you will use. In addition to good ol' cURL HTTP requests, Solariancol offers clients for JavaScript, Python, and PHP. In the following example, you can see how to install each client.
-
-<CodeGroup>
-
-```bash {{ title: 'cURL' }}
-# cURL is most likely already installed on your machine
-curl --version
-```
-
-```bash {{ language: 'js' }}
-# Install the Solariancol JavaScript SDK
-npm install @example/protocol-api --save
-```
-
-```bash {{ language: 'python' }}
-# Install the Solariancol Python SDK
-pip install protocol_api
-```
-
-```bash {{ language: 'php' }}
-# Install the Solariancol PHP SDK
-composer require protocol/sdk
-```
-
-</CodeGroup>
-
-<div className="not-prose">
-  <Button href="/sdks" variant="text" arrow="right">
-    <>Check out our list of first-party SDKs</>
-  </Button>
-</div>
-
-## Making your first API request
-
-After picking your preferred client, you are ready to make your first call to the Solariancol API. Below, you can see how to send a GET request to the Conversations endpoint to get a list of all your conversations. In the cURL example, results are limited to ten conversations, the default page length for each client.
-
-<CodeGroup tag="GET" label="/v1/conversations">
-
-```bash {{ title: 'cURL' }}
-curl -G https://api.protocol.chat/v1/conversations \
-  -H "Authorization: Bearer {token}" \
-  -d limit=10
-```
-
-```js
-import ApiClient from '@example/protocol-api'
-
-const client = new ApiClient(token)
-
-await client.conversations.list()
-```
-
-```python
-from protocol_api import ApiClient
-
-client = ApiClient(token)
-
-client.conversations.list()
-```
-
-```php
-$client = new \Solariancol\ApiClient($token);
-
-$client->conversations->list();
-```
-
-</CodeGroup>
-
-<div className="not-prose">
-  <Button href="/conversations" variant="text" arrow="right">
-    <>Read the docs for the Conversations endpoint</>
-  </Button>
-</div>
-
-## What's next?
-
-Great, you're now set up with an API client and have made your first request to the API. Here are a few links that might be handy as you venture further into the Solariancol API:
-
-- [Grab your API key from the Solariancol dashboard](#)
-- [Check out the Conversations endpoint](/conversations)
-- [Learn about the different error messages in Solariancol](/errors)
+- Scaffold a real project with [`create-solarian`](/docs/creating-a-project).
+- Explore the full [CLI reference](/docs/commands).
+- Read the [Overview](/docs/overview) for the big picture.

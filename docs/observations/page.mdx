@@ -1,16 +1,159 @@
 export const metadata = {
   title: 'Observations',
   description:
-    'Observations are the sensor readings that you can receive from the robot.',
+    'Observation is the typed schema of every sensor reading the robot publishes. It groups per-module ModuleObs subclasses tied to your robot tree, supports server-side computed fields, and is the same object you record, replay, and feed to policies.',
 }
 
 # Observations
 
-Observation encapsulates sensor readings from a robot.
+An **Observation** is the typed snapshot of every sensor reading the robot publishes each frame. Observations flow from the robot through the relay server to every controller, and they are the same Python object you record to disk, replay, and feed to a learned policy. {{ className: 'lead' }}
 
-It stores structured sensor-level readings (e.g., position, speed) across multiple robot modules.
+Defined in [`solarian/core/observation.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/observation.py).
 
-## See Also
+## What is an Observation?
 
-[Action](/actions): Counterpart to Observation, stores actuator commands in the same hierarchical format. Used together in imitation learning loops.
-[Observation](/observations): Observation class.
+An `Observation` is a top-level container of [`ModuleObs`](#moduleobs) instances, one per [Module](/docs/modules) on your robot. Each `ModuleObs` in turn is a container of typed [`Data`](/docs/core) values — the actual sensor readings.
+
+```text
+Observation
+ ├── arm: ArmObs
+ │    ├── shoulder_pan_pos: PosData
+ │    └── shoulder_lift_pos: PosData
+ └── gripper_camera: CameraObs
+      ├── rgb: ImageData
+      └── bbox: BoundingBoxData    (computed on the server)
+```
+
+The class hierarchy is mirrored on disk and on the wire: every `ModuleObs` attribute matches the corresponding module's attribute name on your `Robot`, and every `SensorField` references a specific `Data` descriptor on a sensor.
+
+## ModuleObs
+
+Subclass `ModuleObs` and bind each field to a `Data` reference on your `Robot`:
+
+```python
+from solarian.core.observation import SensorField, ModuleObs
+from myrobot.robot import MyRobot
+
+class ArmObs(ModuleObs):
+    shoulder_pan_pos = SensorField(MyRobot.arm.shoulder_pan.pos)
+    shoulder_lift_pos = SensorField(MyRobot.arm.shoulder_lift.pos)
+    elbow_flex_pos = SensorField(MyRobot.arm.elbow_flex.pos)
+```
+
+`MyRobot.arm.shoulder_pan.pos` is a `PosData` descriptor on the `FeetechServo` actuator. Solarian uses it to extract:
+
+- **Type information** (`dtype`, `shape`) — used to allocate shared-memory buffers and validate runtime values.
+- **Path** (`(module_name, component_name, data_name)`) — used to route the sensor read into the right field on the right module.
+
+## Observation
+
+Subclass `Observation` and attach `ModuleObs` instances. **The attribute name on `Observation` must equal the attribute name on `Robot`** — Solarian validates this at class definition time:
+
+```python
+from solarian.core.observation import Observation
+from myrobot.robot import MyRobot
+
+class MyObservation(Observation):
+    arm = ArmObs()                # MyRobot.arm
+    gripper_camera = CameraObs()  # MyRobot.gripper_camera
+```
+
+If the names disagree, you'll get a `TypeError` at import time:
+
+```text
+MyObservation.arm: SensorField 'shoulder_pan_pos' references module 'arm',
+but the Observation attribute is named 'gripper_camera'. Observation
+attribute names must match the module names declared on the Robot subclass.
+```
+
+This catches schema drift before any of it makes it to the wire.
+
+## Declaring sensor fields
+
+A `SensorField` binds an observation field to a single `Data` point on a sensor. It carries dtype/shape information from that `Data` and is used at runtime to wrap raw values.
+
+```python
+from solarian.core.observation import SensorField
+
+class CameraObs(ModuleObs):
+    rgb = SensorField(MyRobot.gripper_camera.sensor.rgb_image)
+    depth = SensorField(MyRobot.gripper_camera.sensor.depth_image)
+```
+
+You can introspect a `ModuleObs` subclass to discover its fields:
+
+```python
+ArmObs.get_sensor_fields_spec()
+# {'shoulder_pan_pos': SensorField(...), 'shoulder_lift_pos': SensorField(...), ...}
+```
+
+## Calculated fields
+
+Some observation fields aren't direct sensor reads — they're *computed* from other fields. A `CalculatedField` declares the inputs, the processor that produces the output, and *where* the processor runs (`DataComputer.SERVER`, `DataComputer.ROBOT`, or `DataComputer.CONTROLLER`).
+
+```python
+from solarian.core.observation import CalculatedField
+from solarian.core.data import DataComputer, BoundingBoxData
+from myproject.processors import BBoxProcessor
+
+class CameraObs(ModuleObs):
+    rgb = SensorField(MyRobot.gripper_camera.sensor.rgb_image)
+    bbox = CalculatedField(
+        inputs=[MyRobot.gripper_camera.sensor.rgb_image],
+        processor=BBoxProcessor,
+        computer=DataComputer.SERVER,
+        output=BoundingBoxData(),
+        conf="conf/bbox.yaml",
+    )
+```
+
+At startup, the chosen node calls `Observation.create_processors(computer)` to instantiate every processor whose `computer` matches its role. Processors run inline as observations stream through, so by the time the controller sees the message, `obs.gripper_camera.bbox` is already populated.
+
+See [Server](/docs/servers) for the relay-side processor lifecycle.
+
+## Reading an observation
+
+In a controller, the latest observation is always available as `self.last_observation`, protected by `self.observation_lock`:
+
+```python
+class MyController(Controller):
+    def control_step(self) -> MyAction:
+        with self.observation_lock:
+            obs = self.last_observation
+        pan = obs.arm.shoulder_pan_pos.value     # auto-uncompresses if needed
+        bbox = obs.gripper_camera.bbox.value
+        ...
+```
+
+`Data.value` is a property that auto-uncompresses on read — useful when working with `ImageData`, which is JPEG-encoded on the wire and decoded only when you actually access `.value`.
+
+## Building observations from scratch
+
+The easiest way to allocate a zero-initialized observation is `Observation.zeros()`:
+
+```python
+obs = MyObservation.zeros()
+obs.arm.shoulder_pan_pos.value = 0.42
+print(obs.to_dict())
+```
+
+`Observation.zeros()` walks every declared `ModuleObs` and `SensorField`/`CalculatedField`, allocates an empty `Data` of the right type, and returns a fully populated container. Useful in tests, replay, and policy code.
+
+## Compression and serialization
+
+Each `Data` subclass knows how to compress itself for the wire. `ImageData` uses JPEG; the generic `Data` falls back to `zlib + pickle`. The relay-bound code path is roughly:
+
+```text
+robot:        obs.compress()  →  msgpack(obs.to_dict())  →  ZMQ
+controller:   ZMQ  →  msgpack.unpackb()  →  Observation(data)
+              .value access auto-uncompresses lazily
+```
+
+This means the controller pays the JPEG decode only for fields it actually reads.
+
+## See also
+
+- [Actions](/docs/actions) — the counterpart that flows the other way.
+- [Modules](/docs/modules) — where the underlying sensor data lives.
+- [Core](/docs/core) — the <code>Data</code>, <code>SensorField</code>, and <code>CalculatedField</code> reference.
+- [Server](/docs/servers) — running <code>CalculatedField</code>s on the relay.

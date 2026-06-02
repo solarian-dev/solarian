@@ -1,0 +1,171 @@
+export const metadata = {
+  title: 'Creating a Project',
+  description:
+    'Scaffold a Solarian project, attach a hardware module, and run the relay server, robot, and a keyboard controller end-to-end.',
+}
+
+# Creating a Project
+
+This guide walks through creating a brand-new Solarian project, adding a hardware module from a plugin, and running the three nodes — relay server, robot, and controller — for the first time. By the end you'll have a working keyboard teleop session against either a real arm or a simulated module. {{ className: 'lead' }}
+
+## 1. Scaffold a project
+
+`create-solarian` is shipped as a separate entry point so it works before you have a project on disk.
+
+```bash
+create-solarian myrobot
+cd myrobot
+```
+
+The scaffolder produces a project with this layout:
+
+```text
+myrobot/
+├── conf/
+│   ├── config.yaml          # composes defaults
+│   ├── controller.yaml      # `solarian run-controller` config
+│   ├── robot.yaml           # `solarian run-robot` config
+│   ├── server.yaml          # `solarian run-server` config
+│   ├── record.yaml          # `solarian record` config
+│   ├── replay.yaml          # `solarian replay` config
+│   ├── train.yaml           # `solarian train` config
+│   └── connection/
+│       └── localhost.yaml   # ZMQ ports and IPs
+├── myrobot/
+│   ├── __init__.py
+│   ├── settings.py          # ROBOT_CLASS / CONTROLLER_CLASS / SERVER_CLASS
+│   ├── robot.py             # MyrobotRobot(Robot)
+│   ├── controller.py        # MyrobotController(Controller)
+│   ├── server.py            # MyrobotServer(RelayServer)
+│   ├── observation.py       # Observation/ModuleObs schema
+│   ├── action.py            # Action/ModuleAction schema
+│   └── modules/
+│       └── example_module.py
+└── pyproject.toml
+```
+
+The generated [`settings.py`](/docs/settings) wires the project together by class path:
+
+```python
+ROBOT_CLASS = 'myrobot.robot.MyrobotRobot'
+CONTROLLER_CLASS = 'myrobot.controller.MyrobotController'
+SERVER_CLASS = 'myrobot.server.MyrobotServer'
+```
+
+Install your project so the package is importable:
+
+```bash
+pip install -e .
+```
+
+## 2. Add a hardware module
+
+Solarian hardware drivers ship as standalone `solarian-<name>` packages. The `add-module` command installs the plugin and copies its default YAML config into your project's `conf/` directory.
+
+```bash
+solarian add-module ur5 arm
+```
+
+This installs `solarian-ur5` and creates `conf/arm.yaml` from the plugin's bundled defaults. The second argument (`arm`) becomes both the YAML name **and** the attribute name you'll use on your `Robot`. See the [Plug-ins](/docs/plugins) page for a list of available drivers.
+
+Edit `myrobot/robot.py` to attach the module:
+
+```python
+from solarian.core import Robot
+from solarian_ur5.module import UR5ArmModule
+
+class MyrobotRobot(Robot):
+    arm = UR5ArmModule()
+```
+
+The attribute name `arm` matches `conf/arm.yaml` — that's how Solarian routes per-module configuration. See [Project Configs](/docs/project-configs) for details.
+
+## 3. Define an observation and an action schema
+
+Solarian uses Pydantic-typed [`Observation`](/docs/observations) and [`Action`](/docs/actions) classes to describe what flows over the wire. The scaffolder generates a starting point you can edit:
+
+```python
+from solarian.core.observation import SensorField, ModuleObs, Observation
+from myrobot.robot import MyrobotRobot
+
+class ArmObs(ModuleObs):
+    shoulder_pan_pos = SensorField(MyrobotRobot.arm.shoulder_pan.pos)
+
+class MyrobotObservation(Observation):
+    arm = ArmObs()
+```
+
+```python
+from solarian.core.action import ModuleAction, Action, ActuatorField
+from myrobot.robot import MyrobotRobot
+
+class ArmAction(ModuleAction):
+    shoulder_pan = ActuatorField(MyrobotRobot.arm.shoulder_pan.pos)
+
+class MyrobotAction(Action):
+    arm = ArmAction()
+```
+
+## 4. Wire up keyboard teleop in the controller
+
+Override `control_step` and the keyboard hooks on your `Controller` subclass to send actions on key presses. Solarian uses [pynput](https://pynput.readthedocs.io/) under the hood.
+
+```python
+from solarian.core import Controller
+from solarian.core.action import ActionType
+from myrobot.action import MyrobotAction
+
+class MyrobotController(Controller):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.target = MyrobotAction.zeros()
+
+    def on_key_press(self, char: str):
+        if char == 'a':
+            self.target.arm.shoulder_pan.value -= 0.05
+        elif char == 'd':
+            self.target.arm.shoulder_pan.value += 0.05
+
+    def control_step(self) -> MyrobotAction:
+        self.target.action_type = ActionType.MODULE_ACTION
+        return self.target
+```
+
+See [Controllers](/docs/controllers) for the full lifecycle and [Action Types](/docs/action-types) for the enum.
+
+## 5. Run the three nodes
+
+For local development you can run all three nodes on the same machine using the default `conf/connection/localhost.yaml`:
+
+<CodeGroup>
+
+```bash {{ title: 'Terminal 1: relay server' }}
+solarian run-server
+```
+
+```bash {{ title: 'Terminal 2: robot' }}
+solarian run-robot
+```
+
+```bash {{ title: 'Terminal 3: controller' }}
+solarian run-controller
+```
+
+</CodeGroup>
+
+To split nodes across machines, edit `conf/connection/localhost.yaml` (or create another connection profile in `conf/connection/`) with the right IPs and ports, and pick the profile in `conf/robot.yaml`, `conf/controller.yaml`, and `conf/server.yaml` via `defaults:`.
+
+## 6. Confirm everything works
+
+In the controller window, press `a` and `d` to nudge `shoulder_pan`. You should see the corresponding actuator move. The relay server window logs every action and observation it forwards.
+
+<Note>
+  If something doesn't move, double-check that the module attribute name (`arm`) matches the YAML filename (`conf/arm.yaml`) **and** the `Observation`/`Action` attribute names. Solarian validates these at class definition time and will raise a `TypeError` if they disagree.
+</Note>
+
+## Where to go next
+
+- **Add more modules** with `solarian add-module <plugin> <attr>` — see [Plug-ins](/docs/plugins).
+- **Record a dataset** of teleoperated demonstrations: `solarian record`.
+- **Replace the controller** with a learned policy via `solarian run-policy`, or with the [AI Controller](/docs/ai_controller) for VLM-driven control.
+- **Train a policy** with `solarian train`.

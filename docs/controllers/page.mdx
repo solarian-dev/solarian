@@ -1,17 +1,209 @@
 export const metadata = {
   title: 'Controllers',
   description:
-    '',
+    'A Controller decides what the robot should do next. Subclass it to implement keyboard teleop, leader-arm teleop, a learned policy, or anything else that produces an Action from an Observation.',
 }
 
-# Controller
+# Controllers
 
-Controller is a class representing a controller node in a robotic system. It is 
-responsible for receiving sensor data from the server and visualizing it in some 
-way. It also sends actuator commands to the server.
+A **Controller** is the node that *decides* what the robot does. It receives [Observations](/docs/observations) from the relay server, computes the next [Action](/docs/actions), and sends it back. Anything that can produce an action — a teleoperator, a hard-coded script, a learned policy, an LLM-driven planner — is a controller. {{ className: 'lead' }}
 
-## See Also
-- [Server](/server): The server node acts as a bridge between the robot and the controller. It runs on a remote machine and is responsible for receiving actuator commands from the controller and forwarding them to the robot, as well as receiving sensor data from the robot and forwarding it to the controller.
-- [Robot](/robots): The robot node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
-- [Observation](/observations): The observation node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
-- [Action](/actions): The action node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
+Defined in [`solarian/core/controller.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/controller.py). The class is abstract: subclasses must implement `control_step()`.
+
+## Defining a Controller
+
+Subclass `Controller` and implement `control_step()`:
+
+```python
+from solarian.core import Controller
+from solarian.core.action import ActionType
+from myrobot.action import MyAction
+
+class MyController(Controller):
+    def control_step(self) -> MyAction:
+        action = MyAction.zeros()
+        action.action_type = ActionType.MODULE_ACTION
+        # ... fill in action.arm.shoulder_pan.value, etc. ...
+        return action
+```
+
+The framework calls `control_step()` at `cfg.fps` Hz. Whatever it returns is serialized and pushed to the relay server.
+
+The latest observation is always available as `self.last_observation`, protected by `self.observation_lock` (Solarian's state-receiver thread overwrites it as new observations arrive).
+
+```python
+class MyController(Controller):
+    def control_step(self) -> MyAction:
+        with self.observation_lock:
+            obs = self.last_observation
+        action = MyAction.zeros()
+        action.action_type = ActionType.MODULE_ACTION
+        action.arm.shoulder_pan.value = obs.arm.shoulder_pan_pos.value + 0.01
+        return action
+```
+
+## Registering your Controller class
+
+Set `CONTROLLER_CLASS` in your project's [`settings.py`](/docs/settings):
+
+```python
+CONTROLLER_CLASS = 'myrobot.controller.MyController'
+```
+
+`solarian run-controller` reads this, imports the class, and instantiates it with the `ControllerConfig` parsed from `conf/controller.yaml`.
+
+## Configuration
+
+Default `conf/controller.yaml`:
+
+```yaml
+defaults:
+  - connection: localhost
+  - _self_
+
+fps: 30
+tps: 1
+system2_model: ""
+system2_base_url: ""
+system2_api_key: ""
+system2_prompt: Be a smart and helpful robot assistant.
+policy_path: ""
+device: cpu
+modules: {}
+```
+
+Mapped to [`ControllerConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py):
+
+<Properties>
+  <Property name="fps" type="int">
+    Rate at which <code>control_step()</code> runs (System 1 / control loop).
+  </Property>
+  <Property name="tps" type="int">
+    Rate at which the AI Controller's <code>ThinkProcess</code> runs (System 2). Ignored by plain controllers.
+  </Property>
+  <Property name="headless" type="bool">
+    If <code>True</code>, skip the OpenCV display loop and run the controller from a stdin loop instead.
+  </Property>
+  <Property name="connection" type="ConnectionConfig">
+    ZMQ ports and IPs.
+  </Property>
+  <Property name="modules" type="dict[str, ModuleConfig]">
+    Per-module configuration for any modules attached to the controller (e.g. leader arms used for teleop).
+  </Property>
+  <Property name="policy_path" type="str">
+    Path to a policy checkpoint (used by <code>solarian run-policy</code> and the AI Controller).
+  </Property>
+  <Property name="device" type="str">
+    Torch device (<code>cpu</code>, <code>cuda</code>, <code>mps</code>) for any policy / model the controller loads.
+  </Property>
+</Properties>
+
+## Lifecycle
+
+When `solarian run-controller` runs, the framework calls:
+
+```text
+Controller(cfg)            # __init__ — opens ZMQ sockets, builds shared memory
+   │
+   ├── connect()           # connect any controller-side modules (leader arms, etc.)
+   ├── initialize()        # one-time setup hook
+   └── start()             # spawn _state_receiver thread, control_loop thread,
+                           # optional pynput keyboard listener, then on_start(),
+                           # then display_loop() (or _headless_loop in headless mode)
+```
+
+The control loop is split into:
+
+- **`_state_receiver`** (thread) — pulls every incoming `Observation` off the SUB socket and updates `self.last_observation` under a lock.
+- **`control_loop`** (thread) — calls `control_step()` at `cfg.fps`, serializes the returned `Action`, and pushes it to the relay server.
+- **`display_loop`** (main thread) — opens an OpenCV window per camera and renders the most recent observation. In `headless` mode this is replaced by a stdin loop.
+
+## Keyboard input
+
+Solarian uses [pynput](https://pynput.readthedocs.io/) to capture global keyboard events as long as the controller process is in the foreground. Override these two hooks:
+
+```python
+class MyController(Controller):
+    def on_key_press(self, char: str):
+        """Called once when *char* transitions from released to pressed."""
+        ...
+
+    def on_key_release(self, char: str):
+        """Called once when *char* transitions from pressed to released."""
+        ...
+```
+
+Both hooks fire **once per physical key transition**. OS-level auto-repeat (when you hold a key down) does *not* trigger `on_key_press` again — Solarian tracks held keys in an internal set (`_keyboard_held`) and suppresses repeats.
+
+A typical teleop pattern:
+
+```python
+class MyController(Controller):
+    STEP = 0.05
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.target = MyAction.zeros()
+
+    def on_key_press(self, char: str):
+        if char == 'a':
+            self.target.arm.shoulder_pan.value -= self.STEP
+        elif char == 'd':
+            self.target.arm.shoulder_pan.value += self.STEP
+        elif char == 'q':
+            self.events["exit_early"] = True
+
+    def control_step(self) -> MyAction:
+        self.target.action_type = ActionType.MODULE_ACTION
+        return self.target
+```
+
+<Note>
+  If <code>pynput</code> isn't available (rare — it's pulled in by Solarian's base install), the keyboard hooks silently no-op and the controller still works for non-keyboard inputs.
+</Note>
+
+## Controller-side modules
+
+A `Controller` can also attach `Module` instances as class attributes. This is how leader-arm teleoperation works: the *controller* hardware (a small follower arm you wave around) is itself a Solarian module that streams positions, which the controller then turns into actions for the *real* robot.
+
+```python
+class TeleopController(Controller):
+    leader = LeaderArmModule()      # controller-side module
+
+    def control_step(self) -> MyAction:
+        leader_pos = self.leader.read_positions()
+        action = MyAction.zeros()
+        action.action_type = ActionType.MODULE_ACTION
+        for name, value in zip(action.arm.values(), leader_pos):
+            value.value = float(value)
+        return action
+```
+
+Controller-side modules read their config from `cfg.modules[name]` (i.e. inline under `controller.yaml` rather than from a top-level `conf/<name>.yaml`).
+
+## Lifecycle hooks you can override
+
+<Properties>
+  <Property name="initialize()">
+    Runs once after <code>connect()</code>. Use for one-time setup that needs a live observation stream (homing, baseline reads, etc.).
+  </Property>
+  <Property name="on_start()">
+    Runs after the receiver and control threads have started but before the display loop. The <code>AIController</code> uses this to start its <code>ThinkProcess</code>.
+  </Property>
+  <Property name="on_key_press(char)">
+    Single-fire keyboard-down hook.
+  </Property>
+  <Property name="on_key_release(char)">
+    Single-fire keyboard-up hook.
+  </Property>
+  <Property name="control_step()">
+    <strong>Required.</strong> Compute and return the next <code>Action</code>.
+  </Property>
+</Properties>
+
+## See also
+
+- [Server](/docs/servers) — what sits between your controller and the robot.
+- [Robots](/docs/robots) — what receives your actions on the other side.
+- [Actions](/docs/actions) — the schema you return from <code>control_step()</code>.
+- [AI Controller](/docs/ai_controller) — the dual-process VLM-driven controller built on top of <code>Controller</code>.

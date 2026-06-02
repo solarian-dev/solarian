@@ -1,23 +1,172 @@
 export const metadata = {
-  title: 'Servers',
+  title: 'Server',
   description:
-    'Server is a node that runs on a remote machine and is responsible for receiving actuator commands from the controller and forwarding them to the robot, as well as receiving sensor data from the robot and forwarding it to the controller.',
+    'The RelayServer is the middle node in Solarian. It forwards actions from controllers to robots and observations back, and can run server-side observation processors.',
 }
 
-# Servers
+# Server
 
-Server is a node that runs on a remote machine (typically a cloud server) and acts
-as a relay between the robot and the controller. It is responsible for receiving 
-actuator commands from the controller and forwarding them to the robot, as well as 
-receiving sensor data from the robot and forwarding it to the controller.
+The **RelayServer** is the middle node in Solarian's three-node architecture. It runs anywhere reachable from both ends and is responsible for: {{ className: 'lead' }}
 
-A server will typically run preprocessing and postprocessing logic on the sensor 
-data before sending it to the controller and on the actuator commands before sending 
-them to the robot. An example would be to convert the sensor data to a standardized 
-format or to apply some filtering, smoothing, object detection, depth estimation, etc.
+- Receiving [Actions](/docs/actions) from controllers and forwarding them to the robot.
+- Receiving [Observations](/docs/observations) from the robot and forwarding them to all subscribed controllers.
+- Optionally running **server-side observation processors** — `CalculatedField`s with `computer=DataComputer.SERVER` (e.g. tracking, depth estimation) that augment observations *before* they reach the controller.
+- Handling lightweight side-channel events from controllers, like click points and stop-tracking signals.
 
-## See Also
-- [Controller](/controllers): The controller node runs on the robot and is responsible for managing the robot's actuators and sensors.
-- [Robot](/robots): The robot node runs on the robot and is responsible for managing the robot's actuators and sensors.
-- [Actuator](/actuators): Actuator is a base class for hardware output components in robotic systems. It defines a standardized interface for sending control signals to physical devices like motors or servos.
-- [Sensor](/sensors): Sensor is a base class for hardware input components in robotic systems. It defines a standardized interface for reading sensor data from physical devices like cameras or lidars.
+Defined in [`solarian/core/server.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/server.py).
+
+## Why a relay?
+
+Decoupling the controller from the robot lets you:
+
+- Run them on different networks or machines without each side having to know the other's address.
+- Drop, swap, or add controllers (teleop, policy, recorder) without touching the robot loop.
+- Compute expensive observation enrichments (vision models, tracking) on a beefier machine than the robot itself.
+- Provide a single, stable bind address that all participants connect to.
+
+## Defining a Server
+
+The framework provides `RelayServer`. Most projects subclass it and leave it empty:
+
+```python
+from solarian.core import RelayServer
+
+class MyServer(RelayServer):
+    pass
+```
+
+Override methods only when you need to add custom behavior on top of the relay (custom event handling, logging, metrics).
+
+## Registering your Server class
+
+Set `SERVER_CLASS` in your project's [`settings.py`](/docs/settings):
+
+```python
+SERVER_CLASS = 'myrobot.server.MyServer'
+```
+
+`solarian run-server` reads this, imports the class, and instantiates it with the parsed `ServerConfig` from `conf/server.yaml`.
+
+## ZMQ topology
+
+The relay opens four ZeroMQ sockets and binds all of them. The robot and the controllers *connect* to the relay — never to each other.
+
+```text
+Controller (PUSH)  ──────►  action_receiver_port  ┐
+                                                  │
+                                              RelayServer  ──►  action_sender_port  (PUSH) ─► Robot (PULL)
+                                                  │
+Controller (SUB) ◄──────  state_sender_port    ◄──┘
+                                                                                     ▲
+                                              RelayServer ◄── state_receiver_port  ◄─┘  Robot (PUB)
+```
+
+The relay binds to `tcp://*:<port>` on all four ports. The robot and controllers each connect to `tcp://<server_ip>:<port>` using their respective port from the `ConnectionConfig`.
+
+<Properties>
+  <Property name="action_receiver_port" type="int">
+    Port the controller pushes actions to. The relay binds a <code>PULL</code> socket here.
+  </Property>
+  <Property name="action_sender_port" type="int">
+    Port the robot pulls actions from. The relay binds a <code>PUSH</code> socket here.
+  </Property>
+  <Property name="state_receiver_port" type="int">
+    Port the robot publishes observations to. The relay binds a <code>SUB</code> socket here.
+  </Property>
+  <Property name="state_sender_port" type="int">
+    Port controllers subscribe to for observations. The relay binds a <code>PUB</code> socket here.
+  </Property>
+</Properties>
+
+All four sockets use `ZMQ_CONFLATE=1`, which keeps only the most recent message in the queue. Robot control prefers freshness over backlog: if a controller pauses for a tick, the next observation it receives is the latest one, not a stale one.
+
+## Configuration
+
+Default `conf/server.yaml`:
+
+```yaml
+defaults:
+  - connection: localhost
+  - _self_
+
+img_compression_quality: 70
+```
+
+The composed `connection` group lives at `conf/connection/localhost.yaml`:
+
+```yaml
+connection_id: connection_1
+ip: 127.0.0.1
+action_sender_port: 5555
+action_receiver_port: 5556
+state_sender_port: 5557
+state_receiver_port: 5558
+```
+
+For a multi-machine setup, create another connection profile (e.g. `conf/connection/lab.yaml`) with the relay machine's IP, and reference it from each role's YAML:
+
+```yaml
+# conf/robot.yaml on the robot
+defaults:
+  - connection: lab
+  - _self_
+
+# conf/controller.yaml on the laptop
+defaults:
+  - connection: lab
+  - _self_
+
+# conf/server.yaml on the relay machine
+defaults:
+  - connection: lab
+  - _self_
+```
+
+All three nodes need to agree on the same four port numbers and the same relay IP.
+
+## Server-side observation processors
+
+[`CalculatedField`](/docs/observations) declarations on your `Observation`/`ModuleObs` schema can specify *where* they run via `computer=DataComputer.SERVER`. When the relay starts, it instantiates one processor per such field via `Observation.create_processors(DataComputer.SERVER)` and runs them in the state-relay loop:
+
+```python
+from solarian.core.observation import CalculatedField, ModuleObs
+from solarian.core.data import DataComputer, BoundingBoxData
+
+class CameraObs(ModuleObs):
+    rgb = SensorField(MyRobot.cam.sensor.rgb_image)
+    bbox = CalculatedField(
+        inputs=[MyRobot.cam.sensor.rgb_image],
+        processor=BBoxProcessor,
+        computer=DataComputer.SERVER,    # runs on the relay, not the robot
+        output=BoundingBoxData(),
+        conf="conf/bbox.yaml",
+    )
+```
+
+The processor receives every incoming observation, computes its output, and the relay merges the result back into the message before it goes out to controllers. This is how Solarian keeps heavy CV workloads off the robot while still exposing them as first-class observation fields.
+
+## Side-channel events
+
+Controllers can also send lightweight non-action messages through the action socket. The relay recognizes two of them and dispatches `on_event(...)` calls to every server-side processor:
+
+- `click` — used by tracking processors to seed a track from a UI click. The relay also stamps the next outgoing observation with a matching `click_ack`.
+- `stop_tracking` — tells trackers to release.
+
+You generally don't interact with these directly; they're used by the controller's display loop and bounding-box overlays.
+
+## Running the server
+
+From the project directory on whichever machine you've designated as the relay:
+
+```bash
+solarian run-server
+```
+
+The relay binds the four ports and starts the action-relay and state-relay threads. Logs print one line per forwarded message at debug level.
+
+## See also
+
+- [Robots](/docs/robots) — the node connecting to the action-sender and state-receiver ports.
+- [Controllers](/docs/controllers) — the node connecting to the action-receiver and state-sender ports.
+- [Observations](/docs/observations) — including <code>CalculatedField</code> with <code>DataComputer.SERVER</code>.
+- [Project Configs](/docs/project-configs) — how connection profiles are composed via Hydra defaults.

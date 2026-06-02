@@ -1,207 +1,229 @@
 export const metadata = {
-  title: 'Controllers',
+  title: 'AI Controller',
   description:
-    '',
+    'AIController is a dual-process controller that pairs a slow VLM-driven planner (System 2 / ThinkProcess) with fast reactive Skills (System 1) — all behind the same Controller contract.',
 }
 
 # AI Controller
 
-The AIController extends the base Controller class and implements a dual-process cognitive architecture:
+`AIController` is a `Controller` subclass that adds a **dual-process cognitive architecture** on top of the standard control loop. A slow vision-language model running in its own process decides which [Skills](/docs/skills) to start or stop; the fast control loop merges actions emitted by those skills and forwards them to the robot. {{ className: 'lead' }}
 
-Key Components:
-Component	Rate	Role
-Controller	Base class	Handles ZMQ communication, threading, display
-AIController	-	Orchestrates System1 and System2
-System1	~30 Hz (FPS)	Fast reactions, skill execution
-System2	~1 Hz (TPS)	Slow reasoning via VLM
+Defined in [`solarian/core/ai/ai_controller.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/ai_controller.py).
 
-Data Flow:
-1. Robot → Controller: Observation via ZMQ
-2. Controller → System1: control_step(observation)
-3. System1 ↔ System2: Events sent via attend(), actions received via get_actions()
-4. System1 → Controller: LowLevelAction returned
-4. Controller → Robot: Action sent via ZMQ
+## Why two processes?
 
-Key Design Decisions:
-- System2 runs in a daemon thread started in connect() - always thinking in background
-- System1 is synchronous with the control loop - reacts at frame rate
-- Communication is asynchronous: System1 notifies System2 of events, System2 queues actions when ready
-- Skills bridge high-level to low-level: HighLevelAction contains a Skill that executes to produce LowLevelAction
+A single control loop can't be both:
 
+- **Fast enough for control** (30–500 Hz, predictable jitter, no I/O surprises), and
+- **Smart enough for planning** (LLM/VLM calls take seconds, return JSON, may fail).
 
+Solarian splits the responsibility:
 
+- **System 1 — fast loop.** Reactive `Skill`s push the next `Action` into a shared-memory queue. The controller's `control_step` drains the queue every tick and forwards a single deep-merged action to the robot.
+- **System 2 — `ThinkProcess`.** Runs in its own OS process at `cfg.tps` Hz (typically 1 Hz). Reads the latest observation + a user message, calls a VLM, and decides which skills to start or stop.
 
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                    AI CONTROLLER ARCHITECTURE                                    │
-│                              Dual-Process Cognitive Control System                               │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+```text
+┌──────────────────────  Main process  ──────────────────────┐
+│                                                             │
+│  Controller                                                 │
+│   ├── _state_receiver thread → observation_buffers (shm)    │
+│   ├── control_loop thread    → control_step → _send_action  │
+│   └── display_loop (main)                                   │
+│                                                             │
+│  AIController                                               │
+│   ├── action_queue       (shm)  ← skills push actions       │
+│   ├── skill_status_buffer(shm)  ← skills push status        │
+│   └── user_msg_queue     (shm)  ← user types commands       │
+└────────────────────────────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────  ThinkProcess (separate process, ~tps Hz)  ──┐
+│  1. Drain skill_status_buffer  → status history            │
+│  2. Drain user_msg_queue       → latest command            │
+│  3. Read latest observation    → image + proprio           │
+│  4. decide(image, user_msg, status) via VLM                │
+│  5. Launch / stop Skill processes (or push robot Actions)  │
+└────────────────────────────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────  Skill processes (per-skill frequency)  ──────────┐
+│  - Read observations from shared buffers                   │
+│  - Compute actions (diffusion policy, MP, scripted, …)     │
+│  - put_action()      → controller's action_queue           │
+│  - put_skill_status()→ skill_status_buffer                 │
+└────────────────────────────────────────────────────────────┘
+```
 
-                                    ┌───────────────────────┐
-                                    │       Robot           │
-                                    │  (Server/Hardware)    │
-                                    └───────────┬───────────┘
-                                                │
-                                    ┌───────────▼───────────┐
-                                    │      ZMQ Sockets      │
-                                    │  state_socket (SUB)   │
-                                    │  action_socket (PUSH) │
-                                    └───────────┬───────────┘
-                                                │
-┌───────────────────────────────────────────────▼───────────────────────────────────────────────┐
-│                                      CONTROLLER (Base)                                         │
-│                                                                                                │
-│  ┌─────────────────────────────────────────────────────────────────────────────────────────┐  │
-│  │  Threading Architecture:                                                                 │  │
-│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐                          │  │
-│  │  │ State Receiver  │  │  Control Loop   │  │  Display Loop   │                          │  │
-│  │  │    (Thread)     │  │    (Thread)     │  │  (Main Thread)  │                          │  │
-│  │  │  _state_recv()  │  │  control_loop() │  │  display_loop() │                          │  │
-│  │  └────────┬────────┘  └────────┬────────┘  └─────────────────┘                          │  │
-│  │           │                    │                                                         │  │
-│  │           ▼                    │                                                         │  │
-│  │    ┌─────────────┐             │                                                         │  │
-│  │    │ Observation │─────────────┼──────────────────────────────┐                         │  │
-│  │    │   (locked)  │             │                              │                         │  │
-│  │    └─────────────┘             ▼                              ▼                         │  │
-│  │                    ┌───────────────────────┐       ┌────────────────────┐               │  │
-│  │                    │   control_step()      │       │    send_action()   │               │  │
-│  │                    │     @abstractmethod   │──────▶│                    │               │  │
-│  │                    └───────────────────────┘       └────────────────────┘               │  │
-│  └─────────────────────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                                │
-│  Key Methods: connect(), start(), initialize(), disconnect()                                   │
-│  Components: modules, component_bus, calibration                                               │
-└───────────────────────────────────────────────────────────────────────────────────────────────┘
-                                                │
-                                    ┌───────────▼───────────┐
-                                    │     AICONTROLLER      │
-                                    │   (extends Controller)│
-                                    └───────────┬───────────┘
-                                                │
-          ┌─────────────────────────────────────┼─────────────────────────────────────┐
-          │                                     │                                     │
-          ▼                                     │                                     ▼
-┌──────────────────────────────────────┐        │        ┌──────────────────────────────────────┐
-│          SYSTEM 1 (Fast)             │        │        │          SYSTEM 2 (Slow)             │
-│     "Reactive / Intuitive"           │        │        │     "Deliberative / Reasoning"       │
-│                                      │        │        │                                      │
-│  ┌────────────────────────────────┐  │        │        │  ┌────────────────────────────────┐  │
-│  │ Runs at: FPS rate (~30 Hz)    │  │        │        │  │ Runs at: TPS rate (~1 Hz)      │  │
-│  │ Triggered by: control_step()  │  │        │        │  │ Triggered by: threading.Thread │  │
-│  └────────────────────────────────┘  │        │        │  │              (daemon)          │  │
-│                                      │◀───────┴───────▶│  └────────────────────────────────┘  │
-│  ┌────────────────────────────────┐  │  references     │                                      │
-│  │         react(obs)             │  │                 │  ┌────────────────────────────────┐  │
-│  │              │                 │  │                 │  │          think()               │  │
-│  │              ▼                 │  │                 │  │    Continuous loop:            │  │
-│  │   ┌─────────────────────┐     │  │   attend()      │  │              │                 │  │
-│  │   │   feel(obs)         │─────│──│────────────────▶│  │              ▼                 │  │
-│  │   │ Detect Events       │     │  │   (events,obs)  │  │   ┌─────────────────────┐     │  │
-│  │   └─────────────────────┘     │  │                 │  │   │   call_model()      │     │  │
-│  │              │                │  │                 │  │   │   (VLM inference)   │     │  │
-│  │              ▼                │  │                 │  │   └──────────┬──────────┘     │  │
-│  │   ┌─────────────────────┐     │  │   get_actions() │  │              │                │  │
-│  │   │   get_actions()     │◀────│──│────────────────◀│  │              ▼                │  │
-│  │   │   from System2      │     │  │  HighLevelAction│  │   ┌─────────────────────┐     │  │
-│  │   └─────────────────────┘     │  │                 │  │   │get_action_from_     │     │  │
-│  │              │                │  │                 │  │   │    thought()        │     │  │
-│  │              ▼                │  │                 │  │   └──────────┬──────────┘     │  │
-│  │   ┌─────────────────────┐     │  │                 │  │              │                │  │
-│  │   │  active_actions     │     │  │                 │  │              ▼                │  │
-│  │   │  Execute Skills     │     │  │                 │  │   ┌─────────────────────┐     │  │
-│  │   └──────────┬──────────┘     │  │                 │  │   │   queue_action()    │     │  │
-│  │              │                │  │                 │  │   └─────────────────────┘     │  │
-│  │              ▼                │  │                 │  │                               │  │
-│  │   ┌─────────────────────┐     │  │                 │  │  Also: sleep(), dream()       │  │
-│  │   │merge_low_level_     │     │  │                 │  │  (future capabilities)        │  │
-│  │   │    actions()        │     │  │                 │  │                               │  │
-│  │   └──────────┬──────────┘     │  │                 │  └────────────────────────────────┘  │
-│  │              │                │  │                 │                                      │
-│  └──────────────│────────────────┘  │                 │                                      │
-│                 │                    │                 │                                      │
-│                 ▼                    │                 │                                      │
-│         LowLevelAction               │                 │                                      │
-│                                      │                 │                                      │
-└──────────────────────────────────────┘                 └──────────────────────────────────────┘
+## Defining an `AIController`
 
+Subclass `AIController` and attach `Skill` instances as class attributes. The attribute name becomes the canonical skill name used by the VLM.
 
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                      DATA STRUCTURES                                            │
-├─────────────────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                                 │
-│   ┌────────────────────┐        ┌────────────────────┐        ┌────────────────────┐           │
-│   │    Observation     │        │  HighLevelAction   │        │   LowLevelAction   │           │
-│   │    (Pydantic)      │        │    (Pydantic)      │        │                    │           │
-│   ├────────────────────┤        ├────────────────────┤        ├────────────────────┤           │
-│   │ data: Dict         │        │ action_id: str     │        │ (Robot commands)   │           │
-│   │  └─ module_name    │        │ skill: Skill       │        │                    │           │
-│   │      └─ sensor     │        │ params: Dict       │        │                    │           │
-│   │         └─ values  │        └────────────────────┘        └────────────────────┘           │
-│   │ (images, pos, etc) │                  │                                                    │
-│   └────────────────────┘                  │                                                    │
-│                                           ▼                                                    │
-│   ┌────────────────────┐        ┌────────────────────┐        ┌────────────────────┐           │
-│   │       Event        │        │       Skill        │        │      Policy        │           │
-│   ├────────────────────┤        │      (ABC)         │        ├────────────────────┤           │
-│   │ description: str   │        ├────────────────────┤        │ select_action()    │           │
-│   │                    │        │ execute(params)    │        │                    │           │
-│   └────────────────────┘        └─────────┬──────────┘        └────────────────────┘           │
-│                                           │                             ▲                      │
-│                                           ▼                             │                      │
-│                                 ┌────────────────────┐                  │                      │
-│                                 │   PhysicalSkill    │                  │                      │
-│                                 ├────────────────────┤                  │                      │
-│                                 │ policy: Policy     │──────────────────┘                      │
-│                                 │ build_policy()     │                                         │
-│                                 │ build_policy_obs() │                                         │
-│                                 └─────────┬──────────┘                                         │
-│                                           │                                                    │
-│                                           ▼                                                    │
-│                                 ┌────────────────────┐                                         │
-│                                 │  PickObjectSkill   │                                         │
-│                                 │  (concrete impl)   │                                         │
-│                                 └────────────────────┘                                         │
-│                                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+```python
+from solarian.core.ai.ai_controller import AIController
+from solarian.core.ai.system1.skill import SkillRunner
+from myproject.skills import PickSkill, PlaceSkill, MoveArmSkill
+from myproject.action_types import MyActionType
 
+class MyAIController(AIController):
+    pick = PickSkill(runner=SkillRunner.CONTROLLER)
+    place = PlaceSkill(runner=SkillRunner.CONTROLLER)
+    move_arm = MoveArmSkill(
+        runner=SkillRunner.ROBOT,
+        action_type=MyActionType.MOVE_ARM,
+    )
+```
 
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                         EXECUTION FLOW                                          │
-├─────────────────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                                 │
-│   1. AIController.connect()                                                                     │
-│      └─▶ Starts System2.think() in daemon thread (runs at 1 TPS)                               │
-│                                                                                                 │
-│   2. AIController.start()                                                                       │
-│      ├─▶ Starts _state_receiver thread (receives Observations)                                  │
-│      ├─▶ Starts control_loop thread                                                             │
-│      │      └─▶ Calls control_step(observation) at FPS rate                                     │
-│      │            └─▶ system1.react(observation)                                                │
-│      │                  ├─▶ feel(obs) → Events                                                  │
-│      │                  ├─▶ system2.attend(events, obs)  [async notification]                   │
-│      │                  ├─▶ system2.get_actions() → HighLevelActions                            │
-│      │                  ├─▶ Execute active skills                                               │
-│      │                  └─▶ Return merged LowLevelAction                                        │
-│      └─▶ Runs display_loop in main thread                                                       │
-│                                                                                                 │
-│   3. System2 (parallel):                                                                        │
-│      └─▶ think() loop at 1 TPS                                                                  │
-│            ├─▶ Pops from attention_queue                                                        │
-│            ├─▶ call_model(events, obs) → thought (VLM)                                          │
-│            ├─▶ get_action_from_thought() → HighLevelAction                                      │
-│            └─▶ queue_action() → available to System1                                            │
-│                                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+`AIController.__init__` walks the MRO, collects every `Skill` instance, and builds a registry:
 
-Key Insight: This is a dual-process architecture inspired by Kahneman's System 1/System 2 theory:
-  • System 1 (Fast): Reactive, runs at sensor rate (~30Hz), handles immediate responses
-  • System 2 (Slow): Deliberative, runs at ~1Hz, uses VLM for reasoning and planning
+```python
+{
+  "pick":     {"cls": PickSkill,    "runner": SkillRunner.CONTROLLER, "action_type": None},
+  "place":    {"cls": PlaceSkill,   "runner": SkillRunner.CONTROLLER, "action_type": None},
+  "move_arm": {"cls": MoveArmSkill, "runner": SkillRunner.ROBOT,      "action_type": MyActionType.MOVE_ARM},
+}
+```
 
+The think process uses this registry to decide whether to spawn a skill locally (`CONTROLLER`) or to push an `Action` with the declared `action_type` onto the action queue so the robot or server picks it up (`ROBOT`/`SERVER`). See [Skills](/docs/skills).
 
+## Registering with the project
 
+Set `CONTROLLER_CLASS` to your `AIController` subclass and run with `solarian run-controller`:
 
-## See Also
-- [Server](/server): The server node acts as a bridge between the robot and the controller. It runs on a remote machine and is responsible for receiving actuator commands from the controller and forwarding them to the robot, as well as receiving sensor data from the robot and forwarding it to the controller.
-- [Robot](/robots): The robot node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
-- [Observation](/observations): The observation node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
-- [Action](/actions): The action node runs on the robot and is responsible for collecting sensor data and sending it to the server. It also receives actuator commands from the server and executes them on the robot.
+```python
+# myrobot/settings.py
+CONTROLLER_CLASS = 'myrobot.controller.MyAIController'
+```
+
+```bash
+solarian run-controller
+```
+
+## Configuration
+
+`AIController` reuses `ControllerConfig` (`conf/controller.yaml`) and reads a few extra fields from it:
+
+<Properties>
+  <Property name="tps" type="int">
+    Think Process rate in Hz. Typical values are 1–2 Hz.
+  </Property>
+  <Property name="system2_model" type="str">
+    Model name passed to the VLM client (e.g. <code>gpt-4o</code>).
+  </Property>
+  <Property name="system2_base_url" type="str">
+    OpenAI-compatible endpoint URL. Leave empty for the default OpenAI endpoint.
+  </Property>
+  <Property name="system2_api_key" type="str">
+    API key for the VLM endpoint.
+  </Property>
+  <Property name="system2_prompt" type="str">
+    Optional instruction prepended to the system prompt.
+  </Property>
+</Properties>
+
+The full `vlm_config` dict (image preprocessing flags, temperature, debug overlays, action map) lives on `self.vlm_config` — override it in your subclass `__init__` if you need to tune it.
+
+## System prompt and user prompt
+
+Two Jinja2 templates drive the VLM, declared as class attributes on your `AIController` subclass:
+
+```python
+class MyAIController(AIController):
+    system_prompt = """
+    You are a robot skill orchestrator.
+    Available skills:
+    {{ available_skills }}
+
+    Currently active skills:
+    {{ active_skills }}
+
+    Return JSON: { "skills_to_start": [...], "skills_to_stop": [...], "reasoning": "..." }
+    """
+
+    user_prompt = """
+    User command: {{ user_msg }}
+    Previous decision: {{ prev_decide }}
+    Recent statuses: {{ recent_skills_status }}
+
+    Decide which skills to start or stop.
+    """
+```
+
+Both templates have access to:
+
+<Properties>
+  <Property name="user_msg" type="str">
+    The most recent natural-language command from the operator.
+  </Property>
+  <Property name="available_skills" type="str">
+    A formatted list of the registered skills and their docstrings.
+  </Property>
+  <Property name="active_skills" type="str">
+    Skills currently running.
+  </Property>
+  <Property name="prev_decide" type="str">
+    The previous decision (skills started/stopped + reasoning).
+  </Property>
+  <Property name="recent_skills_status" type="str">
+    Recent <code>SkillStatus</code> transitions drained from the shared buffer.
+  </Property>
+  <Property name="module.field" type="value">
+    The latest value of any observation field, e.g. <code>{`{{ arm.shoulder_pan }}`}</code>. Index back in time with <code>[0]</code>, <code>[-1]</code>, …
+  </Property>
+  <Property name="prev_obs.module.field" type="value">
+    The same field at the time of the *previous* <code>decide()</code> call. Guard with <code>{`{% if has_prev_obs %}`}…{`{% endif %}`}</code>.
+  </Property>
+  <Property name="delta_obs.module.field" type="value">
+    The numeric delta between now and the previous <code>decide()</code> call.
+  </Property>
+  <Property name="stagnation_warning" type="str">
+    A short hint emitted when the VLM keeps returning the same decision; useful to nudge it out of a fixed point.
+  </Property>
+</Properties>
+
+### Custom prompt filters
+
+Pipe values through registered Python callables using the `|` syntax:
+
+```python
+class MyAIController(AIController):
+    prompt_filters = {
+        "cm": lambda v: v * 100.0,   # meters → centimeters
+    }
+
+    user_prompt = """
+    Gripper opening: {{ gripper.gripper[0] | cm | fmt('.2f') }} cm
+    """
+```
+
+`fmt(spec)` is built in. Filters compose left to right.
+
+## Lifecycle
+
+```text
+AIController(cfg)         # __init__ — build skill registry, action_queue, ThinkProcess
+   │
+   ├── connect()          # connect controller-side modules
+   ├── initialize()       # one-time setup
+   └── start()
+        ├── _state_receiver thread
+        ├── control_loop thread
+        ├── pynput keyboard listener
+        ├── on_start()    # spawn ThinkProcess
+        └── display_loop  # OpenCV window per camera + interactive prompt
+```
+
+`AIController.control_step` drains every action sitting in `self.action_queue`, deep-merges them into a single `Action`, and returns it. Skills running concurrently can each emit per-module actions; the merge resolves overlaps last-write-wins.
+
+## Sending user commands
+
+Two ways to feed natural-language commands into the think process:
+
+1. **Programmatically** — `controller.send_user_message("pick up the red cup")`. The string lands in `user_msg_queue` and the next `decide()` call sees it as `{{ user_msg }}`.
+2. **Interactively** — press `Enter` in the controller window. The pynput listener captures keystrokes into a buffer (mirrored on the on-screen status board); pressing `Enter` again submits.
+
+## See also
+
+- [Skills](/docs/skills) — the unit of work the AI Controller orchestrates.
+- [Controllers](/docs/controllers) — the base class.
+- [Action Types](/docs/action-types) — used to dispatch robot/server-side skills.
+- [Observations](/docs/observations) — the data the VLM ingests through the prompt templates.

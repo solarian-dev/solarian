@@ -1,52 +1,224 @@
 export const metadata = {
   title: 'Modules',
   description:
-    'Modules are the physical components of a robot module, encapsulating its bodies, joints, actuators and sensors.',
+    'A Module is a self-contained unit of robot hardware (an arm, a gripper, a camera) that runs in its own process at its own rate. It groups actuators and sensors, owns its own control loop, and handles incoming actions.',
 }
 
 # Modules
 
-Modules are the physical components of a robot module, encapsulating its bodies, 
-joints, actuators and sensors.
+A **Module** is a self-contained unit of robot hardware — an arm, a gripper, a camera, a base, a leg — that bundles together every actuator and sensor on the same hardware port and runs in its own OS process at its own configurable rate. {{ className: 'lead' }}
 
-It is instantiated during the initialization of a Robot, using configuration data 
-to dynamically create and store sensor and actuator components based on the provided ModuleConfig.
+Each module is responsible for:
 
-Modules can be reused to create multiple instances of the same module on the same or 
-different robots.
+- Reading its sensors and writing its actuators on a real-time loop.
+- Publishing observations into a shared-memory ring buffer the [`Robot`](/docs/robots) drains at `cfg.fps`.
+- Pulling actions off a shared-memory queue and dispatching them to `@action_handler`-decorated methods.
+- Optional one-time setup (`initialize`), and optional per-tick interpolation (`control_step`).
 
-A typical module would be a robot arm, robot leg, robot base, etc.
+Defined in [`solarian/core/module.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/module.py). `Module` extends `multiprocessing.Process`.
 
+## Declaring a Module
 
-## Creating a Module
-
-To create a module, you need to subclass the Module class and define the actuators and sensors.
+Subclass `Module` and attach `Actuator` / `Sensor` instances as **class attributes**. Each attribute name becomes the canonical identifier for that hardware component.
 
 ```python
 from solarian.core.module import Module
 from solarian_feetech.actuator import FeetechServo
 
-class MyArmModule(Module):
+class ArmModule(Module):
     shoulder_pan = FeetechServo()
     shoulder_lift = FeetechServo()
     elbow_flex = FeetechServo()
     wrist_flex = FeetechServo()
     wrist_roll = FeetechServo()
+    gripper = FeetechServo()
 ```
 
+Then attach the module to your `Robot`:
 
+```python
+from solarian.core import Robot
 
-## See Also
-- [Body](/bodies): Bodies are the physical components of a robot module, 
-encapsulating its actuators and sensors.
-- [Joint](/joints): Joints are the physical connections between two bodies in a 
-robotic system. They define the relative positions and orientations of the two 
-bodies and allow for relative motion between them.
-- [Actuator](/actuators): Actuator is a base class for hardware output components 
-in robotic systems. It defines a standardized interface for sending control signals 
-to physical devices like motors or servos.
-- [Sensor](/sensors): Sensor is a base class for hardware input components in 
-robotic systems. It defines a standardized interface for reading sensor data from 
-physical devices like cameras or lidars.
-- [ModuleConfig](/module-config): ModuleConfig is a configuration class for a robot module, 
-defining the module's bodies, joints, actuators and sensors.
+class MyRobot(Robot):
+    arm = ArmModule()
+```
+
+The attribute name on the robot (`arm`) is used to load `conf/arm.yaml` and to key your `Observation` and `Action` schemas.
+
+<Note>
+  An <code>Actuator</code> that also implements the <code>Sensor</code> interface (a <code>Servo</code>) is registered on both sides — you can read its position back as part of your <code>Observation</code> and command its position as part of your <code>Action</code>.
+</Note>
+
+## Module configuration
+
+Each module gets its own YAML config under `conf/<module_attribute_name>.yaml`. The fields map to [`ModuleConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py):
+
+```yaml
+# conf/arm.yaml
+calibration_file: .cache/calibration/my_arm.json
+actuator_port: /dev/ttyUSB0
+frequency: 200
+actuators:
+  shoulder_pan:
+    id: 1
+    model: sts3215
+    port: ${actuator_port}
+    mode: position
+  shoulder_lift:
+    id: 2
+    model: sts3215
+    port: ${actuator_port}
+    mode: position
+  # ...
+```
+
+<Properties>
+  <Property name="frequency" type="float">
+    Module control loop rate in Hz. Each module ticks independently at this rate.
+  </Property>
+  <Property name="get_max_k" type="int">
+    Max number of observation samples kept in the shared-memory ring buffer (default 128).
+  </Property>
+  <Property name="commands_per_cycle" type="int">
+    Max number of actions drained per control loop iteration.
+  </Property>
+  <Property name="command_queue_size" type="int">
+    Capacity of the shared-memory action queue.
+  </Property>
+  <Property name="actuators" type="dict[str, ActuatorConfig]">
+    Per-actuator configuration keyed by the class attribute name.
+  </Property>
+  <Property name="sensors" type="dict[str, SensorConfig]">
+    Per-sensor configuration keyed by the class attribute name.
+  </Property>
+  <Property name="calibration_file" type="str | None">
+    Path to a calibration JSON file produced by <code>solarian calibrate-module</code>.
+  </Property>
+  <Property name="interpolator_type" type="InterpolatorType">
+    One of <code>joint</code>, <code>scalar</code>, or <code>pose</code>. Selects the trajectory interpolator used by the default <code>SCHEDULE_WAYPOINT</code> handler.
+  </Property>
+</Properties>
+
+To add module-specific config fields, set `config_class` on your subclass:
+
+```python
+from solarian.core.configs import ModuleConfig
+
+class ArmConfig(ModuleConfig):
+    home_position: list[float] = [0.0] * 6
+    max_torque: float = 1.0
+
+class ArmModule(Module):
+    config_class = ArmConfig
+    shoulder_pan = FeetechServo()
+    # ...
+```
+
+Solarian validates `conf/arm.yaml` against `ArmConfig` and exposes it as `self.cfg.home_position`, `self.cfg.max_torque`, etc.
+
+## The `initialize` method
+
+`initialize()` runs **once** in the parent process, after `connect()` and before `start()`. Use it for hardware setup that should happen exactly once (setting torque, choosing an operating mode, homing).
+
+```python
+class ArmModule(Module):
+    shoulder_pan: FeetechServo = FeetechServo()
+    # ...
+
+    def initialize(self):
+        super().initialize()
+        self.disable_torque()
+        self.configure_components({"Operating_Mode": 0})  # position mode
+        self.enable_torque()
+```
+
+The base implementation is a no-op, so calling `super().initialize()` is optional but encouraged.
+
+## The `control_step` method
+
+`control_step()` is called every iteration of the module's run loop, *after* incoming actions are drained and *before* observations are published. This is where you put fast inner-loop logic — interpolation, feed-forward terms, velocity smoothing, anything that has to happen at the module's `frequency`.
+
+```python
+from solarian.core.module import Module
+from solarian.core.action import ActionType, ModuleAction, action_handler
+
+class ArmModule(Module):
+    shoulder_pan = FeetechServo()
+    # ...
+
+    def initialize(self):
+        super().initialize()
+        self.next_position = None
+
+    def control_step(self):
+        if self.next_position is not None:
+            self.write_actuators(self.next_position)
+            self.next_position = None
+```
+
+The base implementation is a no-op — modules that just stream sensor data don't need to override it.
+
+## Action handlers
+
+Actions arrive at a module through its shared-memory `ModuleActionQueue`. The module's run loop drains the queue each tick and dispatches each action to a method registered with `@action_handler`.
+
+```python
+from solarian.core.action import action_handler, ActionType, ModuleAction
+
+class ArmModule(Module):
+    shoulder_pan = FeetechServo()
+    # ...
+
+    @action_handler(ActionType.SCHEDULE_WAYPOINT)
+    def _on_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
+        self.next_position = [field.value for field in action.values()]
+        return True   # return False to stop the module
+```
+
+The decorator stores the action type on the method (`method._handles_action`), and `Module.__init__` walks the class to build a `dict[int, str]` mapping action types to method names.
+
+A handler must return a `bool`:
+
+- `True` to keep the module running.
+- `False` to stop the module's process cleanly.
+
+If an action arrives with no registered handler, the module logs a warning and ignores it.
+
+See [Action Types](/docs/action-types) for the standard types (`STOP`, `MODULE_ACTION`, `SCHEDULE_WAYPOINT`, `RESTART_PUT`) and how to declare your own.
+
+## The run loop
+
+When the parent `Robot` calls `module.start()`, Solarian forks a new OS process and runs `Module.run()`:
+
+```text
+run() in child process
+   │
+   ├── reconnect hardware (the parent's handles are not safe across fork)
+   ├── reset()
+   └── loop forever:
+         drain action_queue   →  _dispatch_action(action, t_now)
+         control_step()
+         update_observations()  (writes to shared-memory ring buffer)
+         precise_wait(1/frequency)
+```
+
+The first successful iteration sets `ready_event`, telling the parent `Robot` that the module is live and the next observation is real.
+
+## Sensor reads and observation publishing
+
+`update_observations()` walks every sensor on the module, reads its current value (through the `ComponentBus` if needed), wraps it in the appropriate [`Data`](/docs/core) subclass, and writes a snapshot into the module's `ObservationRingBuffer`. The robot's `_observation_sender` thread reads the latest snapshot from each module and combines them into a single [`Observation`](/docs/observations) at the configured `fps`.
+
+You don't normally call `update_observations()` yourself — it's called for you at the end of every iteration.
+
+## Multi-port modules
+
+If your module has actuators on more than one port (for example, two daisy-chained Dynamixel buses), Solarian groups them by `actuators[name].port` into `self.actuators_by_port` and creates one `ModuleBus` per port. If two **different modules** share a port, the parent `Robot` automatically starts a `BusServer` and gives each module a `BusClient` proxy — no work on your end.
+
+## See also
+
+- [Robots](/docs/robots) — how modules are attached to a robot and dispatched.
+- [Observations](/docs/observations) — the schema your module publishes into.
+- [Actions](/docs/actions) — the schema your module consumes from.
+- [Action Types](/docs/action-types) — built-in and custom action types.
+- [Core](/docs/core) — `Actuator`, `Sensor`, `Servo`, `ComponentBus`, and `Data` classes.
+- [Plug-ins](/docs/plugins) — how reusable modules are packaged and shared.

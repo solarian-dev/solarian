@@ -1,44 +1,68 @@
-import { Guides } from '@/components/Guides'
-import { Resources } from '@/components/Resources'
 import { HeroPattern } from '@/components/HeroPattern'
 
 export const metadata = {
-  title: 'API Documentation',
+  title: 'Solarian Documentation',
   description:
-    'Learn everything there is to know about the Solariancol API and integrate Solariancol into your product.',
+    'Everything you need to know to install Solarian, create a project, and build robots — from the CLI to the AI Controller.',
 }
-
-export const sections = [
-  { title: 'Getting Started', id: 'getting-started' },
-  { title: 'Guides', id: 'guides' },
-  { title: 'Resources', id: 'resources' },
-]
 
 <HeroPattern />
 
-# Post 1
+# Solarian Documentation
 
-Use the Solariancol API to access contacts, conversations, group messages, and more and seamlessly integrate your product into the workflows of dozens of devoted Solariancol users. {{ className: 'lead' }}
+Welcome to the Solarian docs. Solarian is a Python framework for building robotics applications: a clean **Robot ↔ Server ↔ Controller** architecture, real-time multi-process modules, plug-and-play hardware drivers, and a dual-process AI controller — all configured with Hydra. {{ className: 'lead' }}
 
 <div className="not-prose mt-6 mb-16 flex gap-3">
-  <Button href="/quickstart" arrow="right">
-    <>Quickstart</>
+  <Button href="/docs/overview" arrow="right">
+    <>Read the Overview</>
   </Button>
-  <Button href="/sdks" variant="outline">
-    <>Explore SDKs</>
-  </Button>
-</div>
-
-## Getting started {{ anchor: false }}
-
-To get started, create a new application in your [developer settings](#), then read about how to make requests for the resources you need to access using our HTTP APIs or dedicated client SDKs. When your integration is ready to go live, publish it to our [integrations directory](#) to reach the Solariancol community. {{ className: 'lead' }}
-
-<div className="not-prose">
-  <Button href="/sdks" variant="text" arrow="right">
-    <>Get your API key</>
+  <Button href="/docs/installation" variant="outline">
+    <>Install Solarian</>
   </Button>
 </div>
 
-<Guides />
+## Getting Started {{ anchor: false }}
 
-<Resources />
+The fastest path from zero to a running robot.
+
+<div className="not-prose my-8 grid grid-cols-1 gap-6 sm:grid-cols-3">
+  <a href="/docs/overview" className="group rounded-2xl border border-zinc-900/5 bg-zinc-50 p-6 transition hover:border-emerald-500/30 hover:bg-emerald-50/30 dark:border-white/5 dark:bg-white/2.5 dark:hover:border-emerald-400/30 dark:hover:bg-emerald-400/5">
+    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Overview</h3>
+    <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">What Solarian is, the architecture, and the big-picture features.</p>
+  </a>
+  <a href="/docs/installation" className="group rounded-2xl border border-zinc-900/5 bg-zinc-50 p-6 transition hover:border-emerald-500/30 hover:bg-emerald-50/30 dark:border-white/5 dark:bg-white/2.5 dark:hover:border-emerald-400/30 dark:hover:bg-emerald-400/5">
+    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Installation</h3>
+    <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Install Solarian on Linux, macOS, or directly on your robot.</p>
+  </a>
+  <a href="/docs/creating-a-project" className="group rounded-2xl border border-zinc-900/5 bg-zinc-50 p-6 transition hover:border-emerald-500/30 hover:bg-emerald-50/30 dark:border-white/5 dark:bg-white/2.5 dark:hover:border-emerald-400/30 dark:hover:bg-emerald-400/5">
+    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Creating a Project</h3>
+    <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Scaffold a project, add a hardware module, and run it end-to-end.</p>
+  </a>
+</div>
+
+## Basic Concepts {{ anchor: false }}
+
+Learn the building blocks of every Solarian project.
+
+<div className="not-prose my-8 grid grid-cols-1 gap-x-8 gap-y-4 text-sm sm:grid-cols-2 xl:grid-cols-3">
+  <a href="/docs/commands" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">CLI →</a>
+  <a href="/docs/robots" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Robots →</a>
+  <a href="/docs/modules" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Modules →</a>
+  <a href="/docs/controllers" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Controllers →</a>
+  <a href="/docs/servers" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Server →</a>
+  <a href="/docs/observations" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Observations →</a>
+  <a href="/docs/actions" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Actions →</a>
+  <a href="/docs/action-types" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Action Types →</a>
+  <a href="/docs/settings" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Project Settings →</a>
+  <a href="/docs/ai_controller" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">AI Controller →</a>
+  <a href="/docs/skills" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Skills →</a>
+  <a href="/docs/project-configs" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Project Configs →</a>
+  <a href="/docs/core" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Core (Components / Buses / Data) →</a>
+  <a href="/docs/plugins" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Plug-ins →</a>
+</div>
+
+## Reference {{ anchor: false }}
+
+<div className="not-prose my-8 grid grid-cols-1 gap-x-8 gap-y-4 text-sm sm:grid-cols-2">
+  <a href="/docs/glossary" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Glossary — robotics and Solarian terms →</a>
+</div>

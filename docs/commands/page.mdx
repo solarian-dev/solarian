@@ -1,83 +1,245 @@
 export const metadata = {
-  title: 'Commands',
+  title: 'Command Line Interface',
   description:
-    'Solarian has multiple management commands.',
+    'Reference for every Solarian CLI command — running the robot, controller, and server, recording datasets, training policies, and authoring custom commands.',
 }
 
-# Commands
+# Command Line Interface
 
-Solarian has multiple management commands. The following are the most common ones:
+Solarian ships two console scripts:
 
-- `train`: Trains a model.
-- `detect-device`: Detects devices connected to the computer (port and name).
-- `setup-servo`: Setup servo device.
+- **`solarian`** — the main CLI. Every project workflow (running a node, recording, training, …) goes through this command.
+- **`create-solarian`** — a one-shot project scaffolder. See [Creating a Project](/docs/creating-a-project).
 
+Run `solarian --help` to print the grouped command list.
 
-# Creating a new command
+## Global flags
 
-To create a new command, you need to create a new file in the `solarian/cli/commands` directory.
+Every `solarian` subcommand accepts two top-level flags before the subcommand name:
 
-```python
-from solarian.cli import BaseCommand, CommandRegistry
+<Properties>
+  <Property name="--conf" type="string">
+    Path to the Hydra config directory. Defaults to <code>conf</code>. You can also pass <code>dir/name</code> to override the config name (for example, <code>--conf conf/robot_dev</code>).
+  </Property>
+  <Property name="--settings" type="string">
+    Path to your project's <code>settings.py</code>. Auto-discovered when omitted (looks for <code>{`{package_name}`}/settings.py</code> based on <code>pyproject.toml</code>, then <code>conf/settings.py</code>).
+  </Property>
+</Properties>
 
-@CommandRegistry.register('my-command')
-class MyCommand(BaseCommand):
-    help = 'My command.'
-
-    def handle(self, cfg: DictConfig) -> None:
-        print('Hello, world!')
-```
-
-You can then run it with:
+Hydra-style overrides on the command line (`key=value`) are forwarded to the underlying Hydra `compose()` call, so anything in your YAML can be overridden ad hoc.
 
 ```bash
-python manage.py my-command
+solarian run-robot fps=60 connection.ip=192.168.1.20
 ```
 
-Optionally you can add a config file to the command and specify it with the `--conf` option.
-The default config file name can be specified in the `CommandRegistry.register` decorator.
+## Project commands
 
-```python
-@CommandRegistry.register('my-command', 'my_command')
-class MyCommand(BaseCommand):
-    help = 'My command.'
-
-    def handle(self, cfg: DictConfig) -> None:
-        print('Hello, world!')
-```
-
-Then you will add a config file in the `<project_path>/conf` directory.
-
-For example, if you have a command called `my-command`, you will add a file called `my_command.yaml` in the `<project_path>/conf` directory.
-
-When running a command form a differnt config file or directory, you can specify it with the `--conf` option.
+### `create-project`
 
 ```bash
-python manage.py my-command --conf <conf_path>/<conf_name>
+solarian create-project <project_name> [--force]
 ```
 
-If you want to add validation logic to parse the config file, you can add a config class to the command.
+Scaffolds a new project. Prefer the standalone `create-solarian <name>` script — it's the same code, but works before a Solarian project exists in the current directory.
+
+### `add-module`
+
+```bash
+solarian add-module <plugin_name> <attr_name>
+```
+
+Installs a hardware plugin (`solarian-<plugin_name>`) and copies the plugin's bundled `conf.yaml` to `conf/<attr_name>.yaml`. The `attr_name` must match the attribute you'll use on your `Robot` subclass — see [Project Configs](/docs/project-configs).
+
+```bash
+solarian add-module ur5 arm
+solarian add-module feetech gripper
+```
+
+## Robot commands
+
+These commands run on the robot machine. They import the modules listed under <code>setup_modules=("robot", "observation", "action")</code>.
+
+### `run-robot`
+
+```bash
+solarian run-robot
+```
+
+Loads `conf/robot.yaml`, instantiates your `Robot` subclass, spawns one process per `Module`, and starts the action receiver / observation publisher. See [Robots](/docs/robots).
+
+### `calibrate-module`
+
+```bash
+solarian calibrate-module module_name=<attr>
+```
+
+Runs the calibration routine for a single module on the robot. Used for arms with absolute encoders that need a one-time origin set, cameras that need intrinsics, and similar. The exact behavior is delegated to the module's `calibrate()` implementation.
+
+### `setup-module`
+
+```bash
+solarian setup-module module_name=<attr>
+```
+
+Interactive helper for setting up a hardware module — assigning servo IDs, picking a port, and writing the resulting values into `conf/<attr>.yaml`.
+
+### `write-robot-calibration`
+
+```bash
+solarian write-robot-calibration
+```
+
+Writes the calibration values listed in your YAML into the actuators / sensors themselves (e.g. servo offsets stored on the device EEPROM).
+
+## Controller commands
+
+These run on the controller machine. They import <code>setup_modules=("controller", "observation", "action")</code>.
+
+### `run-controller`
+
+```bash
+solarian run-controller
+```
+
+Loads `conf/controller.yaml`, instantiates your `Controller` (or `AIController`) subclass, and starts the action sender / observation receiver. See [Controllers](/docs/controllers).
+
+### `calibrate-controller`
+
+```bash
+solarian calibrate-controller
+```
+
+Runs controller-side calibration. Used for leader-arm setups where the *controller* hardware also needs zeroing.
+
+### `write-controller-calibration`
+
+```bash
+solarian write-controller-calibration
+```
+
+Writes the calibration values from YAML into the controller hardware.
+
+### `run-policy`
+
+```bash
+solarian run-policy policy_path=/path/to/checkpoint.pt
+```
+
+Loads `conf/controller.yaml` and runs a learned policy as the controller (instead of teleop or the AI controller). The policy class is selected by the `policy_path` field on the controller config.
+
+### `run-server`
+
+```bash
+solarian run-server
+```
+
+Starts a [`RelayServer`](/docs/servers) using `conf/server.yaml`. Run this on the relay machine — typically a small box on the same network as both the robot and the controller.
+
+## Recording & replay commands
+
+### `record`
+
+```bash
+solarian record num_episodes=10 episode_time_s=20
+```
+
+Records teleoperated episodes by simultaneously running the controller and observation receiver, then writes the result to disk in the format declared by `conf/record.yaml` (`repo_id`, `tasks`, video options). Imports robot, observation, action, and controller modules.
+
+### `replay`
+
+```bash
+solarian replay episodes=[0,1,2]
+```
+
+Replays a previously recorded episode by streaming its actions back through the standard action path. Useful for debugging deterministic behavior.
+
+## Training & data commands
+
+### `train`
+
+```bash
+solarian train
+```
+
+Trains a policy from a recorded dataset using the configuration in `conf/train.yaml`. Supports ACT and diffusion policies (`model.type=act` or `model.type=diffusion`) and optional Weights & Biases logging.
+
+### `dataset2lerobot`
+
+```bash
+solarian dataset2lerobot
+```
+
+Converts a Solarian-recorded dataset to the [LeRobot](https://github.com/huggingface/lerobot) on-disk format.
+
+## Utility commands
+
+### `detect-device`
+
+```bash
+solarian detect-device
+```
+
+Lists USB / serial devices currently connected to the host (port path and name). Handy when you need to fill in a `port:` field in a module config.
+
+### `list-cameras`
+
+```bash
+solarian list-cameras
+```
+
+Detects and lists every camera available to the system (V4L2 on Linux, AVFoundation on macOS).
+
+### `shell`
+
+```bash
+solarian shell
+```
+
+Opens an IPython shell with `solarian.conf.settings` already loaded and your project on `sys.path`. Useful for poking at your `Robot`/`Controller` classes without spinning up the full pipeline.
+
+## Authoring a custom command
+
+Add a new file under `solarian/cli/commands/` (or your project's own command package) and register it with `CommandRegistry`:
 
 ```python
+from omegaconf import DictConfig
 from pydantic import BaseModel
+
+from solarian.cli.base import BaseCommand, CommandRegistry
 
 
 class MyCommandConfig(BaseModel):
-    param1: int
-    param2: str
-    param3: float
+    target: str
+    speed: float = 1.0
 
-@CommandRegistry.register('my-command', 'my_command')
+
+@CommandRegistry.register('my-command')
 class MyCommand(BaseCommand):
-    help = 'My command.'
+    help = "Run the my-command demo."
 
     def get_config_class(self):
         return MyCommandConfig
 
     def handle(self, cfg: DictConfig) -> None:
-        print('Hello, world!')
-        print(cfg)
-
+        print(f"Running {cfg.target} at speed {cfg.speed}")
 ```
 
-The config class will be used to parse the config file and validate the values automatically.
+To make the command discoverable without forcing an import on every CLI startup, register it lazily:
+
+```python
+CommandRegistry.register_lazy(
+    "my-command",
+    module_path="myproject.commands.my_command",
+    help="Run the my-command demo.",
+    config_name="my_command",          # picks conf/my_command.yaml
+    setup_modules=("robot",),          # which project modules to auto-import
+)
+```
+
+The command then runs as:
+
+```bash
+solarian my-command target=arm speed=2.0
+```
+
+If `config_name` is set, the command receives a parsed `DictConfig` from `conf/<config_name>.yaml`; otherwise it gets an empty `DictConfig`. If `get_config_class()` returns a Pydantic model, Solarian validates the config and prints friendly errors on failure.

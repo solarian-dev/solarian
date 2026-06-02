@@ -1,25 +1,141 @@
 export const metadata = {
   title: 'Robots',
   description:
-    'Robot is the node that runs on the robot hardware and abstracts all the components',
+    'A Robot is the on-robot node that owns hardware. Subclass it, attach Modules as class attributes, and Solarian handles process spawning, ZMQ messaging, and shared-memory observation buffers.',
 }
 
 # Robots
 
-A robot is the node that runs on the robot hardware and abstracts all the components
-of the robot into a single interface. A robot is composed of multiple modules, each
-containing its own actuators, sensors, bodies and joints.
+A **Robot** is the on-robot node in the Solarian three-node architecture. It runs on the robot itself and is responsible for: {{ className: 'lead' }}
 
-A robot node is in charge of collecting sensor data from the robot and sending it to
-the server. It also receives actuator commands from the server and executes them on the robot.
+- Owning the hardware (every [Module](/docs/modules) is spawned as its own OS process by the robot).
+- Receiving incoming [Actions](/docs/actions) from the relay server.
+- Routing each action to either the right module's action queue or a robot-level [`@action_handler`](/docs/action-types).
+- Publishing the latest [Observation](/docs/observations) back out to the relay server at the configured frame rate.
 
-## See Also
-- [Module](/modules): The module node runs on the robot and is responsible for 
-managing the robot's actuators and sensors.
-- [Actuator](/actuators): Actuator is a base class for hardware output components 
-in robotic systems. It defines a standardized interface for sending control signals 
-to physical devices like motors or servos.
-- [Sensor](/sensors): Sensor is a base class for hardware input components in 
-robotic systems. It defines a standardized interface for reading sensor data from 
-physical devices like cameras or lidars.
-- [Server](/server): The server node acts as a bridge between the robot and the controller. It runs on a remote machine and is responsible for receiving actuator commands from the controller and forwarding them to the robot, as well as receiving sensor data from the robot and forwarding it to the controller.
+Defined in [`solarian/core/robot.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py).
+
+## Defining a Robot
+
+Subclass `Robot` and attach `Module` instances as **class attributes**. The attribute name is the canonical module ID — it's used to look up `conf/<name>.yaml`, to key the `Observation` and `Action` schemas, and to address per-module action queues.
+
+```python
+from solarian.core import Robot
+from solarian_ur5.module import UR5ArmModule
+from solarian_feetech.module import FeetechGripperModule
+
+class MyRobot(Robot):
+    arm = UR5ArmModule()
+    gripper = FeetechGripperModule()
+```
+
+That's it — no `__init__`, no boilerplate. `Robot.__init__` walks `cls.__dict__`, finds every `Module` instance, loads its YAML, instantiates the module, and wires up shared-memory ring buffers.
+
+<Note>
+  `Robot` is a singleton. The first instantiation wins; subsequent calls return the same object. This is what makes it safe to reference `MyRobot.arm.shoulder_pan.pos` from your `Observation` and `Action` schemas at import time.
+</Note>
+
+## Registering your Robot class
+
+Solarian needs to know which `Robot` subclass to instantiate when `solarian run-robot` runs. Set it in your project's [`settings.py`](/docs/settings):
+
+```python
+ROBOT_CLASS = 'myrobot.robot.MyRobot'
+CONTROLLER_CLASS = 'myrobot.controller.MyController'
+SERVER_CLASS = 'myrobot.server.MyServer'
+```
+
+The CLI reads `ROBOT_CLASS`, imports it, and feeds it the parsed `RobotConfig` from `conf/robot.yaml`.
+
+## Configuration
+
+Each robot loads `conf/robot.yaml` (the default config name for `solarian run-robot`):
+
+```yaml
+defaults:
+  - connection: localhost
+  - _self_
+
+img_compression_quality: 70
+fps: 30
+```
+
+The fields map to [`RobotConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py):
+
+<Properties>
+  <Property name="fps" type="int">
+    Rate at which the robot publishes observations to the relay server.
+  </Property>
+  <Property name="img_compression_quality" type="int">
+    JPEG quality (0–100) for any <code>ImageData</code> field that gets compressed before publishing.
+  </Property>
+  <Property name="connection" type="ConnectionConfig">
+    ZMQ ports and IPs — composed from <code>conf/connection/&lt;name&gt;.yaml</code>. See <a href="/docs/servers">Server</a>.
+  </Property>
+</Properties>
+
+Every individual module attached to the robot also reads its own `conf/<attr>.yaml`. So `MyRobot.arm` reads `conf/arm.yaml`, `MyRobot.gripper` reads `conf/gripper.yaml`, etc. See [Modules](/docs/modules) and [Project Configs](/docs/project-configs).
+
+## Lifecycle
+
+When you run `solarian run-robot`, the framework calls these methods in order:
+
+```text
+Robot(cfg)              # __init__ — discovers modules, builds shared memory
+   │
+   ├── connect()        # connect every module to its hardware (in the parent)
+   ├── initialize()     # call module.initialize() on every module
+   └── start()          # disconnect parent-side, spawn module processes,
+                        # start observation sender thread, then control_loop
+```
+
+- **`connect()`** opens hardware buses (USB, serial, sockets, cameras) and runs each module's `connect()`. Calibration is loaded here.
+- **`initialize()`** runs each module's `initialize()` hook. Use this for one-time setup like setting torque, operating mode, or homing.
+- **`start()`** disconnects in the parent process (so each module process can re-open the bus on its own), spawns one OS process per `Module`, starts shared bus servers for any port shared by multiple modules, and finally enters `control_loop()`.
+
+A separate `_observation_sender` thread runs at ~200 Hz, reading the latest observation from each module's shared-memory `ObservationRingBuffer` and publishing it as a single combined message at `cfg.fps`.
+
+## Action routing
+
+The control loop pulls `Action` messages off the ZMQ socket and dispatches them based on `action.action_type`:
+
+```text
+Action received
+   │
+   ├── action_type == MODULE_ACTION → push each ModuleAction onto
+   │                                  module.action_queue (shared memory)
+   │
+   └── otherwise                   → look up @action_handler(action_type)
+                                     on the Robot subclass and call it
+```
+
+You can declare robot-level handlers for custom action types — see [Action Types](/docs/action-types):
+
+```python
+from solarian.core import Robot
+from solarian.core.action import action_handler, ActionType
+
+class MyActionType(ActionType):
+    EMERGENCY_STOP = ActionType.CUSTOM_START + 1
+
+class MyRobot(Robot):
+    arm = ArmModule()
+
+    @action_handler(MyActionType.EMERGENCY_STOP)
+    def _on_emergency_stop(self, action, t_now):
+        for module in self.modules.values():
+            module.action_queue.clear()
+        return False  # return False to stop the control loop
+```
+
+## Multi-module shared ports
+
+If two modules share a hardware port (for example, a serial bus with multiple Dynamixel servos addressed by ID), Solarian automatically starts a `BusServer` in the parent process and gives each module a `BusClient` proxy. From your code's perspective the bus still looks like a normal `ModuleBus` — you don't have to coordinate access yourself.
+
+## See also
+
+- [Modules](/docs/modules) — how to declare per-module behavior.
+- [Server](/docs/servers) — the relay node sitting between robots and controllers.
+- [Controllers](/docs/controllers) — how to send actions and consume observations.
+- [Project Configs](/docs/project-configs) — the conventions that bind YAML files to module attributes.
+- [Action Types](/docs/action-types) — declaring custom routes for non-standard actions.

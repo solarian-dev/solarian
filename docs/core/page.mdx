@@ -1,0 +1,245 @@
+export const metadata = {
+  title: 'Core: Components, Buses, and Data',
+  description:
+    'Components are the leaf-level units of hardware (Actuators, Sensors, Servos). Buses speak the protocol that talks to them. Data classes are the typed values flowing through both. Together they make up the runtime of every Solarian Module.',
+}
+
+# Core: Components, Buses, and Data
+
+Underneath every [Module](/docs/modules) sits a small layer of reusable primitives: **Components** (the leaf-level units of hardware), **Buses** (the protocol-speaking objects that talk to them), and **Data** classes (the typed values flowing through both). This page is a reference for all three. {{ className: 'lead' }}
+
+## Components
+
+A `Component` is the smallest addressable piece of hardware: a single actuator (one motor, one servo) or a single sensor (one camera). Components are declared as **class attributes** on a [Module](/docs/modules); the attribute name becomes the component's identifier.
+
+Defined in [`solarian/core/component.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/component.py).
+
+### Hierarchy
+
+```text
+Component (abstract)
+├── Actuator      — output device (motor, servo)
+├── Sensor        — input device (camera, IMU, force sensor)
+└── Servo         — both: a Sensor + Actuator on the same hardware
+```
+
+### Actuator
+
+An `Actuator` is a write-only component. Its `cfg` is an `ActuatorConfig` (`id`, `port`, `model`, `mode`).
+
+```python
+from solarian.core.actuator import Actuator
+from solarian_ur5.bus import UR5Bus
+
+class UR5JointActuator(Actuator):
+    bus_class = UR5Bus
+    pos = PosData()
+```
+
+`bus_class` tells the framework which `ActuatorBus` knows how to talk to this actuator's hardware. Each `Data` descriptor (`PosData`, `SpeedData`, …) is a writable channel exposed by this actuator.
+
+### Sensor
+
+A `Sensor` is a read-only component. Its `cfg` is a `SensorConfig` (cameras add `width`, `height`, `fps`, `color_mode`, …).
+
+```python
+from solarian.core.sensor import Sensor
+from solarian_camera.bus import CameraBus
+from solarian.core.data import ImageData
+
+class RGBCamera(Sensor):
+    bus_class = CameraBus
+    rgb_image = ImageData(shape=(480, 640, 3))
+```
+
+### Servo
+
+A `Servo` is both an `Actuator` and a `Sensor`. The same hardware (e.g. a Dynamixel motor) accepts position commands and reports back its current position.
+
+```python
+from solarian.core.servo import Servo
+from solarian.core.data import PosData, SpeedData
+from solarian_dynamixel.bus import DynamixelBus
+
+class DynamixelServo(Servo):
+    bus_class = DynamixelBus
+    pos = PosData()
+    speed = SpeedData()
+```
+
+Solarian registers servos on both the actuator and sensor sides of a `Module`, so a single declaration powers both directions.
+
+## Component Buses
+
+A `ComponentBus` knows how to talk to a specific *kind* of hardware on a specific *port*. One bus instance is created per port per module: if you have two Dynamixel servos on `/dev/ttyUSB0`, both share a single `DynamixelBus` instance.
+
+Defined in [`solarian/core/component_bus.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/component_bus.py). Concrete subclasses live in plugin packages (`solarian-ur5`, `solarian-dynamixel`, …).
+
+### Hierarchy
+
+```text
+ComponentBus (abstract)
+├── ActuatorBus  — adds write/calibration/torque control
+├── SensorBus    — adds sensor-specific read paths
+└── (plugin)     — UR5Bus, DynamixelBus, FeetechBus, CameraBus, …
+```
+
+### The bus contract
+
+<Properties>
+  <Property name="connect()">
+    Open the underlying hardware connection (USB serial, TCP socket, V4L2 device, …).
+  </Property>
+  <Property name="disconnect()">
+    Close the connection.
+  </Property>
+  <Property name="read(data_type, names, normalize=True)">
+    Read one <code>Data</code> type for the listed components. Returns <code>{`{name: Data instance}`}</code>.
+  </Property>
+  <Property name="write(values, normalize=True)">
+    Write <code>Data</code> values to writable components.
+  </Property>
+  <Property name="enable_torque(names) / disable_torque(names)">
+    For actuator buses with torque control.
+  </Property>
+  <Property name="configure(params, names)">
+    Write raw hardware-level configuration parameters (servo registers, camera modes).
+  </Property>
+  <Property name="setup_component(name, configs)">
+    Interactive setup hook used by <code>solarian setup-module</code>.
+  </Property>
+  <Property name="read_calibration() / write_calibration(dict)">
+    Round-trip calibration parameters between the bus and a JSON file.
+  </Property>
+</Properties>
+
+### `ModuleBus`
+
+A `Module` doesn't talk to a `ComponentBus` directly — it talks to a `ModuleBus`, which groups one or more `ComponentBus` instances (one per port) and routes calls. This is what lets a single module mix actuators on `/dev/ttyUSB0` with sensors on `/dev/video0`.
+
+If two **different** modules share a port, the `Robot` automatically promotes the bus to a multi-process server: it starts a `BusServer` in the parent and gives each module a `BusClient` proxy that forwards calls over a `multiprocessing.Pipe`. This is invisible to your code — modules keep using the same `ModuleBus` interface.
+
+## Data classes
+
+A `Data` is the typed wrapper around every value that flows through Solarian. Sensor reads return `Data` instances; actuator writes accept them; observations and actions are containers of them.
+
+Defined in [`solarian/core/data.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/data.py). All `Data` subclasses are Pydantic models, so they validate on construction and serialize cleanly.
+
+### Common fields
+
+Every `Data` carries:
+
+<Properties>
+  <Property name="value" type="property">
+    The actual payload. Auto-uncompresses on read if the data is currently compressed.
+  </Property>
+  <Property name="timestamp" type="float">
+    Unix-epoch timestamp recorded when the value was sampled.
+  </Property>
+  <Property name="dtype" type="type">
+    Python type of the payload (<code>float</code>, <code>bool</code>, <code>np.uint8</code>, …).
+  </Property>
+  <Property name="shape" type="tuple | None">
+    For tensor-valued data; <code>None</code> for scalars.
+  </Property>
+  <Property name="path" type="(module, component, field)">
+    Set automatically when used as a class-attribute descriptor on a <code>Component</code>.
+  </Property>
+  <Property name="is_compressed" type="bool">
+    Whether the payload is currently in compressed (bytes) form.
+  </Property>
+</Properties>
+
+### Built-in subclasses
+
+<Properties>
+  <Property name="PosData" type="float">
+    Joint or linear position. Default value 0.0.
+  </Property>
+  <Property name="SpeedData" type="float">
+    Joint or linear velocity.
+  </Property>
+  <Property name="TorqueEnableData" type="bool">
+    Whether torque is enabled on a servo.
+  </Property>
+  <Property name="ImageData" type="np.ndarray">
+    HxWxC uint8 image. Compresses to JPEG on the wire (requires <code>opencv-python</code>).
+  </Property>
+  <Property name="BoundingBoxData" type="(x1, y1, x2, y2)">
+    Axis-aligned bounding box.
+  </Property>
+  <Property name="TimestampData" type="float">
+    Wall-clock timestamp.
+  </Property>
+</Properties>
+
+### Compression
+
+Each `Data` subclass picks a default codec via `_default_codec()`:
+
+- Most subclasses: `zlib + pickle`.
+- `ImageData`: JPEG via OpenCV.
+
+Compression is always *opt-in*: the framework calls `obs.compress()` before sending an observation over the wire, then the consumer's lazy `data.value` access uncompresses on first read. This means downstream consumers only pay the JPEG decode for fields they actually look at.
+
+### Custom `Data` subclasses
+
+Define your own when you need a typed channel that isn't covered by the built-ins:
+
+```python
+from solarian.core.data import Data
+from pydantic import Field
+
+class IMUData(Data):
+    dtype: type = float
+    shape: tuple = (6,)   # (ax, ay, az, gx, gy, gz)
+    payload: list[float] = Field(default_factory=lambda: [0.0]*6, alias="value")
+```
+
+Then attach it to a sensor:
+
+```python
+class IMUSensor(Sensor):
+    bus_class = IMUBus
+    imu = IMUData()
+```
+
+`IMUSensor.imu` becomes the `Data` reference you bind to a `SensorField` in your `ModuleObs`.
+
+### `DataComputer`
+
+Used by [`CalculatedField`](/docs/observations) to choose where a processor runs:
+
+<Properties>
+  <Property name="DataComputer.SERVER" type="0">
+    Run on the relay server (typical for vision models that need a beefy machine).
+  </Property>
+  <Property name="DataComputer.ROBOT" type="1">
+    Run on the robot itself (typical for low-latency processing of high-rate sensor data).
+  </Property>
+  <Property name="DataComputer.CONTROLLER" type="2">
+    Run on the controller (rare; used when the controller has hardware the others don't).
+  </Property>
+</Properties>
+
+## Putting it all together
+
+A typical chain through these layers:
+
+```text
+Module (your subclass)
+  └── Servo (class attribute, e.g. shoulder_pan = DynamixelServo())
+        ├── Data descriptors    (pos = PosData(), speed = SpeedData())
+        └── bus_class           (DynamixelBus)
+              └── ModuleBus      (one per port)
+                   └── BusServer ←→ BusClient   (only when multiple modules share a port)
+```
+
+When the module's run loop ticks, it asks `module_bus.read(PosData, ["shoulder_pan", ...])`, the bus speaks the wire protocol to the hardware, returns a `dict[str, PosData]`, and the module writes those into its `ObservationRingBuffer`. The reverse path runs on `write()`.
+
+## See also
+
+- [Modules](/docs/modules) — where Components are declared.
+- [Plug-ins](/docs/plugins) — how Components and Buses ship as standalone packages.
+- [Observations](/docs/observations) — how <code>Data</code> values are exposed to controllers.
+- [Actions](/docs/actions) — how <code>Data</code> values are sent back to actuators.

@@ -1,0 +1,254 @@
+export const metadata = {
+  title: 'Glossary',
+  description:
+    'A glossary of robotics terms used in Solarian and Solarian-specific concepts.',
+}
+
+# Glossary
+
+A reference for robotics terms you'll see across the docs and the Solarian-specific concepts the framework introduces. Each entry links to the full page when one exists. {{ className: 'lead' }}
+
+## Robotics terms
+
+### Actuator
+
+A hardware component that produces motion or force — a motor, a servo, a linear stage, a gripper. In Solarian, an `Actuator` is a [Component](/docs/core) attached as a class attribute on a [Module](/docs/modules).
+
+### Body
+
+A rigid mechanical link in a robot's structure. In Solarian, "body" is used informally; the framework's primary structural unit is a [Module](/docs/modules) (e.g. an arm, a gripper, a base).
+
+### Bus
+
+The physical or logical channel a host computer uses to talk to one or more hardware devices: a USB serial bus, a CAN bus, a Dynamixel bus, an Ethernet socket. In Solarian, a [`ComponentBus`](/docs/core) is the Python object that wraps this protocol.
+
+### Calibration
+
+The process of mapping raw hardware values (encoder ticks, ADC counts) to physically meaningful units (radians, meters). Solarian stores calibration in JSON files referenced by `ModuleConfig.calibration_file` and provides `solarian calibrate-module` / `write-robot-calibration` to manage them.
+
+### Cartesian space
+
+A frame defined by `(x, y, z, rx, ry, rz)` describing position and orientation of an end effector. Contrast with [joint space](#joint-space). `solarian-ur5` exposes both representations as separate actuators on the same arm.
+
+### Control loop
+
+The repeating sequence of *read sensors → decide action → write actuators*. In Solarian, every [Module](/docs/modules) has its own control loop running at `cfg.frequency`, and every [Controller](/docs/controllers) has a control loop running at `cfg.fps`.
+
+### Degree of freedom (DoF)
+
+An independent axis of motion. A 6-DoF arm can position its end effector in any pose; a 1-DoF gripper can only open or close.
+
+### End effector
+
+The tip of a manipulator — the gripper, the tool, the camera. Cartesian-space targets typically refer to the end-effector pose.
+
+### Frame
+
+A coordinate system attached to a body. Common frames: world frame, base frame, end-effector frame, camera frame. Most actions in Solarian are expressed relative to a known frame declared by the module.
+
+### Frequency / Rate / FPS
+
+How often a loop runs, in Hz. Solarian uses `frequency` for module loops and `fps` for the robot's observation publish rate and the controller's control rate.
+
+### Gripper
+
+A simple end effector with one or two DoFs that grasps objects. Often packaged as its own [Module](/docs/modules) (e.g. `solarian-umi-gripper`).
+
+### Inverse kinematics (IK)
+
+The math that turns a desired end-effector pose into the joint angles needed to achieve it. Cartesian-space actuators in Solarian rely on the underlying driver to compute IK on the robot side.
+
+### Joint
+
+A connection between two bodies that allows constrained relative motion (rotational, prismatic). Each joint is typically driven by a single actuator.
+
+### Joint space
+
+A representation of a robot's configuration as a vector of joint values, one per joint. Contrast with [Cartesian space](#cartesian-space).
+
+### Kinematics
+
+The geometry of motion — how joint values map to end-effector poses (forward kinematics) and back (inverse kinematics).
+
+### Pose
+
+A combined position + orientation, usually `(x, y, z, rx, ry, rz)` or a 4×4 transformation matrix.
+
+### Proprioception
+
+A robot's sense of its own state — joint positions, joint velocities, end-effector pose. Distinct from exteroception (cameras, force sensors).
+
+### Sensor
+
+A hardware component that produces data — a camera, an IMU, a force sensor, an encoder. In Solarian, a `Sensor` is a [Component](/docs/core) attached to a [Module](/docs/modules).
+
+### Servo
+
+A device that combines an actuator and a sensor in one package — a motor that knows its own position. Solarian's [`Servo`](/docs/core) class inherits from both `Actuator` and `Sensor`.
+
+### Teleoperation (teleop)
+
+A controller-driven mode where a human directly drives the robot — via keyboard, joystick, or a "leader" arm — to demonstrate behavior or to manually accomplish a task.
+
+### Trajectory / Waypoint
+
+A trajectory is a time-parameterized path through configuration space; a waypoint is a single point on that path. Solarian's modules support waypoint scheduling via `ActionType.SCHEDULE_WAYPOINT` and a built-in `TrajectoryInterpolator`.
+
+### Vision-Language Model (VLM)
+
+A multimodal model that consumes images and text and returns text. Used by Solarian's [AI Controller](/docs/ai_controller) to decide which skills to start or stop.
+
+## Solarian terms
+
+### Action
+
+The typed schema of a single command sent from the controller to the robot each tick. Contains an `action_type` and either per-module sub-actions or arbitrary `data`. See [Actions](/docs/actions).
+
+### Action handler
+
+A method decorated with `@action_handler(action_type)` on a [Robot](/docs/robots) or [Module](/docs/modules). The framework dispatches incoming actions to the matching handler. See [Action Types](/docs/action-types).
+
+### Action queue
+
+A shared-memory queue per module that the [Robot](/docs/robots) writes incoming actions into, and the module's run loop drains. Implemented as `ModuleActionQueue`.
+
+### Action type
+
+An integer tag on every [Action](/docs/actions) that controls how it's dispatched. Built-ins are `STOP`, `MODULE_ACTION`, `SCHEDULE_WAYPOINT`, `RESTART_PUT`. Custom types live at `>= ActionType.CUSTOM_START`. See [Action Types](/docs/action-types).
+
+### `ActuatorBus`
+
+An [`ComponentBus`](/docs/core) subclass that adds `write()`, `enable_torque()`, `disable_torque()`, and calibration writing. One per hardware port.
+
+### `ActuatorField`
+
+A class-attribute descriptor on a [`ModuleAction`](/docs/actions) that binds an action field to a `Data` reference on a [Robot](/docs/robots) actuator.
+
+### AI Controller
+
+A [Controller](/docs/controllers) subclass that runs a dual-process System 1 / System 2 architecture: fast reactive [Skills](/docs/skills) plus a slow VLM-driven `ThinkProcess`. See [AI Controller](/docs/ai_controller).
+
+### `BusClient` / `BusServer`
+
+When two modules share a hardware port, the [Robot](/docs/robots) starts a `BusServer` in the parent process and gives each module a `BusClient` proxy. From the module's perspective the bus still looks like a normal `ModuleBus`.
+
+### `CalculatedField`
+
+An [Observation](/docs/observations) field whose value is *computed* from other fields by a `Processor`. Declares its `inputs`, `processor`, `output`, and where it runs (`DataComputer.SERVER/ROBOT/CONTROLLER`).
+
+### Component
+
+The smallest addressable unit of hardware: an [Actuator](#actuator), a [Sensor](#sensor), or a [Servo](#servo). Defined in [Core](/docs/core).
+
+### `ComponentBus`
+
+The abstract base for buses. Subclasses: `ActuatorBus`, `SensorBus`, plus per-vendor implementations (`UR5Bus`, `DynamixelBus`, …).
+
+### Controller
+
+The node that decides what the robot does — keyboard teleop, learned policy, AI controller. Subclasses must implement `control_step()`. See [Controllers](/docs/controllers).
+
+### `ControllerConfig`
+
+Pydantic model for `conf/controller.yaml` (`fps`, `tps`, `system2_*`, `policy_path`, `device`, `headless`, `connection`, `modules`).
+
+### `Data`
+
+The Pydantic-typed wrapper around every value flowing through Solarian. Subclasses include `PosData`, `SpeedData`, `ImageData`, `BoundingBoxData`, `TimestampData`. See [Core](/docs/core).
+
+### `DataComputer`
+
+Enum (`SERVER`, `ROBOT`, `CONTROLLER`) used by `CalculatedField` to choose where a processor runs.
+
+### Hydra
+
+The configuration framework Solarian uses to compose YAML. See [Project Configs](/docs/project-configs).
+
+### `ModuleAction`
+
+The per-module schema bound to a [Module](/docs/modules)'s actuators via `ActuatorField` descriptors. See [Actions](/docs/actions).
+
+### `ModuleBus`
+
+Per-module wrapper that groups one or more `ComponentBus` instances (one per hardware port) and routes calls.
+
+### `ModuleObs`
+
+The per-module schema bound to a [Module](/docs/modules)'s sensors via `SensorField` and `CalculatedField` descriptors. See [Observations](/docs/observations).
+
+### Module
+
+A self-contained unit of robot hardware that runs in its own OS process — an arm, a gripper, a camera. See [Modules](/docs/modules).
+
+### `ModuleConfig`
+
+Pydantic model for `conf/<module_name>.yaml` (`frequency`, `actuators`, `sensors`, `calibration_file`, `interpolator_type`, …). Modules can extend it via `config_class`.
+
+### Observation
+
+The typed schema of every sensor reading the robot publishes per frame. Groups [`ModuleObs`](#moduleobs) instances by module name. See [Observations](/docs/observations).
+
+### `ObservationRingBuffer`
+
+Shared-memory ring buffer between a module process and the main robot process. Each module writes its latest observation snapshot here; the robot's observation-sender thread reads the latest snapshot per module.
+
+### Plug-in
+
+A standalone `solarian-<name>` Python package that provides one or more hardware drivers (modules, actuators, sensors, buses). See [Plug-ins](/docs/plugins).
+
+### `RelayServer`
+
+The middle node of Solarian's architecture. Forwards actions from controllers to robots and observations back. See [Server](/docs/servers).
+
+### Robot
+
+The on-robot node that owns hardware. Subclasses attach [Modules](/docs/modules) as class attributes. See [Robots](/docs/robots).
+
+### `RobotConfig`
+
+Pydantic model for `conf/robot.yaml` (`fps`, `img_compression_quality`, `connection`).
+
+### `SensorBus`
+
+A [`ComponentBus`](/docs/core) subclass for sensors.
+
+### `SensorField`
+
+A class-attribute descriptor on a [`ModuleObs`](/docs/observations) that binds an observation field to a `Data` reference on a [Robot](/docs/robots) sensor.
+
+### `ServerConfig`
+
+Pydantic model for `conf/server.yaml` (`connection`, `img_compression_quality`).
+
+### Settings
+
+The project's `settings.py` registry that holds `ROBOT_CLASS`, `CONTROLLER_CLASS`, `SERVER_CLASS`. Loaded lazily as `solarian.conf.settings`. See [Project Settings](/docs/settings).
+
+### Skill
+
+A self-contained, restartable behavior the [AI Controller](/docs/ai_controller) launches in response to a VLM decision. Runs in its own process, reads observations, emits actions. See [Skills](/docs/skills).
+
+### `SkillRunner`
+
+Enum (`CONTROLLER`, `ROBOT`, `SERVER`) that tells the `ThinkProcess` where to launch a [Skill](/docs/skills).
+
+### `SkillStatus`
+
+Enum (`IDLE`, `RUNNING`, `COMPLETED`, `FAILED`, `STOPPED`) reported by skills via the shared `SkillStatusBuffer`.
+
+### System 1 / System 2
+
+The naming Solarian uses for its dual-process AI architecture. System 1 = fast reactive control loop running [Skills](/docs/skills). System 2 = slow `ThinkProcess` running a VLM. See [AI Controller](/docs/ai_controller).
+
+### `ThinkProcess`
+
+The separate OS process that runs Solarian's "System 2" loop: drains user messages, queries a VLM, decides which [Skills](/docs/skills) to start or stop. Spawned by `AIController.on_start()`.
+
+### ZeroMQ
+
+The networking library Solarian uses for all controller ↔ relay ↔ robot communication. PUSH/PULL for actions, PUB/SUB for observations.
+
+## See also
+
+- Browse the [Basic Concepts](/docs/overview) section for full pages on each Solarian concept.
+- The [Overview](/docs/overview) walks through the whole architecture from the top down.

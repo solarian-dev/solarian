@@ -1,0 +1,191 @@
+export const metadata = {
+  title: 'Skills',
+  description:
+    'A Skill is a self-contained behavior — a diffusion policy, a motion plan, a scripted routine — that runs in its own process. The AI Controller orchestrates skills based on VLM decisions.',
+}
+
+# Skills
+
+A **Skill** is a self-contained, restartable behavior that the [AI Controller](/docs/ai_controller) can launch in response to a high-level decision. A skill is "open the gripper", "track the red cup", "run a diffusion policy", or "navigate to waypoint X". Each runs in its own OS process at its own rate, reads from the shared observation buffers, and emits actions back to the controller. {{ className: 'lead' }}
+
+Defined in [`solarian/core/ai/system1/skill.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/system1/skill.py).
+
+## Anatomy
+
+A `Skill` is an `abstract` `multiprocessing.Process` subclass. It owns:
+
+- A reference to the shared **observation ring buffers** (read-only).
+- A reference to the **action queues** (per-module) and/or the controller's **top-level action queue**.
+- A handle to the **skill status buffer** for reporting lifecycle transitions.
+- A `frequency` (Hz) and a `params` dict (forwarded by the think process).
+
+```python
+from solarian.core.ai.system1.skill import Skill, SkillStatus
+
+class PickSkill(Skill):
+    def setup(self):
+        self.target_position = self.params.get("target", [0.0] * 6)
+
+    def control_step(self) -> bool:
+        obs = self.get_observation("arm")
+        # ... compute next action ...
+        action = ArmAction.zeros()
+        action.shoulder_pan.value = self.target_position[0]
+        self.put_action("arm", action)
+        return False    # return True to mark skill as COMPLETED
+
+    def teardown(self):
+        pass
+```
+
+## Required and optional methods
+
+<Properties>
+  <Property name="setup()">
+    Optional one-time setup (load model weights, allocate buffers, open files). Called once before the loop starts.
+  </Property>
+  <Property name="control_step() -> bool">
+    <strong>Required.</strong> Called in a loop at <code>self.frequency</code>. Read observations, compute the next action, and submit it. Return <code>True</code> when the skill has finished its job; the loop ends and the framework reports <code>SkillStatus.COMPLETED</code>.
+  </Property>
+  <Property name="teardown()">
+    Optional cleanup. Called once after the loop exits, regardless of whether it stopped normally or crashed.
+  </Property>
+</Properties>
+
+## Submitting actions
+
+Two helpers cover both run targets:
+
+```python
+# Per-module action — for skills that target a specific module on the robot
+self.put_action("arm", ArmAction(...))
+
+# Top-level Action — for controller-side skills that emit a complete Action
+self.action_queue.put(MyAction(...))
+```
+
+The first form is used by **robot-side skills** (running on the robot process) that push directly into a module's `action_queue`. The second form is used by **controller-side skills** that hand a complete `Action` back to `AIController.control_step` for forwarding to the robot.
+
+## Reporting status
+
+Skills publish their lifecycle state through a shared-memory `SkillStatusBuffer` so the think process can read recent transitions and feed them into its next prompt:
+
+```python
+from solarian.core.ai.system1.skill import SkillStatus
+
+self.put_skill_status(SkillStatus.RUNNING)
+# ... do work ...
+self.put_skill_status(SkillStatus.COMPLETED)
+```
+
+The framework already publishes `RUNNING` before the loop and `COMPLETED`/`STOPPED`/`FAILED` after. You only need to call `put_skill_status` to emit intermediate states (e.g. progress markers).
+
+The `SkillStatus` enum:
+
+<Properties>
+  <Property name="IDLE" type="0">
+    Skill exists but isn't running.
+  </Property>
+  <Property name="RUNNING" type="1">
+    Skill is in its execution loop.
+  </Property>
+  <Property name="COMPLETED" type="2">
+    <code>control_step()</code> returned <code>True</code> and the loop exited cleanly.
+  </Property>
+  <Property name="FAILED" type="3">
+    The skill crashed; a traceback is queued for the parent.
+  </Property>
+  <Property name="STOPPED" type="4">
+    The think process called <code>request_stop()</code> and the skill exited.
+  </Property>
+</Properties>
+
+## Where the skill runs: `SkillRunner`
+
+The `SkillRunner` enum tells the think process *where* to launch the skill:
+
+<Properties>
+  <Property name="SkillRunner.CONTROLLER" type="0">
+    The skill is spawned as a subprocess of the controller. It reads observations from the controller-side shared buffers and emits actions into the controller's <code>action_queue</code>; the controller forwards them. Best for digital skills (policies, planners, scripted controllers).
+  </Property>
+  <Property name="SkillRunner.ROBOT" type="1">
+    The skill lives on the robot process. The think process does *not* spawn it locally — instead it pushes a top-level <code>Action</code> with the skill's declared <code>action_type</code> onto the controller action queue. The robot's <code>@action_handler</code> for that action type starts the skill on its side.
+  </Property>
+  <Property name="SkillRunner.SERVER" type="2">
+    Same as <code>ROBOT</code> but semantically the skill runs on the relay server.
+  </Property>
+</Properties>
+
+Declare the runner (and `action_type` if remote) when you attach the skill to your `AIController`:
+
+```python
+from solarian.core.ai.system1.skill import SkillRunner
+from myproject.action_types import MyActionType
+
+class MyAIController(AIController):
+    pick = PickSkill(runner=SkillRunner.CONTROLLER)
+    move_arm = MoveArmSkill(
+        runner=SkillRunner.ROBOT,
+        action_type=MyActionType.MOVE_ARM,
+    )
+```
+
+## How the think process selects skills
+
+`ThinkProcess.decide()` calls a VLM with the current observation, recent skill statuses, and the user message. The VLM returns JSON like:
+
+```json
+{
+  "skills_to_start": [
+    {"skill_name": "pick", "params": {"target": "red_cup"}}
+  ],
+  "skills_to_stop": ["explore"],
+  "reasoning": "Cup detected; switching from exploration to pick."
+}
+```
+
+For each entry in `skills_to_start`:
+
+- If the skill's `runner` is `CONTROLLER`, the think process spawns a fresh `Skill` subprocess with `params` forwarded.
+- If the runner is `ROBOT`/`SERVER`, the think process builds an `Action(action_type=..., data={"params": ..., "skill_id": ...})` and pushes it onto the controller's `action_queue`. The controller forwards it; the robot's `@action_handler` receives it and runs the skill on the remote side.
+
+For each entry in `skills_to_stop`, `request_stop()` is called on the active skill (or a stop `Action` is sent for remote skills).
+
+## Stopping yourself
+
+A controller-side skill can also self-terminate by:
+
+- Returning `True` from `control_step()` — the run loop exits and the final status becomes `COMPLETED`.
+- Calling `self.request_stop()` from another thread / signal — the run loop exits at the next iteration with status `STOPPED`.
+
+```python
+class TimedSkill(Skill):
+    def setup(self):
+        self.t0 = time.monotonic()
+
+    def control_step(self) -> bool:
+        if time.monotonic() - self.t0 > 5.0:
+            return True            # done after 5 seconds
+        # ... do work ...
+        return False
+```
+
+## Discovering skills
+
+`AIController._collect_available_skills()` walks the MRO and registers every `Skill` instance attached as a class attribute. The attribute name becomes the skill name the VLM uses; the value's `runner` and `action_type` are recorded so the think process can dispatch correctly.
+
+## Examples
+
+Solarian ships a couple of reference skill patterns:
+
+- **`solarian.core.ai.system1.diffusion_policy`** — wraps a learned diffusion policy as a `Skill` that emits chunk-of-actions per inference call.
+- **`solarian.core.ai.system1.umi`** — UMI-style controller that schedules waypoints into the modules' interpolators.
+
+Both live next to `skill.py` and are good starting points for your own implementations.
+
+## See also
+
+- [AI Controller](/docs/ai_controller) — the orchestrator that spawns and coordinates skills.
+- [Action Types](/docs/action-types) — used by remote (`ROBOT`/`SERVER`) skills.
+- [Modules](/docs/modules) — the per-module action queues skills push into.
+- [Observations](/docs/observations) — the shared buffers skills read from.
