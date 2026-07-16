@@ -25,6 +25,47 @@ import logging
 logger = logging.getLogger("robot")
 
 
+class RobotSchemaError(Exception):
+    """Raised when a robot module has no matching entry in the
+    Observation/Action schema.
+
+    Every ``Module`` declared on a ``Robot`` subclass needs a corresponding
+    ``ModuleObs``/``ModuleAction`` entry (matched by attribute name) on the
+    project's ``Observation``/``Action`` subclasses. When that entry is
+    missing the buffers/queues can't be created, so we fail early here with a
+    message that points the user at the exact file and change to make.
+    """
+
+    def __init__(self, module_name, module_class, schema_cls, schema_kind, base_name):
+        try:
+            import inspect
+            schema_file = inspect.getsourcefile(schema_cls) or "<unknown>"
+        except (TypeError, OSError):
+            schema_file = "<unknown>"
+
+        schema_name = getattr(schema_cls, "__name__", str(schema_cls))
+        module_cls_name = getattr(module_class, "__name__", str(module_class))
+        field_cls = f"{module_cls_name.replace('Module', '')}{schema_kind.capitalize()}"
+
+        message = (
+            f"Module '{module_name}' ({module_cls_name}) is declared on the robot "
+            f"but has no {schema_kind} defined in the '{schema_name}' schema.\n"
+            f"\n"
+            f"Every module needs a matching '{base_name}' entry (by attribute name) "
+            f"on your '{schema_name}' class.\n"
+            f"\n"
+            f"To fix, edit {schema_file} and add a '{base_name}' for '{module_name}', e.g.:\n"
+            f"\n"
+            f"    class {field_cls}({base_name}):\n"
+            f"        ...  # actuator/sensor fields for '{module_name}'\n"
+            f"\n"
+            f"    class {schema_name}(...):\n"
+            f"        ...\n"
+            f"        {module_name} = {field_cls}()\n"
+        )
+        super().__init__(message)
+
+
 class Robot(ABC):
 
     _instance = None
@@ -135,11 +176,28 @@ class Robot(ABC):
         example_action = Action.zeros()
 
         # Phase 3: Create shared-memory buffers and queues and assign to modules.
+        action_cls = Action._resolve_class()
+        observation_cls = Observation._resolve_class()
         for name, (module_class, module_cfg) in module_configs.items():
             module_obs = example_observation[name]
-            module_act = example_action[name]
-            assert module_obs is not None, f"No observation defined for module '{name}'"
-            assert module_act is not None, f"No action defined for module '{name}'"
+            if module_obs is None:
+                raise RobotSchemaError(
+                    module_name=name,
+                    module_class=module_class,
+                    schema_cls=observation_cls,
+                    schema_kind="observation",
+                    base_name="ModuleObs",
+                )
+            try:
+                module_act = example_action[name]
+            except KeyError:
+                raise RobotSchemaError(
+                    module_name=name,
+                    module_class=module_class,
+                    schema_cls=action_cls,
+                    schema_kind="action",
+                    base_name="ModuleAction",
+                ) from None
 
             self.observation_buffers[name] = ObservationRingBuffer.create_from_example(
                 shm_manager=self.shm_manager,

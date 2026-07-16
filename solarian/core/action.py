@@ -351,7 +351,16 @@ class Action:
         return object.__getattribute__(self, name)
 
     def __getitem__(self, name):
-        return self._module_actions[name]
+        try:
+            return self._module_actions[name]
+        except KeyError:
+            actual_cls = type(self)._resolve_class()
+            valid_keys = sorted(actual_cls.get_module_actions_spec().keys())
+            raise KeyError(
+                f"No action defined for module '{name}' on '{actual_cls.__name__}'. "
+                f"Add a ModuleAction attribute named '{name}' to your Action "
+                f"subclass. Defined module actions: {valid_keys}."
+            ) from None
 
     def items(self):
         return self._module_actions.items()
