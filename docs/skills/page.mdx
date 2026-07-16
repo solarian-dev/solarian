@@ -172,16 +172,70 @@ class TimedSkill(Skill):
 
 ## Discovering skills
 
-`AIController._collect_available_skills()` walks the MRO and registers every `Skill` instance attached as a class attribute. The attribute name becomes the skill name the VLM uses; the value's `runner` and `action_type` are recorded so the think process can dispatch correctly.
+Skills are discovered two ways, both merged into `AIController.available_skills`:
 
-## Examples
+1. **Class attributes.** `AIController._collect_available_skills()` walks the MRO and registers every `Skill` instance attached as a class attribute. The attribute name becomes the skill name the VLM uses; the value's `runner` and `action_type` are recorded so the think process can dispatch correctly.
+2. **Installed plugins.** Any package that declares a `solarian.skills` entry point is discovered automatically (see [`registry.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/system1/registry.py)). Class-attribute skills take priority, so a project can still override or re-configure a discovered skill by declaring it explicitly.
 
-Solarian ships a couple of reference skill patterns:
+## Skills as plugins
 
-- **`solarian.core.ai.system1.diffusion_policy`** — wraps a learned diffusion policy as a `Skill` that emits chunk-of-actions per inference call.
-- **`solarian.core.ai.system1.umi`** — UMI-style controller that schedules waypoints into the modules' interpolators.
+A **skill plugin** is an installable `solarian-skill-*` package — the unit a third party can publish and a user can install. It mirrors the module/actuator plugin pattern and builds on three public classes from `solarian.core.ai.system1`:
 
-Both live next to `skill.py` and are good starting points for your own implementations.
+- **`Skill`** — the behavior (runs in its own process), as above.
+- **`PolicyClient`** — a generic HTTP client used by a skill to call a policy. It is policy-agnostic: the same client works for diffusion, ACT, VLAs, or classical methods (waypoints, SLAM).
+- **`PolicyServer`** — a base class for hosting a policy behind a small HTTP API. Subclass it and implement `load`, `predict`, `model_info` and `shape_meta`; the base hides FastAPI/uvicorn and gives you `serve()` and a `main()` CLI launcher.
+
+A skill that uses a policy implements both a `Skill` and a `PolicyServer`, and talks to the server through `PolicyClient`. The server is a **separate process** whose location is independent of the skill: it can run on the robot, the controller, or a dedicated GPU box. Point the skill at it via a `policy_server_url`, or set the skill to launch a co-located ("managed") server itself.
+
+A plugin advertises its skill via an entry point in `pyproject.toml`:
+
+```toml
+[project.entry-points."solarian.skills"]
+my_skill = "my_skill_pkg.skill:MySkill"
+```
+
+A skill only *calls* a policy over HTTP, so it does not host one itself. The
+policy (training + serving) lives in a separate **policy plugin** (see
+[Training](/docs/training)), which ships the `PolicyServer` the skill connects
+to via `policy_server_url`.
+
+### Configuring a skill (project-level config)
+
+Skills resolve their config by deep-merging two layers, with the project layer
+winning:
+
+1. **Bundled defaults** — a `conf.yaml` shipped next to the skill module in the plugin.
+2. **Project override** — `conf/<config_name>.yaml` in your project, where `config_name` is a class attribute on the skill (set it to the `solarian.skills` entry-point name, e.g. `cup_arrange`).
+
+At launch, individual `params` keys override both. This keeps project-specific
+values — most importantly the **policy checkpoint path** — in your project's
+`conf/` rather than baked into the installed plugin. A project only sets what it
+needs and inherits the rest:
+
+```yaml
+# <your-project>/conf/cup_arrange.yaml — overrides plugin defaults
+policy_server_url: http://localhost:8001
+policy_server:
+  managed: false
+  checkpoint: data/models/cup_wild_vit_l_1img.ckpt
+  host: 127.0.0.1
+  port: 8001
+```
+
+The same merged config backs `solarian run-policy <skill>`, so the launcher
+reuses the project's checkpoint. A skill that declares a `policy_server_module`
+but has no checkpoint (in any layer, and none passed on the CLI) errors clearly.
+
+### Example plugin
+
+`plugins/solarian-skill-cup-arrange` is a complete reference *skill* plugin: it ships a `CupArrangeSkill` (a UMI diffusion-policy skill), auto-discovered through its `solarian.skills` entry point. Point it at your checkpoint in `conf/cup_arrange.yaml`, then run its policy server (hosted by the `solarian-policy-diffusion` policy plugin):
+
+```bash
+# reuses the checkpoint from conf/cup_arrange.yaml
+solarian run-policy cup_arrange
+# or launch directly:
+solarian-diffusion-policy --input <checkpoint.ckpt> --port 8001
+```
 
 ## See also
 
