@@ -122,10 +122,10 @@ Writes the calibration values from YAML into the controller hardware.
 ### `run-policy`
 
 ```bash
-solarian run-policy policy_path=/path/to/checkpoint.pt
+solarian run-policy <skill_name> [--checkpoint PATH] [--host HOST] [--port PORT]
 ```
 
-Loads `conf/controller.yaml` and runs a learned policy as the controller (instead of teleop or the AI controller). The policy class is selected by the `policy_path` field on the controller config.
+Runs the [`PolicyServer`](/docs/servers) associated with a skill. The skill declares its server via the `policy_server_module` class attribute and the checkpoint location in its bundled config (`policy_server.checkpoint`); this command resolves both and launches the server (overridable with `--checkpoint`/`--host`/`--port`). For example, `solarian run-policy cup_arrange` starts the diffusion policy server that `solarian-skill-cup-arrange` drives. See [Training](/docs/training) and [Skills](/docs/skills).
 
 ### `run-server`
 

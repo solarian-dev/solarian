@@ -1,10 +1,134 @@
 export const metadata = {
   title: 'Training',
   description:
-    'Learn how to train models using the Solarian framework.',
+    'Train policies in Solarian via library-agnostic policy plugins: implement a PolicyTrainer, register it under solarian.trainers, and run `solarian train` locally or on Modal.',
 }
 
 
 # Training
 
-Learn how to effectively train models using the Solarian framework.
+Solarian's training is **library-agnostic**. The framework ships only the
+generic `solarian train` command plus a small plugin contract; the actual
+training logic for a given model family (diffusion, ACT, a VLA, ...) lives in a
+**policy plugin**. The same plugin also ships the `PolicyServer` that serves
+the trained policy, so a policy is self-contained. {{ className: 'lead' }}
+
+```mermaid
+flowchart TD
+    cli["solarian train"] --> resolve["read cfg.policy"]
+    resolve --> reg["solarian.trainers entry points"]
+    reg --> trainer["PolicyTrainer subclass (plugin)"]
+    cli -->|"modal.enabled"| modal["ModalLauncher (generic)"]
+    modal -->|"accelerate launch"| entry["modal_entry → TrainerCls.train()"]
+    cli -->|"local"| trainer
+```
+
+## How `solarian train` works
+
+The command never imports any ML library. It:
+
+1. Reads the `policy` key from the composed config.
+2. Resolves the matching `PolicyTrainer` subclass through the `solarian.trainers`
+   entry-point group.
+3. Validates the config with that trainer's `config_class()`.
+4. Resolves an `output_dir` (defaults to `$SOLARIAN_PROJECT_PATH/models/<job_name>`).
+5. Runs it — locally (`TrainerCls(cfg, output_dir).train()`) or, when
+   `modal.enabled` is set, on Modal via the generic launcher.
+
+```bash
+solarian train --conf conf/train
+```
+
+## The `PolicyTrainer` contract
+
+Defined in
+[`solarian/core/ai/system1/policy_trainer.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/system1/policy_trainer.py).
+A plugin subclasses it and implements `train()`:
+
+```python
+from solarian.core.ai.system1 import PolicyTrainer, ModalSpec
+
+class MyTrainer(PolicyTrainer):
+    @classmethod
+    def config_class(cls):
+        return MyTrainConfig         # a TrainConfig subclass
+
+    @classmethod
+    def modal_spec(cls):
+        return ModalSpec(pip_packages=["torch", "my-lib"])
+
+    def train(self):
+        ...  # the real training loop, using self.cfg and self.output_dir
+```
+
+| Member | Purpose |
+| --- | --- |
+| `train(self)` | **Required.** Runs training to completion. |
+| `config_class()` | Pydantic schema validating the config (defaults to the thin `TrainConfig`). |
+| `modal_spec()` | Declares the container image (apt/pip deps) for cloud training. |
+| `add_arguments` / `from_args` / `main` | Standalone CLI launching (e.g. under `accelerate launch`). |
+
+### Thin base config
+
+The framework's `TrainConfig`
+([`solarian/core/configs.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py))
+only knows common fields — `policy`, `train_dataset`, `val_dataset`,
+`output_dir`, `job_name`, `batch_size`, `steps`, logging and a `modal` block —
+and uses `extra="allow"`, so any plugin-specific keys (model architecture,
+optimizer, ...) pass through untouched. A plugin's `config_class()` is a
+`TrainConfig` subclass that re-adds and validates those fields.
+
+## Registering a trainer
+
+A policy plugin advertises its trainer under the `solarian.trainers`
+entry-point group and (optionally) a console script for its server:
+
+```toml
+[project.entry-points."solarian.trainers"]
+my_policy = "my_policy_pkg.trainer:MyTrainer"
+
+[project.scripts]
+my-policy-server = "my_policy_pkg.policy_server:main"
+```
+
+Then `policy: my_policy` in the train config selects it. Install missing
+plugins with `pip install <plugin>`; `solarian train` lists the available
+trainers if the requested one isn't installed.
+
+## Cloud training (Modal)
+
+Set `modal.enabled: true` (plus `gpu_type`, `gpus`, `volume`, `secrets`) and the
+generic
+[`ModalLauncher`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/training/modal_launcher.py)
+builds a `modal.Image` from the trainer's `modal_spec()`, mounts a volume at
+`/data` for datasets and outputs, and runs the trainer remotely with
+`accelerate launch -m solarian.core.training.modal_entry`. Datasets must already
+live on the volume — reference them with `/data/...` paths.
+
+```yaml
+modal:
+  enabled: true
+  gpu_type: A100-80GB
+  gpus: 2
+  volume: solarian-data
+  secrets: [wandb]
+```
+
+## Built-in policy plugins
+
+Two reference policy plugins live under `plugins/`:
+
+- **`solarian-policy-lerobot`** (`policy: lerobot_act`) — trains and serves a
+  [LeRobot](https://github.com/huggingface/lerobot) ACT policy.
+- **`solarian-policy-diffusion`** (`policy: diffusion`) — trains and serves a
+  [UMI](https://umi-gripper.github.io/) `DiffusionUnetTimmPolicy`, reusing the
+  UMI `diffusion_policy` workspace.
+
+A *skill* plugin (e.g. `solarian-skill-cup-arrange`) then consumes a served
+policy over HTTP — see [Skills](/docs/skills).
+
+## See also
+
+- [Skills](/docs/skills) — behaviors that consume a policy server.
+- [Servers](/docs/servers) — the `PolicyServer` / `PolicyClient` HTTP contract.
+- [Plugins](/docs/plugins) — how Solarian discovers plugins.

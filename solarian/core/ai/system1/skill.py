@@ -86,6 +86,17 @@ class Skill(Process, ABC):
     Subclasses **must** implement :meth:`control_step`.
     They may also override :meth:`setup` and :meth:`teardown`.
 
+    A skill that is driven by a policy declares the policy server it uses via
+    the :attr:`policy_server_module` class attribute and the checkpoint
+    location in config (``policy_server.checkpoint``).  Config is resolved by
+    deep-merging the plugin's bundled defaults (``conf.yaml`` next to the skill
+    module) with a **project-level** override at ``conf/<config_name>.yaml``
+    (project wins), so each project points the skill at its own checkpoint
+    without editing the installed plugin.  The skill always defines where the
+    checkpoint is; when ``policy_server.managed`` is true it launches that
+    server as a child process to load it, and the ``solarian run-policy
+    <skill>`` command can launch it standalone.
+
     Args:
         name: Unique identifier for this skill instance.
         skill_id: Integer id assigned by the orchestrator (e.g. index in
@@ -116,6 +127,25 @@ class Skill(Process, ABC):
             :class:`ActionQueue` so the remote side can launch the skill.
             Ignored when ``runner`` is ``CONTROLLER``.
     """
+
+    #: Importable module that runs this skill's policy server (``python -m
+    #: <module>``).  The module's ``main()`` must be built on
+    #: :meth:`~solarian.core.ai.system1.policy_server.PolicyServer.main`, so it
+    #: accepts ``--input <checkpoint> --host <host> --port <port>``.  ``None``
+    #: for skills that don't use a policy server.
+    policy_server_module: Optional[str] = None
+
+    #: Filename of the bundled default config shipped alongside the skill's
+    #: module (used to locate ``policy_server.checkpoint`` and friends).
+    config_filename: str = "conf.yaml"
+
+    #: Basename (without extension) of the *project-level* config file that
+    #: overrides the bundled defaults, looked up at ``conf/<config_name>.yaml``
+    #: in the active project.  ``None`` means "no project override"; skills that
+    #: want project-owned config (e.g. the policy checkpoint path) should set
+    #: this to their stable skill name — typically the ``solarian.skills``
+    #: entry-point name (e.g. ``"cup_arrange"``).
+    config_name: Optional[str] = None
 
     def __init__(
         self,
@@ -204,6 +234,140 @@ class Skill(Process, ABC):
             status=int(status),
             timestamp=time.time(),
         )
+
+    # ------------------------------------------------------------------
+    # Associated policy server
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def default_config_path(cls):
+        """Return the path to the skill's bundled default config, or ``None``."""
+        import inspect
+        from pathlib import Path
+
+        try:
+            module_file = inspect.getfile(cls)
+        except TypeError:
+            return None
+        path = Path(module_file).parent / cls.config_filename
+        return path if path.exists() else None
+
+    @classmethod
+    def load_default_config(cls) -> Dict[str, Any]:
+        """Load the skill's bundled default config (``{}`` if none is shipped)."""
+        import yaml
+
+        path = cls.default_config_path()
+        if path is None:
+            return {}
+        with open(path, "r") as f:
+            return yaml.safe_load(f) or {}
+
+    @staticmethod
+    def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        """Recursively merge ``override`` onto ``base`` (values in ``override`` win).
+
+        Nested dicts are merged key-by-key so a project file can set e.g. just
+        ``policy_server.checkpoint`` and inherit the other ``policy_server.*``
+        defaults from the bundled config.
+        """
+        out = dict(base or {})
+        for key, value in (override or {}).items():
+            if isinstance(value, dict) and isinstance(out.get(key), dict):
+                out[key] = Skill._deep_merge(out[key], value)
+            else:
+                out[key] = value
+        return out
+
+    @classmethod
+    def _project_conf_dir(cls):
+        """Locate the active project's ``conf/`` directory.
+
+        Uses ``SOLARIAN_CONF_PATH`` (set by the CLI for every command), falling
+        back to ``SOLARIAN_PROJECT_PATH/conf`` or ``<cwd>/conf``.  These env
+        vars are inherited by skill child processes spawned from the
+        robot/controller, so this works both from ``run-policy`` and at skill
+        runtime.
+        """
+        import os
+        from pathlib import Path
+
+        conf_path = os.environ.get("SOLARIAN_CONF_PATH")
+        if conf_path:
+            return Path(conf_path)
+        project = os.environ.get("SOLARIAN_PROJECT_PATH")
+        base = Path(project) if project else Path.cwd()
+        return base / "conf"
+
+    @classmethod
+    def project_config_path(cls):
+        """Path to the project-level ``conf/<config_name>.yaml`` if it exists."""
+        from pathlib import Path
+
+        if not cls.config_name:
+            return None
+        conf_dir = cls._project_conf_dir()
+        if conf_dir is None:
+            return None
+        path = Path(conf_dir) / f"{cls.config_name}.yaml"
+        return path if path.exists() else None
+
+    @classmethod
+    def load_project_config(cls) -> Dict[str, Any]:
+        """Load the project-level config override (``{}`` if none present)."""
+        import yaml
+
+        path = cls.project_config_path()
+        if path is None:
+            return {}
+        with open(path, "r") as f:
+            return yaml.safe_load(f) or {}
+
+    @classmethod
+    def load_config(cls) -> Dict[str, Any]:
+        """Resolved skill config: bundled defaults deep-merged with the
+        project-level override (``conf/<config_name>.yaml``), project wins."""
+        return cls._deep_merge(cls.load_default_config(), cls.load_project_config())
+
+    @classmethod
+    def get_policy_server_spec(
+        cls,
+        checkpoint: Optional[str] = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Describe how to launch this skill's policy server.
+
+        Returns ``None`` for skills that don't use a policy server (no
+        :attr:`policy_server_module`).  Otherwise returns a dict with
+        ``module``, ``checkpoint``, ``host``, ``port`` and ``managed``.
+
+        The checkpoint is resolved from the merged config (project-level
+        ``conf/<config_name>.yaml`` overriding the bundled ``policy_server.checkpoint``);
+        explicit arguments here take precedence.  A missing checkpoint is an error.
+        """
+        if not cls.policy_server_module:
+            return None
+
+        server_cfg = (cls.load_config().get("policy_server") or {})
+        checkpoint = checkpoint or server_cfg.get("checkpoint")
+        if not checkpoint:
+            project_file = f"conf/{cls.config_name}.yaml" if cls.config_name else "conf/<skill>.yaml"
+            raise ValueError(
+                f"{cls.__name__} declares a policy server "
+                f"({cls.policy_server_module!r}) but no checkpoint is defined. "
+                f"Set 'policy_server.checkpoint' in the project's {project_file} "
+                f"(or the skill's bundled {cls.config_filename}), or pass an explicit checkpoint."
+            )
+        host = host or server_cfg.get("host", "127.0.0.1")
+        port = int(port if port is not None else server_cfg.get("port", 8001))
+        return {
+            "module": cls.policy_server_module,
+            "checkpoint": str(checkpoint),
+            "host": str(host),
+            "port": port,
+            "managed": bool(server_cfg.get("managed", False)),
+        }
 
     # ------------------------------------------------------------------
     # Stop control

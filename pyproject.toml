@@ -26,6 +26,14 @@ dependencies = [
     "rich==14.1.0",
     "ipython",
 
+    # Policy serving over HTTP (PolicyServer / PolicyClient live in core, so
+    # their serving + client + checkpoint-loading deps ship with the framework
+    # and plugins don't have to re-declare them).
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "requests>=2.31",
+    "dill>=0.3.7",
+
     # Data processing
     "opencv-python==4.12.0.88",
     "numpy==2.2.6",
@@ -60,6 +68,8 @@ sim = [
     "gymnasium==0.29.1",
     "mujoco==3.3.2",
     "dm_control==1.0.30",
+    "mink==0.0.11",
+    "robot_descriptions==3.0.0",
 ]
 all = [
     "solarian[ai,sim]",

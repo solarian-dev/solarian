@@ -52,6 +52,7 @@ from solarian.core.configs import ControllerConfig
 from solarian.utils import get_class, StatusBoard
 from solarian.conf import settings
 from solarian.core.ai.system1.skill import Skill, SkillRunner
+from solarian.core.ai.system1.registry import discover_available_skills
 from solarian.core.ai.system2.think import ThinkProcess
 from solarian.utils.shared_memory.action_queue import ActionQueue
 
@@ -404,6 +405,20 @@ class AIController(Controller):
                         ),
                         "docstring": (type(attr_value).__doc__ or "").strip(),
                     }
+
+        # Merge in skills installed as plugins (``solarian.skills`` entry
+        # points).  Class-attribute skills declared on the controller take
+        # priority, so a project can override or re-configure a discovered
+        # skill simply by declaring it explicitly.
+        try:
+            discovered = discover_available_skills()
+        except Exception:  # noqa: BLE001 - discovery must never break startup
+            logger.exception("Skill plugin discovery failed")
+            discovered = {}
+        for name, spec in discovered.items():
+            if name not in skills:
+                skills[name] = spec
+
         return skills
 
     # ------------------------------------------------------------------

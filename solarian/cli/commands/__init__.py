@@ -86,9 +86,9 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "run-policy",
     module_path=f"{_pkg}.run_policy",
-    help="Policy client that connects to a relay server",
-    config_name="controller",
-    setup_modules=("controller",),
+    help="Run the policy server associated with a skill",
+    config_name=None,
+    setup_modules=(),
 )
 CommandRegistry.register_lazy(
     "run-server",
