@@ -38,6 +38,26 @@ class InterpolatorType(str, Enum):
         return self.value
 
 
+class SimActuatorConfig(BaseModel):
+    """Simulation mapping for an actuator.
+
+    Added to the *same* module yaml as the real hardware fields; it is ignored
+    when the module runs on real hardware and only consumed when the robot is a
+    :class:`~solarian.sim.robot.SimRobot`. It says which MuJoCo joint/actuator
+    the servo drives and the radian range the normalized command space maps
+    onto. Leave ``joint``/``actuator`` unset for a virtual joint (one with no
+    MuJoCo counterpart) that just echoes the commanded value.
+    """
+    joint: str | None = None
+    actuator: str | None = None
+    range_min: float = -3.141592653589793
+    range_max: float = 3.141592653589793
+    drive_mode: int = 0
+
+class SimSensorConfig(BaseModel):
+    """Simulation mapping for a sensor (e.g. the MuJoCo camera to render)."""
+    camera: str | None = None
+
 class ComponentConfig(BaseModel):
     id: int = 0
     port: str
@@ -53,6 +73,8 @@ class SensorConfig(ComponentConfig):
     video_format: str
     resize_width: int | None
     resize_height: int | None
+    #: Optional simulation mapping; used only under a SimRobot.
+    sim: SimSensorConfig | None = None
 
 class CameraConfig(SensorConfig):
     fps: int
@@ -69,6 +91,8 @@ class ActuatorConfig(ComponentConfig):
     model: str
     # TODO validate mode string value
     mode: str
+    #: Optional simulation mapping; used only under a SimRobot.
+    sim: SimActuatorConfig | None = None
     
 
 class ServoConfig(ActuatorConfig, SensorConfig):
@@ -238,64 +262,66 @@ class AdamWOptimizerConfig(TrainOptimizerConfig):
     eps: float = 1e-8
     weight_decay: float = 0.0001
     
-class ModelConfig(ConfigBaseModel):
-    type: Literal['act', 'diffusion'] = 'act'
+class ModalConfig(ConfigBaseModel):
+    """Cloud-GPU (Modal) orchestration for training.
 
-class ACTConfig(ModelConfig):
-    n_obs_steps: int = 1
-    chunk_size: int = 100
-    n_action_steps: int = 100
-    use_vae: bool = True
-    temporal_ensemble_coeff: float | None = None
+    Consumed by :class:`solarian.core.training.modal_launcher.ModalLauncher`.
+    The framework builds the container image from the trainer's
+    :meth:`~solarian.core.ai.system1.policy_trainer.PolicyTrainer.modal_spec`
+    and runs the trainer remotely; only orchestration knobs live here.
+    """
+    enabled: bool = False
+    gpu_type: str = "A100-80GB"
+    gpus: int = 1
+    #: Modal volume mounted at ``/data`` for datasets + outputs.
+    volume: str = "solarian-data"
+    #: Names of ``modal.Secret`` objects to attach (e.g. ``["wandb"]``).
+    secrets: list[str] = []
+    timeout: int = 24 * 60 * 60
+    mixed_precision: str = "bf16"
+    app_name: str = "solarian-train"
+
 
 class TrainConfig(ConfigBaseModel):
+    """Thin, library-agnostic training config.
+
+    The framework only knows these common fields; everything policy- or
+    library-specific (model architecture, optimizer, etc.) is carried
+    through untouched (``extra='allow'``) and validated by the plugin
+    trainer's own :meth:`config_class`.  The ``policy`` field selects which
+    installed trainer (``solarian.trainers`` entry point) runs.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    #: Name of the trainer to run (resolved via the ``solarian.trainers``
+    #: entry-point group), e.g. ``"diffusion"`` or ``"lerobot_act"``.
+    policy: str
+
     train_dataset: str
     val_dataset: str | None = None
     output_dir: str | None = None
     val_percentage: float | None = None
 
-    policy_path: str | None = None
     job_name: str
-    resume: bool
-    batch_size: int
-    image_channels: int
-    steps: int
-    num_workers: int
-    log_freq: int
-    val_freq: int
-    save_freq: int
-    
-    optimizer: Union[AdamOptimizerConfig, AdamWOptimizerConfig] = Field(discriminator="type")
-    scheduler: SchedulerConfig
-    precision: PrecisionConfig
-    logger: TrainLoggerConfig = Field(discriminator="type")
-    model: ModelConfig = Field(discriminator="type")
-    
-    @model_validator(mode='after')
-    def validate_policy_path_when_resuming(cls, values) -> 'TrainConfig':
-        """Validate that policy_path is provided when resuming"""
-        if values.resume and not values.policy_path:
-            raise ValueError("policy_path must be specified when resume is true")
-        return values
-    
-    @field_validator('logger')
-    @classmethod
-    def validate_logger_config(cls, v):
-        """Validate the logger configuration"""
-        if v.type == "wandb":
-            if not hasattr(v, 'project') or not v.project:
-                raise ValueError("logger.project must be specified when logger is enabled with type 'wandb'")
-        return v
-    
+    resume: bool = False
+    batch_size: int = 64
+    steps: int = 100000
+    num_workers: int = 4
+    log_freq: int = 100
+    val_freq: int = 1000
+    save_freq: int = 10000
+
+    logger: Optional[TrainLoggerConfig] = None
+    modal: ModalConfig = Field(default_factory=ModalConfig)
+
     def to_tags(self) -> list[str]:
-        tags = [
-            f"lr:{self.optimizer.lr}",
+        """Generic run tags for logging. Plugins may override to add more."""
+        return [
+            f"policy:{self.policy}",
             f"batch_size:{self.batch_size}",
             f"train_dataset:{self.train_dataset}",
             f"val_dataset:{self.val_dataset if self.val_dataset else self.train_dataset}",
-            f"policy:{'act' if type(self.model) == ACTConfig else 'unknown'}",
         ]
-        return tags
 
 
 
