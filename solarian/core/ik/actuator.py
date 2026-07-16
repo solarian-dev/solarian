@@ -1,0 +1,34 @@
+"""Cartesian-space IK actuator.
+
+A :class:`CartesianIKActuator` represents one component of an end-effector pose
+(x, y, z, rx, ry, rz). An arm that implements IK declares six of these (like the
+UR5 does) alongside its joint-space actuators; the pose index each one drives is
+taken from its ``cfg.id`` (0..5 == x, y, z, rx, ry, rz).
+
+Cartesian IK actuators never talk to hardware directly. They are handled by the
+:class:`~solarian.core.ik.bus.IKActuatorBus` that a module installs to wrap its
+joint bus, which converts Cartesian reads/writes to FK/IK on the joint bus. The
+module bus recognizes them *by class* (``isinstance(..., CartesianIKActuator)``)
+and routes them through IK instead of building a hardware bus for them. The
+``bus_class`` below is only a marker to satisfy :class:`Component`; it is never
+instantiated for a Cartesian IK actuator.
+"""
+
+from __future__ import annotations
+
+from solarian.core.servo import Servo
+from solarian.core.data import PosData
+from solarian.core.ik.bus import IKActuatorBus
+
+
+class CartesianIKActuator(Servo):
+    """End-effector pose component (metres for x/y/z, radians for rx/ry/rz).
+
+    Values are raw metric units (``mode: raw`` in the actuator config); they are
+    not normalized like joint servos.
+    """
+
+    #: Placeholder only -- the real bus is the module's IKActuatorBus.
+    bus_class = IKActuatorBus
+
+    pos = PosData()

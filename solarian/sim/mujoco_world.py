@@ -72,11 +72,17 @@ class MujocoWorldServer(Process):
         server_conns: Dict[str, Connection],
         conn_modules: Dict[str, str],
         realtime: bool = True,
+        ee_frames: list[tuple[str, str]] | None = None,
     ):
         super().__init__(daemon=True)
         self._scene = scene
         self._component_specs = component_specs
         self._server_conns = server_conns
+        # End-effector frames to visualize in the overview viewer, as
+        # ``(composed_frame_name, frame_type)`` where frame_type is
+        # "site"/"body"/"geom". Resolved to ids in ``_build``.
+        self._ee_frames = list(ee_frames or [])
+        self._ee_frame_ids: list[tuple[str, int]] = []
         # {conn_key: module_name} -- lets the server namespace bare component
         # names per connection so identically named components on different
         # modules (e.g. both arms' ``shoulder_pan``) don't collide.
@@ -132,6 +138,23 @@ class MujocoWorldServer(Process):
                     self._virtual.setdefault(name, 0.0)
             elif spec["kind"] == "camera":
                 spec["camera_id"] = self._name2id(mujoco.mjtObj.mjOBJ_CAMERA, spec.get("camera"))
+
+        # Resolve end-effector frames used for the overview axis triads.
+        objtype_by_frame = {
+            "site": mujoco.mjtObj.mjOBJ_SITE,
+            "body": mujoco.mjtObj.mjOBJ_BODY,
+            "geom": mujoco.mjtObj.mjOBJ_GEOM,
+        }
+        for frame_name, frame_type in self._ee_frames:
+            objtype = objtype_by_frame.get(frame_type, mujoco.mjtObj.mjOBJ_SITE)
+            fid = self._name2id(objtype, frame_name)
+            if fid is None:
+                logger.warning(
+                    "EE frame '%s' (%s) not found in scene; not drawing its axes.",
+                    frame_name, frame_type,
+                )
+                continue
+            self._ee_frame_ids.append((frame_type, fid))
 
         mujoco.mj_forward(self.model, self.data)
 
@@ -294,12 +317,61 @@ class MujocoWorldServer(Process):
                 camera.lookat = np.asarray(lookat, dtype=float)
             with self._lock:
                 renderer.update_scene(self.data, camera=camera)
+                if self._scene.show_frames:
+                    self._draw_frames(renderer.scene)
             return renderer.render()
         except Exception as exc:  # noqa: BLE001 - degrade gracefully when GL is unavailable
             if not self._overview_failed:
                 logger.warning("Overview rendering unavailable (%s); viewer will blank.", exc)
                 self._overview_failed = True
             return np.zeros((h, w, 3), dtype=np.uint8)
+
+    # -- coordinate-frame overlays -------------------------------------
+    #: Axis length (m) for the world / end-effector triads and arrow width (m).
+    _WORLD_AXIS_LEN = 0.15
+    _EE_AXIS_LEN = 0.08
+    _AXIS_WIDTH = 0.004
+
+    def _draw_frames(self, scene) -> None:
+        """Append world + end-effector axis triads to the render scene."""
+        self._add_triad(scene, np.zeros(3), np.eye(3).ravel(), self._WORLD_AXIS_LEN)
+        for frame_type, fid in self._ee_frame_ids:
+            if frame_type == "site":
+                pos, mat = self.data.site_xpos[fid], self.data.site_xmat[fid]
+            elif frame_type == "geom":
+                pos, mat = self.data.geom_xpos[fid], self.data.geom_xmat[fid]
+            else:  # body
+                pos, mat = self.data.xpos[fid], self.data.xmat[fid]
+            self._add_triad(scene, pos, mat, self._EE_AXIS_LEN)
+
+    def _add_triad(self, scene, pos, mat, length: float) -> None:
+        """Draw an RGB (x/y/z) arrow triad at ``pos`` oriented by ``mat`` (3x3)."""
+        import mujoco
+
+        R = np.asarray(mat, dtype=float).reshape(3, 3)
+        origin = np.asarray(pos, dtype=float)
+        axes = (
+            (R[:, 0], (1.0, 0.2, 0.2, 1.0)),  # x -> red
+            (R[:, 1], (0.2, 1.0, 0.2, 1.0)),  # y -> green
+            (R[:, 2], (0.3, 0.4, 1.0, 1.0)),  # z -> blue
+        )
+        for direction, rgba in axes:
+            if scene.ngeom >= scene.maxgeom:
+                return
+            tip = origin + direction * length
+            geom = scene.geoms[scene.ngeom]
+            mujoco.mjv_initGeom(
+                geom,
+                mujoco.mjtGeom.mjGEOM_ARROW,
+                np.zeros(3),
+                np.zeros(3),
+                np.zeros(9),
+                np.asarray(rgba, dtype=np.float32),
+            )
+            mujoco.mjv_connector(
+                geom, mujoco.mjtGeom.mjGEOM_ARROW, self._AXIS_WIDTH, origin, tip
+            )
+            scene.ngeom += 1
 
     # -- no-op hardware operations (all take the calling module first) --
     def configure(self, module: str, params: dict, component_names: list[str]):

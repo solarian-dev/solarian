@@ -103,7 +103,14 @@ def _get_screen_geometry():
 
 
 class Controller(ABC):
-    
+
+    # When True and not running headless, use the single-window pygame GUI
+    # (dashboard + camera grid + on-window key capture) instead of the OpenCV
+    # camera windows plus the global pynput listener. The GUI captures keys via
+    # window focus, so it needs no OS accessibility / input-monitoring
+    # permission. Opt in per subclass (e.g. keyboard-teleop controllers).
+    use_gui = False
+
     def __init__(self, cfg: ControllerConfig):
         self.cfg = cfg
         self.context = zmq.Context()
@@ -654,6 +661,146 @@ class Controller(ABC):
 
             cv2.imshow(window_name, np.ascontiguousarray(display_img[:, :, ::-1]))
 
+    # -- single-window GUI (dashboard + cameras + key capture) -------------
+    def _collect_display_images(self) -> list[tuple[str, "np.ndarray"]]:
+        """Return ``(label, rgb_image)`` for every image field in the latest
+        observation, for rendering in the GUI camera grid."""
+        if self._image_field_keys is None:
+            self._build_display_schema()
+        assert self._image_field_keys is not None
+
+        images: list[tuple[str, np.ndarray]] = []
+        for module_name, field_name in self._image_field_keys:
+            try:
+                module_obs = self.last_observation[module_name]
+            except (KeyError, TypeError):
+                continue
+            if module_obs is None:
+                continue
+            try:
+                field_data = module_obs[field_name]
+            except KeyError:
+                continue
+            if field_data is not None and field_data.value is not None:
+                images.append((f"{module_name}/{field_name}", field_data.value))
+        return images
+
+    @staticmethod
+    def _gui_format_value(value) -> str:
+        if isinstance(value, dict):
+            value = value.get("value")
+        if isinstance(value, (float, np.floating)):
+            return f"{value:.3f}"
+        if isinstance(value, (int, np.integer, bool)):
+            return str(value)
+        if isinstance(value, np.ndarray):
+            if value.ndim == 0:
+                return f"{float(value):.3f}"
+            if value.ndim == 1 and value.size <= 8:
+                return "[" + ", ".join(f"{float(x):.2f}" for x in value) + "]"
+            return f"<{value.shape}>"
+        if value is None:
+            return "-"
+        return str(value)
+
+    def _gui_dashboard_sections(self) -> list[tuple[str, list[tuple[str, str]]]]:
+        """Build ``(title, [(field, value), ...])`` panels from the latest
+        observation and action, skipping image fields."""
+        sections: list[tuple[str, list[tuple[str, str]]]] = []
+
+        try:
+            obs_items = list(self.last_observation.items())
+        except Exception:
+            obs_items = []
+        for module_name, module_obs in obs_items:
+            if module_obs is None:
+                continue
+            try:
+                payload = module_obs.to_dict()
+            except Exception:
+                continue
+            rows: list[tuple[str, str]] = []
+            for field, val in payload.items():
+                raw = val.get("value") if isinstance(val, dict) else val
+                if isinstance(raw, (bytes, bytearray)):
+                    continue
+                if isinstance(raw, np.ndarray) and raw.ndim >= 2:
+                    continue  # image / large tensor -> shown in the camera grid
+                rows.append((field, self._gui_format_value(val)))
+            if rows:
+                sections.append((f"obs · {module_name}", rows))
+
+        action = self.last_action
+        if action is not None:
+            try:
+                adict = action.to_dict()
+                data = adict.get("data", {})
+                if isinstance(data, dict):
+                    for module_name, payload in data.items():
+                        fields = payload.get("data", {}) if isinstance(payload, dict) else {}
+                        rows = [
+                            (field, self._gui_format_value(val))
+                            for field, val in fields.items()
+                        ]
+                        if rows:
+                            sections.append((f"act · {module_name}", rows))
+            except Exception:
+                pass
+        return sections
+
+    def gui_key_help(self) -> list[tuple[str, str]]:
+        """Key-binding rows ``(keys, description)`` shown in the GUI keys panel.
+
+        Override in keyboard-teleop controllers. Keys listed here (split on
+        whitespace) are highlighted while held.
+        """
+        return []
+
+    def _gui_loop(self, episode_time_s):
+        """Main loop for GUI mode: render the single-window dashboard/cameras
+        and route this window's key events to on_key_press / on_key_release."""
+        from solarian.core.controller_gui import ControllerGUI
+
+        try:
+            gui = ControllerGUI(title="Solarian")
+        except Exception:
+            logger.exception(
+                "Failed to start pygame GUI; falling back to OpenCV display "
+                "and the global pynput keyboard listener."
+            )
+            self._start_keyboard_listener()
+            return self.display_loop(episode_time_s)
+
+        fps = self.cfg.fps or 30
+        timestamp = 0
+        start_episode_t = time.perf_counter()
+        try:
+            while timestamp < episode_time_s and self.running:
+                start_loop_t = time.time_ns()
+
+                quit_requested = gui.poll(
+                    on_press=self._dispatch_key_press,
+                    on_release=self._dispatch_key_release,
+                )
+                if quit_requested:
+                    break
+
+                gui.render(
+                    sections=self._gui_dashboard_sections(),
+                    images=self._collect_display_images(),
+                    key_help=self.gui_key_help(),
+                    fps=self.cfg.fps if self.cfg.fps else None,
+                )
+
+                timestamp = time.perf_counter() - start_episode_t
+                if self.events["exit_early"]:
+                    break
+
+                gui.tick(fps)
+                manual_profile("gui loop latency", (time.time_ns() - start_loop_t))
+        finally:
+            gui.close()
+
     def control_loop(self, dataset=None, episode_time_s=120, single_task=None):
         try:
             timestamp = 0
@@ -825,10 +972,13 @@ class Controller(ABC):
         t = threading.Thread(target=self.control_loop, args=(dataset, episode_time_s + 1, single_task), daemon=True)
         t.start()
 
+        gui_mode = (not self.cfg.headless) and self.use_gui
+
         # Global keyboard listener — provides real OS key-down / key-up
         # events to the on_key_press / on_key_release hooks.  Skipped in
-        # headless mode where we read from stdin instead.
-        if not self.cfg.headless:
+        # headless mode (we read stdin) and in GUI mode (the window captures
+        # keys itself, needing no OS accessibility permission).
+        if not self.cfg.headless and not gui_mode:
             self._start_keyboard_listener()
 
         # Hook for subclasses to start additional threads
@@ -839,6 +989,14 @@ class Controller(ABC):
                 logger.info("Starting headless loop (no display)")
                 try:
                     self._headless_loop(episode_time_s)
+                finally:
+                    self.running = False
+                    t.join(timeout=5.0)
+                    self.events["exit_early"] = False
+            elif gui_mode:
+                logger.info("Starting GUI loop (single-window dashboard)")
+                try:
+                    self._gui_loop(episode_time_s)
                 finally:
                     self.running = False
                     t.join(timeout=5.0)

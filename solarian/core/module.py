@@ -70,6 +70,13 @@ class Module(Process):
     # Override in subclasses to use a custom config class (must extend ModuleConfig)
     config_class: type = ModuleConfig
 
+    # Optional IK backend for arms that declare Cartesian IK actuators. Set this
+    # on the subclass to a declarative spec (e.g. ``MinkIK(...)``), an object
+    # exposing ``.build()``, or a ready :class:`DifferentialIKBackend`. The core
+    # resolves it automatically when connecting a port with Cartesian IK
+    # actuators, so no ``build_ik_backend`` method is required.
+    ik_backend = None
+
     field_name = "component"
 
     allowed_attr_type = Sensor | Actuator
@@ -88,12 +95,29 @@ class Module(Process):
     #             )
       
     @classmethod
+    def _component_names(cls, component_type):
+        # Walk the MRO (not just cls.__dict__) so components declared on a base
+        # class -- e.g. Cartesian actuators inherited by a SimModule that only
+        # re-declares its joint servos -- are included, matching how __init__
+        # builds the module's actuators/sensors.
+        names = []
+        seen = set()
+        for klass in cls.__mro__:
+            for name in klass.__dict__:
+                if name in seen:
+                    continue
+                if isinstance(getattr(cls, name, None), component_type):
+                    names.append(name)
+                    seen.add(name)
+        return names
+
+    @classmethod
     def actuator_names(cls):
-        return [name for name in cls.__dict__ if isinstance(getattr(cls, name), Actuator)]
+        return cls._component_names(Actuator)
     
     @classmethod
     def sensor_names(cls):
-        return [name for name in cls.__dict__ if isinstance(getattr(cls, name), Sensor)]
+        return cls._component_names(Sensor)
 
     @classmethod
     def validate_obs(cls, data: dict):
@@ -200,6 +224,10 @@ class Module(Process):
         self.module_bus = ModuleBus()
         self.module_bus.add_components(self.actuators)
         self.module_bus.add_components(self.sensors)
+        # Lets modules layer extra behavior (e.g. Cartesian IK) over a port's
+        # joint bus. Default wrap_port_bus is a no-op unless the module declares
+        # Cartesian IK actuators and sets a class-level ``ik_backend`` spec.
+        self.module_bus.port_bus_wrapper = self.wrap_port_bus
 
         module_obs_spec = Observation.get_module_obs_spec()
         if self.name in module_obs_spec:
@@ -437,6 +465,57 @@ class Module(Process):
         for port, actuator_names in self.actuators_by_port.items():
             self.module_bus.component_bus_by_port[port].end_calibration_mode()
 
+
+    # ========= inverse kinematics ============
+    def wrap_port_bus(self, port, inner_bus, joint_components, cartesian_components):
+        """Optionally wrap a port's joint bus to add Cartesian (IK) control.
+
+        Called by :class:`~solarian.core.module_bus.ModuleBus` when connecting a
+        port that has Cartesian IK actuators. The default builds an
+        :class:`~solarian.core.ik.bus.IKActuatorBus` around ``inner_bus`` using
+        the backend resolved from the module's :attr:`ik_backend`; modules with
+        no Cartesian actuators never reach here (``inner_bus`` is used directly).
+        """
+        if not cartesian_components:
+            return inner_bus
+        from solarian.core.ik.bus import IKActuatorBus
+        return IKActuatorBus(
+            inner_bus=inner_bus,
+            joint_components=joint_components,
+            cartesian_components=cartesian_components,
+            backend=self._resolve_ik_backend(),
+        )
+
+    def _resolve_ik_backend(self):
+        """Build the :class:`DifferentialIKBackend` from :attr:`ik_backend`.
+
+        Accepts a declarative spec (anything exposing ``.build()``, e.g.
+        :class:`~solarian.core.ik.MinkIK`), a ready
+        :class:`~solarian.core.ik.DifferentialIKBackend`, or a zero-arg callable
+        returning one. This is why arms using a built-in backend never need to
+        write backend-construction code.
+        """
+        from solarian.core.ik.base import DifferentialIKBackend
+
+        spec = type(self).ik_backend
+        if spec is None:
+            raise NotImplementedError(
+                f"Module '{self.name}' declares Cartesian IK actuators but no "
+                f"`ik_backend` is set. Declare one on the module class, e.g. "
+                f"`ik_backend = MinkIK(mjcf=..., joints=..., frame=...)`."
+            )
+        if isinstance(spec, DifferentialIKBackend):
+            return spec
+        build = getattr(spec, "build", None)
+        if callable(build):
+            return build()
+        if callable(spec):
+            return spec()
+        raise TypeError(
+            f"Module '{self.name}'.ik_backend must be a DifferentialIKBackend, a "
+            f"spec with .build() (e.g. MinkIK), or a zero-arg callable; got "
+            f"{type(spec).__name__}."
+        )
 
     def initialize(self):
         pass

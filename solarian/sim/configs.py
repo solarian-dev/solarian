@@ -61,3 +61,7 @@ class SceneConfig(BaseModel):
     timestep: float | None = None
     #: Optional override of gravity.
     gravity: list[float] | None = None
+    #: Draw coordinate-frame triads in the overview viewer: the world frame at
+    #: the origin and the end-effector frame of every arm that declares an IK
+    #: backend. Set ``False`` to hide them.
+    show_frames: bool = True

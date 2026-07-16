@@ -25,6 +25,7 @@ from typing import Any, Dict
 
 from solarian.core.robot import Robot
 from solarian.core.bus_server import BusClient
+from solarian.core.ik.actuator import CartesianIKActuator
 from solarian.utils import setup_process_logging, StatusBoard
 
 from solarian.sim.configs import SceneConfig
@@ -110,6 +111,10 @@ class SimRobot(Robot):
             for components in module.module_bus.components_by_port.values():
                 for name, component in components.items():
                     key = f"{module_name}/{name}"
+                    if isinstance(component, CartesianIKActuator):
+                        # Cartesian IK actuators are not MuJoCo joints; they are
+                        # driven by the module's IK wrapper over the joint bus.
+                        continue
                     if isinstance(component, SimCamera):
                         specs[key] = self._camera_spec(component)
                     elif isinstance(component, SimServo):
@@ -161,6 +166,30 @@ class SimRobot(Robot):
             "width": int(w),
         }
 
+    def _collect_ee_frames(self) -> list[tuple[str, str]]:
+        """Derive end-effector frames to visualize from each attached module's
+        IK backend spec.
+
+        For every scene attachment whose module declares an ``ik_backend`` with
+        a ``frame`` (e.g. ``MinkIK(frame="gripper")``), the composed frame name
+        is ``prefix + frame`` (the attach prefix namespaces the sub-model). The
+        world server draws an axis triad at each. Empty if frames are disabled.
+        """
+        if not getattr(self.scene, "show_frames", True):
+            return []
+        ee_frames: list[tuple[str, str]] = []
+        for att in self.scene.attachments:
+            module = self.modules.get(att.module)
+            if module is None:
+                continue
+            spec = getattr(type(module), "ik_backend", None)
+            frame = getattr(spec, "frame", None)
+            if not frame:
+                continue
+            frame_type = getattr(spec, "frame_type", "site")
+            ee_frames.append((f"{att.prefix}{frame}", frame_type))
+        return ee_frames
+
     # ------------------------------------------------------------------
     def connect(self):
         """Compose the scene, launch the world server, and proxy module I/O.
@@ -199,6 +228,7 @@ class SimRobot(Robot):
             component_specs=specs,
             server_conns=server_conns,
             conn_modules=conn_modules,
+            ee_frames=self._collect_ee_frames(),
         )
         self._world_server.start()
         # The child now holds its own duplicated ends of every pipe. Drop the

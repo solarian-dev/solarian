@@ -18,6 +18,10 @@ class ModuleBus():
         # Ports mapped here use a pre-created bus (e.g. a BusClient proxy)
         # instead of opening the hardware directly.
         self._port_bus_overrides: Dict[str, ComponentBus] = {}
+        # Optional callable set by the owning Module to wrap a port's inner
+        # (hardware/joint) bus -- e.g. to add Cartesian IK control. Signature:
+        # (port, inner_bus, joint_components, cartesian_components) -> ComponentBus
+        self.port_bus_wrapper = None
         
     def add_components(self, components: Dict[str, Component]):
         for name, component in components.items():
@@ -37,21 +41,41 @@ class ModuleBus():
         self._port_bus_overrides[port] = bus
 
     def connect(self, calibration: Dict[str, Any] = {}):
+        from solarian.core.ik.actuator import CartesianIKActuator
+
         self.component_bus_by_port = {}
         for port, components in self.components_by_port.items():
-            if port in self._port_bus_overrides:
-                bus = self._port_bus_overrides[port]
-                self.component_bus_by_port[port] = bus
-                if not bus.is_connected:
-                    bus.connect()
-                # logger.info(f"Using shared bus proxy on port {port}")
-                continue
+            # Cartesian IK actuators are not hardware: they are driven by an IK
+            # wrapper over the joint (hardware) bus, never given their own bus.
+            joint_components = {
+                name: comp for name, comp in components.items()
+                if not isinstance(comp, CartesianIKActuator)
+            }
+            cartesian_components = {
+                name: comp for name, comp in components.items()
+                if isinstance(comp, CartesianIKActuator)
+            }
 
-            first_component = next(iter(components.values()))
-            bus_class = first_component.bus_class
-            self.component_bus_by_port[port] = bus_class(port=port, components=components, calibration=calibration.get(port, None))
-            # logger.info(f"Connecting {self.component_bus_by_port[port].__class__.__name__} on port {port}")
-            self.component_bus_by_port[port].connect()
+            # Build (or reuse) the inner joint bus for this port.
+            if port in self._port_bus_overrides:
+                inner_bus = self._port_bus_overrides[port]
+                if not inner_bus.is_connected:
+                    inner_bus.connect()
+                # logger.info(f"Using shared bus proxy on port {port}")
+            else:
+                first_component = next(iter(joint_components.values()))
+                bus_class = first_component.bus_class
+                inner_bus = bus_class(port=port, components=joint_components, calibration=calibration.get(port, None))
+                # logger.info(f"Connecting {inner_bus.__class__.__name__} on port {port}")
+                inner_bus.connect()
+
+            # Optionally wrap the inner bus (e.g. add Cartesian IK control).
+            if cartesian_components and self.port_bus_wrapper is not None:
+                self.component_bus_by_port[port] = self.port_bus_wrapper(
+                    port, inner_bus, joint_components, cartesian_components
+                )
+            else:
+                self.component_bus_by_port[port] = inner_bus
 
     def disconnect(self):
         for port, bus in self.component_bus_by_port.items():
