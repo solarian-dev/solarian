@@ -108,8 +108,9 @@ class Controller(ABC):
     # (dashboard + camera grid + on-window key capture) instead of the OpenCV
     # camera windows plus the global pynput listener. The GUI captures keys via
     # window focus, so it needs no OS accessibility / input-monitoring
-    # permission. Opt in per subclass (e.g. keyboard-teleop controllers).
-    use_gui = False
+    # permission. Enabled by default so the GUI is always shown when not
+    # headless; set ``use_gui = False`` on a subclass to explicitly opt out.
+    use_gui = True
 
     def __init__(self, cfg: ControllerConfig):
         self.cfg = cfg

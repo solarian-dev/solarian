@@ -104,6 +104,9 @@ class MujocoWorldServer(Process):
         self._lock = None
         self._stop = None
         self._renderers: dict = {}
+        # Cached fisheye remaps keyed like the renderers: {(camera, h, w): (map1, map2)}.
+        self._distort_maps: dict = {}
+        self._distort_warned: set = set()
         self._virtual: dict[str, float] = {}
         self._render_failed = False
         self._overview_failed = False
@@ -253,20 +256,57 @@ class MujocoWorldServer(Process):
         if self._render_failed or spec.get("camera_id") is None:
             return np.zeros((h, w, 3), dtype=np.uint8)
 
+        dist = spec.get("distortion")
+        # Render at (possibly supersampled) source size; distortion remaps it
+        # down to the (h, w) output afterwards.
+        if dist is not None:
+            scale = max(1.0, float(getattr(dist, "render_scale", 1.0)))
+            src_h, src_w = max(1, round(h * scale)), max(1, round(w * scale))
+        else:
+            src_h, src_w = h, w
+
         key = (spec["camera"], h, w)
         renderer = self._renderers.get(key)
         try:
             if renderer is None:
-                renderer = mujoco.Renderer(self.model, height=h, width=w)
+                renderer = mujoco.Renderer(self.model, height=src_h, width=src_w)
                 self._renderers[key] = renderer
             with self._lock:
                 renderer.update_scene(self.data, camera=spec["camera"])
-            return renderer.render()
+            frame = renderer.render()
+            if dist is not None:
+                frame = self._distort(spec, dist, frame, h, w, src_h, src_w)
+            return frame
         except Exception as exc:  # noqa: BLE001 - degrade gracefully when headless GL is unavailable
             if not self._render_failed:
                 logger.warning("MuJoCo rendering unavailable (%s); returning blank frames.", exc)
                 self._render_failed = True
             return np.zeros((h, w, 3), dtype=np.uint8)
+
+    def _distort(self, spec, dist, frame, h, w, src_h, src_w) -> np.ndarray:
+        """Warp a pinhole render into a calibrated fisheye-distorted image."""
+        from solarian.sim import distortion
+
+        key = (spec["camera"], h, w)
+        maps = self._distort_maps.get(key)
+        if maps is None:
+            fovy = float(self.model.cam_fovy[spec["camera_id"]])
+            map1, map2, outside_frac = distortion.build_fisheye_maps(
+                dist, fovy, out_w=w, out_h=h, src_w=src_w, src_h=src_h
+            )
+            self._distort_maps[key] = (map1, map2)
+            maps = (map1, map2)
+            # A large black border means the source FOV is too narrow to feed
+            # the fisheye; the user likely needs a wider CameraMount.fovy.
+            if outside_frac > 0.02 and spec["camera"] not in self._distort_warned:
+                self._distort_warned.add(spec["camera"])
+                logger.warning(
+                    "Camera '%s': %.0f%% of the fisheye output maps outside the "
+                    "pinhole render (fovy=%.1f). Increase CameraMount.fovy to fill "
+                    "the frame.",
+                    spec["camera"], outside_frac * 100.0, fovy,
+                )
+        return distortion.apply(frame, maps[0], maps[1])
 
     # -- live overview viewer support ----------------------------------
     def overview_defaults(self, module: str) -> Dict[str, Any]:
@@ -319,6 +359,8 @@ class MujocoWorldServer(Process):
                 renderer.update_scene(self.data, camera=camera)
                 if self._scene.show_frames:
                     self._draw_frames(renderer.scene)
+                if self._scene.show_cameras:
+                    self._draw_camera_frustums(renderer.scene)
             return renderer.render()
         except Exception as exc:  # noqa: BLE001 - degrade gracefully when GL is unavailable
             if not self._overview_failed:
@@ -331,6 +373,16 @@ class MujocoWorldServer(Process):
     _WORLD_AXIS_LEN = 0.15
     _EE_AXIS_LEN = 0.08
     _AXIS_WIDTH = 0.004
+
+    #: Frustum depth (m) and line/arrow widths (m) for the camera overlays.
+    _CAM_FRUSTUM_DEPTH = 0.15
+    _CAM_LINE_WIDTH = 0.002
+    _CAM_ARROW_WIDTH = 0.004
+    #: Fallback aspect (width / height) when a camera's render size is unknown.
+    _CAM_DEFAULT_ASPECT = 4.0 / 3.0
+    #: Cyan wireframe / yellow look-arrow so frustums stand out from the triads.
+    _CAM_FRUSTUM_RGBA = (0.1, 0.9, 0.9, 1.0)
+    _CAM_ARROW_RGBA = (1.0, 0.9, 0.1, 1.0)
 
     def _draw_frames(self, scene) -> None:
         """Append world + end-effector axis triads to the render scene."""
@@ -372,6 +424,108 @@ class MujocoWorldServer(Process):
                 geom, mujoco.mjtGeom.mjGEOM_ARROW, self._AXIS_WIDTH, origin, tip
             )
             scene.ngeom += 1
+
+    def _camera_aspects(self) -> dict[str, float]:
+        """Map composed camera name -> render aspect (width / height)."""
+        aspects: dict[str, float] = {}
+        for spec in self._component_specs.values():
+            if spec.get("kind") != "camera":
+                continue
+            name = spec.get("camera")
+            h, w = spec.get("height"), spec.get("width")
+            if name and h:
+                aspects[name] = float(w) / float(h)
+        return aspects
+
+    def _draw_camera_frustums(self, scene) -> None:
+        """Append a wireframe frustum + look-arrow for every mounted camera.
+
+        MuJoCo cameras look down their local -Z axis (local +X right, +Y up), so
+        the frustum is built in world frame from ``cam_xpos``/``cam_xmat`` and
+        the vertical FOV in ``cam_fovy``.
+        """
+        import mujoco
+
+        aspects = self._camera_aspects()
+        depth = self._CAM_FRUSTUM_DEPTH
+        for cam in self._scene.cameras:
+            cam_id = self._name2id(mujoco.mjtObj.mjOBJ_CAMERA, cam.name)
+            if cam_id is None:
+                continue
+            origin = np.asarray(self.data.cam_xpos[cam_id], dtype=float)
+            R = np.asarray(self.data.cam_xmat[cam_id], dtype=float).reshape(3, 3)
+            right, up = R[:, 0], R[:, 1]
+            forward = -R[:, 2]  # cameras look down local -Z
+
+            fovy = float(self.model.cam_fovy[cam_id])
+            aspect = aspects.get(cam.name, self._CAM_DEFAULT_ASPECT)
+            half_h = depth * np.tan(np.deg2rad(fovy) / 2.0)
+            half_w = half_h * aspect
+
+            center = origin + forward * depth
+            corners = [
+                center + up * sy * half_h + right * sx * half_w
+                for sy, sx in ((1, -1), (1, 1), (-1, 1), (-1, -1))
+            ]
+
+            # Four edges apex -> far corners, then the far-plane rectangle.
+            edges = [(origin, c) for c in corners]
+            edges += [(corners[i], corners[(i + 1) % 4]) for i in range(4)]
+            for start, end in edges:
+                if not self._add_line(
+                    scene, start, end, self._CAM_LINE_WIDTH, self._CAM_FRUSTUM_RGBA
+                ):
+                    return
+
+            # A short arrow along -Z makes the look direction unambiguous.
+            self._add_arrow(
+                scene, origin, origin + forward * depth,
+                self._CAM_ARROW_WIDTH, self._CAM_ARROW_RGBA,
+            )
+
+    def _add_line(self, scene, start, end, width: float, rgba) -> bool:
+        """Draw a single line segment; return ``False`` when the geom cap is hit."""
+        import mujoco
+
+        if scene.ngeom >= scene.maxgeom:
+            return False
+        geom = scene.geoms[scene.ngeom]
+        mujoco.mjv_initGeom(
+            geom,
+            mujoco.mjtGeom.mjGEOM_LINE,
+            np.zeros(3),
+            np.zeros(3),
+            np.zeros(9),
+            np.asarray(rgba, dtype=np.float32),
+        )
+        mujoco.mjv_connector(
+            geom, mujoco.mjtGeom.mjGEOM_LINE, width,
+            np.asarray(start, dtype=float), np.asarray(end, dtype=float),
+        )
+        scene.ngeom += 1
+        return True
+
+    def _add_arrow(self, scene, start, end, width: float, rgba) -> bool:
+        """Draw a single arrow; return ``False`` when the geom cap is hit."""
+        import mujoco
+
+        if scene.ngeom >= scene.maxgeom:
+            return False
+        geom = scene.geoms[scene.ngeom]
+        mujoco.mjv_initGeom(
+            geom,
+            mujoco.mjtGeom.mjGEOM_ARROW,
+            np.zeros(3),
+            np.zeros(3),
+            np.zeros(9),
+            np.asarray(rgba, dtype=np.float32),
+        )
+        mujoco.mjv_connector(
+            geom, mujoco.mjtGeom.mjGEOM_ARROW, width,
+            np.asarray(start, dtype=float), np.asarray(end, dtype=float),
+        )
+        scene.ngeom += 1
+        return True
 
     # -- no-op hardware operations (all take the calling module first) --
     def configure(self, module: str, params: dict, component_names: list[str]):

@@ -54,9 +54,32 @@ class SimActuatorConfig(BaseModel):
     range_max: float = 3.141592653589793
     drive_mode: int = 0
 
+class FisheyeDistortionConfig(BaseModel):
+    """Calibrated OpenCV fisheye distortion for a simulated camera.
+
+    MuJoCo renders a rectilinear (pinhole) image; these are the real camera's
+    OpenCV fisheye intrinsics (``K``) and distortion coefficients (``D``) used to
+    warp the pinhole render into an image that matches the real lens (e.g. a
+    GoPro with a fisheye mod). ``K``/``D`` are the values produced by
+    ``cv2.fisheye.calibrate`` at the ``calib_width`` x ``calib_height``
+    resolution; they are rescaled to the render resolution automatically.
+    """
+    #: 3x3 real-camera intrinsics matrix (row-major).
+    K: list[list[float]]
+    #: OpenCV fisheye distortion coefficients (k1, k2, k3, k4).
+    D: list[float]
+    #: Resolution (px) the ``K``/``D`` were calibrated at.
+    calib_width: int
+    calib_height: int
+    #: Supersample factor for the pinhole source render (>1 reduces the heavy
+    #: edge-stretch aliasing before the distortion remap downsamples it).
+    render_scale: float = 1.0
+
 class SimSensorConfig(BaseModel):
     """Simulation mapping for a sensor (e.g. the MuJoCo camera to render)."""
     camera: str | None = None
+    #: Optional calibrated fisheye distortion applied to the rendered frames.
+    distortion: FisheyeDistortionConfig | None = None
 
 class ComponentConfig(BaseModel):
     id: int = 0

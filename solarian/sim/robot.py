@@ -164,6 +164,9 @@ class SimRobot(Robot):
             "camera": sim.camera,
             "height": int(h),
             "width": int(w),
+            # Optional calibrated fisheye distortion; applied by the world
+            # server when rendering this camera. None for a plain pinhole.
+            "distortion": sim.distortion,
         }
 
     def _collect_ee_frames(self) -> list[tuple[str, str]]:
