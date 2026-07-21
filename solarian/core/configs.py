@@ -42,11 +42,11 @@ class SimActuatorConfig(BaseModel):
     """Simulation mapping for an actuator.
 
     Added to the *same* module yaml as the real hardware fields; it is ignored
-    when the module runs on real hardware and only consumed when the robot is a
-    :class:`~solarian.sim.robot.SimRobot`. It says which MuJoCo joint/actuator
-    the servo drives and the radian range the normalized command space maps
-    onto. Leave ``joint``/``actuator`` unset for a virtual joint (one with no
-    MuJoCo counterpart) that just echoes the commanded value.
+    when the module runs on real hardware and only consumed when the robot runs
+    with ``is_sim = True``. It says which MuJoCo joint/actuator the servo drives
+    and the radian range the normalized command space maps onto. Leave
+    ``joint``/``actuator`` unset for a virtual joint (one with no MuJoCo
+    counterpart) that just echoes the commanded value.
     """
     joint: str | None = None
     actuator: str | None = None
@@ -96,7 +96,7 @@ class SensorConfig(ComponentConfig):
     video_format: str
     resize_width: int | None
     resize_height: int | None
-    #: Optional simulation mapping; used only under a SimRobot.
+    #: Optional simulation mapping; used only when the robot runs with is_sim.
     sim: SimSensorConfig | None = None
 
 class CameraConfig(SensorConfig):
@@ -114,7 +114,7 @@ class ActuatorConfig(ComponentConfig):
     model: str
     # TODO validate mode string value
     mode: str
-    #: Optional simulation mapping; used only under a SimRobot.
+    #: Optional simulation mapping; used only when the robot runs with is_sim.
     sim: SimActuatorConfig | None = None
     
 
@@ -155,6 +155,10 @@ class RobotConfig(BaseModel):
     img_compression_quality: int
     connection: ConnectionConfig
     fps: int
+    #: Run in MuJoCo simulation. ``None`` (default) defers to the robot class's
+    #: ``is_sim`` attribute; set it here (or via ``run-robot sim=true``) to
+    #: override, so the same robot class can run on hardware or in sim.
+    sim: bool | None = None
 
 class ControllerConfig(BaseModel):
     fps: int

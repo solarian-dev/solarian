@@ -1,0 +1,159 @@
+export const metadata = {
+  title: 'Inverse Kinematics',
+  description:
+    'Give a module Cartesian (end-effector) control by declaring six CartesianIKActuators and an ik_backend spec. Solarian auto-wraps the joint bus with an IKActuatorBus that runs differential IK every tick. Works identically on real hardware and in simulation.',
+}
+
+# Inverse Kinematics
+
+An arm gets Cartesian (end-effector) control by declaring six `CartesianIKActuator`s and an `ik_backend`. Solarian then automatically wraps the module's joint bus so that Cartesian writes are solved to joint targets every control tick — no `solve_ik` method to write, no mixin to inherit. {{ className: 'lead' }}
+
+IK lives in [`solarian/core/ik/`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ik) and works the same whether the module runs on hardware or in [simulation](/docs/simulation): the same MJCF describes the kinematics either way.
+
+## The recipe
+
+Add three things to your [Module](/docs/modules):
+
+```python
+from solarian.core.module import Module
+from solarian_feetech.actuator import FeetechServo
+from solarian.core.ik import CartesianIKActuator, MinkIK
+
+class ArmModule(Module):
+    # 1) joint-space servos (hardware or, in sim, the same servos)
+    shoulder_pan = FeetechServo()
+    shoulder_lift = FeetechServo()
+    elbow_flex = FeetechServo()
+    wrist_flex = FeetechServo()
+    wrist_yaw = FeetechServo()
+    wrist_roll = FeetechServo()
+
+    # 2) six Cartesian pose components: x, y, z, rx, ry, rz
+    x = CartesianIKActuator()
+    y = CartesianIKActuator()
+    z = CartesianIKActuator()
+    rx = CartesianIKActuator()
+    ry = CartesianIKActuator()
+    rz = CartesianIKActuator()
+
+    # 3) a declarative IK backend spec
+    ik_backend = MinkIK(
+        mjcf="assets/arm.xml",
+        joints={
+            "shoulder_pan": "shoulder_pan", "shoulder_lift": "shoulder_lift",
+            "elbow_flex": "elbow_flex", "wrist_flex": "wrist_flex",
+            "wrist_yaw": "wrist_yaw", "wrist_roll": "wrist_roll",
+        },
+        frame="gripper",
+        position_cost=1.0,
+        orientation_cost=1.0,
+    )
+```
+
+The pose convention is a 6-vector `(x, y, z, rx, ry, rz)`: position in metres, orientation as an axis-angle rotation vector in radians.
+
+## The `CartesianIKActuator`s
+
+Each of the six [`CartesianIKActuator`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ik/actuator.py) declarations is one component of the end-effector pose. The pose index each drives comes from its `cfg.id` (0..5 == x, y, z, rx, ry, rz), and they use raw metric units (`mode: raw`), not the normalized space of joint servos:
+
+```yaml
+# conf/arm.yaml — Cartesian actuators alongside the joint actuators
+actuators:
+  # ... the six joint servos ...
+  x:  { id: 0, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
+  y:  { id: 1, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
+  z:  { id: 2, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
+  rx: { id: 3, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
+  ry: { id: 4, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
+  rz: { id: 5, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
+```
+
+<Note>
+  Because a <code>CartesianIKActuator</code> reports its pose back on read (via forward kinematics), you can expose the live end-effector pose in your <a href="/docs/observations">Observation</a> and command it in your <a href="/docs/actions">Action</a> — the same as any other actuator field.
+</Note>
+
+## The `ik_backend` spec
+
+[`MinkIK`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ik/spec.py) is a declarative spec; the module resolves it (calling `.build()`) the first time it connects a port with Cartesian actuators, producing a [`MinkBackend`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ik/mink_backend.py) — a velocity-level (differential) IK solver built on [mink](https://github.com/kevinzakka/mink) and MuJoCo.
+
+<Properties>
+  <Property name="mjcf" type="str">
+    Robot-description name or path to an MJCF describing the kinematics (resolved like scene MJCF — see <a href="/docs/scenes">Scenes</a>).
+  </Property>
+  <Property name="joints" type="dict[str, str]">
+    Ordered mapping of joint-actuator name → MuJoCo joint name. The order defines the solver's joint vector.
+  </Property>
+  <Property name="frame" type="str">
+    End-effector frame (site/body/geom) in the model.
+  </Property>
+  <Property name="frame_type" type="str">
+    <code>"site"</code> (default), <code>"body"</code>, or <code>"geom"</code>.
+  </Property>
+  <Property name="position_cost / orientation_cost" type="float">
+    Frame-task tracking weights.
+  </Property>
+  <Property name="posture_cost" type="float">
+    Regularization toward the rest posture (helps an under-actuated arm resolve a 6D target gracefully).
+  </Property>
+  <Property name="lm_damping / damping / solver" type="float / str">
+    QP damping and solver knobs (default solver <code>"daqp"</code>).
+  </Property>
+</Properties>
+
+`ik_backend` also accepts a ready `DifferentialIKBackend` instance or a zero-arg callable returning one — not just a `MinkIK` spec.
+
+## Automatic wiring
+
+You don't build or call the solver. When a module connects a port that has Cartesian actuators, [`Module.wrap_port_bus`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/module.py) wraps the joint bus in an [`IKActuatorBus`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ik/bus.py):
+
+```text
+Cartesian write (x, y, z, rx, ry, rz)
+   │
+   ▼
+IKActuatorBus            set_q(current joints) → solve(target, dt) → integrate → q_next
+   │                     (one differential IK step per control tick)
+   ▼
+joint bus (Feetech / BusClient / MuJoCo proxy)   ← writes joint targets
+```
+
+Cartesian **reads** run forward kinematics on the current joint positions. Joint reads/writes pass straight through to the inner bus. In [simulation](/docs/sim-robots) the inner bus is the MuJoCo `BusClient` proxy, so the exact same IK code drives the sim.
+
+## Extending: a custom backend
+
+Implement the [`DifferentialIKBackend`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ik/base.py) interface and point `ik_backend` at it:
+
+```python
+import numpy as np
+from solarian.core.ik.base import DifferentialIKBackend
+
+class MyBackend(DifferentialIKBackend):
+    def set_q(self, q): ...                 # set current joint config
+    def solve(self, target_pose, dt): ...   # return joint velocities
+    def integrate(self, v, dt): ...         # return next q (radians)
+    def get_pose(self) -> np.ndarray: ...   # forward kinematics (x,y,z,rx,ry,rz)
+    @property
+    def joint_actuator_names(self) -> list[str]: ...
+    @property
+    def joint_limits(self) -> dict[str, tuple[float, float]]: ...
+
+class MyArm(Module):
+    ik_backend = MyBackend(...)   # or a spec with .build()
+```
+
+## Validating a backend
+
+[`solarian.core.ik.diagnostics`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ik/diagnostics.py) provides backend-agnostic checks for bring-up — axis response, per-joint sensitivity (catches mis-mapped joints), and convergence to reachable poses:
+
+```python
+from solarian.core.ik.diagnostics import diagnose_backend
+
+report = diagnose_backend(MyArm.ik_backend.build())
+print(report.format())
+```
+
+## See also
+
+- [Modules](/docs/modules) — where actuators and `ik_backend` are declared.
+- [Simulation](/docs/simulation) / [Sim Robots](/docs/sim-robots) — IK drives sim unchanged; the arm's `frame` is drawn in the viewer.
+- [Scenes](/docs/scenes) — how the IK MJCF path is resolved.
+- [Actions](/docs/actions) / [Observations](/docs/observations) — commanding and reading the end-effector pose.

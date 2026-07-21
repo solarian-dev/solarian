@@ -97,9 +97,9 @@ class Module(Process):
     @classmethod
     def _component_names(cls, component_type):
         # Walk the MRO (not just cls.__dict__) so components declared on a base
-        # class -- e.g. Cartesian actuators inherited by a SimModule that only
-        # re-declares its joint servos -- are included, matching how __init__
-        # builds the module's actuators/sensors.
+        # class -- e.g. Cartesian actuators inherited from a base arm module --
+        # are included, matching how __init__ builds the module's
+        # actuators/sensors.
         names = []
         seen = set()
         for klass in cls.__mro__:

@@ -1,0 +1,130 @@
+export const metadata = {
+  title: 'Scenes',
+  description:
+    'A Scene describes the MuJoCo world a simulated robot lives in: the environment MJCF, how each module\u2019s model attaches into it, extra mounted cameras, and physics options. Scenes are composed programmatically with MuJoCo\u2019s MjSpec API.',
+}
+
+# Scenes
+
+A **Scene** describes the MuJoCo world a [simulated robot](/docs/sim-robots) lives in: the environment (floor, lights, objects), how each module's MJCF model attaches into it, any extra cameras, and physics options. It is a plain declarative [`SceneConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/configs.py) you set on the robot. {{ className: 'lead' }}
+
+```python
+from solarian.sim import SceneConfig, ModuleAttachment, CameraMount
+
+scene = SceneConfig(
+    world_mjcf="assets/scene.xml",
+    attachments=[
+        ModuleAttachment(module="arm", mjcf="assets/arm.xml", prefix="arm/"),
+    ],
+    cameras=[
+        CameraMount(name="wrist_cam", parent_body="arm/gripper",
+                    pos=[0.0, -0.05, 0.02], quat=[1, 0, 0, 0], fovy=70.0),
+    ],
+    timestep=0.002,
+)
+```
+
+## `SceneConfig`
+
+<Properties>
+  <Property name="world_mjcf" type="str | None">
+    MJCF for the environment (ground, lights, manipulable objects). If <code>None</code>, a minimal ground+light world is generated for you.
+  </Property>
+  <Property name="attachments" type="list[ModuleAttachment]">
+    One entry per module MJCF to attach into the world. See <a href="/docs/sim-robots">Sim Robots</a> for the field-by-field reference.
+  </Property>
+  <Property name="cameras" type="list[CameraMount]">
+    Extra MuJoCo cameras added to composed bodies (e.g. a wrist camera).
+  </Property>
+  <Property name="timestep" type="float | None">
+    Override the physics timestep (seconds). e.g. <code>0.002</code> = 500 Hz.
+  </Property>
+  <Property name="gravity" type="list[float] | None">
+    Override gravity, e.g. <code>[0, 0, -9.81]</code>.
+  </Property>
+  <Property name="show_frames" type="bool">
+    Draw coordinate-frame triads in the overview viewer: the world frame at the origin and the end-effector frame of every arm that declares an <a href="/docs/ik">IK backend</a>. Default <code>True</code>.
+  </Property>
+  <Property name="show_cameras" type="bool">
+    Draw a wireframe frustum for every mounted camera in the overview viewer. Default <code>True</code>.
+  </Property>
+</Properties>
+
+## How composition works
+
+Scenes are built **programmatically** with MuJoCo's `MjSpec` API — not with XML `<include>`/`<attach>` tags — by [`compose_scene()`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/scene.py):
+
+```python
+# solarian/sim/scene.py (excerpt)
+world = _load_spec(scene.world_mjcf)              # environment (or default world)
+
+for att in scene.attachments:
+    child = mujoco.MjSpec.from_file(resolve_mjcf(att.mjcf))
+    parent = _find_body(world, att.parent_body)   # "world" → worldbody
+    frame = parent.add_frame(pos=att.pos, quat=att.quat)
+    world.attach(child, frame=frame, prefix=att.prefix)   # prefix namespaces names
+
+for cam in scene.cameras:
+    body = _find_body(world, cam.parent_body)
+    body.add_camera(name=cam.name, pos=cam.pos, quat=cam.quat, fovy=cam.fovy)
+
+model = world.compile()                           # single MjModel for the whole scene
+```
+
+The compiled `MjModel` is handed to the [`MujocoWorldServer`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/mujoco_world.py), which owns it and serves every module's I/O.
+
+<Note>
+  Because attachment is done with <code>MjSpec.attach(..., prefix=...)</code>, a joint named <code>shoulder_pan</code> in the attached model becomes <code>arm/shoulder_pan</code> in the composed world. Your servo <code>sim.joint</code>/<code>sim.actuator</code> must use the prefixed name — see <a href="/docs/sim-robots">Sim Robots</a>.
+</Note>
+
+## Resolving MJCF paths
+
+Every `mjcf` reference (the world and each attachment) is resolved by [`resolve_mjcf()`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/scene.py), in order:
+
+1. An **absolute path** that exists.
+2. A path **relative to `SOLARIAN_PROJECT_PATH`** (set automatically by the CLI to your project root) — this is the usual case, e.g. `"assets/arm.xml"`.
+3. A path relative to the current working directory.
+4. Otherwise, treated as a **`robot_descriptions` module name** (e.g. `"so_arm101_mj_description"`), using its `MJCF_PATH`.
+
+This means you can attach a community model without shipping any files:
+
+```python
+ModuleAttachment(module="arm", mjcf="so_arm101_mj_description", prefix="arm/")
+```
+
+## The default world
+
+If `world_mjcf` is `None`, `compose_scene` generates a minimal world — a skybox, a grid floor plane, and a directional light — so you can bring up a robot before authoring an environment:
+
+```python
+scene = SceneConfig(
+    attachments=[ModuleAttachment(module="arm", mjcf="assets/arm.xml", prefix="arm/")],
+)  # world_mjcf omitted → default floor + light
+```
+
+A custom `world_mjcf` is a normal MuJoCo XML with your ground, lighting, and any free-floating objects (a manipulable cube, props, fixtures) the robot interacts with. The robot itself is **not** part of the world MJCF — it is attached at runtime from the module models.
+
+## Mounting cameras
+
+`CameraMount` adds a MuJoCo camera to any body in the composed scene, including a body contributed by a module (using its prefix):
+
+<Properties>
+  <Property name="name" type="str">
+    Camera name. A simulated camera's <code>sim.camera</code> field references this.
+  </Property>
+  <Property name="parent_body" type="str">
+    Body to attach to, e.g. <code>"arm/gripper"</code> for a wrist camera.
+  </Property>
+  <Property name="pos" type="list[float]">Camera position on the body.</Property>
+  <Property name="quat" type="list[float]">Camera orientation quaternion.</Property>
+  <Property name="fovy" type="float">Vertical field of view in degrees (default 58).</Property>
+</Properties>
+
+See [Sim Servos & Cameras](/docs/sim-components) for wiring the render into a camera module's observation.
+
+## See also
+
+- [Sim Robots](/docs/sim-robots) — `ModuleAttachment` fields and the `prefix` namespacing.
+- [Sim Servos & Cameras](/docs/sim-components) — mapping components to MuJoCo joints/cameras.
+- [Simulation](/docs/simulation) — the overview and how to run.
+- [IK](/docs/ik) — end-effector frames drawn from `ik_backend`.

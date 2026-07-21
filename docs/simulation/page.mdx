@@ -1,0 +1,129 @@
+export const metadata = {
+  title: 'Simulation',
+  description:
+    'Run any Solarian robot in a MuJoCo simulation by flipping a switch: set is_sim = True and declare a scene. No separate SimRobot, SimModule, or SimServo classes — the same modules, servos, cameras, and YAML drive both real hardware and sim.',
+}
+
+# Simulation
+
+Running a robot in simulation is a **switch, not a rewrite**. Take your existing [`Robot`](/docs/robots), set `is_sim = True`, give it a `scene`, and the framework runs every [Module](/docs/modules) inside a shared MuJoCo world instead of on hardware — same [Observation](/docs/observations)/[Action](/docs/actions) schemas, same transport, same control loop. {{ className: 'lead' }}
+
+There are **no** `SimRobot`, `SimModule`, or `SimServo` classes. Your real modules, servos, and cameras run unchanged; the only extra input the sim needs is a `scene` describing the environment and how each module's MuJoCo model attaches, plus a small `sim:` block on each component's YAML.
+
+<Note>
+  MuJoCo and the other simulation dependencies live in the `[sim]` extra (`mujoco`, `mink`). They are imported lazily inside the sim code paths, so `import solarian` never requires them — only running a robot with `is_sim = True` does. Install with <code>pip install "solarian[sim]"</code>.
+</Note>
+
+## Flip the switch
+
+Set `is_sim = True` and a `scene` on your robot class:
+
+```python
+from solarian.core import Robot
+from solarian.sim import SceneConfig, ModuleAttachment
+from myrobot.modules.arm import ArmModule
+
+class MyRobot(Robot):
+    is_sim = True            # run in MuJoCo
+    view = True              # show the live overview window
+
+    arm = ArmModule()        # the SAME module used on real hardware
+
+    scene = SceneConfig(
+        world_mjcf="assets/scene.xml",
+        attachments=[
+            ModuleAttachment(module="arm", mjcf="assets/arm.xml", prefix="arm/"),
+        ],
+    )
+```
+
+That's the whole difference from a real robot. See [Sim Robots](/docs/sim-robots) for the full anatomy and [Scenes](/docs/scenes) for building the world.
+
+## Choosing real vs sim at run time
+
+`is_sim` defaults to the class attribute but is overridable per run by the `sim` field on [`RobotConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py). So the **same** robot class can run on hardware or in sim:
+
+```bash
+solarian run-robot            # uses the class attribute (sim here)
+solarian run-robot sim=false  # force the real hardware path
+solarian run-robot sim=true   # force simulation
+```
+
+The resolution order is: `sim` from config/CLI if set, otherwise the class attribute. Keep `sim: null` in your `conf/robot.yaml` so the CLI override is accepted:
+
+```yaml
+# conf/robot.yaml
+defaults:
+  - connection: localhost
+  - _self_
+fps: 30
+img_compression_quality: 70
+sim: null   # null defers to the robot class's is_sim; override with sim=true/false
+```
+
+<Properties>
+  <Property name="is_sim" type="bool">
+    Robot class attribute (default <code>False</code>). Run modules in MuJoCo instead of on hardware.
+  </Property>
+  <Property name="scene" type="SceneConfig">
+    Required when <code>is_sim</code>. Describes the environment and how each module's MJCF attaches. See <a href="/docs/scenes">Scenes</a>.
+  </Property>
+  <Property name="view" type="bool">
+    Show a live overview window while running. Overridable at runtime with the <code>SOLARIAN_SIM_VIEW</code> env var (<code>1</code>/<code>0</code>). Best-effort: with no display available the sim runs headless.
+  </Property>
+</Properties>
+
+## Same YAML, one `sim:` block
+
+Real and simulated robots read the **same** `conf/<module>.yaml` files. The hardware fields (`id`, `model`, `port`, `type`) are ignored in sim; a `sim:` block on each actuator/sensor supplies the MuJoCo mapping and is ignored on hardware:
+
+```yaml
+# conf/arm.yaml
+actuators:
+  shoulder_pan:
+    id: 1
+    model: sts3215
+    port: ${actuator_port}
+    type: feetech
+    mode: range_m100_100
+    sim:
+      joint: "arm/shoulder_pan"       # MJCF joint name (after the attach prefix)
+      actuator: "arm/shoulder_pan"    # MJCF actuator name
+      range_min: -1.91986             # radians mapped to -100
+      range_max: 1.91986              # radians mapped to +100
+```
+
+See [Sim Servos & Cameras](/docs/sim-components) for the full `sim:` schema, virtual joints, and simulated cameras.
+
+## How it works
+
+When `is_sim` is set, [`Robot.connect()`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py) delegates to [`solarian/sim/runtime.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/runtime.py) instead of opening hardware buses:
+
+```text
+Robot.connect()  (is_sim)
+   │
+   ├── compose_scene(scene)              → a single MuJoCo MjModel
+   ├── MujocoWorldServer.start()         → physics process (owns MjModel/MjData)
+   ├── BusClient per (module, port)      → proxy each module's I/O to the world
+   └── module.connect()                  → modules attach to their BusClient
+```
+
+The `MujocoWorldServer` owns one composed `MjModel`/`MjData`, steps the physics in real time, and answers each module's read/write/render requests over a pipe — exactly the same `BusClient`/`BusServer` protocol hardware modules use when several of them share one serial port. Because the module subprocesses, observation sender, and control loop are all inherited unchanged from [`Robot`](/docs/robots), a real leader arm can drive a simulated follower with zero schema or transport changes.
+
+## Running the stack
+
+Sim uses the same three-node setup as hardware — only the robot node changes:
+
+```bash
+solarian run-server                 # relay server
+solarian run-robot sim=true         # the simulated robot
+solarian run-controller             # unchanged controller (keyboard, leader arm, policy...)
+```
+
+## See also
+
+- [Sim Robots](/docs/sim-robots) — the `is_sim`/`scene` switch and attaching modules.
+- [Scenes](/docs/scenes) — building the MuJoCo world from module MJCF.
+- [Sim Servos & Cameras](/docs/sim-components) — the `sim:` block on components.
+- [IK](/docs/ik) — Cartesian control that works in real and sim alike.
+- [Robots](/docs/robots) / [Modules](/docs/modules) — the classes you reuse unchanged.

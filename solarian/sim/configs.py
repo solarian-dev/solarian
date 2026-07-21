@@ -44,7 +44,7 @@ class CameraMount(BaseModel):
 
 
 class SceneConfig(BaseModel):
-    """Declares the simulated environment a :class:`SimRobot` lives in.
+    """Declares the simulated environment an ``is_sim`` robot lives in.
 
     The scene starts from ``world_mjcf`` (the environment: ground, lights,
     objects the robot interacts with). Each module's MJCF is then attached to

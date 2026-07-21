@@ -1,0 +1,165 @@
+export const metadata = {
+  title: 'Sim Robots',
+  description:
+    'A simulated robot is an ordinary Robot with is_sim = True and a scene. This page covers the switch, its lifecycle in MuJoCo, and how to attach one or more module MJCF models into the world (including bimanual setups) via ModuleAttachment.',
+}
+
+# Sim Robots
+
+A simulated robot is just a [`Robot`](/docs/robots) with `is_sim = True` and a `scene`. You do **not** subclass anything new or re-declare your modules — the same class that runs on hardware runs in MuJoCo when the switch is on. {{ className: 'lead' }}
+
+The sim behavior lives in [`solarian/sim/runtime.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/runtime.py); [`Robot`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py) delegates to it when `is_sim` is set.
+
+## Defining a sim robot
+
+```python
+from solarian.core import Robot
+from solarian.sim import SceneConfig, ModuleAttachment
+from myrobot.modules.arm import ArmModule
+
+class MyRobot(Robot):
+    is_sim = True
+    view = True
+
+    arm = ArmModule()
+
+    scene = SceneConfig(
+        world_mjcf="assets/scene.xml",
+        attachments=[
+            ModuleAttachment(
+                module="arm",
+                mjcf="assets/arm.xml",
+                parent_body="world",
+                pos=[0.0, 0.0, 0.0],
+                quat=[1.0, 0.0, 0.0, 0.0],
+                prefix="arm/",
+            ),
+        ],
+        timestep=0.002,
+    )
+```
+
+<Note>
+  The module attribute name (<code>arm</code>) is still the canonical module ID — it keys <code>conf/arm.yaml</code>, the Observation/Action schemas, and the <code>module</code> field of each <code>ModuleAttachment</code>. Nothing about the schema changes between real and sim.
+</Note>
+
+## The switch
+
+<Properties>
+  <Property name="is_sim" type="bool">
+    Class attribute, default <code>False</code>. When true, <code>connect</code>/<code>start</code>/<code>disconnect</code> use the MuJoCo path instead of hardware.
+  </Property>
+  <Property name="scene" type="SceneConfig">
+    Required when <code>is_sim</code> is true (a clear error is raised otherwise). See <a href="/docs/scenes">Scenes</a>.
+  </Property>
+  <Property name="view" type="bool">
+    Show the live overview window. Overridable with the <code>SOLARIAN_SIM_VIEW</code> env var.
+  </Property>
+</Properties>
+
+`is_sim` resolves from the class attribute unless the `sim` field on [`RobotConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py) overrides it (via `conf/robot.yaml` or `solarian run-robot sim=...`):
+
+```python
+# solarian/core/robot.py — resolution in Robot.__init__
+cfg_sim = getattr(cfg, "sim", None)
+self.is_sim = type(self).is_sim if cfg_sim is None else bool(cfg_sim)
+```
+
+So one class serves both: hard-code `is_sim = True` for a sim-first project and run `sim=false` for the occasional hardware run, or leave it `False` and opt in with `sim=true`.
+
+## Lifecycle
+
+The hardware lifecycle from [Robots](/docs/robots) is preserved; only the bus layer changes.
+
+```text
+MyRobot(cfg)            # resolves is_sim; requires `scene`
+   │
+   ├── connect()        # compose scene → launch MujocoWorldServer →
+   │                    #   inject a BusClient proxy per (module, port) →
+   │                    #   module.connect()
+   ├── initialize()     # module.initialize() on every module (unchanged)
+   └── start()          # the world server is the sole "bus server";
+                        #   fork module processes, start observation sender,
+                        #   run control_loop()
+```
+
+- **`connect()`** calls `sim_connect(self)`: it composes the scene into one `MjModel`, starts a single [`MujocoWorldServer`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/mujoco_world.py) that owns the physics, and injects a `BusClient` proxy for every `(module, port)` so each module's I/O is routed to the world instead of a serial port. If `view` is on, a `SimViewer` window process is started too.
+- **`initialize()`** runs each module's `initialize()` against the live world.
+- **`start()`** registers the world server as the only bus server, then forks the module subprocesses, starts the observation sender thread, and enters the control loop — identical to hardware from here on.
+- **`disconnect()`** tears down the viewer, then the world server (it is listed in `self._bus_servers`) and the base robot.
+
+## Attaching modules
+
+A `scene`'s `attachments` list controls how each module's MuJoCo model is placed into the world. Each [`ModuleAttachment`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/configs.py) attaches one module's MJCF sub-model to a body of the (already-composed) scene:
+
+<Properties>
+  <Property name="module" type="str">
+    The robot's module attribute name this MJCF belongs to (e.g. <code>"arm"</code>).
+  </Property>
+  <Property name="mjcf" type="str">
+    Path to the module's <code>.xml</code> (absolute, or relative to <code>SOLARIAN_PROJECT_PATH</code>), or the name of a <code>robot_descriptions</code> module (e.g. <code>"so_arm101_mj_description"</code>).
+  </Property>
+  <Property name="parent_body" type="str">
+    Body in the scene to attach to. <code>"world"</code> (default) attaches to the worldbody.
+  </Property>
+  <Property name="pos" type="list[float]">
+    Attachment position <code>[x, y, z]</code> in metres.
+  </Property>
+  <Property name="quat" type="list[float]">
+    Attachment orientation as a quaternion <code>[w, x, y, z]</code>.
+  </Property>
+  <Property name="prefix" type="str">
+    Name prefix applied to every joint / actuator / camera in the child model. This is the namespacing mechanism that lets multiple modules coexist.
+  </Property>
+</Properties>
+
+### The prefix connects the MJCF to your YAML
+
+`prefix` namespaces the attached model, so a joint named `shoulder_pan` in `arm.xml` becomes `arm/shoulder_pan` in the composed world. Each servo's `sim:` block in the module YAML must reference the **prefixed** names:
+
+```yaml
+# conf/arm.yaml
+actuators:
+  shoulder_pan:
+    # ... hardware fields ...
+    sim:
+      joint: "arm/shoulder_pan"       # matches prefix="arm/"
+      actuator: "arm/shoulder_pan"
+      range_min: -1.91986
+      range_max: 1.91986
+```
+
+### Bimanual (and multi-module) setups
+
+Attaching two copies of the same arm is just two attachments with different prefixes and offsets — the prefixes keep their identically named joints distinct:
+
+```python
+class Bimanual(Robot):
+    is_sim = True
+    left_arm = ArmModule()
+    right_arm = ArmModule()
+
+    scene = SceneConfig(
+        world_mjcf="assets/scene.xml",
+        attachments=[
+            ModuleAttachment(module="left_arm",  mjcf="assets/arm.xml",
+                             pos=[0.0, 0.2, 0.0],  prefix="left/"),
+            ModuleAttachment(module="right_arm", mjcf="assets/arm.xml",
+                             pos=[0.0, -0.2, 0.0], prefix="right/"),
+        ],
+    )
+```
+
+`left_arm`'s YAML then maps `sim.joint: "left/shoulder_pan"`, `right_arm`'s maps `sim.joint: "right/shoulder_pan"`, and so on. Internally the world server keys every component as `"{module}/{component}"`, so even without prefixes the two modules stay separate — but a prefix is required so their MJCF joint **names** don't collide in the compiled model.
+
+<Note>
+  A camera can be mounted onto a composed body (e.g. an arm's wrist) with <code>CameraMount</code> in the same <code>scene</code>. See <a href="/docs/scenes">Scenes</a> and <a href="/docs/sim-components">Sim Servos & Cameras</a>.
+</Note>
+
+## See also
+
+- [Simulation](/docs/simulation) — the big picture and how to run.
+- [Scenes](/docs/scenes) — `SceneConfig`, the world MJCF, and scene composition.
+- [Sim Servos & Cameras](/docs/sim-components) — the `sim:` block that maps components to MuJoCo.
+- [IK](/docs/ik) — Cartesian control and end-effector frames in the viewer.
+- [Robots](/docs/robots) — the base class and hardware lifecycle.
