@@ -1,0 +1,34 @@
+"""
+${class_prefix} Policy Server
+
+Hosts inference for the ${plugin_name} policy over HTTP.
+"""
+
+from typing import Any, Dict
+
+import numpy as np
+
+from solarian.core.ai.system1.policy_server import PolicyServer
+
+
+class ${class_prefix}PolicyServer(PolicyServer):
+    title = "${class_prefix} Policy Server"
+
+    def load(self) -> None:
+        # TODO: load the checkpoint / model into memory. self.config holds the
+        # kwargs the server was constructed with.
+        raise NotImplementedError
+
+    def predict(self, obs_dict: Dict[str, np.ndarray], **kwargs: Any) -> Dict[str, Any]:
+        # TODO: run inference for a single observation and return at least
+        # {"action": np.ndarray}.
+        raise NotImplementedError
+
+    @property
+    def model_info(self) -> Dict[str, Any]:
+        return {"name": "${plugin_name}"}
+
+    @property
+    def shape_meta(self) -> Dict[str, Any]:
+        # TODO: describe observation / action shapes.
+        return {}

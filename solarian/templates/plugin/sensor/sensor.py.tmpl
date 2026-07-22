@@ -1,0 +1,30 @@
+"""
+${class_prefix} Sensor
+
+Sensor class for ${plugin_name} hardware.
+"""
+
+from solarian.core.sensor import Sensor
+
+from ${package_name}.sensor_bus import ${class_prefix}SensorBus
+
+
+class ${class_prefix}Sensor(Sensor):
+    """
+    Sensor for ${plugin_name} hardware.
+
+    Declare it as a class attribute inside a Module, e.g.:
+
+        from ${package_name}.sensor import ${class_prefix}Sensor
+
+        class MyModule(Module):
+            sensor = ${class_prefix}Sensor()
+
+    The corresponding ${class_prefix}SensorBus is automatically used for communication.
+    """
+
+    bus_class = ${class_prefix}SensorBus
+
+    # Declare the data channels this sensor exposes, e.g.:
+    #   from solarian.core.data import ImageData
+    #   rgb_image = ImageData()

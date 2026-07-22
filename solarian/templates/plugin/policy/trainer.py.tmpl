@@ -1,0 +1,23 @@
+"""
+${class_prefix} Policy Trainer
+
+Trains the ${plugin_name} policy. Resolved by ``solarian train`` through the
+``solarian.trainers`` entry-point group.
+"""
+
+from solarian.core.ai.system1.policy_trainer import PolicyTrainer
+
+
+class ${class_prefix}Trainer(PolicyTrainer):
+    title = "${class_prefix} Policy Trainer"
+
+    @classmethod
+    def config_class(cls) -> type:
+        # Return a pydantic config subclass to validate training config, or the
+        # default TrainConfig from the base class.
+        return super().config_class()
+
+    def train(self) -> None:
+        # TODO: implement the training loop. self.cfg holds the validated
+        # config and self.output_dir the checkpoint/log directory.
+        raise NotImplementedError

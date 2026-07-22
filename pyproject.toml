@@ -71,6 +71,9 @@ sim = [
     "dm_control==1.0.30",
     "mink==0.0.11",
     "robot_descriptions==3.0.0",
+    # Onshape assembly -> MJCF export (the `solarian onshape-export` command).
+    # Pulls numpy-stl + transforms3d + commentjson, used by solarian/sim/onshape.py.
+    "onshape-to-robot>=1.8",
 ]
 all = [
     "solarian[ai,sim]",

@@ -1,0 +1,23 @@
+"""
+``solarian ${plugin_name}-command`` — a custom CLI command provided by ${dist_name}.
+"""
+
+import argparse
+import sys
+
+from solarian.cli import BaseCommand, CommandRegistry
+
+
+@CommandRegistry.register("${plugin_name}-command")
+class ${class_prefix}Command(BaseCommand):
+    help = "A custom command provided by the ${dist_name} plugin."
+
+    def handle(self, cfg) -> None:
+        args = self._parse_args()
+        # TODO: implement the command logic here.
+        print(f"Running ${plugin_name}-command (args: {args})")
+
+    def _parse_args(self) -> argparse.Namespace:
+        parser = argparse.ArgumentParser(prog="solarian ${plugin_name}-command")
+        # Add command-specific arguments here.
+        return parser.parse_args(sys.argv[2:])

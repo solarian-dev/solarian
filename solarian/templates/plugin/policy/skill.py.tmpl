@@ -1,0 +1,28 @@
+"""
+${class_prefix} Skill
+
+A runtime behavior for ${plugin_name}. Discovered through the
+``solarian.skills`` entry-point group.
+"""
+
+from solarian.core.ai.system1.skill import Skill
+
+
+class ${class_prefix}Skill(Skill):
+    """Skill that drives the ${plugin_name} behavior (optionally via a policy)."""
+
+    def setup(self):
+        # Called once before the control loop. Load models / allocate buffers.
+        pass
+
+    def control_step(self) -> bool:
+        # Called in a loop at self.frequency Hz. Read observations, compute
+        # actions, submit them, and return True when the skill is complete.
+        #
+        #   obs = self.get_observation("arm")
+        #   self.put_action(action_data)
+        return False
+
+    def teardown(self):
+        # Called once after the control loop ends. Release resources.
+        pass

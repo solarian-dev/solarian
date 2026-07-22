@@ -1,0 +1,25 @@
+"""
+${class_prefix} Robot
+
+A Solarian robot definition that composes one or more modules.
+"""
+
+from solarian.core import Robot
+
+
+class ${class_prefix}Robot(Robot):
+    """
+    Robot for ${plugin_name}.
+
+    Declare modules as class attributes, e.g.:
+
+        from ${package_name}.module import ${class_prefix}Module
+
+        class ${class_prefix}Robot(Robot):
+            arm = ${class_prefix}Module()
+
+    To use this robot in a project, point ROBOT_CLASS in the project's
+    settings.py at ``${package_name}.robot.${class_prefix}Robot``.
+    """
+
+    # Declare modules here as class attributes.

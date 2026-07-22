@@ -1,0 +1,269 @@
+export const metadata = {
+  title: 'Onshape → Sim Models',
+  description:
+    'Turn an Onshape CAD assembly into an attachable MuJoCo (MJCF) model with one command: solarian onshape-export. A config.json drives which mates become joints, how the tree is rooted, mass/inertia inference, and an optional end-effector site — the same pipeline used to build the SO-106 arm and its gripper.',
+}
+
+# Onshape → Sim Models
+
+A [simulated robot](/docs/simulation) composes its scene from each module's MJCF model. `solarian onshape-export` builds those models straight from an **Onshape assembly**: it pulls the CAD through [onshape-to-robot](https://onshape-to-robot.readthedocs.io), then cleans the raw export into an *attachable* MuJoCo model you can drop into a [scene](/docs/scenes). {{ className: 'lead' }}
+
+The whole process is driven by a single `config.json`, so once an assembly is set up, re-exporting after a CAD change is one command — and the recipe is version-controlled next to the meshes.
+
+<Note>
+  The exporter lives in the `[sim]` extra (it adds `onshape-to-robot`, which pulls `numpy-stl` + `transforms3d`). Install with <code>pip install "solarian[sim]"</code>. You also need Onshape API keys (below).
+</Note>
+
+## The command
+
+```bash
+solarian onshape-export <assembly_dir>              # full export (needs network)
+solarian onshape-export <assembly_dir> --clean-only # re-run only the clean stage
+solarian onshape-export <assembly_dir> --keys-file path/to/keys.txt
+```
+
+`<assembly_dir>` is a directory containing a `config.json`. The command writes the cleaned, attachable MJCF (by default to the project's `assets/`, see `output_xml`) and prints where it landed.
+
+<Properties>
+  <Property name="--clean-only" type="flag">
+    Skip the Onshape API call and re-run only the <a href="#stage-2-clean">clean stage</a> on the previously-exported raw MJCF. Fast iteration on cleaning options (density, EE site, self-collision) without re-hitting the network.
+  </Property>
+  <Property name="--keys-file" type="path">
+    File with <code>ONSHAPE_ACCESS_KEY</code>/<code>ONSHAPE_SECRET_KEY</code> lines, loaded into the environment if the keys aren't already set. Defaults to <code>onshape_keys.txt</code> in the current directory.
+  </Property>
+</Properties>
+
+## Credentials
+
+onshape-to-robot reads credentials from the environment. Create an API key pair at [dev-portal.onshape.com/keys](https://dev-portal.onshape.com/keys) and either export them:
+
+```bash
+export ONSHAPE_API=https://cad.onshape.com   # the command defaults this for you
+export ONSHAPE_ACCESS_KEY=your_access_key
+export ONSHAPE_SECRET_KEY=your_secret_key
+```
+
+…or drop them in a keys file (git-ignored) that the command loads automatically:
+
+```text
+# onshape_keys.txt
+ONSHAPE_ACCESS_KEY=your_access_key
+ONSHAPE_SECRET_KEY=your_secret_key
+```
+
+## The `config.json`
+
+The file is the ordinary [onshape-to-robot config](https://onshape-to-robot.readthedocs.io/en/latest/config.html) (which assembly to pull, joint limits, `output_format: mujoco`) **plus** a `solarian` block that describes how to turn the raw export into an attachable Solarian model:
+
+```json
+{
+    "document_id": "d60e2cd05d40533c485d06e9",
+    "workspace_id": "361314ab0f218f78e02b4966",
+    "element_id": "f8420291ebade3c3ad36c733",
+    "output_format": "mujoco",
+    "output_filename": "so106_raw",
+    "assets_directory": "meshes",
+    "robot_name": "so106",
+    "joint_properties": {
+        "shoulder_pan":  {"limits": [-1.91986, 1.91986], "range": true},
+        "shoulder_lift": {"limits": [-1.74533, 1.74533], "range": true},
+        "elbow_flex":    {"limits": [-1.74533, 1.57080], "range": true},
+        "wrist_flex":    {"limits": [-1.65806, 1.65806], "range": true},
+        "wrist_yaw":     {"limits": [-1.57080, 1.57080], "range": true},
+        "wrist_roll":    {"limits": [-2.79253, 2.79253], "range": true}
+    },
+    "solarian": {
+        "dof_mates": ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_yaw", "wrist_roll"],
+        "base_dof": "shoulder_pan",
+        "output_xml": "../so106.xml",
+        "meshdir": "so106_description/meshes",
+        "density": 1400,
+        "ee_site": { "name": "gripper", "body": "so100_6dof_wrist_roll_to_gripper", "axis": "z" }
+    }
+}
+```
+
+<Note>
+  You can point at the assembly with a single <code>"url"</code> field (the Onshape tab URL) instead of <code>document_id</code>/<code>workspace_id</code>/<code>element_id</code> — onshape-to-robot parses the IDs out of it.
+</Note>
+
+### The `solarian` block
+
+Parsed into [`SolarianExportSpec`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/onshape.py). Every field has a default that reproduces the SO-106 arm's behaviour:
+
+<Properties>
+  <Property name="dof_mates" type="list[str]">
+    CAD names of the revolute/prismatic mates to expose as actuated joints. onshape-to-robot only treats a mate as a joint when its name starts with <code>dof_</code>; rather than renaming mates in the CAD, the command renames these on the fly in the API responses.
+  </Property>
+  <Property name="base_dof" type="str | None">
+    Root the kinematic tree at the body of this DOF that no other DOF touches (the mechanism's base), so the model attaches to the world / a parent body at its base rather than at the tool. <code>None</code> keeps onshape-to-robot's default root.
+  </Property>
+  <Property name="drop_unmated_links" type="bool">
+    Drop links that carry no mate — free-floating duplicate shells the CAD sometimes surfaces. Default <code>true</code>; keeps the export a single connected mechanism.
+  </Property>
+  <Property name="output_xml" type="str | None">
+    Where to write the cleaned MJCF, relative to the assembly dir. Default <code>../&lt;robot_name&gt;.xml</code> (the project <code>assets/</code>).
+  </Property>
+  <Property name="meshdir" type="str | None">
+    <code>meshdir</code> written into the cleaned MJCF (relative to <code>output_xml</code>). Defaults to the assembly's assets directory.
+  </Property>
+  <Property name="density" type="float">
+    Uniform density (kg/m³) used to infer link mass/inertia from the collision meshes, since the CAD assigns no materials. Default <code>1400</code> (~1 kg for an SO-ARM-sized part).
+  </Property>
+  <Property name="attach" type="bool">
+    Drop the base <code>&lt;freejoint&gt;</code> so the model attaches rigidly into a scene. Default <code>true</code>.
+  </Property>
+  <Property name="strip_inertials" type="bool">
+    Remove the placeholder inertials and infer mass/inertia from geometry at <code>density</code>. Default <code>true</code>.
+  </Property>
+  <Property name="self_collision" type="bool">
+    Let the mechanism's own links collide with each other. Default <code>false</code>: full-link collision meshes overlap by design at every joint and MuJoCo does not auto-exclude parent/child contacts, so self-collision produces permanent interpenetrations that fight the actuators.
+  </Property>
+  <Property name="ee_site" type="object | None">
+    Optional end-effector <code>&lt;site&gt;</code> at a flange. <code>name</code> is referenced by an <a href="/docs/ik">IK backend</a> (e.g. <code>MinkIK(frame="gripper")</code>); <code>body</code> is the flange body; <code>axis</code> (<code>x</code>/<code>y</code>/<code>z</code>, optionally signed like <code>-z</code>) is the tool direction pointing out of the flange.
+  </Property>
+</Properties>
+
+## How it works
+
+The pipeline ([`solarian/sim/onshape.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/onshape.py)) has two stages:
+
+```text
+solarian onshape-export <dir>
+   │
+   ├── Stage 1: raw export  (Onshape API + network)
+   │     ├── rename dof_mates → dof_<name>   (so o2r treats them as joints)
+   │     ├── root the tree at base_dof
+   │     ├── drop unmated (free-floating) links
+   │     └── write <output_filename>.xml + STL meshes
+   │
+   └── Stage 2: clean       (no network)
+         ├── drop the base <freejoint>            (attach)
+         ├── strip inertials + infer mass/inertia (density)
+         ├── set meshdir, non-self-colliding geoms
+         ├── add the end-effector <site>          (ee_site)
+         └── write output_xml
+```
+
+### Stage 1: raw export
+
+onshape-to-robot pulls the assembly and writes a raw MJCF plus one STL per part. Two things it doesn't do out of the box are patched in for the duration of the export (and cleanly restored afterward): exposing your chosen mates as joints, and rooting the kinematic tree at the base so the model hangs off its mount rather than its tool.
+
+### Stage 2: clean
+
+The raw model is a free-floating body with placeholder inertials and no materials. The clean stage makes it *attachable*: it drops the base free joint, lets the compiler infer mass and inertia from the collision meshes at a fixed `density`, repoints `meshdir`, makes the mechanism non-self-colliding, and adds the optional end-effector site. Re-run just this stage with `--clean-only` while tuning those knobs.
+
+## Wiring the model into a robot
+
+The export gives you an MJCF; a [simulated robot](/docs/simulation) still needs two small things to drive it:
+
+1. **Attach it in the scene** — one [`ModuleAttachment`](/docs/scenes) per model, with a `prefix` that namespaces its joints/actuators:
+
+```python
+from solarian.core import Robot
+from solarian.sim import SceneConfig, ModuleAttachment
+from so106.modules.follower_so106_arm import ArmModule
+
+class So106Robot(Robot):
+    is_sim = True
+    right_arm = ArmModule()
+
+    scene = SceneConfig(
+        world_mjcf="assets/sim_scene.xml",
+        attachments=[
+            ModuleAttachment(module="right_arm", mjcf="assets/so106.xml", prefix="right/"),
+        ],
+    )
+```
+
+2. **Map each servo to the model** — a [`sim:` block](/docs/sim-components) per actuator in the module's `conf/<module>.yaml`, naming the MJCF `joint`/`actuator` (with the attach `prefix`) and the radian range that the servo's normalized command space maps onto:
+
+```yaml
+# conf/right_arm.yaml
+actuators:
+  shoulder_pan:
+    id: 1
+    model: sts3250
+    mode: range_m100_100
+    sim:
+      joint: "right/shoulder_pan"
+      actuator: "right/shoulder_pan"
+      range_min: -1.91986    # = joint_properties limits from config.json
+      range_max: 1.91986
+```
+
+<Note>
+  Keep <code>range_min</code>/<code>range_max</code> equal to the joint limits you set in <code>joint_properties</code> — they are the same numbers, and a mismatch silently skews every normalized ↔ radian conversion.
+</Note>
+
+## Worked example: adding a gripper
+
+The SO-106 gripper is a separate assembly with a single **prismatic** jaw mate. Its `config.json` differs from the arm only in the `solarian` block:
+
+```json
+{
+    "url": "https://cad.onshape.com/documents/.../w/.../e/...",
+    "output_format": "mujoco",
+    "output_filename": "umi_slim_gripper_raw",
+    "assets_directory": "meshes",
+    "robot_name": "umi_slim_gripper",
+    "joint_properties": { "jaw": {"limits": [0.0, 0.037], "range": true} },
+    "solarian": {
+        "dof_mates": ["jaw"],
+        "base_dof": "jaw",
+        "output_xml": "../umi_slim_gripper.xml",
+        "meshdir": "umi_slim_gripper_description/meshes",
+        "density": 1400
+    }
+}
+```
+
+Export it, attach it to the arm's wrist body, and give its servo a `sim:` block:
+
+```bash
+solarian onshape-export assets/umi_slim_gripper_description
+```
+
+```python
+    right_gripper = GripperModule()
+
+    scene = SceneConfig(
+        attachments=[
+            ModuleAttachment(module="right_arm", mjcf="assets/so106.xml", prefix="right/"),
+            ModuleAttachment(
+                module="right_gripper",
+                mjcf="assets/umi_slim_gripper.xml",
+                parent_body="right/so100_6dof_wrist_roll_to_gripper",  # the arm flange
+                prefix="right_gripper/",
+            ),
+        ],
+    )
+```
+
+```yaml
+# conf/right_gripper.yaml
+actuators:
+  gripper:
+    id: 7
+    model: sts3215
+    mode: range_m100_100
+    sim:
+      joint: "right_gripper/jaw"
+      actuator: "right_gripper/jaw"
+      range_min: 0.0
+      range_max: 0.037
+```
+
+## Tips & gotchas
+
+- **Mate names.** `dof_mates` are the *CAD mate* names in Onshape (before the `dof_` prefixing). The resulting MJCF joint/actuator name is the bare mate name, then the attach `prefix`.
+- **Rooting.** If the model attaches by the wrong end (e.g. hangs from the tool), set `base_dof` to the DOF at the base of the chain.
+- **Mesh order is nondeterministic.** Re-exporting can reorder the `<mesh>` asset lines with no functional change; this is cosmetic.
+- **Byproducts.** onshape-to-robot caches part metadata (`.part` files) and may write a `scene.xml` wrapper next to the raw export; meshes for dropped unmated links are also downloaded. Only the cleaned `output_xml` and the referenced meshes matter — git-ignore the rest.
+
+## See also
+
+- [Simulation](/docs/simulation) — the `is_sim` switch.
+- [Scenes](/docs/scenes) — `ModuleAttachment`, `parent_body`, `prefix`.
+- [Sim Servos & Cameras](/docs/sim-components) — the `sim:` block schema.
+- [IK](/docs/ik) — the end-effector `site` referenced by `ee_site`.

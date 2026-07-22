@@ -64,6 +64,42 @@ def _find_settings_path(cwd: Path | None = None) -> str:
     )
 
 
+#: Entry-point group that plugins use to advertise extra CLI commands.
+COMMAND_ENTRY_POINT_GROUP = "solarian.commands"
+
+#: Plugin commands that operate directly on hardware and therefore must run
+#: without Hydra config or project ``settings.py`` discovery.
+PLUGIN_NO_HYDRA_COMMANDS = {"feetech-set-id"}
+
+
+def _iter_entry_points(group: str):
+    """Yield entry points for *group* across importlib.metadata API versions."""
+    import importlib.metadata
+
+    try:
+        eps = importlib.metadata.entry_points()
+    except Exception:  # noqa: BLE001 - metadata access can fail in odd envs
+        return []
+    # Python 3.10+: EntryPoints.select; older: dict-like .get
+    if hasattr(eps, "select"):
+        return list(eps.select(group=group))
+    return list(eps.get(group, []))  # type: ignore[attr-defined]
+
+
+def _register_plugin_commands() -> None:
+    """Register commands advertised by installed plugins (lazy — no imports)."""
+    for ep in _iter_entry_points(COMMAND_ENTRY_POINT_GROUP):
+        try:
+            module_path = ep.value.split(":", 1)[0]
+        except Exception:  # noqa: BLE001 - a malformed entry point must not crash the CLI
+            continue
+        CommandRegistry.register_lazy(
+            ep.name,
+            module_path=module_path,
+            help=f"{ep.name} (provided by plugin)",
+        )
+
+
 class SolarianHelpFormatter(argparse.RawDescriptionHelpFormatter):
     """Custom formatter that adjusts help layout for the solarian CLI."""
     pass
@@ -87,7 +123,9 @@ def _build_command_list() -> str:
 
     category_map = {
         "create-project": "Project",
+        "create-plugin": "Project",
         "add-module": "Project",
+        "onshape-export": "Utilities",
         "run-robot": "Robot",
         "calibrate-module": "Robot",
         "setup-module": "Robot",
@@ -104,6 +142,7 @@ def _build_command_list() -> str:
         "detect-device": "Utilities",
         "list-cameras": "Utilities",
         "shell": "Utilities",
+        "feetech-set-id": "Robot",
     }
 
     for name in all_names:
@@ -132,6 +171,11 @@ def main() -> None:
 
     # Register command metadata (lazy — no heavy imports happen here)
     from ..cli import commands  # noqa: F401
+
+    # Discover plugin-provided commands advertised under the
+    # "solarian.commands" entry-point group.  Only metadata is registered
+    # here — the command module is imported lazily when the command runs.
+    _register_plugin_commands()
 
     available_commands = CommandRegistry.get_all_command_names()
 
@@ -171,12 +215,51 @@ def main() -> None:
         # Store positional args in environment for the command to access
         os.environ["SOLARIAN_ADD_MODULE_NAME"] = module_name
         os.environ["SOLARIAN_ADD_MODULE_ID"] = module_id
+    elif args.subcommand == "onshape-export":
+        oe_parser = argparse.ArgumentParser(prog="solarian onshape-export")
+        oe_parser.add_argument("assembly_dir", help="Directory containing the assembly config.json.")
+        oe_parser.add_argument("--clean-only", action="store_true",
+                               help="Re-run only the clean stage on a previous raw export (no network).")
+        oe_parser.add_argument("--keys-file", default=None,
+                               help="File with ONSHAPE_ACCESS_KEY/ONSHAPE_SECRET_KEY (default: onshape_keys.txt).")
+        oe_args = oe_parser.parse_args(remaining)
+        os.environ["SOLARIAN_ONSHAPE_EXPORT_DIR"] = oe_args.assembly_dir
+        if oe_args.clean_only:
+            os.environ["SOLARIAN_ONSHAPE_EXPORT_CLEAN_ONLY"] = "true"
+        if oe_args.keys_file:
+            os.environ["SOLARIAN_ONSHAPE_EXPORT_KEYS_FILE"] = oe_args.keys_file
+        overrides = []
     elif args.subcommand == "create-project":
         if len(remaining) < 1:
             parser.error("create-project requires a project name argument")
         os.environ["SOLARIAN_CREATE_PROJECT_NAME"] = remaining[0]
         if "--force" in remaining:
             os.environ["SOLARIAN_CREATE_PROJECT_FORCE"] = "true"
+        overrides = []
+    elif args.subcommand == "create-plugin":
+        positionals = [a for a in remaining if not a.startswith("-")]
+        if len(positionals) < 2:
+            parser.error("create-plugin requires a type and a name argument")
+        os.environ["SOLARIAN_CREATE_PLUGIN_TYPE"] = positionals[0]
+        os.environ["SOLARIAN_CREATE_PLUGIN_NAME"] = positionals[1]
+        if "--force" in remaining:
+            os.environ["SOLARIAN_CREATE_PLUGIN_FORCE"] = "true"
+        overrides = []
+    elif args.subcommand == "run-policy":
+        rp_parser = argparse.ArgumentParser(prog="solarian run-policy")
+        rp_parser.add_argument("skill", help="Name of the skill whose policy server to run.")
+        rp_parser.add_argument("--checkpoint", "-c", default=None,
+                               help="Checkpoint path (overrides the skill's configured checkpoint).")
+        rp_parser.add_argument("--host", default=None, help="Host to bind the server to.")
+        rp_parser.add_argument("--port", default=None, help="Port to bind the server to.")
+        rp_args = rp_parser.parse_args(remaining)
+        os.environ["SOLARIAN_RUN_POLICY_SKILL"] = rp_args.skill
+        if rp_args.checkpoint:
+            os.environ["SOLARIAN_RUN_POLICY_CHECKPOINT"] = rp_args.checkpoint
+        if rp_args.host:
+            os.environ["SOLARIAN_RUN_POLICY_HOST"] = rp_args.host
+        if rp_args.port:
+            os.environ["SOLARIAN_RUN_POLICY_PORT"] = rp_args.port
         overrides = []
     else:
         overrides = remaining
@@ -191,7 +274,8 @@ def main() -> None:
     subcommand = args.subcommand
 
     # Commands that don't need Hydra config or project settings
-    no_hydra_commands = ['add-module', 'create-project', 'list-cameras', 'detect-device']
+    no_hydra_commands = ['add-module', 'create-project', 'create-plugin', 'list-cameras', 'detect-device', 'run-policy', 'onshape-export']
+    no_hydra_commands += list(PLUGIN_NO_HYDRA_COMMANDS)
 
     # Resolve settings.py location (skip for commands that don't need it)
     if subcommand not in no_hydra_commands:

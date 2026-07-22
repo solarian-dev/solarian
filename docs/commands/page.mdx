@@ -189,6 +189,14 @@ solarian list-cameras
 
 Detects and lists every camera available to the system (V4L2 on Linux, AVFoundation on macOS).
 
+### `onshape-export`
+
+```bash
+solarian onshape-export <assembly_dir> [--clean-only] [--keys-file PATH]
+```
+
+Exports an Onshape CAD assembly into an attachable MuJoCo (MJCF) model for [simulation](/docs/simulation). `<assembly_dir>` holds a `config.json` describing the assembly and a `solarian` block controlling the export. See [Onshape → Sim Models](/docs/onshape-models) for the full workflow. Part of the `[sim]` extra.
+
 ### `shell`
 
 ```bash

@@ -30,6 +30,17 @@ CommandRegistry.register_lazy(
     module_path=f"{_pkg}.add_module",
     help="Install a module plugin and copy its default configuration to the project",
 )
+CommandRegistry.register_lazy(
+    "create-plugin",
+    module_path=f"{_pkg}.create_plugin",
+    help="Scaffold a new Solarian plugin (or add a component type to an existing one)",
+)
+CommandRegistry.register_lazy(
+    "onshape-export",
+    module_path=f"{_pkg}.onshape_export",
+    help="Export an Onshape assembly into an attachable MuJoCo sim model",
+    setup_modules=(),
+)
 
 # ── Robot commands ───────────────────────────────────────────────────
 CommandRegistry.register_lazy(

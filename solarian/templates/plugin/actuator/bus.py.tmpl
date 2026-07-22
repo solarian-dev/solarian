@@ -1,0 +1,60 @@
+"""
+${class_prefix} Actuator Bus
+
+Bus implementation for communicating with ${plugin_name} actuators.
+"""
+
+import logging
+from typing import Any, Dict
+
+from solarian.core.actuator_bus import ActuatorBus
+from solarian.core.component import Component
+from solarian.core.data import Data
+from solarian.core.calibration import MotorCalibration
+
+logger = logging.getLogger(__name__)
+
+
+class ${class_prefix}Bus(ActuatorBus):
+    """
+    Actuator bus for ${plugin_name} hardware.
+
+    Automatically used when ${class_prefix}Servo actuators are declared in a module.
+    Implement the methods below to talk to your hardware.
+    """
+
+    def __init__(
+        self,
+        port: str,
+        components: Dict[str, Component],
+        calibration: Dict[str, MotorCalibration],
+    ):
+        super().__init__(port, components, calibration)
+        # TODO: initialize the underlying hardware/SDK connection here.
+
+    def is_connected(self) -> bool:
+        raise NotImplementedError
+
+    def connect(self):
+        raise NotImplementedError
+
+    def disconnect(self):
+        raise NotImplementedError
+
+    def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def write(self, values: Dict[str, Data], normalize: bool = True):
+        raise NotImplementedError
+
+    def is_calibrated(self) -> bool:
+        raise NotImplementedError
+
+    def reset_calibration(self, component_names: list[str]):
+        raise NotImplementedError
+
+    def read_calibration(self) -> dict[str, MotorCalibration]:
+        raise NotImplementedError
+
+    def set_half_turn_homings(self, component_names: list[str]) -> Dict[str, int]:
+        raise NotImplementedError

@@ -1,0 +1,32 @@
+"""
+${class_prefix} Servo Actuator
+
+Actuator class for ${plugin_name} motors.
+"""
+
+from solarian.core.servo import Servo
+from solarian.core.data import PosData, SpeedData
+
+from ${package_name}.bus import ${class_prefix}Bus
+
+
+class ${class_prefix}Servo(Servo):
+    """
+    Servo actuator for ${plugin_name} motors.
+
+    Declare it as a class attribute inside a Module, e.g.:
+
+        from ${package_name}.actuator import ${class_prefix}Servo
+
+        class MyArmModule(Module):
+            shoulder = ${class_prefix}Servo()
+            elbow = ${class_prefix}Servo()
+
+    The corresponding ${class_prefix}Bus is automatically used for communication.
+    """
+
+    bus_class = ${class_prefix}Bus
+
+    # Declare the data channels this actuator exposes.
+    pos = PosData()
+    speed = SpeedData()
