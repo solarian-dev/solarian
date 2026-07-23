@@ -16,5 +16,11 @@ dependencies = [
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+# Build only the plugin package. This disables setuptools flat-layout
+# auto-discovery, which otherwise fails when the plugin root also contains
+# non-package directories such as `assets/`, `tests/`, or `docs/`.
+[tool.setuptools.packages.find]
+include = ["${package_name}*"]
+
 # Entry points below are managed by `solarian create-plugin`. Each component
 # type you scaffold adds its class(es) here so Solarian can discover them.
