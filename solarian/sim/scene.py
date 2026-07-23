@@ -83,6 +83,29 @@ def _find_body(spec, name: str):
     return body
 
 
+def _compose_site_pose(site, off_pos, off_quat):
+    """Camera pose in the site's body frame: the site frame composed with an
+    optional local offset (``off_pos``/``off_quat``, relative to the site).
+
+    Returns ``(pos, quat)`` as plain lists suitable for ``add_camera``.
+    """
+    import mujoco
+    import numpy as np
+
+    sp = np.asarray(site.pos, dtype=float)
+    sq = np.asarray(site.quat, dtype=float)
+    op = np.asarray(off_pos, dtype=float)
+    oq = np.asarray(off_quat, dtype=float)
+
+    rotated = np.zeros(3)
+    mujoco.mju_rotVecQuat(rotated, op, sq)
+    pos = sp + rotated
+
+    quat = np.zeros(4)
+    mujoco.mju_mulQuat(quat, sq, oq)
+    return pos.tolist(), quat.tolist()
+
+
 def compose_scene(scene: SceneConfig):
     """Compose and compile a scene into a MuJoCo ``MjModel``.
 
@@ -100,8 +123,20 @@ def compose_scene(scene: SceneConfig):
         world.attach(child, frame=frame, prefix=att.prefix)
 
     for cam in scene.cameras:
-        body = _find_body(world, cam.parent_body)
-        body.add_camera(name=cam.name, pos=cam.pos, quat=cam.quat, fovy=cam.fovy)
+        if cam.site:
+            site = world.site(cam.site)
+            if site is None:
+                raise ValueError(
+                    f"Site '{cam.site}' not found in composed scene (needed to "
+                    f"mount camera '{cam.name}'). Sites exported from a module "
+                    f"model are namespaced by its attach prefix."
+                )
+            body = site.parent
+            pos, quat = _compose_site_pose(site, cam.pos, cam.quat)
+            body.add_camera(name=cam.name, pos=pos, quat=quat, fovy=cam.fovy)
+        else:
+            body = _find_body(world, cam.parent_body)
+            body.add_camera(name=cam.name, pos=cam.pos, quat=cam.quat, fovy=cam.fovy)
 
     if scene.gravity is not None:
         world.option.gravity = scene.gravity

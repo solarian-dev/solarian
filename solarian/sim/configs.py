@@ -34,10 +34,29 @@ class ModuleAttachment(BaseModel):
 
 
 class CameraMount(BaseModel):
-    """A MuJoCo camera added to a body of the composed scene."""
+    """A MuJoCo camera added to the composed scene.
+
+    Mount the camera either directly on a body (``parent_body``) or at a named
+    ``site`` (frame) already present in the composed scene -- e.g. a frame
+    exported from Onshape by ``onshape-to-robot`` (which becomes a ``<site>``),
+    namespaced by the owning module's attach ``prefix``. When ``site`` is set it
+    takes precedence over ``parent_body``, the camera is placed on the site's
+    own body, and ``pos``/``quat`` are interpreted as an offset relative to the
+    site frame (defaults leave the camera exactly on the frame). This keeps the
+    mount location as a single source of truth in the CAD/MJCF model.
+
+    Note: a MuJoCo camera looks down its local -Z axis (with +X right, +Y up).
+    If the exported frame's axes don't already match that convention, use
+    ``quat`` to rotate the camera onto the frame.
+    """
 
     name: str
-    parent_body: str
+    #: Body to attach to (e.g. ``"arm/gripper"``). Ignored when ``site`` is set.
+    parent_body: str = ""
+    #: Name of a site/frame in the composed scene to mount at (prefixed by the
+    #: owning module). When set, the camera is placed on the site's body at the
+    #: site's pose, composed with ``pos``/``quat`` as an offset.
+    site: str | None = None
     pos: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
     quat: list[float] = Field(default_factory=lambda: [1.0, 0.0, 0.0, 0.0])
     fovy: float = 58.0
