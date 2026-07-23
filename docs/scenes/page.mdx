@@ -92,6 +92,14 @@ This means you can attach a community model without shipping any files:
 ModuleAttachment(module="arm", mjcf="so_arm101_mj_description", prefix="arm/")
 ```
 
+A [plugin](/docs/plugins) that ships its own model uses option 1: it exposes an absolute `MJCF_PATH` from its package, so a project attaches it without copying the model into `assets/`. See [Onshape → Sim Models](/docs/onshape-models#shipping-the-model-inside-a-plugin).
+
+```python
+from solarian_umi_slim import MJCF_PATH as UMI_SLIM_MJCF
+
+ModuleAttachment(module="gripper", mjcf=UMI_SLIM_MJCF, parent_body="arm/wrist", prefix="gripper/")
+```
+
 ## The default world
 
 If `world_mjcf` is `None`, `compose_scene` generates a minimal world — a skybox, a grid floor plane, and a directional light — so you can bring up a robot before authoring an environment:

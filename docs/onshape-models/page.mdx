@@ -254,6 +254,78 @@ actuators:
       range_max: 0.037
 ```
 
+## Shipping the model inside a plugin
+
+The worked example above keeps the model in the project's own `assets/`. When the module instead ships as a [plugin package](/docs/plugins) — reused across projects — its MJCF should travel **with the package**. That way every project that installs the plugin gets the model, and there is a single source of truth with no copy to drift out of sync (edit the density in one place, not one-per-project). This is how the [`solarian-umi-slim`](https://github.com/solarian-dev/solarian/tree/main/plugins/solarian-umi-slim) gripper works.
+
+**1. Keep the assets inside the package.** Point `output_xml` at an `assets/` directory *inside* the importable package, so the export writes there instead of into a project:
+
+```text
+solarian-umi-slim/
+├── pyproject.toml
+└── solarian_umi_slim/            # the importable package
+    ├── __init__.py
+    └── assets/
+        ├── umi_slim.xml          # the attachable model (output_xml)
+        └── umi_slim_description/
+            ├── config.json       # the export recipe
+            └── meshes/*.stl      # meshes, resolved relative to umi_slim.xml
+```
+
+**2. Expose the path from the package.** MuJoCo resolves a model's `meshdir` relative to the MJCF file itself, so a scene only needs the absolute path to `umi_slim.xml`. Publish it from the package `__init__.py`:
+
+```python
+# solarian_umi_slim/__init__.py
+from pathlib import Path
+
+#: Simulation assets shipped inside the package.
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+#: Absolute path to the attachable gripper MJCF.
+MJCF_PATH = str(ASSETS_DIR / "umi_slim.xml")
+```
+
+`MJCF_PATH` is an absolute path derived from the *installed* package location, so it is correct on any machine — no hardcoded paths, and no copy of the model in the consuming project.
+
+**3. Attach it by importing the path.** `ModuleAttachment.mjcf` accepts an absolute path, so pass `MJCF_PATH` straight through:
+
+```python
+from solarian_umi_slim import MJCF_PATH as UMI_SLIM_MJCF
+
+ModuleAttachment(
+    module="right_gripper",
+    mjcf=UMI_SLIM_MJCF,                                   # loaded from the installed plugin
+    parent_body="right/so100_6dof_wrist_roll_to_gripper",  # the arm flange
+    prefix="right_gripper/",
+)
+```
+
+<Note>
+  <code>ModuleAttachment.mjcf</code> resolves three ways (<a href="https://github.com/solarian-dev/solarian/blob/main/solarian/sim/scene.py"><code>resolve_mjcf</code></a>): an <strong>absolute path</strong> (what <code>MJCF_PATH</code> gives you), a path <strong>relative to <code>SOLARIAN_PROJECT_PATH</code></strong> (a model in the project's own <code>assets/</code>), or a <code>robot_descriptions</code> <strong>module name</strong>.
+</Note>
+
+### Making sure the assets are packaged
+
+Meshes and MJCF are **not** Python files, so setuptools leaves them out of a built wheel unless you declare them — and then `MJCF_PATH` breaks for anyone who `pip install`s the plugin (it still works from an editable/source checkout, which is why this is easy to miss). Two requirements:
+
+- The `assets/` directory must live **inside** the importable package (`solarian_umi_slim/assets/`, as above). Data outside the package can't be shipped as importable package data.
+- Declare the files as [`package-data`](https://setuptools.pypa.io/en/latest/userguide/datafiles.html) in `pyproject.toml`. Ship only the runtime files — leave out the onshape-export byproducts (`*_raw.xml`, `scene.xml`, `meshes/*.part`):
+
+```toml
+[tool.setuptools.package-data]
+solarian_umi_slim = [
+    "assets/umi_slim.xml",
+    "assets/umi_slim_description/config.json",
+    "assets/umi_slim_description/meshes/*.stl",
+]
+```
+
+Then verify the build actually contains them before publishing:
+
+```bash
+python -m build --wheel
+unzip -l dist/*.whl | grep assets   # expect umi_slim.xml + meshes/*.stl, and no *.part / *_raw.xml
+```
+
 ## Tips & gotchas
 
 - **Mate names.** `dof_mates` are the *CAD mate* names in Onshape (before the `dof_` prefixing). The resulting MJCF joint/actuator name is the bare mate name, then the attach `prefix`.
@@ -265,5 +337,6 @@ actuators:
 
 - [Simulation](/docs/simulation) — the `is_sim` switch.
 - [Scenes](/docs/scenes) — `ModuleAttachment`, `parent_body`, `prefix`.
+- [Plug-ins](/docs/plugins) — packaging a module (and its model) as a reusable plugin.
 - [Sim Servos & Cameras](/docs/sim-components) — the `sim:` block schema.
 - [IK](/docs/ik) — the end-effector `site` referenced by `ee_site`.

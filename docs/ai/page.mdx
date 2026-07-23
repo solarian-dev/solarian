@@ -1,0 +1,36 @@
+export const metadata = {
+  title: 'AI Overview',
+  description:
+    'How Solarian layers artificial intelligence on top of the core control loop: a dual-process AI Controller that pairs a slow VLM planner (System 2) with fast reactive Skills (System 1), backed by trainable Policies.',
+}
+
+# AI Overview
+
+Solarian's AI stack sits on top of the standard [Controller](/docs/controllers) contract and gives a robot the ability to plan, decide, and act autonomously. It follows a **dual-process** design: a slow, deliberative planner decides *what* to do, while fast reactive behaviors handle *how* to do it. {{ className: 'lead' }}
+
+## The pieces
+
+<Properties>
+  <Property name="AI Controller">
+    A <a href="/docs/controllers">Controller</a> subclass that runs a dual-process cognitive loop. A vision-language model (System 2) decides which behaviors to start or stop; the fast control loop (System 1) merges the actions those behaviors emit and forwards them to the robot. See <a href="/docs/ai_controller">AI Controller</a>.
+  </Property>
+  <Property name="Skills">
+    Self-contained, restartable behaviors that run in their own process — a diffusion policy, a motion plan, a scripted routine. The AI Controller orchestrates them based on the planner's decisions. See <a href="/docs/skills">AI Skills</a>.
+  </Property>
+  <Property name="Policies">
+    The trainable models a Skill calls to produce actions (diffusion, ACT, VLAs, classical methods). Policies are trained and served independently of the Skill that consumes them. See <a href="/docs/policies">Policies</a>.
+  </Property>
+</Properties>
+
+## System 1 and System 2
+
+- **System 2 — the planner.** Runs in its own process at a low rate (typically ~1 Hz). It reads the latest observation plus any user message, calls a VLM, and decides which Skills to start or stop.
+- **System 1 — the fast loop.** Reactive Skills push the next `Action` into a shared-memory queue. The controller drains the queue every tick and forwards a single merged action to the robot at control rate (30–500 Hz).
+
+This split lets the robot be both *smart enough to plan* (slow, may fail, returns JSON) and *fast enough to control* (predictable, jitter-free).
+
+## Where to go next
+
+- [AI Controller](/docs/ai_controller) — the orchestrator and its dual-process architecture.
+- [Policies](/docs/policies) — training and serving the models Skills call.
+- [AI Skills](/docs/skills) — the unit of behavior the AI Controller runs.
