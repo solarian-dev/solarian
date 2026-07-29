@@ -17,6 +17,7 @@ backend reasons in -- using the model joint limits the backend exposes.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict
 
@@ -29,6 +30,13 @@ from solarian.core.ik.base import DifferentialIKBackend
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Opt-in diagnostics: set SOLARIAN_IK_DEBUG=1 to log commanded vs. measured
+# Cartesian pose (and joint angles) each write. Off by default so normal
+# (and sim) runs are unaffected.
+_IK_DEBUG = os.environ.get("SOLARIAN_IK_DEBUG", "0").lower() not in ("0", "", "false", "no")
+# Minimum seconds between debug log lines so a fast control loop doesn't flood.
+_IK_DEBUG_PERIOD = 0.2
 
 # Bounds on the differential-IK integration timestep, measured from the actual
 # inter-write cadence. Keeps a stalled loop from feeding a wildly out-of-range dt
@@ -78,6 +86,18 @@ class IKActuatorBus(ActuatorBus):
 
         self._last_write_time: float | None = None
         self._dt_ema: float = _DEFAULT_DT
+        self._last_debug_time: float = 0.0
+
+        # Differential IK converges to the target by iterating solve+integrate
+        # within a single control tick (the mink-recommended usage) instead of
+        # taking one velocity step per tick. One step badly undershoots -- worst
+        # in ill-conditioned directions and with high ``lm_damping`` -- which
+        # shows up as imprecise Cartesian tracking. We iterate the model to the
+        # target and early-exit once the pose error is within tolerance, so a
+        # nearby (normal teleop) target costs only a couple of iterations.
+        self.ik_iterations = 12
+        self.ik_pos_tol = 1e-4  # metres
+        self.ik_ori_tol = 1e-3  # radians
 
     # -- connection (delegate to inner bus) --------------------------------
     @staticmethod
@@ -97,45 +117,42 @@ class IKActuatorBus(ActuatorBus):
     def disconnect(self):
         self.inner_bus.disconnect()
 
-    # -- normalized <-> radian joint conversion ----------------------------
-    def _drive_mode(self, name: str) -> int:
-        calib = getattr(self.inner_bus, "calibration", None)
-        if calib and name in calib and calib[name] is not None:
-            entry = calib[name]
-            dm = getattr(entry, "drive_mode", None)
-            if dm is None and isinstance(entry, dict):
-                dm = entry.get("drive_mode", 0)
-            return int(dm or 0)
-        return 0
+    # -- optional angular hook (delegated to the inner joint bus) -----------
+    def counts_per_revolution(self, name: str):
+        fn = getattr(self.inner_bus, "counts_per_revolution", None)
+        return fn(name) if callable(fn) else None
 
+    # -- normalized <-> radian joint conversion ----------------------------
+    # NOTE: ``drive_mode`` (joint direction sign) is owned by the *inner* joint
+    # bus, which already applies it when normalizing raw encoder units to the
+    # ``[-100, 100]`` space (real: ``FeetechMotorsBus._normalize``; sim: the
+    # MuJoCo world's ``_normalize``). This layer must NOT re-apply it -- doing so
+    # would cancel it out (double flip), silently ignoring the sign set during
+    # IK sim<->real alignment. So the conversions below are pure normalized<->
+    # radian maps over the model limits, matching the composed formula in
+    # ``solarian.core.ik.alignment``.
     def _norm_to_rad(self, name: str, norm: float) -> float:
         mode = self.joint_components[name].cfg.mode
         lo, hi = self._limits[name]
-        dm = self._drive_mode(name)
         if mode == "range_m100_100":
-            v = -norm if dm else norm
-            v = min(100.0, max(-100.0, v))
+            v = min(100.0, max(-100.0, norm))
             return ((v + 100.0) / 200.0) * (hi - lo) + lo
         if mode == "range_0_100":
-            v = 100.0 - norm if dm else norm
-            v = min(100.0, max(0.0, v))
+            v = min(100.0, max(0.0, norm))
             return (v / 100.0) * (hi - lo) + lo
         return norm
 
     def _rad_to_norm(self, name: str, rad: float) -> float:
         mode = self.joint_components[name].cfg.mode
         lo, hi = self._limits[name]
-        dm = self._drive_mode(name)
         if hi == lo:
             return 0.0
         if mode == "range_m100_100":
             bounded = min(hi, max(lo, rad))
-            norm = (((bounded - lo) / (hi - lo)) * 200.0) - 100.0
-            return -norm if dm else norm
+            return (((bounded - lo) / (hi - lo)) * 200.0) - 100.0
         if mode == "range_0_100":
             bounded = min(hi, max(lo, rad))
-            norm = ((bounded - lo) / (hi - lo)) * 100.0
-            return 100.0 - norm if dm else norm
+            return ((bounded - lo) / (hi - lo)) * 100.0
         return rad
 
     def _read_ik_joint_radians(self) -> np.ndarray:
@@ -190,19 +207,65 @@ class IKActuatorBus(ActuatorBus):
     def _write_cartesian(self, cart_vals: Dict[str, Data]):
         dt = self._tick_dt()
 
-        self.backend.set_q(self._read_ik_joint_radians())
-        target = np.asarray(self.backend.get_pose(), dtype=float).copy()
+        q_now = self._read_ik_joint_radians()
+        self.backend.set_q(q_now)
+        current_pose = np.asarray(self.backend.get_pose(), dtype=float).copy()
+        target = current_pose.copy()
         for name, data in cart_vals.items():
             target[self.cartesian_index[name]] = float(data.value)
 
-        v = self.backend.solve(target, dt)
-        q_next = np.asarray(self.backend.integrate(v, dt), dtype=float)
+        # Iterate solve+integrate to drive the model onto the target this tick
+        # (see __init__: ik_iterations). Each pass feeds the integrated joints
+        # back via set_q so the next solve sees the reduced error; we stop early
+        # once within tolerance. The backend's configuration is left at the
+        # converged solution -- fine, since the next tick re-seeds it from the
+        # freshly read joint positions.
+        q_next = q_now
+        for _ in range(max(1, int(self.ik_iterations))):
+            v = self.backend.solve(target, dt)
+            q_next = np.asarray(self.backend.integrate(v, dt), dtype=float)
+            self.backend.set_q(q_next)
+            pose = np.asarray(self.backend.get_pose(), dtype=float)
+            if (
+                np.linalg.norm(pose[:3] - target[:3]) < self.ik_pos_tol
+                and np.linalg.norm(pose[3:] - target[3:]) < self.ik_ori_tol
+            ):
+                break
 
         out = {
             name: PosData(value=self._rad_to_norm(name, float(rad)))
             for name, rad in zip(self.ik_joint_names, q_next)
         }
         self.inner_bus.write(out, normalize=True)
+
+        if _IK_DEBUG:
+            self._debug_log(cart_vals, current_pose, target, q_now, q_next, dt)
+
+    def _debug_log(self, cart_vals, current_pose, target, q_now, q_next, dt):
+        now = time.monotonic()
+        if now - self._last_debug_time < _IK_DEBUG_PERIOD:
+            return
+        self._last_debug_time = now
+        commanded = {name: round(float(data.value), 4) for name, data in cart_vals.items()}
+        # Cartesian delta the solver is trying to achieve this tick (target minus
+        # the pose measured from the current joint angles).
+        pose_err = np.round(target - current_pose, 4)
+        logger.info(
+            "IK[%s] dt=%.4f cmd=%s\n"
+            "    measured_pose xyz=%s rxyz=%s\n"
+            "    target_pose   xyz=%s rxyz=%s\n"
+            "    pose_err(t-m) xyz=%s rxyz=%s\n"
+            "    q_now(rad)=%s\n"
+            "    q_next(rad)=%s\n"
+            "    joints=%s",
+            self.port, dt, commanded,
+            np.round(current_pose[:3], 4), np.round(current_pose[3:], 4),
+            np.round(target[:3], 4), np.round(target[3:], 4),
+            pose_err[:3], pose_err[3:],
+            np.round(np.asarray(q_now, dtype=float), 4),
+            np.round(np.asarray(q_next, dtype=float), 4),
+            self.ik_joint_names,
+        )
 
     # -- hardware / calibration ops (delegate joint names only) ------------
     def _joint_subset(self, component_names: list[str]) -> list[str]:

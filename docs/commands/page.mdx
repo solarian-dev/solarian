@@ -91,6 +91,30 @@ solarian write-robot-calibration
 
 Writes the calibration values listed in your YAML into the actuators / sensors themselves (e.g. servo offsets stored on the device EEPROM).
 
+### `calibrate-ik`
+
+```bash
+solarian calibrate-ik module=<attr>
+```
+
+Guided sim↔real alignment for an IK arm: a live MuJoCo view is shown alongside the real robot while you move it, a per-joint sign check flips any reversed `drive_mode`, and an optional Cartesian check commands small +X/+Y/+Z tool moves to confirm direction and scale. See [IK Calibration & Alignment](/docs/ik/alignment).
+
+### `verify-ik-calibration`
+
+```bash
+solarian verify-ik-calibration module=<attr>
+```
+
+Compares each joint's calibrated span (in radians) to the IK model's `jnt_range` and prints a per-joint PASS/FAIL table. Runs offline from the calibration JSON; the root-cause check for "Cartesian moves track in sim but skew on the real robot".
+
+### `derive-model-limits`
+
+```bash
+solarian derive-model-limits module=<attr> [sweep=true]
+```
+
+Prints MJCF-ready joint `range="lo hi"` values (radians) derived from the real arm's mechanical limits — from the existing calibration, or a guided live sweep with `sweep=true`. For model authors keeping `jnt_range` equal to the real hard-stops.
+
 ## Controller commands
 
 These run on the controller machine. They import <code>setup_modules=("controller", "observation", "action")</code>.

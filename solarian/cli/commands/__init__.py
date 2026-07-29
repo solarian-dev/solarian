@@ -71,6 +71,29 @@ CommandRegistry.register_lazy(
     config_name="robot",
     setup_modules=("robot",),
 )
+CommandRegistry.register_lazy(
+    "calibrate-ik",
+    module_path=f"{_pkg}.align_ik",
+    help="Guided sim<->real alignment for an IK arm (live mirror + sign + Cartesian checks).",
+    config_name="robot",
+    # Instantiates the full Robot (for the scene + live mirror), which validates
+    # the Observation schema, so the observation/action modules must be imported.
+    setup_modules=("robot", "observation", "action"),
+)
+CommandRegistry.register_lazy(
+    "verify-ik-calibration",
+    module_path=f"{_pkg}.verify_ik_calibration",
+    help="Verify a module's calibration matches its IK model joint limits.",
+    config_name="robot",
+    setup_modules=("robot",),
+)
+CommandRegistry.register_lazy(
+    "derive-model-limits",
+    module_path=f"{_pkg}.derive_model_limits",
+    help="Derive MJCF joint ranges (radians) from the real arm's mechanical limits.",
+    config_name="robot",
+    setup_modules=("robot",),
+)
 
 # ── Controller commands ──────────────────────────────────────────────
 CommandRegistry.register_lazy(

@@ -151,8 +151,13 @@ report = diagnose_backend(MyArm.ik_backend.build())
 print(report.format())
 ```
 
+## Making it track on real hardware
+
+IK is exact in the model, but a real arm only follows a commanded **+X/+Y/+Z** correctly when its calibration and the model agree on what each joint angle means. [IK Calibration & Alignment](/docs/ik/alignment) is the guided process for that — an easy limit sweep, a live sim-vs-real mirror to fix joint direction, and `verify-ik-calibration` / `derive-model-limits` tools that keep the model's `jnt_range` equal to the real mechanical limits.
+
 ## See also
 
+- [IK Calibration & Alignment](/docs/ik/alignment) — get Cartesian moves tracking correctly on the real robot.
 - [Modules](/docs/modules) — where actuators and `ik_backend` are declared.
 - [Simulation](/docs/simulation) / [Sim Robots](/docs/sim-robots) — IK drives sim unchanged; the arm's `frame` is drawn in the viewer.
 - [Scenes](/docs/scenes) — how the IK MJCF path is resolved.
