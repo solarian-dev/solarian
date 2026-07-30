@@ -10,6 +10,7 @@ import math
 import string
 import numpy as np
 from abc import ABC, abstractmethod
+from typing import Any
 from multiprocessing.managers import SharedMemoryManager
 
 # pynput is imported lazily inside ``_start_keyboard_listener`` instead of
@@ -51,6 +52,7 @@ def _get_pynput_keyboard():
 
 from solarian.utils import busy_wait
 from solarian.core import Action
+from solarian.core.action import ActionType
 from solarian.core import Observation
 from solarian.core.configs import ControllerConfig, ActionValue
 from solarian.core.message import Message
@@ -333,7 +335,7 @@ class Controller(ABC):
                     logger.warning(f"skill_status_buffer.put failed: {e}")
 
         if msg.data.get("click_ack", None) and msg.data["click_ack"] == self.clicked_id:
-            logger.info("Click acknowledged", self.clicked_id)
+            logger.info(f"Click acknowledged {self.clicked_id}")
             self.clicked_id = None
             self.clicked_point = None
 

@@ -96,6 +96,30 @@ class ActuatorBus(ComponentBus):
 
         return mins, maxes
 
+    # -- optional angular hook (used by IK sim<->real alignment tooling) ----
+    def counts_per_revolution(self, name: str) -> int | None:
+        """Encoder counts per full revolution for actuator ``name``.
+
+        Optional and servo-specific: a tick-based bus (e.g. Feetech) returns its
+        resolution so the IK-alignment tools can convert raw encoder span to
+        radians. The default returns ``None`` (unknown); callers then degrade to
+        the qualitative live-mirror / Cartesian checks instead.
+        """
+        return None
+
+    def raw_to_radians(self, name: str, raw: float) -> float | None:
+        """Convert a raw encoder value to radians, or ``None`` if unknown.
+
+        Built on :meth:`counts_per_revolution`; override for servos that report
+        position directly in degrees/radians.
+        """
+        import math
+
+        cpr = self.counts_per_revolution(name)
+        if not cpr:
+            return None
+        return float(raw) * (2.0 * math.pi) / float(cpr)
+
     def _normalize(self, values: dict[str, float]) -> dict[str, float]:
         if not self.calibration:
             raise RuntimeError(f"{self} has no calibration registered.")

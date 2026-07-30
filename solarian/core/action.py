@@ -28,6 +28,11 @@ class ActionType:
     MODULE_ACTION = 1
     SCHEDULE_WAYPOINT = 2
     RESTART_PUT = 3
+    # Safety controls (see Robot.safety_arming). SAFETY_ARM opens the motion
+    # gate and ramps torque to operating level; SAFETY_ESTOP cuts torque and
+    # re-holds. Both are broadcast to every module.
+    SAFETY_ARM = 4
+    SAFETY_ESTOP = 5
     CUSTOM_START = 100
 
     def __init__(self, value: int = 0):

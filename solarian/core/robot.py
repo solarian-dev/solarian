@@ -2,6 +2,7 @@ import zmq
 import time
 import threading
 import os
+import sys
 from abc import ABC, abstractmethod
 from typing import Any
 from multiprocessing.managers import SharedMemoryManager
@@ -279,6 +280,7 @@ class Robot(ABC):
         and inject ``BusClient`` proxies into the modules' ``ModuleBus``.
         """
         from multiprocessing.connection import Pipe
+        from solarian.core.ik.actuator import CartesianIKActuator
 
         shared_ports = self._detect_shared_ports()
         if not shared_ports:
@@ -292,10 +294,17 @@ class Robot(ABC):
 
             for mod_name in module_names:
                 module = self.modules[mod_name]
-                components = module.module_bus.components_by_port[port]
+                # Cartesian IK actuators are not hardware: they are driven by an
+                # IK wrapper over the joint bus client-side and have no real
+                # motor mode, so they must never reach the hardware BusServer.
+                components = {
+                    name: comp
+                    for name, comp in module.module_bus.components_by_port[port].items()
+                    if not isinstance(comp, CartesianIKActuator)
+                }
                 all_components.update(components)
 
-                if bus_class is None:
+                if bus_class is None and components:
                     bus_class = next(iter(components.values())).bus_class
 
                 calibration = module.get_calibration() or {}

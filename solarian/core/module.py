@@ -47,7 +47,7 @@ import logging
 logger = logging.getLogger(f"module")
 
 
-class Module(Process):
+class Module(Process, ABC):
     """
     Base class for robot modules.
     
@@ -348,6 +348,11 @@ class Module(Process):
         data = self.module_bus.read_calibration()
         calibration = {}
         for actuator_name, actuator in self.actuators.items():
+            # Virtual actuators (e.g. ik_cartesian x/y/z/rx/ry/rz) are not
+            # hardware and have no calibration to read back; the bus only
+            # reports the real motors, so skip anything it doesn't return.
+            if actuator_name not in data:
+                continue
             calibration[actuator_name] = data[actuator_name]
         return calibration
 
@@ -370,9 +375,13 @@ class Module(Process):
         for port, actuators in self.actuators_by_port.items():
             port_calibration = {}
             for actuator_name in actuators:
+                # Skip virtual actuators (e.g. ik_cartesian) that have no
+                # hardware calibration entry.
+                if actuator_name not in self.calibration:
+                    continue
                 port_calibration[actuator_name] = self.calibration[actuator_name]
             self.module_bus.component_bus_by_port[port].write_calibration(port_calibration)
-        logger.info("Calibration written to:", self.name)
+        logger.info(f"Calibration written to: {self.name}")
         self.end_calibration_mode()
     
     def _save_calibration(self, calibration: dict):
@@ -439,6 +448,11 @@ class Module(Process):
         for port, actuator_names in self.actuators_by_port.items():
             port_calibration = {}
             for actuator_name in actuator_names:
+                # Virtual actuators (e.g. ik_cartesian) are driven by IK and
+                # never reported by the bus's homing/range recording, so they
+                # have no hardware calibration to build.
+                if actuator_name not in homing_offsets:
+                    continue
                 port_calibration[actuator_name] = MotorCalibration(
                     id=self.actuators[actuator_name].cfg.id,
                     drive_mode=0,
@@ -450,7 +464,7 @@ class Module(Process):
             self.calibration.update(port_calibration)
 
         self._save_calibration(self.calibration)
-        logger.info("Calibration saved to", self.cfg.calibration_file)
+        logger.info(f"Calibration saved to {self.cfg.calibration_file}")
         self.write_calibration()
         logger.info("Calibration written to actuators")
         self.end_calibration_mode()
@@ -479,12 +493,13 @@ class Module(Process):
         if not cartesian_components:
             return inner_bus
         from solarian.core.ik.bus import IKActuatorBus
-        return IKActuatorBus(
+        ik_bus = IKActuatorBus(
             inner_bus=inner_bus,
             joint_components=joint_components,
             cartesian_components=cartesian_components,
             backend=self._resolve_ik_backend(),
         )
+        return ik_bus
 
     def _resolve_ik_backend(self):
         """Build the :class:`DifferentialIKBackend` from :attr:`ik_backend`.
