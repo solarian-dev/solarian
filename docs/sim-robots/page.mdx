@@ -100,18 +100,41 @@ A `scene`'s `attachments` list controls how each module's MuJoCo model is placed
     Path to the module's <code>.xml</code> (absolute, or relative to <code>SOLARIAN_PROJECT_PATH</code>), or the name of a <code>robot_descriptions</code> module (e.g. <code>"so_arm101_mj_description"</code>).
   </Property>
   <Property name="parent_body" type="str">
-    Body in the scene to attach to. <code>"world"</code> (default) attaches to the worldbody.
+    Body in the scene to attach to. <code>"world"</code> (default) attaches to the worldbody. Ignored when <code>parent_site</code> is set.
+  </Property>
+  <Property name="parent_site" type="str | None">
+    Site/frame already in the composed scene to mate against (e.g. <code>"right/side_bracket"</code>). Requires <code>child_site</code>.
+  </Property>
+  <Property name="child_site" type="str | None">
+    Site/frame in the child MJCF (unprefixed) that should coincide with <code>parent_site</code> (e.g. <code>"side_bracket"</code>). Requires <code>parent_site</code>.
   </Property>
   <Property name="pos" type="list[float]">
-    Attachment position <code>[x, y, z]</code> in metres.
+    Attachment position <code>[x, y, z]</code> in metres (body mode), or an optional offset in the parent-site frame (site-mate mode).
   </Property>
   <Property name="quat" type="list[float]">
-    Attachment orientation as a quaternion <code>[w, x, y, z]</code>.
+    Attachment orientation as a quaternion <code>[w, x, y, z]</code> (body mode), or an optional offset in the parent-site frame (site-mate mode).
   </Property>
   <Property name="prefix" type="str">
     Name prefix applied to every joint / actuator / camera in the child model. This is the namespacing mechanism that lets multiple modules coexist.
   </Property>
 </Properties>
+
+### Mating two frames (site-mate mode)
+
+When both modules export a matching Onshape frame (a `<site>` in MJCF), attach by coinciding those sites instead of hand-tuning `pos`/`quat` against a body origin:
+
+```python
+ModuleAttachment(module="right_arm", mjcf="assets/so106.xml", prefix="right/"),
+ModuleAttachment(
+    module="right_gripper",
+    mjcf=UMI_SLIM_MJCF,
+    parent_site="right/side_bracket",  # already prefixed by the arm attach
+    child_site="side_bracket",         # unprefixed name in the gripper MJCF
+    prefix="right_gripper/",
+)
+```
+
+`pos`/`quat` remain available as a fine offset relative to the parent site after the mate.
 
 ### The prefix connects the MJCF to your YAML
 

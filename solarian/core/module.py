@@ -412,55 +412,167 @@ class Module(Process, ABC):
             self.calibration = {actuator_name: MotorCalibration(**calibration) for actuator_name, calibration in data.items()}
             logger.info(f"Calibration loaded for module {self.name}")
         
+    def _hardware_actuators_by_port(self) -> dict[str, list[str]]:
+        """Port → hardware actuator names (excludes virtual IK Cartesian axes)."""
+        from solarian.core.ik.actuator import CartesianIKActuator
+
+        out: dict[str, list[str]] = {}
+        for port, names in self.actuators_by_port.items():
+            hw = [
+                n for n in names
+                if not isinstance(self.actuators[n], CartesianIKActuator)
+            ]
+            if hw:
+                out[port] = hw
+        return out
+
     def calibrate(self) -> None:
+        """Calibrate hard-stop joints from a range sweep only.
+
+        Flow:
+        1. Reset homing offset to 0 and record raw min/max while the operator
+           sweeps each joint's full travel (no middle-pose prompt). Glitch
+           samples that would expand the span across the encoder wrap are
+           ignored so travel near 0/CPR does not require remounting.
+        2. Keep ``homing_offset=0``; refuse non-contiguous / over-wide spans.
+        3. Ask the operator to move each joint to its **low command** end to set
+           ``drive_mode``.
+        """
+        from solarian.core.data import PosData
+        from solarian.utils.general import enter_pressed
+        from solarian.core.joint_calibration import (
+            CalibrationSafetyError,
+            DerivedHoming,
+            EncoderRangeTracker,
+            calibration_from_raw_range,
+            drive_mode_from_low_end_pose,
+            low_command_label,
+        )
+
         if self.cfg.calibration_file is None:
             logger.error(f"No calibration required for module {self.name}")
             return
 
+        hw_by_port = self._hardware_actuators_by_port()
+        if not hw_by_port:
+            logger.error(f"No hardware actuators to calibrate on module {self.name}")
+            return
+
         print(f"\nRunning calibration of {self}")
+        print(
+            "Homing offset stays 0 (raw encoder). Move each joint through its\n"
+            "FULL mechanical travel while recording, then press ENTER."
+        )
 
         self.start_calibration_mode()
 
-        input(f"Move {self} to the middle of its range of motion and press ENTER....")
-        homing_offsets = {}
-        for port, actuator_names in self.actuators_by_port.items():
+        for port, actuator_names in hw_by_port.items():
             bus = self.module_bus.component_bus_by_port[port]
             assert isinstance(bus, ActuatorBus)
-            homing_offsets.update(bus.set_half_turn_homings(actuator_names))
+            bus.reset_calibration(actuator_names)
 
-        logger.info(
-            f"Move all joints sequentially through their "
-            "entire ranges of motion.\nRecording positions. Press ENTER to stop..."
+        # Glitch-filtered range recording (per joint, needs CPR from the bus).
+        trackers: dict[str, EncoderRangeTracker] = {}
+        for port, actuator_names in hw_by_port.items():
+            bus = self.module_bus.component_bus_by_port[port]
+            for name in actuator_names:
+                cpr = bus.counts_per_revolution(name)
+                if not cpr:
+                    print(
+                        f"\nCalibration aborted: {name} has no counts_per_revolution."
+                    )
+                    self.end_calibration_mode()
+                    return
+                trackers[name] = EncoderRangeTracker(cpr=int(cpr))
+
+        print(
+            "\nRecording positions. Move every joint through its entire range of "
+            "motion, then press ENTER to stop..."
         )
+        while not enter_pressed():
+            status_min, status_pos, status_max = {}, {}, {}
+            for port, actuator_names in hw_by_port.items():
+                bus = self.module_bus.component_bus_by_port[port]
+                positions = bus.read(PosData, actuator_names, normalize=False)
+                for name in actuator_names:
+                    pos = int(positions[name])
+                    trackers[name].update(pos)
+                    t = trackers[name]
+                    status_pos[name] = pos
+                    status_min[name] = t.raw_min
+                    status_max[name] = t.raw_max
+            StatusBoard.set("MIN", status_min)
+            StatusBoard.set("POS", status_pos)
+            StatusBoard.set("MAX", status_max)
 
-        range_mins = {}
-        range_maxes = {}
-       
-        for port, actuator_names in self.actuators_by_port.items():
+        # Build calibration windows (homing_offset=0).
+        derived: dict[str, DerivedHoming] = {}
+        try:
+            for name, tracker in trackers.items():
+                if tracker.rejected:
+                    print(
+                        f"  {name}: ignored {tracker.rejected} wrap-glitch sample(s)"
+                    )
+                raw_lo, raw_hi = tracker.result()
+                # Re-validate with the joint name in the error message.
+                derived[name] = calibration_from_raw_range(
+                    name, raw_lo, raw_hi, tracker.cpr
+                )
+                d = derived[name]
+                print(
+                    f"  {name}: raw/Present range {d.range_min} .. {d.range_max} "
+                    f"(span {d.range_max - d.range_min}, homing_offset=0)"
+                )
+        except CalibrationSafetyError as exc:
+            print(f"\nCalibration aborted (safety): {exc}")
+            logger.error("Calibration aborted (safety): %s", exc)
+            self.end_calibration_mode()
+            return
+
+        # Drive mode: operator moves each joint to its low-command pose.
+        print("\n=== Drive mode (command direction) ===")
+        drive_modes: dict[str, int] = {}
+        for port, actuator_names in hw_by_port.items():
             bus = self.module_bus.component_bus_by_port[port]
-            assert isinstance(bus, ActuatorBus)
-            range_mins, range_maxes = bus.record_ranges_of_motion(actuator_names)
-            range_mins.update(range_mins)
-            range_maxes.update(range_maxes)
-            
+            for name in actuator_names:
+                mode = self.actuators[name].cfg.mode
+                label = low_command_label(mode)
+                input(
+                    f"Move '{name}' to the pose that should map to command {label}, "
+                    "then press ENTER..."
+                )
+                reading = bus.read(PosData, [name], normalize=False)
+                pose = float(reading[name])
+                d = derived[name]
+                dm = drive_mode_from_low_end_pose(pose, d.range_min, d.range_max)
+                drive_modes[name] = dm
+                end = "min" if dm == 0 else "max"
+                print(
+                    f"  {name}: pose={pose:.0f} near encoder {end} → drive_mode={dm}"
+                )
+                sim = getattr(self.actuators[name].cfg, "sim", None)
+                sim_dm = getattr(sim, "drive_mode", None) if sim is not None else None
+                if sim_dm is not None and int(sim_dm) != dm:
+                    print(
+                        f"  warning: sim.drive_mode={sim_dm} disagrees with operator "
+                        f"result ({dm}); keeping operator result."
+                    )
 
         self.calibration = {}
-        for port, actuator_names in self.actuators_by_port.items():
+        for port, actuator_names in hw_by_port.items():
             port_calibration = {}
-            for actuator_name in actuator_names:
-                # Virtual actuators (e.g. ik_cartesian) are driven by IK and
-                # never reported by the bus's homing/range recording, so they
-                # have no hardware calibration to build.
-                if actuator_name not in homing_offsets:
-                    continue
-                port_calibration[actuator_name] = MotorCalibration(
-                    id=self.actuators[actuator_name].cfg.id,
-                    drive_mode=0,
-                    homing_offset=homing_offsets[actuator_name],
-                    range_min=range_mins[actuator_name],
-                    range_max=range_maxes[actuator_name],
+            for name in actuator_names:
+                d = derived[name]
+                port_calibration[name] = MotorCalibration(
+                    id=self.actuators[name].cfg.id,
+                    drive_mode=drive_modes[name],
+                    homing_offset=d.homing_offset,
+                    range_min=d.range_min,
+                    range_max=d.range_max,
                 )
-            port_calibration = self.module_bus.component_bus_by_port[port].write_calibration(port_calibration)
+            port_calibration = self.module_bus.component_bus_by_port[port].write_calibration(
+                port_calibration
+            )
             self.calibration.update(port_calibration)
 
         self._save_calibration(self.calibration)

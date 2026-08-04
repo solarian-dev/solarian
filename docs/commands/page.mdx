@@ -216,10 +216,10 @@ Detects and lists every camera available to the system (V4L2 on Linux, AVFoundat
 ### `onshape-export`
 
 ```bash
-solarian onshape-export <assembly_dir> [--clean-only] [--keys-file PATH]
+solarian onshape-export <assembly_dir> [--clean-only] [--keys-file PATH] [--update-yaml PATH]
 ```
 
-Exports an Onshape CAD assembly into an attachable MuJoCo (MJCF) model for [simulation](/docs/simulation). `<assembly_dir>` holds a `config.json` describing the assembly and a `solarian` block controlling the export. See [Onshape → Sim Models](/docs/onshape-models) for the full workflow. Part of the `[sim]` extra.
+Exports an Onshape CAD assembly into an attachable MuJoCo (MJCF) model for [simulation](/docs/simulation). `<assembly_dir>` holds a `config.json` describing the assembly and a `solarian` block controlling the export. With `--update-yaml conf/<module>.yaml`, joint ranges from the cleaned MJCF are synced into that module conf's `sim.range_min`/`range_max` and into `config.json` `joint_properties.*.limits`. See [Onshape → Sim Models](/docs/onshape-models) for the full workflow. Part of the `[sim]` extra.
 
 ### `shell`
 

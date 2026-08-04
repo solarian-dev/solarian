@@ -222,12 +222,17 @@ def main() -> None:
                                help="Re-run only the clean stage on a previous raw export (no network).")
         oe_parser.add_argument("--keys-file", default=None,
                                help="File with ONSHAPE_ACCESS_KEY/ONSHAPE_SECRET_KEY (default: onshape_keys.txt).")
+        oe_parser.add_argument("--update-yaml", default=None, metavar="PATH",
+                               help="After export, sync MJCF joint ranges into this module conf "
+                                    "(sim.range_min/max) and config.json joint_properties.limits.")
         oe_args = oe_parser.parse_args(remaining)
         os.environ["SOLARIAN_ONSHAPE_EXPORT_DIR"] = oe_args.assembly_dir
         if oe_args.clean_only:
             os.environ["SOLARIAN_ONSHAPE_EXPORT_CLEAN_ONLY"] = "true"
         if oe_args.keys_file:
             os.environ["SOLARIAN_ONSHAPE_EXPORT_KEYS_FILE"] = oe_args.keys_file
+        if oe_args.update_yaml:
+            os.environ["SOLARIAN_ONSHAPE_EXPORT_UPDATE_YAML"] = oe_args.update_yaml
         overrides = []
     elif args.subcommand == "create-project":
         if len(remaining) < 1:

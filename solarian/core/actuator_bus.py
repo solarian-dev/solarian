@@ -107,6 +107,14 @@ class ActuatorBus(ComponentBus):
         """
         return None
 
+    def max_homing_offset_abs(self, name: str) -> int | None:
+        """Max ``|homing_offset|`` the hardware accepts for actuator ``name``.
+
+        Vendor-specific (e.g. Feetech Homing_Offset sign-magnitude width).
+        Default ``None`` means core calibration will not enforce a magnitude cap.
+        """
+        return None
+
     def raw_to_radians(self, name: str, raw: float) -> float | None:
         """Convert a raw encoder value to radians, or ``None`` if unknown.
 

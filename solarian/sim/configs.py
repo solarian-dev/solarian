@@ -8,16 +8,25 @@ a MuJoCo joint / actuator / camera.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ModuleAttachment(BaseModel):
     """Declares an MJCF model contributed by a module and how it attaches.
 
-    A module composes its own MJCF sub-model into the shared scene. The
-    sub-model is attached to a body of the (already-composed) scene at the
-    given pose. ``prefix`` namespaces every joint / actuator / camera in the
-    child model so that models with colliding names can coexist.
+    A module composes its own MJCF sub-model into the shared scene.
+    ``prefix`` namespaces every joint / actuator / camera in the child model
+    so that models with colliding names can coexist.
+
+    Two attachment modes (pick one):
+
+    1. **Body + pose** — place the child's worldbody origin on ``parent_body``
+       at ``pos``/``quat`` (the original API).
+    2. **Site mate** — coincide ``parent_site`` (already in the composed scene,
+       namespaced by a prior attach prefix) with ``child_site`` (unprefixed
+       name in the child MJCF). Typical for mating matching Onshape frames
+       (e.g. both named ``side_bracket``). ``pos``/``quat`` become an optional
+       offset applied in the parent-site frame after the mate.
     """
 
     module: str
@@ -26,11 +35,29 @@ class ModuleAttachment(BaseModel):
     #: (e.g. ``"so_arm101_mj_description"``) to resolve at runtime.
     mjcf: str
     #: Body in the scene to attach to. ``"world"`` attaches to the worldbody.
+    #: Ignored when ``parent_site`` is set.
     parent_body: str = "world"
+    #: Site/frame already in the composed scene to mate against (e.g.
+    #: ``"right/side_bracket"``). Requires ``child_site``.
+    parent_site: str | None = None
+    #: Site/frame in the child MJCF (unprefixed) that should coincide with
+    #: ``parent_site`` (e.g. ``"side_bracket"``). Requires ``parent_site``.
+    child_site: str | None = None
+    #: Attachment position, or offset in the parent-site frame when mating.
     pos: list[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+    #: Attachment orientation ``[w, x, y, z]``, or offset when mating.
     quat: list[float] = Field(default_factory=lambda: [1.0, 0.0, 0.0, 0.0])
     #: Name prefix applied to the child model's joints/actuators/cameras.
     prefix: str = ""
+
+    @model_validator(mode="after")
+    def _sites_come_as_a_pair(self):
+        if (self.parent_site is None) ^ (self.child_site is None):
+            raise ValueError(
+                "parent_site and child_site must be set together (site-mate "
+                "mode), or both left unset (parent_body + pos/quat mode)"
+            )
+        return self
 
 
 class CameraMount(BaseModel):

@@ -100,6 +100,18 @@ from solarian_umi_slim import MJCF_PATH as UMI_SLIM_MJCF
 ModuleAttachment(module="gripper", mjcf=UMI_SLIM_MJCF, parent_body="arm/wrist", prefix="gripper/")
 ```
 
+To mate matching Onshape frames instead of placing the child origin on a body, set `parent_site` + `child_site` (see [Sim Robots](/docs/sim-robots#mating-two-frames-site-mate-mode)):
+
+```python
+ModuleAttachment(
+    module="gripper",
+    mjcf=UMI_SLIM_MJCF,
+    parent_site="arm/side_bracket",
+    child_site="side_bracket",
+    prefix="gripper/",
+)
+```
+
 ## The default world
 
 If `world_mjcf` is `None`, `compose_scene` generates a minimal world — a skybox, a grid floor plane, and a directional light — so you can bring up a robot before authoring an environment:

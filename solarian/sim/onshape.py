@@ -19,6 +19,10 @@ The pipeline has two stages:
      features response, the latter being where joint limits are read).
    * the kinematic tree is rooted at the assembly's base (``base_dof``) so the
      model attaches to the world / a parent body at its base, not at the tool.
+   * stale ``joint_properties.*.limits`` in ``config.json`` are ignored during
+     the pull (Onshape mate limits win); after cleaning, those CAD limits are
+     written back into ``config.json``. Set ``solarian.prefer_config_limits``
+     to keep config.json as the source of truth instead.
 
    Free-floating shells that carry no mate (duplicate CAD bodies) are dropped so
    the exported model is a single connected mechanism.
@@ -41,7 +45,9 @@ so importing this module never requires the ``[sim]`` extras.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Iterator, Optional
 
@@ -113,6 +119,11 @@ class SolarianExportSpec:
     self_collision: bool = False
     #: Optional end-effector site.
     ee_site: Optional[EESiteSpec] = None
+    #: When ``False`` (default), ``joint_properties.*.limits`` in config.json are
+    #: ignored during the Onshape pull so mate limits from the assembly win;
+    #: after export those CAD limits are written back into config.json. Set
+    #: ``True`` only when you intentionally want config.json to override CAD.
+    prefer_config_limits: bool = False
 
     @classmethod
     def from_config(cls, config: dict) -> "SolarianExportSpec":
@@ -122,6 +133,24 @@ class SolarianExportSpec:
         if ee is not None:
             spec.ee_site = EESiteSpec(**ee)
         return spec
+
+
+def clear_joint_property_limits(joint_properties: dict) -> list[str]:
+    """Remove ``limits`` overrides from a ``joint_properties`` mapping (in-place).
+
+    Returns the joint names (including ``default`` / ``*``) whose ``limits``
+    entry was cleared. Leaves other properties (``range``, effort, …) intact so
+    onshape-to-robot still emits ``range=`` from the CAD mate limits.
+    """
+    cleared: list[str] = []
+    if not isinstance(joint_properties, dict):
+        return cleared
+    for name, entry in joint_properties.items():
+        if not isinstance(entry, dict) or "limits" not in entry:
+            continue
+        del entry["limits"]
+        cleared.append(name)
+    return cleared
 
 
 # --------------------------------------------------------------------------- #
@@ -240,6 +269,19 @@ def _export_raw(assembly_dir: str, spec: SolarianExportSpec) -> tuple[str, "obje
             f"solarian onshape-export requires output_format=\"mujoco\" "
             f"(got {config.output_format!r})."
         )
+
+    # onshape-to-robot treats joint_properties.*.limits as an override of the
+    # mate limits. Default workflow: drop those overrides so the assembly wins,
+    # then rewrite config.json from the exported MJCF after cleaning.
+    if not spec.prefer_config_limits:
+        cleared = clear_joint_property_limits(config.joint_properties)
+        if cleared:
+            print(
+                "* Using Onshape mate limits "
+                f"(cleared joint_properties limits for: {', '.join(cleared)})"
+            )
+    else:
+        print("* prefer_config_limits=true: joint_properties.*.limits override CAD")
 
     exporter = ExporterMuJoCo(config)
 
@@ -378,6 +420,336 @@ def _clean(raw_xml: str, out_xml: str, spec: SolarianExportSpec, meshdir: str) -
 
 
 # --------------------------------------------------------------------------- #
+# Sync MJCF joint ranges → module YAML + config.json                          #
+# --------------------------------------------------------------------------- #
+
+#: Actuator keys that are never MJCF joints (Cartesian IK components).
+_CARTESIAN_ACTUATORS = frozenset({"x", "y", "z", "rx", "ry", "rz"})
+
+_ACTUATOR_KEY_RE = re.compile(r"^(\s*)([A-Za-z_][\w]*)\s*:\s*(?:#.*)?$")
+_SIM_JOINT_RE = re.compile(
+    r"""^(\s*)joint\s*:\s*["']?([^"'#\n]+?)["']?\s*(?:#.*)?$"""
+)
+_RANGE_MIN_RE = re.compile(r"^(\s*)range_min\s*:\s*[^\n#]*")
+_RANGE_MAX_RE = re.compile(r"^(\s*)range_max\s*:\s*[^\n#]*")
+
+
+def _format_limit(value: float) -> str:
+    """Compact float formatting that matches typical MJCF / yaml limit style."""
+    text = f"{value:.10g}"
+    if text in ("-0", "-0.0"):
+        return "0"
+    return text
+
+
+def _bare_joint_name(joint_ref: str) -> str:
+    """Strip an attach prefix: ``right/shoulder_pan`` → ``shoulder_pan``."""
+    return joint_ref.strip().strip("\"'").rsplit("/", 1)[-1]
+
+
+def _split_newline(raw: str) -> tuple[str, str]:
+    if raw.endswith("\r\n"):
+        return raw[:-2], "\r\n"
+    if raw.endswith("\n"):
+        return raw[:-1], "\n"
+    return raw, ""
+
+
+_JOINT_TAG_RE = re.compile(r"<joint\b([^>]*)/?>", re.IGNORECASE)
+_ATTR_NAME_RE = re.compile(r"""\bname\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+_ATTR_RANGE_RE = re.compile(r"""\brange\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+
+
+def read_joint_ranges(mjcf_path: str) -> dict[str, tuple[float, float]]:
+    """Parse ``<joint name=... range="lo hi">`` from an MJCF file.
+
+    Joints without a ``range`` attribute are skipped. Returns
+    ``{joint_name: (lo, hi)}``.
+
+    Uses a regex over joint tags rather than a full XML parse so hand-edited
+    MJCF with non-strict comments (e.g. ``--`` inside ``<!-- ... -->``) still
+    works — MuJoCo accepts those files; ElementTree does not.
+    """
+    with open(mjcf_path, "r", encoding="utf-8") as f:
+        text = f.read()
+    ranges: dict[str, tuple[float, float]] = {}
+    for tag in _JOINT_TAG_RE.finditer(text):
+        attrs = tag.group(1)
+        name_m = _ATTR_NAME_RE.search(attrs)
+        range_m = _ATTR_RANGE_RE.search(attrs)
+        if not name_m or not range_m:
+            continue
+        parts = range_m.group(1).split()
+        if len(parts) != 2:
+            continue
+        ranges[name_m.group(1)] = (float(parts[0]), float(parts[1]))
+    return ranges
+
+
+def _discover_yaml_actuator_joints(lines: list[str]) -> dict[str, str]:
+    """Map actuator key → bare MJCF joint name for actuators with a ``sim:`` block.
+
+    Default joint name is the actuator key; an explicit ``sim.joint`` (bare name
+    after the last ``/``) overrides it. Actuators without ``sim:`` are omitted.
+    """
+    actuators_indent: Optional[int] = None
+    actuator_key_indent: Optional[int] = None
+    current_actuator: Optional[str] = None
+    current_has_sim = False
+    current_joint: Optional[str] = None
+    in_sim = False
+    sim_indent: Optional[int] = None
+    mapping: dict[str, str] = {}
+
+    def _commit() -> None:
+        nonlocal current_actuator, current_has_sim, current_joint
+        if current_actuator is not None and current_has_sim:
+            mapping[current_actuator] = current_joint or current_actuator
+        current_actuator = None
+        current_has_sim = False
+        current_joint = None
+
+    for raw in lines:
+        body, _ = _split_newline(raw)
+        if not body.strip() or body.lstrip().startswith("#"):
+            continue
+        indent = len(body) - len(body.lstrip(" "))
+
+        if actuators_indent is None:
+            if re.match(r"^\s*actuators\s*:", body):
+                actuators_indent = indent
+            continue
+
+        if indent <= actuators_indent:
+            _commit()
+            break
+
+        if actuator_key_indent is None:
+            m = _ACTUATOR_KEY_RE.match(body)
+            if m and len(m.group(1)) > actuators_indent:
+                actuator_key_indent = len(m.group(1))
+
+        if actuator_key_indent is not None and indent == actuator_key_indent:
+            m = _ACTUATOR_KEY_RE.match(body)
+            if m:
+                _commit()
+                current_actuator = m.group(2)
+                in_sim = False
+                sim_indent = None
+                continue
+
+        if current_actuator is None or actuator_key_indent is None:
+            continue
+
+        if re.match(r"^\s*sim\s*:", body) and indent > actuator_key_indent:
+            in_sim = True
+            sim_indent = indent
+            current_has_sim = True
+            continue
+
+        if in_sim and sim_indent is not None:
+            if indent <= sim_indent:
+                in_sim = False
+                sim_indent = None
+            else:
+                jm = _SIM_JOINT_RE.match(body)
+                if jm:
+                    current_joint = _bare_joint_name(jm.group(2))
+
+    _commit()
+    return mapping
+
+
+def sync_module_yaml(
+    yaml_path: str, ranges: dict[str, tuple[float, float]]
+) -> list[str]:
+    """Surgically update ``sim.range_min`` / ``range_max`` in a module yaml.
+
+    Preserves comments and unrelated structure. Matches actuators by key name or
+    by the bare name of ``sim.joint`` (attach prefixes allowed). Actuators with
+    no ``sim:`` block are left alone. Returns the list of updated actuator keys.
+    """
+    path = os.path.abspath(yaml_path)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Module yaml not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines(keepends=True)
+
+    actuator_joints = _discover_yaml_actuator_joints(lines)
+    update_for: dict[str, tuple[float, float]] = {
+        actuator: ranges[joint]
+        for actuator, joint in actuator_joints.items()
+        if joint in ranges
+    }
+
+    actuators_indent: Optional[int] = None
+    actuator_key_indent: Optional[int] = None
+    current_actuator: Optional[str] = None
+    in_sim = False
+    sim_indent: Optional[int] = None
+    updated: list[str] = []
+    touched: set[str] = set()
+    out: list[str] = []
+
+    for raw in lines:
+        body, newline = _split_newline(raw)
+        stripped = body.lstrip(" ")
+        indent = len(body) - len(stripped) if stripped else len(body)
+
+        if actuators_indent is None:
+            if re.match(r"^\s*actuators\s*:", body):
+                actuators_indent = indent
+            out.append(raw)
+            continue
+
+        if indent <= actuators_indent and stripped and not stripped.startswith("#"):
+            actuators_indent = None
+            current_actuator = None
+            in_sim = False
+            out.append(raw)
+            continue
+
+        if actuator_key_indent is None:
+            m = _ACTUATOR_KEY_RE.match(body)
+            if m and actuators_indent is not None and len(m.group(1)) > actuators_indent:
+                actuator_key_indent = len(m.group(1))
+
+        if (
+            actuator_key_indent is not None
+            and indent == actuator_key_indent
+            and stripped
+            and not stripped.startswith("#")
+        ):
+            m = _ACTUATOR_KEY_RE.match(body)
+            if m:
+                current_actuator = m.group(2)
+                in_sim = False
+                sim_indent = None
+            out.append(raw)
+            continue
+
+        if current_actuator is not None and re.match(r"^\s*sim\s*:", body):
+            if actuator_key_indent is None or indent > actuator_key_indent:
+                in_sim = True
+                sim_indent = indent
+                out.append(raw)
+                continue
+
+        if in_sim and sim_indent is not None:
+            if stripped and not stripped.startswith("#") and indent <= sim_indent:
+                in_sim = False
+                sim_indent = None
+            elif current_actuator in update_for:
+                lo, hi = update_for[current_actuator]
+                trailing = ""
+                comment_idx = body.find(" #")
+                if comment_idx >= 0:
+                    trailing = body[comment_idx:]
+
+                if _RANGE_MIN_RE.match(body):
+                    out.append(
+                        f"{body[:indent]}range_min: {_format_limit(lo)}{trailing}{newline}"
+                    )
+                    if current_actuator not in touched:
+                        touched.add(current_actuator)
+                        updated.append(current_actuator)
+                    continue
+                if _RANGE_MAX_RE.match(body):
+                    out.append(
+                        f"{body[:indent]}range_max: {_format_limit(hi)}{trailing}{newline}"
+                    )
+                    if current_actuator not in touched:
+                        touched.add(current_actuator)
+                        updated.append(current_actuator)
+                    continue
+
+        out.append(raw)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(out)
+    return updated
+
+
+def sync_joint_properties(
+    config_path: str, ranges: dict[str, tuple[float, float]]
+) -> list[str]:
+    """Rewrite ``joint_properties.<name>.limits`` from MJCF ranges.
+
+    Only updates joints that already exist in ``joint_properties``; does not
+    invent new entries. Returns the list of updated joint names.
+    """
+    path = os.path.abspath(config_path)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"config.json not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        config = commentjson.load(f)
+
+    jp = config.get("joint_properties")
+    if not isinstance(jp, dict):
+        return []
+
+    updated: list[str] = []
+    for name, (lo, hi) in ranges.items():
+        entry = jp.get(name)
+        if not isinstance(entry, dict):
+            continue
+        entry["limits"] = [lo, hi]
+        updated.append(name)
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4)
+        f.write("\n")
+    return updated
+
+
+def sync_limits_from_mjcf(
+    mjcf_path: str,
+    *,
+    config_path: str,
+    yaml_path: str | None = None,
+) -> dict[str, list[str]]:
+    """Sync MJCF joint ranges into the assembly config.json (and optionally a module yaml).
+
+    ``config.json`` ``joint_properties.*.limits`` are always rewritten from the
+    MJCF so they mirror the Onshape mate limits that produced the export.
+    When ``yaml_path`` is set, ``sim.range_min`` / ``range_max`` are updated too.
+
+    Returns ``{"yaml": [...], "config": [...], "unmatched_mjcf": [...],
+    "unmatched_yaml": [...]}`` for the caller to print a summary.
+    """
+    ranges = read_joint_ranges(mjcf_path)
+    config_updated = sync_joint_properties(config_path, ranges)
+    yaml_updated: list[str] = []
+    unmatched_mjcf: list[str] = []
+    unmatched_yaml: list[str] = []
+
+    if yaml_path is not None:
+        yaml_updated = sync_module_yaml(yaml_path, ranges)
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines(keepends=True)
+        actuator_joints = _discover_yaml_actuator_joints(lines)
+        yaml_target_joints = set(actuator_joints.values())
+
+        unmatched_mjcf = sorted(name for name in ranges if name not in yaml_target_joints)
+        unmatched_yaml = sorted(
+            actuator
+            for actuator, joint in actuator_joints.items()
+            if joint not in ranges
+            and joint not in _CARTESIAN_ACTUATORS
+            and actuator not in _CARTESIAN_ACTUATORS
+        )
+
+    return {
+        "yaml": yaml_updated,
+        "config": config_updated,
+        "unmatched_mjcf": unmatched_mjcf,
+        "unmatched_yaml": unmatched_yaml,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Entry points                                                                 #
 # --------------------------------------------------------------------------- #
 
@@ -420,7 +792,12 @@ def _raw_xml_path(assembly_dir: str, config: dict) -> str:
     return os.path.join(os.path.abspath(assembly_dir), f"{output_filename}.xml")
 
 
-def export(assembly_dir: str, *, clean_only: bool = False) -> str:
+def export(
+    assembly_dir: str,
+    *,
+    clean_only: bool = False,
+    update_yaml: str | None = None,
+) -> str:
     """Run the Onshape → attachable-MJCF pipeline for ``assembly_dir``.
 
     ``assembly_dir`` holds a ``config.json`` (onshape-to-robot fields plus a
@@ -430,6 +807,13 @@ def export(assembly_dir: str, *, clean_only: bool = False) -> str:
     With ``clean_only=True`` the network export is skipped and only the clean
     stage is re-run on the previously-exported raw MJCF — handy for iterating on
     the cleaning options without re-hitting the Onshape API.
+
+    Joint limits flow **CAD → MJCF → config.json**: stale
+    ``joint_properties.*.limits`` are ignored during the Onshape pull (unless
+    ``solarian.prefer_config_limits`` is set), and after cleaning the MJCF ranges
+    are always written back into ``config.json``. With ``update_yaml`` set to a
+    module conf path (e.g. ``conf/right_arm.yaml``), those same ranges are also
+    written into that yaml's ``sim.range_min`` / ``range_max``.
     """
     config = _load_config(assembly_dir)
     spec = SolarianExportSpec.from_config(config)
@@ -446,6 +830,32 @@ def export(assembly_dir: str, *, clean_only: bool = False) -> str:
         raw_xml, _ = _export_raw(assembly_dir, spec)
 
     _clean(raw_xml, out_xml, spec, meshdir)
+
+    config_path = os.path.join(os.path.abspath(assembly_dir), "config.json")
+    yaml_path = None
+    if update_yaml:
+        yaml_path = os.path.abspath(update_yaml)
+        if not os.path.isfile(yaml_path):
+            raise FileNotFoundError(f"--update-yaml path not found: {yaml_path}")
+
+    result = sync_limits_from_mjcf(
+        out_xml, config_path=config_path, yaml_path=yaml_path
+    )
+    print(f"* Synced joint limits from {out_xml}")
+    if result["config"]:
+        print(f"  config.json joint_properties: {', '.join(result['config'])}")
+    else:
+        print("  config.json joint_properties: no matching entries updated")
+    if yaml_path:
+        if result["yaml"]:
+            print(f"  yaml ({yaml_path}): {', '.join(result['yaml'])}")
+        else:
+            print(f"  yaml ({yaml_path}): no matching actuators updated")
+        for name in result["unmatched_mjcf"]:
+            print(f"  warning: MJCF joint {name!r} has no matching yaml actuator")
+        for name in result["unmatched_yaml"]:
+            print(f"  warning: yaml actuator {name!r} has no MJCF joint range")
+
     return out_xml
 
 

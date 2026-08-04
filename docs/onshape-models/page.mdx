@@ -20,6 +20,7 @@ The whole process is driven by a single `config.json`, so once an assembly is se
 solarian onshape-export <assembly_dir>              # full export (needs network)
 solarian onshape-export <assembly_dir> --clean-only # re-run only the clean stage
 solarian onshape-export <assembly_dir> --keys-file path/to/keys.txt
+solarian onshape-export <assembly_dir> --update-yaml conf/right_arm.yaml
 ```
 
 `<assembly_dir>` is a directory containing a `config.json`. The command writes the cleaned, attachable MJCF (by default to the project's `assets/`, see `output_xml`) and prints where it landed.
@@ -29,7 +30,10 @@ solarian onshape-export <assembly_dir> --keys-file path/to/keys.txt
     Skip the Onshape API call and re-run only the <a href="#stage-2-clean">clean stage</a> on the previously-exported raw MJCF. Fast iteration on cleaning options (density, EE site, self-collision) without re-hitting the network.
   </Property>
   <Property name="--keys-file" type="path">
-    File with <code>ONSHAPE_ACCESS_KEY</code>/<code>ONSHAPE_SECRET_KEY</code> lines, loaded into the environment if the keys aren't already set. Defaults to <code>onshape_keys.txt</code> in the current directory.
+    File with <code>ONSHAPE_ACCESS_KEY</code>/<code>ONSHAPE_SECRET_KEY</code> lines, loaded into the environment if the keys aren't already set. When omitted, the command tries <code>onshape_keys.txt</code> then <code>.env</code> in the current directory.
+  </Property>
+  <Property name="--update-yaml" type="path">
+    After export, also sync joint ranges from the cleaned MJCF into this module conf (<code>actuators.*.sim.range_min</code>/<code>range_max</code>). Matches actuators by key name or by the bare name of <code>sim.joint</code> (attach prefixes like <code>right/</code> are stripped). Actuators without a <code>sim:</code> block are left alone. <code>config.json</code> <code>joint_properties.*.limits</code> are always rewritten from the CAD mate limits, with or without this flag.
   </Property>
 </Properties>
 
@@ -43,10 +47,10 @@ export ONSHAPE_ACCESS_KEY=your_access_key
 export ONSHAPE_SECRET_KEY=your_secret_key
 ```
 
-…or drop them in a keys file (git-ignored) that the command loads automatically:
+…or drop them in a git-ignored keys file that the command loads automatically — either `onshape_keys.txt` or a project `.env`:
 
 ```text
-# onshape_keys.txt
+# .env  (or onshape_keys.txt)
 ONSHAPE_ACCESS_KEY=your_access_key
 ONSHAPE_SECRET_KEY=your_secret_key
 ```
@@ -65,12 +69,12 @@ The file is the ordinary [onshape-to-robot config](https://onshape-to-robot.read
     "assets_directory": "meshes",
     "robot_name": "so106",
     "joint_properties": {
-        "shoulder_pan":  {"limits": [-1.91986, 1.91986], "range": true},
-        "shoulder_lift": {"limits": [-1.74533, 1.74533], "range": true},
-        "elbow_flex":    {"limits": [-1.74533, 1.57080], "range": true},
-        "wrist_flex":    {"limits": [-1.65806, 1.65806], "range": true},
-        "wrist_yaw":     {"limits": [-1.57080, 1.57080], "range": true},
-        "wrist_roll":    {"limits": [-2.79253, 2.79253], "range": true}
+        "shoulder_pan":  {"range": true},
+        "shoulder_lift": {"range": true},
+        "elbow_flex":    {"range": true},
+        "wrist_flex":    {"range": true},
+        "wrist_yaw":     {"range": true},
+        "wrist_roll":    {"range": true}
     },
     "solarian": {
         "dof_mates": ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_yaw", "wrist_roll"],
@@ -85,6 +89,10 @@ The file is the ordinary [onshape-to-robot config](https://onshape-to-robot.read
 
 <Note>
   You can point at the assembly with a single <code>"url"</code> field (the Onshape tab URL) instead of <code>document_id</code>/<code>workspace_id</code>/<code>element_id</code> — onshape-to-robot parses the IDs out of it.
+</Note>
+
+<Note>
+  Joint limits flow <strong>CAD → MJCF → config.json</strong>. On export, any stale <code>joint_properties.*.limits</code> are ignored so Onshape mate limits win; after cleaning, those CAD limits are written back into <code>config.json</code> (and into the module yaml when you pass <code>--update-yaml</code>). Set <code>solarian.prefer_config_limits: true</code> only if you intentionally want config.json to override the assembly.
 </Note>
 
 ### The `solarian` block
@@ -122,6 +130,9 @@ Parsed into [`SolarianExportSpec`](https://github.com/solarian-dev/solarian/blob
   <Property name="ee_site" type="object | None">
     Optional end-effector <code>&lt;site&gt;</code> at a flange. <code>name</code> is referenced by an <a href="/docs/ik">IK backend</a> (e.g. <code>MinkIK(frame="gripper")</code>); <code>body</code> is the flange body; <code>axis</code> (<code>x</code>/<code>y</code>/<code>z</code>, optionally signed like <code>-z</code>) is the tool direction pointing out of the flange.
   </Property>
+  <Property name="prefer_config_limits" type="bool">
+    When <code>false</code> (default), ignore stale <code>joint_properties.*.limits</code> during the Onshape pull so mate limits from the assembly win, then rewrite those limits in <code>config.json</code> from the cleaned MJCF. Set <code>true</code> only to keep config.json as an intentional override of CAD.
+  </Property>
 </Properties>
 
 ## How it works
@@ -132,17 +143,20 @@ The pipeline ([`solarian/sim/onshape.py`](https://github.com/solarian-dev/solari
 solarian onshape-export <dir>
    │
    ├── Stage 1: raw export  (Onshape API + network)
-   │     ├── rename dof_mates → dof_<name>   (so o2r treats them as joints)
+   │     ├── clear joint_properties.*.limits     (CAD mate limits win)
+   │     ├── rename dof_mates → dof_<name>       (so o2r treats them as joints)
    │     ├── root the tree at base_dof
    │     ├── drop unmated (free-floating) links
    │     └── write <output_filename>.xml + STL meshes
    │
-   └── Stage 2: clean       (no network)
-         ├── drop the base <freejoint>            (attach)
-         ├── strip inertials + infer mass/inertia (density)
-         ├── set meshdir, non-self-colliding geoms
-         ├── add the end-effector <site>          (ee_site)
-         └── write output_xml
+   ├── Stage 2: clean       (no network)
+   │     ├── drop the base <freejoint>            (attach)
+   │     ├── strip inertials + infer mass/inertia (density)
+   │     ├── set meshdir, non-self-colliding geoms
+   │     ├── add the end-effector <site>          (ee_site)
+   │     └── write output_xml
+   │
+   └── Sync limits: MJCF → config.json (+ module yaml with --update-yaml)
 ```
 
 ### Stage 1: raw export
@@ -188,12 +202,12 @@ actuators:
     sim:
       joint: "right/shoulder_pan"
       actuator: "right/shoulder_pan"
-      range_min: -1.91986    # = joint_properties limits from config.json
+      range_min: -1.91986    # = MJCF joint range (keep in sync via --update-yaml)
       range_max: 1.91986
 ```
 
 <Note>
-  Keep <code>range_min</code>/<code>range_max</code> equal to the joint limits you set in <code>joint_properties</code> — they are the same numbers, and a mismatch silently skews every normalized ↔ radian conversion.
+  Keep <code>range_min</code>/<code>range_max</code> equal to the MJCF joint <code>range</code> (and to <code>joint_properties.limits</code>). Export always refreshes <code>config.json</code> from the CAD mate limits; pass <code>--update-yaml conf/&lt;module&gt;.yaml</code> to sync the module yaml too — a mismatch silently skews every normalized ↔ radian conversion.
 </Note>
 
 ## Worked example: adding a gripper

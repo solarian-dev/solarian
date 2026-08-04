@@ -222,3 +222,9 @@ class BusClient(ComponentBus):
 
     def reset_calibration(self, component_names: list[str]):
         return self._call("reset_calibration", component_names)
+
+    def counts_per_revolution(self, name: str):
+        return self._call("counts_per_revolution", name)
+
+    def max_homing_offset_abs(self, name: str):
+        return self._call("max_homing_offset_abs", name)

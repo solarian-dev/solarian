@@ -1,10 +1,10 @@
 """MuJoCo scene composition from module MJCF models.
 
 Builds a single ``MjModel`` from a :class:`~solarian.sim.configs.SceneConfig`:
-starts from the environment world, attaches each module's MJCF sub-model at its
-declared pose (namespacing joints/actuators/cameras via a prefix), and mounts
-extra cameras. ``mujoco`` is imported lazily so importing ``solarian`` never
-requires the optional ``[sim]`` dependencies.
+starts from the environment world, attaches each module's MJCF sub-model either
+at a body pose or by mating two sites (namespacing joints/actuators/cameras via
+a prefix), and mounts extra cameras. ``mujoco`` is imported lazily so importing
+``solarian`` never requires the optional ``[sim]`` dependencies.
 """
 
 from __future__ import annotations
@@ -83,27 +83,104 @@ def _find_body(spec, name: str):
     return body
 
 
+def _compose_poses(pos_a, quat_a, pos_b, quat_b):
+    """Compose ``T_a * T_b`` → ``(pos, quat)`` as numpy arrays."""
+    import mujoco
+    import numpy as np
+
+    pos_a = np.asarray(pos_a, dtype=float)
+    quat_a = np.asarray(quat_a, dtype=float)
+    pos_b = np.asarray(pos_b, dtype=float)
+    quat_b = np.asarray(quat_b, dtype=float)
+
+    rotated = np.zeros(3)
+    mujoco.mju_rotVecQuat(rotated, pos_b, quat_a)
+    pos = pos_a + rotated
+
+    quat = np.zeros(4)
+    mujoco.mju_mulQuat(quat, quat_a, quat_b)
+    return pos, quat
+
+
+def _invert_pose(pos, quat):
+    """Invert a pose ``(pos, quat)`` → ``(pos, quat)`` as numpy arrays."""
+    import mujoco
+    import numpy as np
+
+    pos = np.asarray(pos, dtype=float)
+    quat = np.asarray(quat, dtype=float)
+    qinv = np.zeros(4)
+    mujoco.mju_negQuat(qinv, quat)
+    pinv = np.zeros(3)
+    mujoco.mju_rotVecQuat(pinv, -pos, qinv)
+    return pinv, qinv
+
+
 def _compose_site_pose(site, off_pos, off_quat):
     """Camera pose in the site's body frame: the site frame composed with an
     optional local offset (``off_pos``/``off_quat``, relative to the site).
 
     Returns ``(pos, quat)`` as plain lists suitable for ``add_camera``.
     """
-    import mujoco
+    pos, quat = _compose_poses(site.pos, site.quat, off_pos, off_quat)
+    return pos.tolist(), quat.tolist()
+
+
+def _site_pose_in_root(spec, site):
+    """Pose of ``site`` relative to ``spec``'s worldbody (default body poses).
+
+    Walks the body chain from the site's parent up to the worldbody, composing
+    each body's ``pos``/``quat``. Joint DOFs are ignored (default configuration),
+    which is correct for fixed mating frames exported from CAD.
+    """
     import numpy as np
 
-    sp = np.asarray(site.pos, dtype=float)
-    sq = np.asarray(site.quat, dtype=float)
-    op = np.asarray(off_pos, dtype=float)
-    oq = np.asarray(off_quat, dtype=float)
+    pos = np.asarray(site.pos, dtype=float)
+    quat = np.asarray(site.quat, dtype=float)
+    body = site.parent
+    while body is not None and body is not spec.worldbody:
+        pos, quat = _compose_poses(body.pos, body.quat, pos, quat)
+        parent = body.parent
+        # worldbody.parent is itself; stop rather than loop forever.
+        if parent is body:
+            break
+        body = parent
+    return pos, quat
 
-    rotated = np.zeros(3)
-    mujoco.mju_rotVecQuat(rotated, op, sq)
-    pos = sp + rotated
 
-    quat = np.zeros(4)
-    mujoco.mju_mulQuat(quat, sq, oq)
-    return pos.tolist(), quat.tolist()
+def _attachment_frame(world, child, att):
+    """Resolve the parent body + local frame pose for one ``ModuleAttachment``.
+
+    Body mode: frame on ``parent_body`` at ``pos``/``quat``.
+    Site-mate mode: frame on the parent site's body at
+    ``T_parent_site * T_offset * inv(T_child_site)``, so the two sites coincide
+    (with ``pos``/``quat`` as an optional offset in the parent-site frame).
+    """
+    if att.parent_site is None:
+        parent = _find_body(world, att.parent_body)
+        return parent, list(att.pos), list(att.quat)
+
+    parent_site = world.site(att.parent_site)
+    if parent_site is None:
+        raise ValueError(
+            f"Site '{att.parent_site}' not found in composed scene (needed to "
+            f"attach module '{att.module}'). Sites exported from a module "
+            f"model are namespaced by its attach prefix."
+        )
+
+    child_site = child.site(att.child_site)
+    if child_site is None:
+        raise ValueError(
+            f"Site '{att.child_site}' not found in child MJCF for module "
+            f"'{att.module}' (needed to mate with parent_site "
+            f"'{att.parent_site}')."
+        )
+
+    # T_attach = T_parent_site * T_offset * inv(T_child_site_in_root)
+    child_in_root = _site_pose_in_root(child, child_site)
+    mid = _compose_poses(parent_site.pos, parent_site.quat, att.pos, att.quat)
+    attach_pos, attach_quat = _compose_poses(*mid, *_invert_pose(*child_in_root))
+    return parent_site.parent, attach_pos.tolist(), attach_quat.tolist()
 
 
 def compose_scene(scene: SceneConfig):
@@ -118,8 +195,8 @@ def compose_scene(scene: SceneConfig):
 
     for att in scene.attachments:
         child = mujoco.MjSpec.from_file(resolve_mjcf(att.mjcf))
-        parent = _find_body(world, att.parent_body)
-        frame = parent.add_frame(pos=att.pos, quat=att.quat)
+        parent, pos, quat = _attachment_frame(world, child, att)
+        frame = parent.add_frame(pos=pos, quat=quat)
         world.attach(child, frame=frame, prefix=att.prefix)
 
     for cam in scene.cameras:
