@@ -87,6 +87,16 @@ The file is the ordinary [onshape-to-robot config](https://onshape-to-robot.read
 }
 ```
 
+Or, when the tip is on a separate gripper not in the arm CAD, put a Frame on the flange in Onshape and offset from it in `config.json` (survives re-exports):
+
+```json
+"ee_site": {
+    "name": "gripper",
+    "site": "flange",
+    "offset": [0.0, 0.0, 0.08]
+}
+```
+
 <Note>
   You can point at the assembly with a single <code>"url"</code> field (the Onshape tab URL) instead of <code>document_id</code>/<code>workspace_id</code>/<code>element_id</code> — onshape-to-robot parses the IDs out of it.
 </Note>
@@ -128,7 +138,12 @@ Parsed into [`SolarianExportSpec`](https://github.com/solarian-dev/solarian/blob
     Let the mechanism's own links collide with each other. Default <code>false</code>: full-link collision meshes overlap by design at every joint and MuJoCo does not auto-exclude parent/child contacts, so self-collision produces permanent interpenetrations that fight the actuators.
   </Property>
   <Property name="ee_site" type="object | None">
-    Optional end-effector <code>&lt;site&gt;</code> at a flange. <code>name</code> is referenced by an <a href="/docs/ik">IK backend</a> (e.g. <code>MinkIK(frame="gripper")</code>); <code>body</code> is the flange body; <code>axis</code> (<code>x</code>/<code>y</code>/<code>z</code>, optionally signed like <code>-z</code>) is the tool direction pointing out of the flange.
+    Optional end-effector <code>&lt;site&gt;</code>. Two mutually exclusive placement modes:
+    <ul>
+      <li><strong>Body + axis</strong> — <code>body</code> is a flange body; <code>axis</code> (<code>x</code>/<code>y</code>/<code>z</code>, optionally signed like <code>-z</code>) places the site at that body's far collision face.</li>
+      <li><strong>Site + offset</strong> — <code>site</code> is an existing CAD Frame exported as a <code>&lt;site&gt;</code>; <code>offset</code> is <code>[x, y, z]</code> in that site's local frame. Use this when the tip is on a separate gripper not in the arm assembly: put a Frame on the flange in Onshape, measure the tip offset, and keep it in <code>config.json</code> so it survives re-exports.</li>
+    </ul>
+    In both cases <code>name</code> is what an <a href="/docs/ik">IK backend</a> references (e.g. <code>MinkIK(frame="gripper")</code>).
   </Property>
   <Property name="prefer_config_limits" type="bool">
     When <code>false</code> (default), ignore stale <code>joint_properties.*.limits</code> during the Onshape pull so mate limits from the assembly win, then rewrite those limits in <code>config.json</code> from the cleaned MJCF. Set <code>true</code> only to keep config.json as an intentional override of CAD.

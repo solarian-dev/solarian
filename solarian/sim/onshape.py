@@ -32,7 +32,8 @@ The pipeline has two stages:
    link mass/inertia from the collision meshes at a fixed density (the CAD
    assigns no materials), points ``meshdir`` at the exported meshes, makes the
    mechanism's own collision geoms non-self-colliding, and optionally adds an
-   end-effector ``<site>`` at a flange.
+   end-effector ``<site>`` (from a flange body+axis, or an existing CAD site
+   plus a local-frame offset).
 
 Credentials are read by onshape-to-robot from the environment
 (``ONSHAPE_API``, ``ONSHAPE_ACCESS_KEY``, ``ONSHAPE_SECRET_KEY``); the CLI
@@ -65,23 +66,54 @@ DEFAULT_DENSITY = 1400.0
 
 @dataclass
 class EESiteSpec:
-    """An end-effector ``<site>`` added to a body of the cleaned model.
+    """An end-effector ``<site>`` added to the cleaned model.
 
-    The site is placed at the centre of the body's far face along ``axis`` (a
-    tool flange / grasp frame). IK backends reference it by ``name``.
+    Two placement modes (mutually exclusive):
+
+    * **Body + axis** (legacy): place at the centre of ``body``'s far collision
+      face along ``axis`` (a tool flange / grasp frame inferred from meshes).
+    * **Site + offset**: copy an existing CAD-exported frame (``site``) and
+      translate by ``offset`` expressed in that site's local frame. Use this when
+      the arm assembly has a flange frame but the tip lives on a separate gripper
+      that is not in the CAD — measure the tip offset once and keep it in
+      ``config.json`` so it survives re-exports.
+
+    IK backends reference the new site by ``name``.
     """
 
-    #: Site name (referenced by e.g. ``MinkIK(frame=...)``).
+    #: Site name written into the cleaned MJCF (referenced by e.g.
+    #: ``MinkIK(frame=...)``).
     name: str
-    #: Body whose collision geometry defines the flange.
-    body: str
+    #: Body whose collision geometry defines the flange (body+axis mode).
+    body: Optional[str] = None
     #: Tool axis pointing out of the flange: ``x``/``y``/``z`` picks the extreme
     #: face with the larger absolute extent (sign auto-detected); prefix with
-    #: ``+``/``-`` (e.g. ``-z``) to force a side.
+    #: ``+``/``-`` (e.g. ``-z``) to force a side. Ignored in site+offset mode.
     axis: str = "z"
+    #: Existing ``<site>`` (typically a CAD Frame exported by onshape-to-robot)
+    #: to offset from (site+offset mode).
+    site: Optional[str] = None
+    #: Translation ``[x, y, z]`` in the referenced site's local frame. Defaults
+    #: to zero (the new site coincides with ``site``, inheriting its orientation).
+    offset: Optional[tuple[float, float, float]] = None
     #: Visual marker size and viewer group.
     size: float = 0.005
     group: int = 1
+
+    def __post_init__(self) -> None:
+        if self.offset is not None:
+            self.offset = tuple(float(x) for x in self.offset)  # type: ignore[assignment]
+            if len(self.offset) != 3:
+                raise ValueError(
+                    f"ee_site.offset must be a length-3 [x, y, z] (got {self.offset!r})"
+                )
+        has_body = self.body is not None
+        has_site = self.site is not None
+        if has_body == has_site:
+            raise ValueError(
+                "ee_site requires exactly one of 'body' (with axis) or 'site' "
+                f"(with optional offset); got body={self.body!r}, site={self.site!r}"
+            )
 
 
 @dataclass
@@ -131,6 +163,9 @@ class SolarianExportSpec:
         ee = block.pop("ee_site", None)
         spec = cls(**block)
         if ee is not None:
+            ee = dict(ee)
+            if "offset" in ee and ee["offset"] is not None:
+                ee["offset"] = tuple(ee["offset"])
             spec.ee_site = EESiteSpec(**ee)
         return spec
 
@@ -353,6 +388,69 @@ def _flange_tip(body, mesh_dir: str, axis: str):
     return center
 
 
+def _find_site(worldbody, site_name: str):
+    """Return ``(parent_body, site_elem)`` for ``site_name``, or raise."""
+    for body in worldbody.iter("body"):
+        for site in body.findall("site"):
+            if site.get("name") == site_name:
+                return body, site
+    raise ValueError(
+        f"ee_site.site {site_name!r} not found in the exported model "
+        "(add a named Frame in Onshape on the flange, then re-export)"
+    )
+
+
+def _site_pose_with_offset(site_elem, offset: Optional[tuple[float, float, float]]):
+    """Body-frame ``(pos, quat)`` of ``site_elem`` translated by ``offset`` in
+    the site's local frame. ``quat`` is inherited unchanged (wxyz)."""
+    import numpy as np
+    from transforms3d.quaternions import quat2mat
+
+    pos = np.array([float(x) for x in site_elem.get("pos", "0 0 0").split()])
+    quat = np.array([float(x) for x in site_elem.get("quat", "1 0 0 0").split()])
+    if offset is not None and any(offset):
+        pos = pos + quat2mat(quat) @ np.asarray(offset, dtype=float)
+    return pos, quat
+
+
+def _add_ee_site(worldbody, spec: SolarianExportSpec, mesh_dir: str) -> None:
+    """Append the configured end-effector ``<site>`` to ``worldbody``."""
+    import xml.etree.ElementTree as ET
+
+    ee = spec.ee_site
+    assert ee is not None
+
+    if ee.site is not None:
+        parent, base = _find_site(worldbody, ee.site)
+        pos, quat = _site_pose_with_offset(base, ee.offset)
+        site = ET.SubElement(parent, "site")
+        site.set("name", ee.name)
+        site.set("pos", "%.6f %.6f %.6f" % tuple(pos))
+        site.set("quat", "%.6f %.6f %.6f %.6f" % tuple(quat))
+        site.set("group", str(ee.group))
+        site.set("size", str(ee.size))
+        off = ee.offset if ee.offset is not None else (0.0, 0.0, 0.0)
+        print(
+            f"* {ee.name} site = {ee.site} + offset {tuple(round(float(x), 4) for x in off)} "
+            f"-> body-frame pos {tuple(round(float(x), 4) for x in pos)}"
+        )
+        return
+
+    target = None
+    for body in worldbody.iter("body"):
+        if body.get("name") == ee.body:
+            target = body
+    if target is None:
+        raise ValueError(f"ee_site.body {ee.body!r} not found in the exported model")
+    tip = _flange_tip(target, mesh_dir, ee.axis)
+    site = ET.SubElement(target, "site")
+    site.set("name", ee.name)
+    site.set("pos", "%.6f %.6f %.6f" % tuple(tip))
+    site.set("group", str(ee.group))
+    site.set("size", str(ee.size))
+    print(f"* {ee.name} site at {ee.body} frame pos {tuple(round(float(x), 4) for x in tip)}")
+
+
 def _clean(raw_xml: str, out_xml: str, spec: SolarianExportSpec, meshdir: str) -> None:
     """Transform the raw MJCF into the attachable model at ``out_xml``."""
     import xml.etree.ElementTree as ET
@@ -393,20 +491,8 @@ def _clean(raw_xml: str, out_xml: str, spec: SolarianExportSpec, meshdir: str) -
                 body.remove(inert)
 
     if spec.ee_site is not None:
-        ee = spec.ee_site
-        target = None
-        for body in worldbody.iter("body"):
-            if body.get("name") == ee.body:
-                target = body
-        if target is None:
-            raise ValueError(f"ee_site.body {ee.body!r} not found in the exported model")
-        tip = _flange_tip(target, os.path.dirname(out_xml) + os.sep + meshdir, ee.axis)
-        site = ET.SubElement(target, "site")
-        site.set("name", ee.name)
-        site.set("pos", "%.6f %.6f %.6f" % tuple(tip))
-        site.set("group", str(ee.group))
-        site.set("size", str(ee.size))
-        print(f"* {ee.name} site at {ee.body} frame pos {tuple(round(float(x), 4) for x in tip)}")
+        mesh_dir = os.path.dirname(out_xml) + os.sep + meshdir
+        _add_ee_site(worldbody, spec, mesh_dir)
 
     # Drop empty <equality/>.
     for eq in root.findall("equality"):
