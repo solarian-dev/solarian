@@ -5,11 +5,12 @@ import pytest
 from solarian.core.joint_calibration import (
     CalibrationSafetyError,
     EncoderRangeTracker,
-    MAX_SPAN_FRACTION_OF_CPR,
     calibration_from_raw_range,
+    circular_distance,
     derive_homing_from_raw_range,
     drive_mode_from_low_end_pose,
     low_command_label,
+    shortest_path_crosses_wrap,
     validate_contiguous_raw_range,
 )
 
@@ -36,18 +37,34 @@ class TestCalibrationFromRawRange:
         d = calibration_from_raw_range("gripper", 50, 1050, CPR)
         assert d.homing_offset == 0
 
-    def test_rejects_huge_span(self):
-        raw_min, raw_max = 100, 100 + int(MAX_SPAN_FRACTION_OF_CPR * CPR) + 10
-        with pytest.raises(CalibrationSafetyError, match="wrap"):
-            validate_contiguous_raw_range("j", raw_min, raw_max, CPR)
+    def test_accepts_large_span(self):
+        # Sweep defines the limits — no span-vs-CPR cap.
+        d = calibration_from_raw_range("j", 100, 100 + int(0.80 * CPR), CPR)
+        assert d.range_min == 100
+        assert d.range_max == 100 + int(0.80 * CPR)
 
     def test_rejects_inverted_range(self):
         with pytest.raises(CalibrationSafetyError, match="invalid raw range"):
             calibration_from_raw_range("j", 2000, 1000, CPR)
 
+    def test_rejects_out_of_bounds(self):
+        with pytest.raises(CalibrationSafetyError, match="outside encoder"):
+            validate_contiguous_raw_range("j", -1, 1000, CPR)
+
     def test_legacy_alias_still_works(self):
         d = derive_homing_from_raw_range("j", 2700, 3700, CPR, max_homing_abs=100)
         assert d.homing_offset == 0
+
+
+class TestCircularHelpers:
+    def test_circular_distance_across_wrap(self):
+        assert circular_distance(4000, 50, CPR) == (50 - 4000) % CPR
+
+    def test_shortest_path_crosses_wrap(self):
+        assert shortest_path_crosses_wrap(3900, 0, CPR) is True
+        assert shortest_path_crosses_wrap(3900, 3800, CPR) is False
+        assert shortest_path_crosses_wrap(100, 200, CPR) is False
+        assert shortest_path_crosses_wrap(50, 4000, CPR) is True
 
 
 class TestEncoderRangeTracker:
@@ -55,12 +72,21 @@ class TestEncoderRangeTracker:
         t = EncoderRangeTracker(cpr=CPR)
         for p in (3900, 3850, 3800, 3750):
             assert t.update(p)
-        # Spurious read at 0 would make span look like a full wrap — reject it.
+        # Spurious read at 0 — shortest path crosses the wrap; reject it.
         assert t.update(0) is False
         assert t.rejected == 1
+        assert t.wrap_rejected == 1
         lo, hi = t.result()
         assert lo == 3750
         assert hi == 3900
+
+    def test_ignores_far_teleport(self):
+        t = EncoderRangeTracker(cpr=CPR)
+        assert t.update(2000)
+        # Jump halfway around the circle in one sample.
+        assert t.update(2000 + int(0.5 * CPR)) is False
+        assert t.rejected == 1
+        assert t.raw_min == t.raw_max == 2000
 
     def test_accepts_normal_sweep_near_top(self):
         t = EncoderRangeTracker(cpr=CPR)
@@ -69,6 +95,27 @@ class TestEncoderRangeTracker:
         lo, hi = t.result()
         assert lo == 3500
         assert hi == 4000
+
+    def test_accepts_large_contiguous_travel(self):
+        # SO-106-class arms need large fractions of a turn (e.g. pan ≈ 69%).
+        t = EncoderRangeTracker(cpr=CPR)
+        lo, hi = 500, 500 + int(0.70 * CPR)
+        for p in list(range(lo, hi, 50)) + [hi]:
+            assert t.update(p), f"rejected contiguous sample {p} in {lo}..{hi}"
+        got_lo, got_hi = t.result()
+        assert got_lo == lo
+        assert got_hi == hi
+
+    def test_rejects_wrap_crossing_step(self):
+        t = EncoderRangeTracker(cpr=CPR)
+        for p in range(4000, 4090, 10):
+            assert t.update(p)
+        # Crossing 0/CPR in the sweep is rejected (needs remount for contiguous range).
+        assert t.update(20) is False
+        assert t.wrap_rejected >= 1
+        lo, hi = t.result()
+        assert lo == 4000
+        assert hi == 4080
 
 
 class TestDriveMode:

@@ -17,12 +17,11 @@ from solarian.core.actuator import Actuator
 from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.sensor import Sensor
 from solarian.core.servo import Servo
-from solarian.core.data import Data
+from solarian.core.data import Data, PosData, DataComputer, TimestampData
 from solarian.core.module_bus import ModuleBus
 from solarian.core.action import Action, ActionType, action_handler, ModuleAction
 from solarian.core.configs import ModuleConfig, InterpolatorType
 from solarian.core.observation import Observation, ModuleObs
-from solarian.core.data import DataComputer, TimestampData
 from solarian.utils import manual_profile, profile, setup_process_logging, get_log_queue
 from solarian.utils.profiling import get_stats_snapshot, merge_stats as merge_profiling_stats
 from solarian.utils.shared_memory.shared_memory_queue import Empty
@@ -41,6 +40,9 @@ from solarian.utils.status_board import StatusBoard
 # CALIBRATION_REQUIRED = [ValueName.POS]
 
 from solarian.utils import profile, manual_profile
+
+# Pose component order for Cartesian IK modules (matches CartesianIKActuator cfg.id 0..5).
+_POSE_AXES = ("x", "y", "z", "rx", "ry", "rz")
 
 
 import logging
@@ -458,10 +460,31 @@ class Module(Process, ABC):
             logger.error(f"No hardware actuators to calibrate on module {self.name}")
             return
 
+        # Continuous (no hard-stop) joints are zeroed in ``calibrate-ik``, not here.
+        continuous = set(getattr(type(self), "ik_continuous_joints", []) or [])
+        if continuous:
+            hw_by_port = {
+                port: [n for n in names if n not in continuous]
+                for port, names in hw_by_port.items()
+            }
+            hw_by_port = {p: ns for p, ns in hw_by_port.items() if ns}
+            print(
+                f"Skipping continuous joints (no hard stop; zero them in "
+                f"calibrate-ik): {sorted(continuous)}"
+            )
+            if not hw_by_port:
+                logger.error(
+                    f"No hard-stop actuators left to calibrate on module {self.name}"
+                )
+                return
+
         print(f"\nRunning calibration of {self}")
         print(
             "Homing offset stays 0 (raw encoder). Move each joint through its\n"
-            "FULL mechanical travel while recording, then press ENTER."
+            "FULL mechanical travel while recording, then press ENTER.\n"
+            "The sweep defines the limits (no span cap). Travel must stay on\n"
+            "one side of the encoder wrap (POS must not jump 4095→0). If a\n"
+            "joint crosses the wrap, remount that horn, then re-run."
         )
 
         self.start_calibration_mode()
@@ -501,6 +524,13 @@ class Module(Process, ABC):
                     status_pos[name] = pos
                     status_min[name] = t.raw_min
                     status_max[name] = t.raw_max
+                    if t.rejected:
+                        # Surface rejected samples so wrap-cross / over-wide
+                        # travel is obvious while sweeping (not only at the end).
+                        StatusBoard.set(
+                            f"{name}_ignored",
+                            t.rejected,
+                        )
             StatusBoard.set("MIN", status_min)
             StatusBoard.set("POS", status_pos)
             StatusBoard.set("MAX", status_max)
@@ -510,8 +540,14 @@ class Module(Process, ABC):
         try:
             for name, tracker in trackers.items():
                 if tracker.rejected:
+                    wrap_note = (
+                        f" ({tracker.wrap_rejected} crossed encoder wrap)"
+                        if tracker.wrap_rejected
+                        else ""
+                    )
                     print(
-                        f"  {name}: ignored {tracker.rejected} wrap-glitch sample(s)"
+                        f"  {name}: ignored {tracker.rejected} glitch/wrap sample(s)"
+                        f"{wrap_note}"
                     )
                 raw_lo, raw_hi = tracker.result()
                 # Re-validate with the joint name in the error message.
@@ -523,6 +559,12 @@ class Module(Process, ABC):
                     f"  {name}: raw/Present range {d.range_min} .. {d.range_max} "
                     f"(span {d.range_max - d.range_min}, homing_offset=0)"
                 )
+                if tracker.wrap_rejected:
+                    print(
+                        f"  warning: {name} saw wrap-crossing samples during the "
+                        f"sweep — if MIN/MAX look incomplete, remount the horn "
+                        f"so travel does not cross 0/{tracker.cpr - 1}."
+                    )
         except CalibrationSafetyError as exc:
             print(f"\nCalibration aborted (safety): {exc}")
             logger.error("Calibration aborted (safety): %s", exc)
@@ -558,7 +600,15 @@ class Module(Process, ABC):
                         f"result ({dm}); keeping operator result."
                     )
 
-        self.calibration = {}
+        # Preserve continuous-joint entries (they are not swept here; ``calibrate-ik``
+        # Step 2 anchors their zero). Dropping them would leave wrist_roll etc.
+        # without a calibration row after a hard-stop-only sweep.
+        preserved = {
+            name: entry
+            for name, entry in (self.calibration or {}).items()
+            if name in continuous
+        }
+        self.calibration = dict(preserved)
         for port, actuator_names in hw_by_port.items():
             port_calibration = {}
             for name in actuator_names:
@@ -818,7 +868,217 @@ class Module(Process, ABC):
     def reset(self):
         """Reset the module. Eg: set to home position"""
         pass
-        
+
+    # ========= pose / trajectory interpolation ============
+    def _cartesian_pose_names(self) -> list[str]:
+        """Ordered Cartesian actuator names (by ``cfg.id`` 0..5)."""
+        from solarian.core.ik.actuator import CartesianIKActuator
+
+        named: list[tuple[int, str]] = []
+        for name, act in self.actuators.items():
+            if isinstance(act, CartesianIKActuator):
+                named.append((int(act.cfg.id), name))
+        named.sort(key=lambda item: item[0])
+        return [n for _, n in named]
+
+    def _is_pose_interpolator(self) -> bool:
+        return self.cfg.interpolator_type == InterpolatorType.POSE
+
+    def _is_scalar_interpolator(self) -> bool:
+        return self.cfg.interpolator_type == InterpolatorType.SCALAR
+
+    def _scalar_actuator_name(self) -> str | None:
+        """Name of the single actuator driven by a scalar interpolator.
+
+        Override via class attr ``scalar_actuator = \"gripper\"``, or defaults to
+        the sole non-Cartesian actuator on the module.
+        """
+        from solarian.core.ik.actuator import CartesianIKActuator
+
+        explicit = getattr(type(self), "scalar_actuator", None)
+        if explicit:
+            return str(explicit)
+        names = [
+            n for n, act in self.actuators.items()
+            if not isinstance(act, CartesianIKActuator)
+        ]
+        return names[0] if names else None
+
+    def _scalar_to_actuator(self, value: float) -> float:
+        """Map interpolator/action units to ``write_actuators`` units.
+
+        Override when the action space differs from the servo command space
+        (e.g. gripper aperture cm → normalized [-100, 100]).
+        """
+        return float(value)
+
+    def _actuator_to_scalar(self, value: float) -> float:
+        """Inverse of :meth:`_scalar_to_actuator` (for seeding from sensors)."""
+        return float(value)
+
+    def _read_current_pose(self) -> np.ndarray:
+        """FK the current end-effector pose via Cartesian actuator reads."""
+        names = self._cartesian_pose_names()
+        if not names:
+            return np.zeros(6, dtype=np.float64)
+        readings = self.read_sensors(PosData, names)
+        pose = np.zeros(len(names), dtype=np.float64)
+        for i, name in enumerate(names):
+            entry = readings[name]
+            pose[i] = float(entry["value"] if isinstance(entry, dict) else entry.value)
+        return pose
+
+    def _ensure_pose_interpolator(self, t_now: float | None = None) -> None:
+        """Seed a PoseTrajectoryInterpolator from the live FK pose if needed."""
+        if not self._is_pose_interpolator():
+            return
+        if self.interp is not None:
+            return
+        t = float(t_now if t_now is not None else time.monotonic())
+        try:
+            pose = self._read_current_pose()
+        except Exception as exc:  # noqa: BLE001 - degrade to zeros so teleop can start
+            logger.warning(
+                "Module '%s': could not seed pose interpolator from FK (%s); using zeros.",
+                self.name,
+                exc,
+            )
+            pose = np.zeros(6, dtype=np.float64)
+        self.interp = self._create_interpolator(
+            np.array([t]), np.asarray(pose, dtype=np.float64)[None, :]
+        )
+        self.last_waypoint_time = t
+
+    def _clear_pose_interpolator(self) -> None:
+        """Drop the pose trajectory so the next tick re-seeds from live FK."""
+        self.interp = None
+        self.last_waypoint_time = 0.0
+
+    def _extract_pose_waypoint(
+        self, action: ModuleAction
+    ) -> tuple[np.ndarray, float] | None:
+        """Pull a 6D pose + wall-clock timestamp from a Cartesian ModuleAction."""
+        names = self._cartesian_pose_names()
+        if not names:
+            return None
+        fields = action.values()
+        missing = [n for n in names if n not in fields]
+        if missing:
+            logger.warning(
+                "Module '%s': SCHEDULE_WAYPOINT missing pose fields %s; ignoring.",
+                self.name,
+                missing,
+            )
+            return None
+        pose = np.array([float(fields[n].value) for n in names], dtype=np.float64)
+        target_time_wall = float(fields[names[0]].timestamp)
+        return pose, target_time_wall
+
+    def _schedule_pose_waypoint(
+        self,
+        pose: np.ndarray,
+        target_time_wall: float,
+        t_now: float,
+    ) -> None:
+        """Insert a Cartesian waypoint (UMI-style wall→monotonic conversion)."""
+        self._ensure_pose_interpolator(t_now)
+        assert self.interp is not None
+        target_time = time.monotonic() - time.time() + float(target_time_wall)
+        self.interp = self.interp.schedule_waypoint(
+            pose=np.asarray(pose, dtype=np.float64),
+            time=target_time,
+            curr_time=t_now,
+            last_waypoint_time=self.last_waypoint_time,
+            **self._get_max_speed_kwargs(),
+        )
+        self.last_waypoint_time = target_time
+
+    def _write_pose(self, pose: np.ndarray) -> None:
+        """Write a 6D pose to Cartesian actuators (IK bus solves joints)."""
+        names = self._cartesian_pose_names()
+        if not names:
+            return
+        pose = np.asarray(pose, dtype=np.float64).reshape(-1)
+        self.write_actuators(
+            {name: PosData(value=float(pose[i])) for i, name in enumerate(names)}
+        )
+
+    def _read_current_scalar(self) -> float:
+        """Read the live scalar command (in interpolator/action units)."""
+        name = self._scalar_actuator_name()
+        if not name:
+            return 0.0
+        readings = self.read_sensors(PosData, [name])
+        entry = readings[name]
+        raw = float(entry["value"] if isinstance(entry, dict) else entry.value)
+        return self._actuator_to_scalar(raw)
+
+    def _ensure_scalar_interpolator(self, t_now: float | None = None) -> None:
+        """Seed a ScalarTrajectoryInterpolator from the live reading if needed."""
+        if not self._is_scalar_interpolator():
+            return
+        if self.interp is not None:
+            return
+        t = float(t_now if t_now is not None else time.monotonic())
+        try:
+            value = self._read_current_scalar()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Module '%s': could not seed scalar interpolator (%s); using 0.",
+                self.name,
+                exc,
+            )
+            value = 0.0
+        self.interp = self._create_interpolator(np.array([t]), np.array([value], dtype=np.float64))
+        self.last_waypoint_time = t
+
+    def _extract_scalar_waypoint(
+        self, action: ModuleAction
+    ) -> tuple[float, float] | None:
+        """Pull a scalar value + wall-clock timestamp from a ModuleAction."""
+        name = self._scalar_actuator_name()
+        if not name:
+            return None
+        fields = action.values()
+        if name not in fields:
+            # Fall back to the sole field when the action uses a different key.
+            if len(fields) == 1:
+                field = next(iter(fields.values()))
+                return float(field.value), float(field.timestamp)
+            logger.warning(
+                "Module '%s': SCHEDULE_WAYPOINT missing scalar field %r; ignoring.",
+                self.name,
+                name,
+            )
+            return None
+        field = fields[name]
+        return float(field.value), float(field.timestamp)
+
+    def _schedule_scalar_waypoint(
+        self,
+        value: float,
+        target_time_wall: float,
+        t_now: float,
+    ) -> None:
+        """Insert a scalar waypoint (UMI-style wall→monotonic conversion)."""
+        self._ensure_scalar_interpolator(t_now)
+        assert self.interp is not None
+        target_time = time.monotonic() - time.time() + float(target_time_wall)
+        self.interp = self.interp.schedule_waypoint(
+            value=float(value),
+            time=target_time,
+            curr_time=t_now,
+            last_waypoint_time=self.last_waypoint_time,
+            **self._get_max_speed_kwargs(),
+        )
+        self.last_waypoint_time = target_time
+
+    def _write_scalar(self, value: float) -> None:
+        """Write a scalar sample to the module's primary actuator."""
+        name = self._scalar_actuator_name()
+        if not name:
+            return
+        self.write_actuators({name: PosData(value=self._scalar_to_actuator(value))})
 
     # ========= interpolator factory ============
     def _create_interpolator(self, times: np.ndarray, values: np.ndarray) -> TrajectoryInterpolator:
@@ -880,37 +1140,17 @@ class Module(Process, ABC):
         Returns:
             np.ndarray: Initial values (scalar, joint array, or 6D pose)
         """
+        if self._is_pose_interpolator():
+            try:
+                return self._read_current_pose()
+            except Exception:
+                return np.zeros(6, dtype=np.float64)
+        if self._is_scalar_interpolator():
+            try:
+                return np.array([self._read_current_scalar()], dtype=np.float64)
+            except Exception:
+                return np.array([0.0], dtype=np.float64)
         return np.array([0.0] * len(self.actuators))
-
-    # def process_action(self, action: Action):
-    #     """
-    #     Utility method to write action data to actuators.
-        
-    #     Subclasses can use this in their exec_waypoint implementation
-    #     after converting interpolated values to an Action.
-        
-    #     Args:
-    #         action: Action with actuator data to write
-    #     """
-    #     if self.name not in action.data:
-    #         return
-    #     for actuator_name, actuator_data in action.data[self.name].items():
-    #         for data_name, data_value in actuator_data.items():
-    #             if data_name == ValueName.POS:
-    #                 self.write_actuators_pos({actuator_name: data_value})
-    #             elif data_name == ValueName.SPEED:
-    #                 self.write_actuators_speed({actuator_name: data_value})
-    #             elif data_name == ValueName.TORQUE_ENABLE:
-    #                 self.write_actuators_torque_enable({actuator_name: data_value})
-
-    # def schedule_waypoint(self, target_values: np.ndarray, target_time: float):
-    #     """Schedule a waypoint action to be executed at a target time."""
-    #     action = Action.schedule_waypoint(target_values, target_time)
-    #     self.process_action(action)
-
-    # def process_action(self, action: ModuleAction):
-    #     """Send an action to the module's input queue."""
-    #     self.action_queue.put(action)
 
     # ========= action dispatch system ============
     def _dispatch_action(self, action: ModuleAction, t_now: float) -> bool:
@@ -936,39 +1176,33 @@ class Module(Process, ABC):
             return True
 
     # ========= standard action handlers ============
-    # @action_handler(ActionType.STOP)
-    # def _handle_stop(self, action: ModuleAction, t_now: float) -> bool:
-    #     """Handle STOP action - stops the module."""
-    #     if self.verbose:
-    #         print(f"[Module] {self.name}: Received STOP action")
-    #     return False  # Signal to stop
-    
-    # @action_handler(ActionType.SCHEDULE_WAYPOINT)
-    # def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
-    #     """Handle SCHEDULE_WAYPOINT action - schedules a new waypoint."""
+    @action_handler(ActionType.SCHEDULE_WAYPOINT)
+    def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
+        """Schedule a timestamped waypoint into the module trajectory interpolator.
 
-    #     # # TO DO: do it in a more elegant way
-    #     # target_values = [data['value'] for data in action.to_dict()['data'].values()]
-    #     # target_time = list(action.to_dict()['data'].values())[0]['timestamp']
-    #     # # translate global time to monotonic time
-    #     # target_time = time.monotonic() - time.time() + target_time
-        
-    #     # self._interp = self._interp.schedule_waypoint(
-    #     #     value=target_values,
-    #     #     time=target_time,
-    #     #     curr_time=t_now,
-    #     #     last_waypoint_time=self._last_waypoint_time,
-    #     #     **self._speed_kwargs
-    #     # )
-    #     # self._last_waypoint_time = target_time
-    #     return True
-    
-    # @action_handler(ActionType.RESTART_PUT)
-    # def _handle_restart_put(self, action: ModuleAction, t_now: float) -> bool:
-    #     """Handle RESTART_PUT action - restarts the put timing."""
-    #     self._t_start = action.target_time - time.time() + time.monotonic()
-    #     self._iter_idx = 1
-    #     return True
+        * ``interpolator_type: pose`` — Cartesian ``x..rz`` (MinkIK arms).
+        * ``interpolator_type: scalar`` — single actuator (grippers, etc.).
+
+        Controllers / skills send sparse waypoints; ``control_step`` samples at
+        the module rate and writes targets (pose → IK bus, scalar → actuator).
+        """
+        if self._is_pose_interpolator():
+            extracted = self._extract_pose_waypoint(action)
+            if extracted is None:
+                return True
+            pose, target_time_wall = extracted
+            self._schedule_pose_waypoint(pose, target_time_wall, t_now)
+            return True
+
+        if self._is_scalar_interpolator():
+            extracted = self._extract_scalar_waypoint(action)
+            if extracted is None:
+                return True
+            value, target_time_wall = extracted
+            self._schedule_scalar_waypoint(value, target_time_wall, t_now)
+            return True
+
+        return True
 
     # ========= observation thread ============
     def _observation_loop(self, stop_event: threading.Event):
@@ -986,15 +1220,21 @@ class Module(Process, ABC):
                 break
 
     def control_step(self):
+        """Sample pose/scalar interpolators (when configured) and write targets.
+
+        Subclasses may override; call ``super().control_step()`` to keep UMI-style
+        upsampling, or replace entirely for latch-only modules.
         """
-        Control step implementation.
-        
-        Subclasses should implement this method to define the control step logic.
-        
-        Returns:
-            None
-        """
-        pass
+        if self._is_pose_interpolator():
+            self._ensure_pose_interpolator()
+            if self.interp is not None:
+                self._write_pose(self.interp(time.monotonic()))
+            return
+        if self._is_scalar_interpolator():
+            self._ensure_scalar_interpolator()
+            if self.interp is not None:
+                self._write_scalar(float(self.interp(time.monotonic())))
+            return
 
     # ========= main loop in process ============
     def run(self):

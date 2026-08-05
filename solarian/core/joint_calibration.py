@@ -1,22 +1,34 @@
 """Pure helpers for generic joint (servo) calibration.
 
 Used by :meth:`Module.calibrate` so hard-stop joints only need a range sweep:
-``drive_mode`` comes from a low-command-end pose, and wrap-unsafe / glitch-
-expanded ranges are refused before writing hardware calibration.
+``drive_mode`` comes from a low-command-end pose. The recorded min/max *are*
+the limits — there is no artificial cap on how large a fraction of a turn the
+travel may be.
 
 Homing offset stays **0** (raw encoder = Present). Recentering to mid-encoder
 is unnecessary for limited-travel joints and is what forced awkward horn
 remounts when travel sat near 0/CPR. Vendor-specific register limits remain on
 the actuator bus when a bus *does* choose to apply a non-zero offset.
+
+Glitch / wrap handling during the sweep:
+* Reject a sample whose shortest path from the previous reading is a sudden
+  teleport (larger than ``max_step_fraction`` of CPR).
+* Reject a sample whose shortest path *crosses* the encoder wrap (0/CPR).
+  Those need a horn remount so mechanical travel is contiguous in raw space;
+  linear ``range_min``/``range_max`` cannot represent a wrap-straddling arc.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Raw sweep spans at or above this fraction of CPR usually mean the operator
-# crossed the encoder wrap (or a glitch hit the opposite side of the circle).
-MAX_SPAN_FRACTION_OF_CPR = 0.45
+# Max circular step between successive reads treated as continuous motion.
+# Larger jumps are dropped as encoder glitches / teleports.
+MAX_STEP_FRACTION_OF_CPR = 0.10
+
+# Back-compat alias — span caps are no longer enforced. Kept so older imports
+# / tests that reference the name keep resolving.
+MAX_SPAN_FRACTION_OF_CPR = 1.0
 
 
 class CalibrationSafetyError(ValueError):
@@ -33,23 +45,45 @@ class DerivedHoming:
     mid_raw: int
 
 
+def circular_distance(a: int, b: int, cpr: int) -> int:
+    """Shortest distance on the encoder circle between ``a`` and ``b``."""
+    fwd = (int(b) - int(a)) % cpr
+    bak = (int(a) - int(b)) % cpr
+    return min(fwd, bak)
+
+
+def shortest_path_crosses_wrap(a: int, b: int, cpr: int) -> bool:
+    """True if the shortest arc from ``a`` to ``b`` crosses the 0/CPR boundary."""
+    a, b = int(a), int(b)
+    fwd = (b - a) % cpr
+    bak = (a - b) % cpr
+    if fwd <= bak:
+        # Forward along increasing encoder counts (mod CPR).
+        return b < a
+    # Backward along decreasing counts.
+    return b > a
+
+
 @dataclass
 class EncoderRangeTracker:
-    """Online min/max tracker that ignores wrap-glitch samples.
+    """Online min/max tracker that ignores glitches and wrap-crossing steps.
 
-    A single bad read near the opposite side of the circle (e.g. 0 while the
-    joint sits at ~3900) would otherwise expand min/max to the full CPR and
-    abort calibration. Samples that would push the span over
-    ``max_span_fraction * cpr`` are skipped; true mechanical travel that
-    crosses the wrap still fails at :meth:`result`.
+    The operator's sweep defines the limits: any contiguous travel is accepted,
+    no matter how large a fraction of a turn it is. Samples that teleport or
+    whose shortest path crosses the encoder wrap are skipped (and counted in
+    ``rejected`` / ``wrap_rejected``) so a single bad read cannot expand the
+    window across the whole circle.
     """
 
     cpr: int
+    max_step_fraction: float = MAX_STEP_FRACTION_OF_CPR
+    # Deprecated kw-only accept for older callers; ignored.
     max_span_fraction: float = MAX_SPAN_FRACTION_OF_CPR
     raw_min: int | None = None
     raw_max: int | None = None
     accepted: int = 0
     rejected: int = 0
+    wrap_rejected: int = 0
     last: int | None = None
 
     def update(self, pos: int) -> bool:
@@ -60,14 +94,20 @@ class EncoderRangeTracker:
             self.accepted = 1
             return True
 
-        trial_min = min(self.raw_min, pos)
-        trial_max = max(self.raw_max, pos)
-        if (trial_max - trial_min) >= self.max_span_fraction * self.cpr:
+        assert self.last is not None
+        step = circular_distance(self.last, pos, self.cpr)
+        max_step = self.max_step_fraction * self.cpr
+        if step > max_step:
             self.rejected += 1
             return False
 
-        self.raw_min = trial_min
-        self.raw_max = trial_max
+        if shortest_path_crosses_wrap(self.last, pos, self.cpr):
+            self.rejected += 1
+            self.wrap_rejected += 1
+            return False
+
+        self.raw_min = min(self.raw_min, pos)
+        self.raw_max = max(self.raw_max, pos)
         self.last = pos
         self.accepted += 1
         return True
@@ -80,7 +120,6 @@ class EncoderRangeTracker:
             self.raw_min,
             self.raw_max,
             self.cpr,
-            max_span_fraction=self.max_span_fraction,
         )
         return self.raw_min, self.raw_max
 
@@ -98,9 +137,14 @@ def validate_contiguous_raw_range(
     raw_max: int,
     cpr: int,
     *,
-    max_span_fraction: float = MAX_SPAN_FRACTION_OF_CPR,
+    max_span_fraction: float | None = None,
 ) -> None:
-    """Refuse raw sweeps that look wrap-straddling or out of encoder bounds."""
+    """Refuse inverted / out-of-bounds raw ranges.
+
+    ``max_span_fraction`` is accepted for back-compat and ignored — the sweep
+    defines the limits; there is no span-vs-CPR cap.
+    """
+    del max_span_fraction  # no longer enforced
     if raw_max <= raw_min:
         raise CalibrationSafetyError(
             f"{name}: invalid raw range {raw_min}..{raw_max} (max must be > min)."
@@ -110,16 +154,6 @@ def validate_contiguous_raw_range(
             f"{name}: raw range {raw_min}..{raw_max} outside encoder window "
             f"[0, {cpr - 1}]."
         )
-    span = raw_max - raw_min
-    limit = max_span_fraction * cpr
-    if span >= limit:
-        raise CalibrationSafetyError(
-            f"{name}: raw span {span} (>= {limit:.0f}, {max_span_fraction:.0%} of "
-            f"CPR={cpr}) looks like the sweep crossed the encoder wrap (or a "
-            "glitch hit the far side of the circle). Move only through the "
-            "mechanical travel; do not force past hard stops. "
-            "Hardware calibration was not modified."
-        )
 
 
 def calibration_from_raw_range(
@@ -128,13 +162,12 @@ def calibration_from_raw_range(
     raw_max: int,
     cpr: int,
     *,
-    max_span_fraction: float = MAX_SPAN_FRACTION_OF_CPR,
+    max_span_fraction: float | None = None,
 ) -> DerivedHoming:
     """Build calibration for a contiguous raw sweep with ``homing_offset=0``.
 
     Limited-travel joints keep the raw encoder as Present so travel may sit
-    anywhere in the turn (including near 0 or CPR) without remounting. The
-    wrap risk is handled by refusing non-contiguous / over-wide spans.
+    anywhere in the turn (including near 0 or CPR) without remounting.
     """
     validate_contiguous_raw_range(
         name, raw_min, raw_max, cpr, max_span_fraction=max_span_fraction
@@ -155,12 +188,13 @@ def derive_homing_from_raw_range(
     raw_max: int,
     cpr: int,
     *,
-    max_span_fraction: float = MAX_SPAN_FRACTION_OF_CPR,
+    max_span_fraction: float | None = None,
     max_homing_abs: int | None = None,
 ) -> DerivedHoming:
     """Deprecated name for :func:`calibration_from_raw_range` (offset always 0).
 
-    ``max_homing_abs`` is ignored; kept so callers that still pass it keep working.
+    ``max_homing_abs`` / ``max_span_fraction`` are ignored; kept so callers that
+    still pass them keep working.
     """
     del max_homing_abs  # no longer used when homing_offset stays 0
     return calibration_from_raw_range(

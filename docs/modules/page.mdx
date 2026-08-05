@@ -95,7 +95,7 @@ actuators:
     Path to a calibration JSON file produced by <code>solarian calibrate-module</code>.
   </Property>
   <Property name="interpolator_type" type="InterpolatorType">
-    One of <code>joint</code>, <code>scalar</code>, or <code>pose</code>. Selects the trajectory interpolator used by the default <code>SCHEDULE_WAYPOINT</code> handler.
+    One of <code>joint</code>, <code>scalar</code>, or <code>pose</code>. Selects the trajectory interpolator used by the default <code>SCHEDULE_WAYPOINT</code> handler. See <a href="/docs/modules/scheduling-waypoints">Scheduling Waypoints</a>.
   </Property>
 </Properties>
 
@@ -184,7 +184,7 @@ A handler must return a `bool`:
 
 If an action arrives with no registered handler, the module logs a warning and ignores it.
 
-See [Action Types](/docs/action-types) for the standard types (`STOP`, `MODULE_ACTION`, `SCHEDULE_WAYPOINT`, `RESTART_PUT`) and how to declare your own.
+See [Action Types](/docs/action-types) for the standard types (`STOP`, `MODULE_ACTION`, `SCHEDULE_WAYPOINT`, `RESTART_PUT`) and how to declare your own. For the built-in pose/scalar waypoint path, see [Scheduling Waypoints](/docs/modules/scheduling-waypoints).
 
 ## The run loop
 
@@ -216,6 +216,7 @@ If your module has actuators on more than one port (for example, two daisy-chain
 
 ## See also
 
+- [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose and scalar `SCHEDULE_WAYPOINT` on `Module`.
 - [Robots](/docs/robots) — how modules are attached to a robot and dispatched.
 - [Observations](/docs/observations) — the schema your module publishes into.
 - [Actions](/docs/actions) — the schema your module consumes from.

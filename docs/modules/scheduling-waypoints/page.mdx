@@ -1,0 +1,177 @@
+export const metadata = {
+  title: 'Scheduling Waypoints',
+  description:
+    'How Module SCHEDULE_WAYPOINT works: controllers send sparse timestamped targets; the module upsamples with a pose or scalar TrajectoryInterpolator at its control rate. Examples for MinkIK arms and grippers.',
+}
+
+# Scheduling Waypoints
+
+Controllers and skills send **sparse, timestamped targets**. The [Module](/docs/modules) owns a [`TrajectoryInterpolator`](https://github.com/solarian-dev/solarian/blob/main/solarian/utils/trajectory_interpolator.py), upsamples at its `frequency`, and writes the dense stream each `control_step`. That is the same UMI pattern used before UR `servoL` — only the interpolator type and write target change. {{ className: 'lead' }}
+
+```text
+Controller / skill  (~10–30 Hz)
+        │  SCHEDULE_WAYPOINT  fields + wall-clock timestamp
+        ▼
+Module  (frequency: 90–120, interpolator_type: pose | scalar)
+        │  sample interpolator @ module rate
+        │  write targets
+        ▼
+Actuator bus  (IK joints, servo, sim joint, …)
+```
+
+Yaml selects the path with `interpolator_type`. The default [`Module._handle_schedule_waypoint`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/module.py) and `control_step` implement both **pose** and **scalar** — subclasses usually only declare actuators (and optional unit conversion).
+
+## Contract
+
+1. Set `interpolator_type` and `max_speed` on the module yaml.
+2. Run the module at a higher `frequency` than the controller (upsample rate).
+3. Emit `ActionType.SCHEDULE_WAYPOINT` with field values and a **wall-clock** `timestamp`.
+4. Stamp targets **in the future**. `schedule_waypoint` drops waypoints with `time <= curr_time` (UMI behaviour). Teleop typically uses `time.time() + 1 / controller_fps`.
+
+Do **not** run a second interpolator in the skill/controller for the same stream — that double-smooths and adds lag. Forward policy waypoints straight onto the module.
+
+## Yaml
+
+```yaml
+frequency: 90
+interpolator_type: pose   # or scalar
+max_speed: [0.25, 0.6]    # meaning depends on type (see below)
+```
+
+<Properties>
+  <Property name="interpolator_type" type="'pose' | 'scalar' | 'joint'">
+    Selects <code>PoseTrajectoryInterpolator</code>, <code>ScalarTrajectoryInterpolator</code>, or <code>JointTrajectoryInterpolator</code>. Pose and scalar are fully wired in core <code>Module</code>.
+  </Property>
+  <Property name="max_speed" type="float | list[float]">
+    Speed limit passed into <code>schedule_waypoint</code>. Pose: <code>[max_pos_m_s, max_rot_rad_s]</code>. Scalar: a single rate in action units per second (e.g. cm/s for aperture).
+  </Property>
+  <Property name="frequency" type="float">
+    Module control rate — how often the interpolator is sampled and written.
+  </Property>
+</Properties>
+
+## Example: arm (pose)
+
+Cartesian MinkIK arms use `interpolator_type: pose`. Controllers schedule `x..rz`; the module samples a 6D pose and writes the Cartesian actuators; [`IKActuatorBus`](/docs/ik) solves joints.
+
+### Module + yaml
+
+Declare six `CartesianIKActuator`s and a `MinkIK` backend. No custom `SCHEDULE_WAYPOINT` handler:
+
+```python
+class ArmModule(Module):
+    shoulder_pan = FeetechServo()
+    # ... other joints ...
+    x = CartesianIKActuator()
+    y = CartesianIKActuator()
+    z = CartesianIKActuator()
+    rx = CartesianIKActuator()
+    ry = CartesianIKActuator()
+    rz = CartesianIKActuator()
+
+    ik_backend = MinkIK(
+        mjcf="assets/so106.xml",
+        joints={...},
+        frame="gripper",
+    )
+```
+
+```yaml
+# conf/right_arm.yaml
+frequency: 90
+interpolator_type: pose
+max_speed: [0.25, 0.6]   # m/s, rad/s
+```
+
+See [Adding a New Arm](/docs/ik/adding-an-arm) for the full SO-106 contract.
+
+### Scheduling from a controller
+
+```python
+from solarian.core.action import Action, ActionType
+
+target_time = time.time() + 1.0 / controller_fps
+data = {
+    axis: {"value": float(pose[i]), "timestamp": target_time}
+    for i, axis in enumerate(("x", "y", "z", "rx", "ry", "rz"))
+}
+return Action(
+    action_type=ActionType.MODULE_ACTION,
+    data={
+        "right_arm": {
+            "action_type": ActionType.SCHEDULE_WAYPOINT,
+            "data": data,
+        }
+    },
+)
+```
+
+Each module tick: sample `PoseTrajectoryInterpolator` → write `x..rz` → IK.
+
+## Example: gripper (scalar)
+
+Grippers use the same action type with `interpolator_type: scalar`. The interpolator works in **action units** (aperture cm for UMI-slim); convert to servo/normalized units only at the write and seed edges.
+
+### Module + yaml
+
+```python
+class UmiSlimModule(Module):
+    scalar_actuator = "gripper"   # field name on SCHEDULE_WAYPOINT
+    gripper = FeetechServo()
+
+    def _scalar_to_actuator(self, value: float) -> float:
+        return self.aperture_to_norm(value)   # cm → [-100, 100]
+
+    def _actuator_to_scalar(self, value: float) -> float:
+        return self.norm_to_aperture(value)   # seed interpolator from sensors
+```
+
+```yaml
+# conf/right_gripper.yaml
+frequency: 120
+interpolator_type: scalar
+max_speed: 15.0            # cm/s aperture rate limit
+```
+
+If action units already match `write_actuators`, you can skip the conversion hooks.
+
+### Scheduling from a controller
+
+Use the **same future timestamp** as the arm — a stamp of `time.time()` is often already in the past when the module receives it, and those waypoints are dropped:
+
+```python
+target_time = time.time() + 1.0 / controller_fps
+gripper_action = {
+    "action_type": ActionType.SCHEDULE_WAYPOINT,
+    "data": {
+        "gripper": {"value": aperture_cm, "timestamp": target_time},
+    },
+}
+return Action(
+    action_type=ActionType.MODULE_ACTION,
+    data={
+        "right_arm": arm_action,
+        "right_gripper": gripper_action,
+    },
+)
+```
+
+Each module tick: sample `ScalarTrajectoryInterpolator` → `_scalar_to_actuator` → `write_actuators`.
+
+## Policy / skill path
+
+Diffusion (and similar) policies emit a chunk of absolute target times. For each step, push one `SCHEDULE_WAYPOINT` onto the arm and one onto the gripper with that wall-clock time (minus action latency). Module-side interpolators own the dense stream — skills should not keep a parallel `PoseTrajectoryInterpolator` / `ScalarTrajectoryInterpolator` for the same modules.
+
+## Pitfalls
+
+- **Past timestamps are ignored.** Always schedule ahead of `curr_time` (teleop: one controller period; policies: absolute future times).
+- **Units must match `max_speed`.** Pose speeds are m/s and rad/s; scalar speed is in the same units as the waypoint value (cm/s if you command cm).
+- **One interpolator owns the stream.** Controller/skill = sparse setpoints; module = upsample + write.
+- **Override `control_step` carefully.** Call `super().control_step()` if you still want core pose/scalar sampling, or replace it entirely for latch-only modules.
+
+## See also
+
+- [Modules](/docs/modules) — process loop, config, handlers
+- [Action Types](/docs/action-types) — `SCHEDULE_WAYPOINT`
+- [Adding a New Arm](/docs/ik/adding-an-arm) — full MinkIK pose contract (SO-106)
+- [Inverse Kinematics](/docs/ik) — Cartesian actuators and `IKActuatorBus`

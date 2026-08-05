@@ -6,21 +6,6 @@ from typing import Callable
 from .data import Data, ImageData
 
 
-# class ActionType(IntEnum):
-#     """
-#     Standard action types supported by all modules.
-    
-#     Modules can extend this by creating their own IntEnum that starts
-#     numbering from CUSTOM_START to avoid conflicts.
-#     """
-#     STOP = 0
-#     SCHEDULE_WAYPOINT = 1
-#     RESTART_PUT = 2
-    
-#     # Reserve range for future standard actions
-#     # Custom module actions should start from this value
-#     CUSTOM_START = 100
-
 class ActionType:
     _registry: dict[int, str] = {}
     

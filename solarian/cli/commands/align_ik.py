@@ -170,6 +170,7 @@ class CalibrateIKCommand(BaseCommand):
         """
         import math
 
+        from solarian.core.calibration import MotorCalibration
         from solarian.core.data import PosData
 
         calib = module.calibration or {}
@@ -179,9 +180,26 @@ class CalibrateIKCommand(BaseCommand):
             cpr = ik_bus.counts_per_revolution(joint)
         except Exception:  # noqa: BLE001
             cpr = None
-        if entry is None or lim is None or not cpr:
-            print(f"  {joint}: missing calibration/model-limit/encoder-resolution; skipping.")
+        if lim is None or not cpr:
+            print(f"  {joint}: missing model-limit/encoder-resolution; skipping.")
             return False
+        if entry is None:
+            # First-time continuous joint (skipped by calibrate-module sweep).
+            act = module.actuators.get(joint)
+            if act is None:
+                print(f"  {joint}: not an actuator on this module; skipping.")
+                return False
+            entry = MotorCalibration(
+                id=int(act.cfg.id),
+                drive_mode=0,
+                homing_offset=0,
+                range_min=0,
+                range_max=int(cpr) - 1,
+            )
+            if module.calibration is None:
+                module.calibration = {}
+            module.calibration[joint] = entry
+            print(f"  {joint}: created calibration entry (continuous joint).")
         lo, hi = lim
         span_ticks = (hi - lo) / (2.0 * math.pi) * cpr
         frac = (0.0 - lo) / (hi - lo) if hi != lo else 0.5
