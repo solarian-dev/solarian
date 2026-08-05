@@ -31,7 +31,7 @@ class ActionType:
     The most common type. The action carries one or more <code>ModuleAction</code> sub-actions in <code>action.data</code>; the robot pushes each one onto the corresponding module's <code>action_queue</code>.
   </Property>
   <Property name="SCHEDULE_WAYPOINT" type="int = 2">
-    Tells a module to schedule a target value at a future timestamp. Core <code>Module</code> implements this with a <code>TrajectoryInterpolator</code> (pose or scalar) selected by yaml <code>interpolator_type</code>. See <a href="/docs/modules/scheduling-waypoints">Scheduling Waypoints</a>.
+    Tells a module to schedule a target value at a future timestamp. Core <code>Module</code> implements this with a <code>TrajectoryInterpolator</code> (pose or scalar) selected by yaml <code>{'interpolator_type'}</code>. See <a href="/docs/modules/scheduling-waypoints">Scheduling Waypoints</a>.
   </Property>
   <Property name="RESTART_PUT" type="int = 3">
     Resets a module's internal <code>put</code> timing — used when the controller resynchronizes the rate.

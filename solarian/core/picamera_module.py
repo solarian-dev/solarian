@@ -1,0 +1,25 @@
+"""
+PiCamera Module
+
+Module for Raspberry Pi CSI cameras via picamera2.
+
+On the Pi: ``sudo apt install python3-picamera2`` and create the project
+venv with ``--system-site-packages`` so the system package is importable.
+``port`` is the CSI index (``0`` = cam0, ``1`` = cam1), not ``/dev/video*``.
+"""
+
+from solarian.core.module import Module
+from solarian.core.configs import ModuleConfig
+from solarian.core.picamera import PiCamera
+
+
+class PiCameraConfig(ModuleConfig):
+    calibration_file: str | None = None
+
+
+class PiCameraModule(Module):
+    """Raspberry Pi CSI camera module (picamera2)."""
+
+    config_class = PiCameraConfig
+
+    camera = PiCamera()

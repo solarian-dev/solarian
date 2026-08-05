@@ -33,7 +33,7 @@ solarian onshape-export <assembly_dir> --update-yaml conf/right_arm.yaml
     File with <code>ONSHAPE_ACCESS_KEY</code>/<code>ONSHAPE_SECRET_KEY</code> lines, loaded into the environment if the keys aren't already set. When omitted, the command tries <code>onshape_keys.txt</code> then <code>.env</code> in the current directory.
   </Property>
   <Property name="--update-yaml" type="path">
-    After export, also sync joint ranges from the cleaned MJCF into this module conf (<code>actuators.*.sim.range_min</code>/<code>range_max</code>). Matches actuators by key name or by the bare name of <code>sim.joint</code> (attach prefixes like <code>right/</code> are stripped). Actuators without a <code>sim:</code> block are left alone. <code>config.json</code> <code>joint_properties.*.limits</code> are always rewritten from the CAD mate limits, with or without this flag.
+    After export, also sync joint ranges from the cleaned MJCF into this module conf (<code>{'actuators.*.sim.range_min'}</code>/<code>{'range_max'}</code>). Matches actuators by key name or by the bare name of <code>sim.joint</code> (attach prefixes like <code>right/</code> are stripped). Actuators without a <code>sim:</code> block are left alone. <code>config.json</code> <code>{'joint_properties.*.limits'}</code> are always rewritten from the CAD mate limits, with or without this flag.
   </Property>
 </Properties>
 
