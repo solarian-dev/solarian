@@ -141,6 +141,15 @@ class ModuleConfig(BaseModel):
     # # Interpolator settings
     interpolator_type: InterpolatorType = InterpolatorType.JOINT
     max_speed: float | list[float] = 1.0  # max speed for interpolation (single or per-joint)
+    #: If True, SCHEDULE_WAYPOINT ignores client timestamps and uses adaptive
+    #: ``drive_to_waypoint`` from the robot clock (best for WiFi teleop). If
+    #: False, keep UMI-style timestamped ``schedule_waypoint`` (policy chunks).
+    drive_waypoints: bool = False
+    #: Adaptive drive horizon bounds (seconds). Only used when drive_waypoints.
+    drive_horizon_min_s: float = 1.0 / 30.0
+    drive_horizon_max_s: float = 0.12
+    drive_horizon_ema_alpha: float = 0.2
+    drive_horizon_multiplier: float = 1.5
 
 class ConnectionConfig(BaseModel):
     connection_id: str = "connection_1"

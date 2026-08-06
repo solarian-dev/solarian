@@ -14,6 +14,7 @@ from solarian.core.clock_sync import (
     synced_time_ns,
     latency_ms_from_stamp_ns,
     LatencyEma,
+    format_latency_status,
 )
 from solarian.core.message import Message
 from solarian.core.action import Action
@@ -388,7 +389,7 @@ class Robot(ABC):
             if latency_ms is not None:
                 StatusBoard.set(
                     "Action latency (ms)",
-                    self._action_latency.update(latency_ms).status_value(),
+                    format_latency_status(self._action_latency, latency_ms),
                 )
 
             raw_action = msg.data["action"]

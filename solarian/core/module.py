@@ -186,7 +186,12 @@ class Module(Process, ABC):
         # Throttle late-waypoint warnings (teleop can discard every tick).
         self._late_waypoint_warn_t: float = 0.0
         self._late_waypoint_suppressed: int = 0
-        
+        # Adaptive drive_to_waypoint (WiFi teleop): track action inter-arrival.
+        self._last_action_time: float | None = None
+        self._action_interval_ema: float = float(
+            getattr(self.cfg, "drive_horizon_min_s", 1.0 / 30.0)
+        )
+
         self.ready_event = Event()
         self._error_queue: MpQueue = MpQueue()
         self._profiling_queue: MpQueue = MpQueue()
@@ -870,7 +875,7 @@ class Module(Process, ABC):
             sensor_names = [sensor_name for _, sensor_name, _ in field_list]
             sensor_data = self.read_sensors(data_class, sensor_names)
             for field_name, sensor_name, _ in field_list:
-                sensor_data[sensor_name]['timestamp'] = time.time() - self.cfg.receive_latency
+                sensor_data[sensor_name]['timestamp'] = synced_time() - self.cfg.receive_latency
                 data[field_name] = sensor_data[sensor_name]
 
         obs = self._module_obs_cls(data)
@@ -1023,19 +1028,56 @@ class Module(Process, ABC):
         horizon = 1.0 / max(float(self.frequency), 1.0)
         return float(t_now + horizon)
 
+    def _adaptive_drive_horizon(self, t_now: float) -> float:
+        """Horizon for drive_to_waypoint from measured action inter-arrival time."""
+        min_h = float(getattr(self.cfg, "drive_horizon_min_s", 1.0 / 30.0))
+        max_h = float(getattr(self.cfg, "drive_horizon_max_s", 0.12))
+        alpha = float(getattr(self.cfg, "drive_horizon_ema_alpha", 0.2))
+        mult = float(getattr(self.cfg, "drive_horizon_multiplier", 1.5))
+        if self._last_action_time is not None:
+            dt = t_now - self._last_action_time
+            if dt > 0:
+                self._action_interval_ema = (
+                    alpha * dt + (1.0 - alpha) * self._action_interval_ema
+                )
+        self._last_action_time = t_now
+        horizon = min(max(self._action_interval_ema * mult, min_h), max_h)
+        StatusBoard.set(
+            f"{self.name} drive horizon (ms)",
+            round(horizon * 1000.0, 1),
+        )
+        return horizon
+
     def _schedule_pose_waypoint(
         self,
         pose: np.ndarray,
         target_time_wall: float,
         t_now: float,
     ) -> None:
-        """Insert a Cartesian waypoint (UMI-style wall→monotonic conversion)."""
+        """Insert a Cartesian waypoint.
+
+        With ``drive_waypoints: true`` (teleop), ignore client timestamps and
+        smoothly drive from the robot clock — robust to WiFi jitter. Otherwise
+        use UMI-style wall→monotonic ``schedule_waypoint`` (policy chunks).
+        """
         self._ensure_pose_interpolator(t_now)
         assert self.interp is not None
+        pose = np.asarray(pose, dtype=np.float64)
+        if getattr(self.cfg, "drive_waypoints", False):
+            target_time = t_now + self._adaptive_drive_horizon(t_now)
+            self.interp = self.interp.drive_to_waypoint(
+                pose=pose,
+                time=target_time,
+                curr_time=t_now,
+                **self._get_max_speed_kwargs(),
+            )
+            self.last_waypoint_time = target_time
+            return
+
         target_time = time.monotonic() - synced_time() + float(target_time_wall)
         target_time = self._resolve_waypoint_time(target_time, t_now)
         self.interp = self.interp.schedule_waypoint(
-            pose=np.asarray(pose, dtype=np.float64),
+            pose=pose,
             time=target_time,
             curr_time=t_now,
             last_waypoint_time=self.last_waypoint_time,
@@ -1110,9 +1152,20 @@ class Module(Process, ABC):
         target_time_wall: float,
         t_now: float,
     ) -> None:
-        """Insert a scalar waypoint (UMI-style wall→monotonic conversion)."""
+        """Insert a scalar waypoint (drive or UMI schedule; see pose helper)."""
         self._ensure_scalar_interpolator(t_now)
         assert self.interp is not None
+        if getattr(self.cfg, "drive_waypoints", False):
+            target_time = t_now + self._adaptive_drive_horizon(t_now)
+            self.interp = self.interp.drive_to_waypoint(
+                value=float(value),
+                time=target_time,
+                curr_time=t_now,
+                **self._get_max_speed_kwargs(),
+            )
+            self.last_waypoint_time = target_time
+            return
+
         target_time = time.monotonic() - synced_time() + float(target_time_wall)
         target_time = self._resolve_waypoint_time(target_time, t_now)
         self.interp = self.interp.schedule_waypoint(

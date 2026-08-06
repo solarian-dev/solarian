@@ -93,11 +93,21 @@ class LatencyEma:
 def latency_ms_from_stamp_ns(stamp_ns: int) -> float | None:
     """One-way latency in ms from a synced ``*_timestamp`` ns stamp to now.
 
-    Returns ``None`` if ``stamp_ns`` is missing/zero.
+    Returns ``None`` if ``stamp_ns`` is missing/zero. A negative value means
+    residual clock skew (sender's synced clock is ahead of the receiver's).
     """
     if not stamp_ns:
         return None
     return synced_time() * 1e3 - (float(stamp_ns) / 1e6)
+
+
+def format_latency_status(tracker: "LatencyEma", raw_ms: float) -> str:
+    """StatusBoard string; floors display at 0 and flags clock-skew if negative."""
+    tracker.update(max(0.0, float(raw_ms)))
+    text = tracker.status_value()
+    if raw_ms < -5.0:
+        text = f"{text}  [skew {raw_ms:.1f}]"
+    return text
 
 
 def set_offset(offset_s: float, rtt_s: float = 0.0) -> None:

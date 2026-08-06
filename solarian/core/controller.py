@@ -64,6 +64,7 @@ from solarian.core.clock_sync import (
     synced_time,
     latency_ms_from_stamp_ns,
     LatencyEma,
+    format_latency_status,
 )
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
@@ -326,7 +327,7 @@ class Controller(ABC):
         if latency_ms is not None:
             StatusBoard.set(
                 "Obs latency (ms)",
-                self._obs_latency.update(latency_ms).status_value(),
+                format_latency_status(self._obs_latency, latency_ms),
             )
 
         if "observation" in msg.data:
@@ -337,7 +338,7 @@ class Controller(ABC):
             if age_ms is not None:
                 StatusBoard.set(
                     "Obs age (ms)",
-                    self._obs_age_latency.update(age_ms).status_value(),
+                    format_latency_status(self._obs_age_latency, age_ms),
                 )
 
             for module_name, module_observation in observation.items():
