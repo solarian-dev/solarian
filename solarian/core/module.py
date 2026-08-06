@@ -978,8 +978,10 @@ class Module(Process, ABC):
         target_time_wall = float(fields[names[0]].timestamp)
         return pose, target_time_wall
 
-    def _warn_late_waypoint(self, target_time: float, t_now: float) -> None:
-        """Log (throttled) when a SCHEDULE_WAYPOINT is discarded as late."""
+    def _warn_late_waypoint(
+        self, target_time: float, t_now: float, *, clamped: bool = False
+    ) -> None:
+        """Log (throttled) when a SCHEDULE_WAYPOINT arrives late."""
         late_ms = (t_now - target_time) * 1000.0
         now_wall = time.time()
         if now_wall - self._late_waypoint_warn_t < 1.0:
@@ -989,12 +991,28 @@ class Module(Process, ABC):
         self._late_waypoint_warn_t = now_wall
         self._late_waypoint_suppressed = 0
         extra = f" ({suppressed} more suppressed)" if suppressed else ""
+        action = "clamping" if clamped else "discarding"
         logger.warning(
-            "Module '%s': discarding late SCHEDULE_WAYPOINT (%.1f ms late)%s",
+            "Module '%s': %s late SCHEDULE_WAYPOINT (%.1f ms late)%s",
             self.name,
+            action,
             late_ms,
             extra,
         )
+
+    def _resolve_waypoint_time(self, target_time: float, t_now: float) -> float:
+        """Ensure waypoint time is strictly after ``t_now``.
+
+        Teleop packets often arrive a few ms past their stamp under WiFi/CPU
+        jitter. Discarding them freezes the arm between accepted samples
+        (jerky motion). Clamp late stamps to one module period ahead so the
+        interpolator still tracks the latest pose.
+        """
+        if target_time > t_now:
+            return float(target_time)
+        self._warn_late_waypoint(target_time, t_now, clamped=True)
+        horizon = 1.0 / max(float(self.frequency), 1.0)
+        return float(t_now + horizon)
 
     def _schedule_pose_waypoint(
         self,
@@ -1006,9 +1024,7 @@ class Module(Process, ABC):
         self._ensure_pose_interpolator(t_now)
         assert self.interp is not None
         target_time = time.monotonic() - synced_time() + float(target_time_wall)
-        if target_time <= t_now:
-            self._warn_late_waypoint(target_time, t_now)
-            return
+        target_time = self._resolve_waypoint_time(target_time, t_now)
         self.interp = self.interp.schedule_waypoint(
             pose=np.asarray(pose, dtype=np.float64),
             time=target_time,
@@ -1089,9 +1105,7 @@ class Module(Process, ABC):
         self._ensure_scalar_interpolator(t_now)
         assert self.interp is not None
         target_time = time.monotonic() - synced_time() + float(target_time_wall)
-        if target_time <= t_now:
-            self._warn_late_waypoint(target_time, t_now)
-            return
+        target_time = self._resolve_waypoint_time(target_time, t_now)
         self.interp = self.interp.schedule_waypoint(
             value=float(value),
             time=target_time,
@@ -1179,6 +1193,26 @@ class Module(Process, ABC):
             except Exception:
                 return np.array([0.0], dtype=np.float64)
         return np.array([0.0] * len(self.actuators))
+
+    def _coalesce_actions(self, actions: list) -> list:
+        """Keep only the latest SCHEDULE_WAYPOINT in a drained burst.
+
+        Backlogged teleop waypoints with stale stamps cause interpolator thrash
+        (and used to be discarded). Other action types keep their order.
+        """
+        if len(actions) <= 1:
+            return actions
+        last_sw = None
+        for i, action in enumerate(actions):
+            if int(action.action_type) == int(ActionType.SCHEDULE_WAYPOINT):
+                last_sw = i
+        if last_sw is None:
+            return actions
+        return [
+            action
+            for i, action in enumerate(actions)
+            if int(action.action_type) != int(ActionType.SCHEDULE_WAYPOINT) or i == last_sw
+        ]
 
     # ========= action dispatch system ============
     def _dispatch_action(self, action: ModuleAction, t_now: float) -> bool:
@@ -1324,7 +1358,7 @@ class Module(Process, ABC):
                     if self.action_queue is None:
                         logger.error("Action queue is not initialized.")
                     elif not self.action_queue.empty():
-                        actions = self.action_queue.get_all()
+                        actions = self._coalesce_actions(self.action_queue.get_all())
                         for action in actions:
                             keep_running = self._dispatch_action(action, t_now)
 

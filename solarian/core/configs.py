@@ -176,7 +176,7 @@ class ControllerConfig(BaseModel):
     headless: bool = False
     #: Seconds ahead of ``time.time()`` for keyboard / teleop SCHEDULE_WAYPOINT
     #: stamps. Must exceed Mac→robot action latency or waypoints are dropped.
-    waypoint_lookahead_s: float = 0.15
+    waypoint_lookahead_s: float = 0.25
     connection: ConnectionConfig
     modules: dict[str, ModuleConfig]
 
