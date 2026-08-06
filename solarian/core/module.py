@@ -773,6 +773,15 @@ class Module(Process, ABC):
                 f"Module '{self.name}' process died during startup "
                 f"(exit code {self.exitcode}). Check stderr for details."
             )
+        if not self.ready_event.is_set():
+            # Alive but never reached the first control-loop iteration — usually
+            # a post-fork deadlock (ZMQ / StatusBoard threads in the parent).
+            raise RuntimeError(
+                f"Module '{self.name}' process (pid {self.pid}) did not become "
+                f"ready within launch_timeout={self.launch_timeout}s. The child "
+                f"is likely stuck after fork; restart and check that the parent "
+                f"is not multithreaded before module.start()."
+            )
     
     def stop_wait(self):
         self.join()

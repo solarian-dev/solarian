@@ -149,27 +149,18 @@ class Robot(ABC):
         self._world_server = None
         self._viewer_proc = None
 
-        # self.cfg.validate_with_robot_schema(settings.ROBOT_SCHEMA)
-        self.context = zmq.Context()
-        
-        # action receiver (PULL)
-        self.action_socket = self.context.socket(zmq.PULL)
-        self.action_socket.setsockopt(zmq.CONFLATE, 1)
-        self.action_socket.connect(f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.action_sender_port}")
-        
-        # State publisher (PUB)
-        self.state_socket = self.context.socket(zmq.PUB)
-        self.state_socket.setsockopt(zmq.CONFLATE, 1)
-        self.state_socket.connect(f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_receiver_port}")
+        # ZMQ is created in ``_init_sockets`` *after* module processes fork.
+        # Creating a Context here would start ZMQ I/O threads and make child
+        # modules prone to post-fork deadlocks (missing arm/gripper obs).
+        self.context = None
+        self.action_socket = None
+        self.state_socket = None
 
         #self.control_lock = threading.Lock()
         self.observation_lock = threading.Lock()
         self.last_observation = Observation({})
         self.windows_initialized = False
 
-        # Verify connection
-        # self._verify_connection()
-        
         self.current_velocity = None
         self.current_arm_state = None
         
@@ -542,10 +533,11 @@ class Robot(ABC):
     def sync_clock(self) -> None:
         """Estimate wall-clock offset vs the relay server (soft-fail)."""
         try:
+            # Use a temporary ZMQ context and tear it down — do not touch the
+            # robot's long-lived context (created after module fork).
             result = sync_with_server(
                 self.cfg.connection.ip,
                 self.cfg.connection.clock_sync_port,
-                context=self.context,
             )
             StatusBoard.set("Clock offset (ms)", result.offset_s * 1000.0)
             StatusBoard.set("Clock sync RTT (ms)", result.rtt_s * 1000.0)
@@ -555,6 +547,24 @@ class Robot(ABC):
                 exc,
                 get_offset() * 1000.0,
             )
+
+    def _init_sockets(self) -> None:
+        """Create ZMQ sockets after module processes have been forked."""
+        if self.context is not None:
+            return
+        self.context = zmq.Context()
+
+        self.action_socket = self.context.socket(zmq.PULL)
+        self.action_socket.setsockopt(zmq.CONFLATE, 1)
+        self.action_socket.connect(
+            f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.action_sender_port}"
+        )
+
+        self.state_socket = self.context.socket(zmq.PUB)
+        self.state_socket.setsockopt(zmq.CONFLATE, 1)
+        self.state_socket.connect(
+            f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_receiver_port}"
+        )
 
     def initialize(self):
         # if not self.is_connected():
@@ -578,7 +588,8 @@ class Robot(ABC):
         self._bus_servers = []
         setup_process_logging(logger_name=None)
 
-        StatusBoard()
+        # Queues only — do not start the UI thread until after module forks.
+        StatusBoard(start_ui=False)
         status_mp_q = StatusBoard.get_mp_queue()
         
         try:
@@ -609,6 +620,10 @@ class Robot(ABC):
                 )
                 module.start()
 
+            # Safe to become multithreaded now that children have forked.
+            self._init_sockets()
+            StatusBoard.start_ui()
+
             # Hook for subclasses to start additional threads
             self.on_start()
 
@@ -637,8 +652,12 @@ class Robot(ABC):
             sim_teardown(self)
 
         self.running = False
-        self.action_socket.close()
-        self.state_socket.close()
+        if self.action_socket is not None:
+            self.action_socket.close()
+            self.action_socket = None
+        if self.state_socket is not None:
+            self.state_socket.close()
+            self.state_socket = None
         for module in self.modules.values():
             if module.is_alive():
                 module.terminate()
@@ -653,7 +672,9 @@ class Robot(ABC):
             if srv.is_alive():
                 srv.terminate()
                 srv.join(timeout=5)
-        self.context.term()
+        if self.context is not None:
+            self.context.term()
+            self.context = None
         self.connected = False
 
     def display(self):

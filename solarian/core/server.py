@@ -136,6 +136,8 @@ class RelayServer:
 
     def start(self):
         self.running = True
+        # StatusBoard.set() defers the UI thread; start it for live metrics.
+        StatusBoard.start_ui()
         # TO DO: action relay and state relay should be implemented as processes instead of threads
         threading.Thread(target=self._action_relay, daemon=True).start()
         threading.Thread(target=self._state_relay, daemon=True).start()

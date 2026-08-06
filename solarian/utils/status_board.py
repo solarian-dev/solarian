@@ -352,14 +352,14 @@ class StatusBoard:
         """
         cls._live = live
 
-    def __new__(cls):
+    def __new__(cls, *args, **kwargs):
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super(StatusBoard, cls).__new__(cls)
                 cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, *, start_ui: bool = True):
         if not hasattr(self, '_initialized') or not self._initialized:
             self.data = {}
             self._local_q = queue.Queue()
@@ -370,12 +370,35 @@ class StatusBoard:
             self._stop_event = threading.Event()
             self._stopped_event = threading.Event()
             self._console = Console()
+            self._ui_started = False
             self._initialized = True
 
             remove_fallback_handlers()
 
-            target = self.ui_loop if self._live else self.ui_loop_plain
-            threading.Thread(target=target, daemon=True).start()
+            if start_ui:
+                self._start_ui_thread()
+
+    def _start_ui_thread(self) -> None:
+        if getattr(self, "_ui_started", False):
+            return
+        self._ui_started = True
+        target = self.ui_loop if self._live else self.ui_loop_plain
+        threading.Thread(target=target, daemon=True).start()
+
+    @classmethod
+    def start_ui(cls) -> "StatusBoard":
+        """Start the display thread (safe to call more than once).
+
+        Robot forking must happen *before* this runs: the UI thread plus any
+        inherited ZMQ I/O threads are a common cause of post-``fork`` deadlocks
+        in module child processes.
+        """
+        with cls._lock:
+            inst = cls._instance
+            if inst is None or not getattr(inst, "_initialized", False):
+                return StatusBoard(start_ui=True)
+            inst._start_ui_thread()
+            return inst
 
     @classmethod
     def get_mp_queue(cls) -> "multiprocessing.Queue | None":
@@ -401,7 +424,10 @@ class StatusBoard:
         elif cls._child_q is not None:
             cls._child_q.put((key, value))
         elif multiprocessing.parent_process() is None:
-            inst = StatusBoard()
+            # Defer the UI thread so early set() calls (e.g. clock sync during
+            # Robot.connect) do not make the parent multithreaded before module
+            # processes are forked.
+            inst = StatusBoard(start_ui=False)
             inst._local_q.put((key, value))
 
     @classmethod

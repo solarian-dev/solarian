@@ -1028,6 +1028,8 @@ class Controller(ABC):
 
         self.running = True
         self._thread_error = None
+        # StatusBoard.set() during connect defers the UI thread; start it now.
+        StatusBoard.start_ui()
         logger.info("Starting state receiver")
 
         threading.Thread(target=self._state_receiver, daemon=True).start()
