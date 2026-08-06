@@ -57,6 +57,7 @@ from solarian.core import Observation
 from solarian.core.configs import ControllerConfig, ActionValue
 from solarian.core.message import Message
 from solarian.core.module import Module
+from solarian.core.clock_sync import sync_with_server, get_offset
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
 from solarian.core.data import ImageData, BoundingBoxData
@@ -376,6 +377,8 @@ class Controller(ABC):
 
     def connect(self):
         """Start receiver threads"""
+        self.sync_clock()
+
         for module_name, module in self.modules.items():
             module.load_calibration()
 
@@ -400,6 +403,23 @@ class Controller(ABC):
 
         self.connected = True
         logger.info("Controller connected")
+
+    def sync_clock(self) -> None:
+        """Estimate wall-clock offset vs the relay server (soft-fail)."""
+        try:
+            result = sync_with_server(
+                self.cfg.connection.ip,
+                self.cfg.connection.clock_sync_port,
+                context=self.context,
+            )
+            StatusBoard.set("Clock offset (ms)", result.offset_s * 1000.0)
+            StatusBoard.set("Clock sync RTT (ms)", result.rtt_s * 1000.0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Clock sync failed (%s); using local wall clock (offset=%.1f ms)",
+                exc,
+                get_offset() * 1000.0,
+            )
 
     def is_connected(self):
         return self.connected

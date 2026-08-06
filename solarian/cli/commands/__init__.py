@@ -166,6 +166,13 @@ CommandRegistry.register_lazy(
 
 # ── Utility commands ─────────────────────────────────────────────────
 CommandRegistry.register_lazy(
+    "sync-clock",
+    module_path=f"{_pkg}.sync_clock",
+    help="Sync Solarian wall-clock offset to the relay server (does not change OS time).",
+    config_name="server",
+    setup_modules=(),
+)
+CommandRegistry.register_lazy(
     "detect-device",
     module_path=f"{_pkg}.detect_device",
     help="Detects devices connected to the computer (port and name).",

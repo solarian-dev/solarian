@@ -149,6 +149,10 @@ class ConnectionConfig(BaseModel):
     action_receiver_port: int
     state_sender_port: int
     state_receiver_port: int
+    #: ZMQ REP port for application-level clock sync (Cristian / NTP-style).
+    #: Controller and robot estimate an offset so SCHEDULE_WAYPOINT stamps share
+    #: the relay server's wall clock without requiring OS NTP/root.
+    clock_sync_port: int = 5559
 
 # A robot is composed by multiple modules, eg: arms, legs, base, etc.
 class RobotConfig(BaseModel):
@@ -170,6 +174,9 @@ class ControllerConfig(BaseModel):
     policy_path: str
     device: str
     headless: bool = False
+    #: Seconds ahead of ``time.time()`` for keyboard / teleop SCHEDULE_WAYPOINT
+    #: stamps. Must exceed Mac→robot action latency or waypoints are dropped.
+    waypoint_lookahead_s: float = 0.15
     connection: ConnectionConfig
     modules: dict[str, ModuleConfig]
 

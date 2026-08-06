@@ -1,12 +1,16 @@
+import logging
 import zmq
 import threading
 import time
 
 from solarian.core.message import Message
 from solarian.core.configs import ServerConfig
+from solarian.core.clock_sync import serve_clock_sync_reply
 from solarian.core.data import DataComputer
 from solarian.core import Observation
 from solarian.utils import StatusBoard
+
+logger = logging.getLogger(__name__)
 
 # TO DO: rename state to observation, rename cmd to action
 
@@ -45,6 +49,11 @@ class RelayServer:
         self.client_state_sender.setsockopt(zmq.CONFLATE, 1)
         self.client_state_sender.setsockopt(zmq.LINGER, 0)
         self.client_state_sender.bind(f"tcp://*:{self.cfg.connection.state_sender_port}")  # Clients subscribe here
+
+        # Application clock authority for controller/robot SCHEDULE_WAYPOINT stamps.
+        self.clock_sync_socket = self.context.socket(zmq.REP)
+        self.clock_sync_socket.setsockopt(zmq.LINGER, 0)
+        self.clock_sync_socket.bind(f"tcp://*:{self.cfg.connection.clock_sync_port}")
 
         self._processors = Observation.create_processors(DataComputer.SERVER)
 
@@ -112,12 +121,30 @@ class RelayServer:
             observation[module_name][field_name] = proc(observation[module_name])
         return observation
 
+    def _clock_sync(self):
+        """Answer Cristian/NTP-style clock sync requests from controller/robot."""
+        poller = zmq.Poller()
+        poller.register(self.clock_sync_socket, zmq.POLLIN)
+        while self.running:
+            try:
+                if not poller.poll(timeout=100):
+                    continue
+                serve_clock_sync_reply(self.clock_sync_socket)
+            except Exception as e:
+                logger.warning("Clock sync reply failed: %s", e)
+                time.sleep(0.01)
+
     def start(self):
         self.running = True
         # TO DO: action relay and state relay should be implemented as processes instead of threads
         threading.Thread(target=self._action_relay, daemon=True).start()
         threading.Thread(target=self._state_relay, daemon=True).start()
+        threading.Thread(target=self._clock_sync, daemon=True).start()
         print("Relay server started")
+        logger.info(
+            "Clock sync listening on tcp://*:%s",
+            self.cfg.connection.clock_sync_port,
+        )
 
         try:
             # Keep main thread alive

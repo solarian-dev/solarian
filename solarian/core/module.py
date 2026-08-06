@@ -18,6 +18,7 @@ from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.sensor import Sensor
 from solarian.core.servo import Servo
 from solarian.core.data import Data, PosData, DataComputer, TimestampData
+from solarian.core.clock_sync import synced_time, sync_with_server, get_offset
 from solarian.core.module_bus import ModuleBus
 from solarian.core.action import Action, ActionType, action_handler, ModuleAction
 from solarian.core.configs import ModuleConfig, InterpolatorType
@@ -182,6 +183,9 @@ class Module(Process, ABC):
         self.interp: TrajectoryInterpolator | None = None
         self.last_waypoint_time: float = 0.0
         self.speed_kwargs: dict[str, Any] = {}
+        # Throttle late-waypoint warnings (teleop can discard every tick).
+        self._late_waypoint_warn_t: float = 0.0
+        self._late_waypoint_suppressed: int = 0
         
         self.ready_event = Event()
         self._error_queue: MpQueue = MpQueue()
@@ -974,6 +978,24 @@ class Module(Process, ABC):
         target_time_wall = float(fields[names[0]].timestamp)
         return pose, target_time_wall
 
+    def _warn_late_waypoint(self, target_time: float, t_now: float) -> None:
+        """Log (throttled) when a SCHEDULE_WAYPOINT is discarded as late."""
+        late_ms = (t_now - target_time) * 1000.0
+        now_wall = time.time()
+        if now_wall - self._late_waypoint_warn_t < 1.0:
+            self._late_waypoint_suppressed += 1
+            return
+        suppressed = self._late_waypoint_suppressed
+        self._late_waypoint_warn_t = now_wall
+        self._late_waypoint_suppressed = 0
+        extra = f" ({suppressed} more suppressed)" if suppressed else ""
+        logger.warning(
+            "Module '%s': discarding late SCHEDULE_WAYPOINT (%.1f ms late)%s",
+            self.name,
+            late_ms,
+            extra,
+        )
+
     def _schedule_pose_waypoint(
         self,
         pose: np.ndarray,
@@ -983,7 +1005,10 @@ class Module(Process, ABC):
         """Insert a Cartesian waypoint (UMI-style wall→monotonic conversion)."""
         self._ensure_pose_interpolator(t_now)
         assert self.interp is not None
-        target_time = time.monotonic() - time.time() + float(target_time_wall)
+        target_time = time.monotonic() - synced_time() + float(target_time_wall)
+        if target_time <= t_now:
+            self._warn_late_waypoint(target_time, t_now)
+            return
         self.interp = self.interp.schedule_waypoint(
             pose=np.asarray(pose, dtype=np.float64),
             time=target_time,
@@ -1063,7 +1088,10 @@ class Module(Process, ABC):
         """Insert a scalar waypoint (UMI-style wall→monotonic conversion)."""
         self._ensure_scalar_interpolator(t_now)
         assert self.interp is not None
-        target_time = time.monotonic() - time.time() + float(target_time_wall)
+        target_time = time.monotonic() - synced_time() + float(target_time_wall)
+        if target_time <= t_now:
+            self._warn_late_waypoint(target_time, t_now)
+            return
         self.interp = self.interp.schedule_waypoint(
             value=float(value),
             time=target_time,
@@ -1258,6 +1286,19 @@ class Module(Process, ABC):
         self.connect(calibration)
 
         logger.info(f"Module {self.name} process connected")
+
+        endpoint = getattr(self, "_clock_sync_endpoint", None)
+        if endpoint is not None:
+            try:
+                sync_with_server(endpoint[0], int(endpoint[1]))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Module '%s': clock sync failed (%s); using local wall "
+                    "clock (offset=%.1f ms)",
+                    self.name,
+                    exc,
+                    get_offset() * 1000.0,
+                )
 
         try:
             self.reset()
