@@ -58,6 +58,48 @@ def synced_time() -> float:
     return time.time() + _offset_s
 
 
+def synced_time_ns() -> int:
+    """``synced_time`` as integer nanoseconds (for ``Message`` timestamps)."""
+    return int(synced_time() * 1e9)
+
+
+@dataclass
+class LatencyEma:
+    """Track last / EMA latency in milliseconds for StatusBoard display."""
+
+    alpha: float = 0.2
+    last_ms: float = 0.0
+    ema_ms: float = 0.0
+    max_ms: float = 0.0
+    _n: int = 0
+
+    def update(self, latency_ms: float) -> "LatencyEma":
+        ms = float(latency_ms)
+        self.last_ms = ms
+        if self._n == 0:
+            self.ema_ms = ms
+            self.max_ms = ms
+        else:
+            self.ema_ms = self.alpha * ms + (1.0 - self.alpha) * self.ema_ms
+            # Slow decay so transient spikes remain visible for a while.
+            self.max_ms = max(ms, self.max_ms * 0.995)
+        self._n += 1
+        return self
+
+    def status_value(self) -> str:
+        return f"{self.last_ms:.1f}  (ema {self.ema_ms:.1f}, max {self.max_ms:.1f})"
+
+
+def latency_ms_from_stamp_ns(stamp_ns: int) -> float | None:
+    """One-way latency in ms from a synced ``*_timestamp`` ns stamp to now.
+
+    Returns ``None`` if ``stamp_ns`` is missing/zero.
+    """
+    if not stamp_ns:
+        return None
+    return synced_time() * 1e3 - (float(stamp_ns) / 1e6)
+
+
 def set_offset(offset_s: float, rtt_s: float = 0.0) -> None:
     """Install an offset (mainly for tests)."""
     global _offset_s, _rtt_s, _synced

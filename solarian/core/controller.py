@@ -57,7 +57,14 @@ from solarian.core import Observation
 from solarian.core.configs import ControllerConfig, ActionValue
 from solarian.core.message import Message
 from solarian.core.module import Module
-from solarian.core.clock_sync import sync_with_server, get_offset
+from solarian.core.clock_sync import (
+    sync_with_server,
+    get_offset,
+    synced_time_ns,
+    synced_time,
+    latency_ms_from_stamp_ns,
+    LatencyEma,
+)
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
 from solarian.core.data import ImageData, BoundingBoxData
@@ -157,6 +164,8 @@ class Controller(ABC):
         self.running = False
         self.connected = False
         self._thread_error = None
+        self._obs_latency = LatencyEma()
+        self._obs_age_latency = LatencyEma()
 
         self.modules = {}
 
@@ -313,9 +322,23 @@ class Controller(ABC):
         bytes = self.state_socket.recv(zmq.NOBLOCK)
         msg = Message.deserialize(bytes)
 
+        latency_ms = latency_ms_from_stamp_ns(msg.robot_timestamp)
+        if latency_ms is not None:
+            StatusBoard.set(
+                "Obs latency (ms)",
+                self._obs_latency.update(latency_ms).status_value(),
+            )
+
         if "observation" in msg.data:
             raw_obs = msg.data["observation"]
             observation = Observation(raw_obs)
+
+            age_ms = self._observation_age_ms(observation)
+            if age_ms is not None:
+                StatusBoard.set(
+                    "Obs age (ms)",
+                    self._obs_age_latency.update(age_ms).status_value(),
+                )
 
             for module_name, module_observation in observation.items():
                 self.last_observation[module_name] = module_observation
@@ -339,6 +362,45 @@ class Controller(ABC):
             logger.info(f"Click acknowledged {self.clicked_id}")
             self.clicked_id = None
             self.clicked_point = None
+
+    def _observation_age_ms(self, observation: Observation) -> float | None:
+        """Age of the newest sensor timestamp in the observation (ms)."""
+        newest = None
+        for _module_name, module_obs in observation.items():
+            items = getattr(module_obs, "items", None)
+            if not callable(items):
+                continue
+            for _fname, field in items():
+                ts = getattr(field, "timestamp", None)
+                if ts is None:
+                    continue
+                newest = float(ts) if newest is None else max(newest, float(ts))
+        if newest is None:
+            return None
+        # Sensor stamps use robot local wall time; after clock sync both sides
+        # share the server time base via offset, so this is a useful combined
+        # capture→controller age signal (includes WiFi + compress + queueing).
+        return (synced_time() - newest) * 1000.0
+
+    @profile
+    def _send_action(self, action: Action):
+        """Send control actions to robot"""
+        msg = Message()
+        msg.controller_timestamp = synced_time_ns()
+        msg.data = {"action": action.to_dict()}
+
+        if self.clicked_point is not None:
+            msg.data["click"] = {
+                "point": self.clicked_point,
+                "id": self.clicked_id
+            }
+        self.action_socket.send(msg.serialize())
+
+    def send_stop_tracking(self):
+        msg = Message()
+        msg.controller_timestamp = synced_time_ns()
+        msg.data = {"stop_tracking": True}
+        self.action_socket.send(msg.serialize())
 
     def _put_module_observation(self, module_name: str, module_observation) -> None:
         """Push *module_observation* into its ``ObservationRingBuffer``.
@@ -445,26 +507,6 @@ class Controller(ABC):
 
     def stop(self):
         self.running = False
-
-    @profile
-    def _send_action(self, action: Action):
-        """Send control actions to robot"""
-        msg = Message()
-        msg.controller_timestamp = time.time_ns()
-        msg.data = {"action": action.to_dict()}
-
-        if self.clicked_point is not None:
-            msg.data["click"] = {
-                "point": self.clicked_point,
-                "id": self.clicked_id
-            }
-        self.action_socket.send(msg.serialize())
-
-    def send_stop_tracking(self):
-        msg = Message()
-        msg.controller_timestamp = time.time_ns()
-        msg.data = {"stop_tracking": True}
-        self.action_socket.send(msg.serialize())
 
     # def record_frame(self, dataset, action, task):
 

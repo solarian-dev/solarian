@@ -8,15 +8,21 @@ from typing import Any
 from multiprocessing.managers import SharedMemoryManager
 
 from solarian.core.configs import RobotConfig
-from solarian.core.clock_sync import sync_with_server, get_offset
+from solarian.core.clock_sync import (
+    sync_with_server,
+    get_offset,
+    synced_time_ns,
+    latency_ms_from_stamp_ns,
+    LatencyEma,
+)
 from solarian.core.message import Message
 from solarian.core.action import Action
+from solarian.core.data import ImageData, set_image_jpeg_quality
 from .module import Module
 from .bus_server import BusServer, BusClient
 from solarian.core import Observation
 from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard, setup_process_logging
 from solarian.utils.profiling import merge_stats as merge_profiling_stats
-from solarian.core.data import ImageData
 from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
 from solarian.utils.shared_memory.action_queue import ModuleActionQueue
 from solarian.utils.shared_memory.skill_status_buffer import SkillStatusBuffer
@@ -171,6 +177,9 @@ class Robot(ABC):
         self.verbose = True
         self.captured_start_pos = False        
         self.connected = False
+        self._action_latency = LatencyEma()
+        self._obs_compress_latency = LatencyEma()
+        set_image_jpeg_quality(getattr(cfg, "img_compression_quality", None))
 
         self.modules = {}
         self._bus_servers: list[BusServer] = []
@@ -384,10 +393,15 @@ class Robot(ABC):
             if "action" not in msg.data:
                 return None
 
+            latency_ms = latency_ms_from_stamp_ns(msg.controller_timestamp)
+            if latency_ms is not None:
+                StatusBoard.set(
+                    "Action latency (ms)",
+                    self._action_latency.update(latency_ms).status_value(),
+                )
+
             raw_action = msg.data["action"]
             action = Action(action_type=ActionType(raw_action["action_type"]), data=raw_action["data"])
-            # latency = (time.time_ns() - action.controller_timestamp)
-            # manual_profile("process_action latency", latency)
             return action
         except zmq.Again:
             return None
@@ -397,8 +411,14 @@ class Robot(ABC):
         if observation is None:
             return
         msg = Message()
-        msg.robot_timestamp = time.time_ns()
+        msg.robot_timestamp = synced_time_ns()
+        t0 = time.perf_counter()
         observation.compress()
+        compress_ms = (time.perf_counter() - t0) * 1000.0
+        StatusBoard.set(
+            "Obs compress (ms)",
+            self._obs_compress_latency.update(compress_ms).status_value(),
+        )
         raw_obs = observation.to_dict()
         msg.data = {"observation": raw_obs}
 
@@ -418,7 +438,9 @@ class Robot(ABC):
                     for r in records
                 ]
 
-        self.state_socket.send(msg.serialize())
+        payload = msg.serialize()
+        StatusBoard.set("Obs payload (KB)", round(len(payload) / 1024.0, 1))
+        self.state_socket.send(payload)
     
     def _check_module_health(self):
         """Raise if any module process or bus server has crashed."""

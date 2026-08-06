@@ -8,6 +8,23 @@ import pickle
 import zlib
 
 
+# Optional JPEG quality for ImageData.compress (OpenCV default is 95 if unset).
+_image_jpeg_quality: int | None = None
+
+
+def set_image_jpeg_quality(quality: int | None) -> None:
+    """Set process-wide JPEG quality used by :class:`ImageData` compression."""
+    global _image_jpeg_quality
+    if quality is None:
+        _image_jpeg_quality = None
+    else:
+        _image_jpeg_quality = int(max(1, min(100, quality)))
+
+
+def get_image_jpeg_quality() -> int | None:
+    return _image_jpeg_quality
+
+
 class DataComputer(int, Enum):
     SERVER = 0
     ROBOT = 1
@@ -219,7 +236,11 @@ class ImageData(Data):
         if not isinstance(raw, np.ndarray):
             raise TypeError(f"ImageData expects np.ndarray, got {type(raw)!r}")
 
-        ok, buf = cv2.imencode(".jpg", raw)
+        params = None
+        quality = get_image_jpeg_quality()
+        if quality is not None:
+            params = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
+        ok, buf = cv2.imencode(".jpg", raw, params) if params is not None else cv2.imencode(".jpg", raw)
         if not ok:
             raise RuntimeError("cv2.imencode('.jpg', image) failed")
         return buf.tobytes()
