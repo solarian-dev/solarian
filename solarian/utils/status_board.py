@@ -393,10 +393,15 @@ class StatusBoard:
         inherited ZMQ I/O threads are a common cause of post-``fork`` deadlocks
         in module child processes.
         """
+        # Do not hold `_lock` across StatusBoard() — `__new__` acquires the same
+        # non-reentrant lock and would deadlock on first construction.
         with cls._lock:
             inst = cls._instance
-            if inst is None or not getattr(inst, "_initialized", False):
-                return StatusBoard(start_ui=True)
+            needs_create = inst is None or not getattr(inst, "_initialized", False)
+        if needs_create:
+            return StatusBoard(start_ui=True)
+        with cls._lock:
+            inst = cls._instance
             inst._start_ui_thread()
             return inst
 
