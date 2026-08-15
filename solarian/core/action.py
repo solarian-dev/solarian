@@ -18,6 +18,8 @@ class ActionType:
     # re-holds. Both are broadcast to every module.
     SAFETY_ARM = 4
     SAFETY_ESTOP = 5
+    # Move a module to its predefined home (arm: moveJ(home_q); gripper: fully open).
+    SET_HOME = 6
     CUSTOM_START = 100
 
     def __init__(self, value: int = 0):

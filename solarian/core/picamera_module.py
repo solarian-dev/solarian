@@ -15,6 +15,9 @@ from solarian.core.picamera import PiCamera
 
 class PiCameraConfig(ModuleConfig):
     calibration_file: str | None = None
+    # libcamera / picamera2 first start (configure + AE settle + first
+    # 1080p capture) routinely exceeds the generic 3s module timeout.
+    launch_timeout: float = 15.0
 
 
 class PiCameraModule(Module):

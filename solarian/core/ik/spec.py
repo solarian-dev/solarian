@@ -2,13 +2,15 @@
 
 A module that wants Cartesian (IK) control declares an ``ik_backend`` attribute
 holding one of these specs instead of building a backend by hand. The core
-:class:`~solarian.core.module.Module` resolves the spec (calling ``.build()``)
+:class:`~solarian.core.arm_module.ArmModule` resolves the spec (calling ``.build()``)
 the first time it connects a port with Cartesian IK actuators, so modules using a
 built-in backend like mink never have to write backend-construction code.
 
 Example::
 
-    class ArmModule(Module):
+    from solarian.core.arm_module import ArmModule
+
+    class MyArm(ArmModule):
         ik_backend = MinkIK(
             mjcf="so_arm101_mj_description",
             joints={"shoulder_pan": "1", "shoulder_lift": "2", ...},

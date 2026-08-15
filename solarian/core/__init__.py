@@ -33,6 +33,9 @@ from .message import Message
 
 # core/module.py
 from .module import Module
+from .actuator_module import ActuatorModule
+from .arm_module import ArmModule
+from .gripper_module import GripperModule
 
 # core/bus_server.py
 from .bus_server import BusServer, BusClient

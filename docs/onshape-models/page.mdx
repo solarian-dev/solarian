@@ -191,11 +191,11 @@ The export gives you an MJCF; a [simulated robot](/docs/simulation) still needs 
 ```python
 from solarian.core import Robot
 from solarian.sim import SceneConfig, ModuleAttachment
-from so106.modules.follower_so106_arm import ArmModule
+from so106.modules.follower_so106_arm import So106ArmModule
 
 class So106Robot(Robot):
     is_sim = True
-    right_arm = ArmModule()
+    right_arm = So106ArmModule()
 
     scene = SceneConfig(
         world_mjcf="assets/sim_scene.xml",
