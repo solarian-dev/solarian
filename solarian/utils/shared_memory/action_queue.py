@@ -208,7 +208,11 @@ class ModuleActionQueue:
         }
 
         action_type = ActionType(int(nested['action_type']))
-        return self._module_action_class(action_type=action_type, data=filtered_data)
+        return self._module_action_class(
+            action_type=action_type,
+            data=filtered_data,
+            drop_timestamps=nested.get('drop_timestamps'),
+        )
     
     def qsize(self) -> int:
         """Return the approximate number of actions in the queue."""

@@ -153,6 +153,10 @@ class ModuleAction:
     When a concrete subclass is defined it auto-registers so that calls to
     ``ModuleAction.zeros()`` or ``ModuleAction.compress()`` on the base class
     transparently delegate to it.
+
+    ``drop_timestamps`` is an optional flag for ``SCHEDULE_WAYPOINT``: ``True``
+    ignores client timestamps (teleop drive), ``False`` honors them (policy
+    chunks). ``None`` falls back to the module's ``drive_waypoints`` config.
     """
 
     _active_subclass = None
@@ -169,8 +173,33 @@ class ModuleAction:
 
     # -- Init --------------------------------------------------------------
 
-    def __init__(self, action_type: "int | ActionType" = ActionType.STOP, data: dict = {}):
+    #: Sentinel used on the wire / shared-memory queue when the sender did
+    #: not set ``drop_timestamps`` (module falls back to ``cfg.drive_waypoints``).
+    _DROP_TIMESTAMPS_UNSET = -1
+
+    @staticmethod
+    def _coerce_drop_timestamps(value) -> bool | None:
+        """Normalize a ``drop_timestamps`` flag from bool / int / missing."""
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        try:
+            iv = int(value)
+        except (TypeError, ValueError):
+            return None
+        if iv < 0:
+            return None
+        return bool(iv)
+
+    def __init__(
+        self,
+        action_type: "int | ActionType" = ActionType.STOP,
+        data: dict = {},
+        drop_timestamps: bool | None = None,
+    ):
         self.action_type = action_type
+        self.drop_timestamps = self._coerce_drop_timestamps(drop_timestamps)
         data = data if data is not None else {}
         self._fields = {}
 
@@ -249,7 +278,16 @@ class ModuleAction:
 
     def to_dict(self):
         data = {name: field.to_dict() for name, field in self._fields.items()}
-        return {'data': data, 'action_type': int(self.action_type)}
+        drop = (
+            self._DROP_TIMESTAMPS_UNSET
+            if self.drop_timestamps is None
+            else (1 if self.drop_timestamps else 0)
+        )
+        return {
+            'data': data,
+            'action_type': int(self.action_type),
+            'drop_timestamps': drop,
+        }
 
     # -- Compression -------------------------------------------------------
 
@@ -308,15 +346,23 @@ class Action:
                         f"Value must be a dictionary."
                     )
 
-                if set(data[key].keys()) != set(['data', 'action_type']):
+                keys = set(data[key].keys())
+                if not {'data', 'action_type'}.issubset(keys):
                     raise ValueError(
                         f"Invalid action value for '{key}' in {actual_cls.__name__}. "
                         f"Value must be a dictionary with keys 'data' and 'action_type'."
                     )
-                
+                extra = keys - {'data', 'action_type', 'drop_timestamps'}
+                if extra:
+                    raise ValueError(
+                        f"Invalid action value for '{key}' in {actual_cls.__name__}. "
+                        f"Unknown keys: {sorted(extra)}."
+                    )
+
                 self._module_actions[key] = module_actions_spec[key].__class__(
                     data=data[key]["data"],
                     action_type=data[key]['action_type'],
+                    drop_timestamps=data[key].get('drop_timestamps'),
                 )
         
 

@@ -1048,22 +1048,35 @@ class Module(Process, ABC):
         )
         return horizon
 
+    def _drop_timestamps(self, action: ModuleAction) -> bool:
+        """Whether this waypoint should ignore client timestamps.
+
+        ``ModuleAction.drop_timestamps`` wins when the sender set it;
+        otherwise fall back to ``cfg.drive_waypoints`` (teleop default).
+        """
+        flag = getattr(action, "drop_timestamps", None)
+        if flag is not None:
+            return bool(flag)
+        return bool(getattr(self.cfg, "drive_waypoints", False))
+
     def _schedule_pose_waypoint(
         self,
         pose: np.ndarray,
         target_time_wall: float,
         t_now: float,
+        drop_timestamps: bool = False,
     ) -> None:
         """Insert a Cartesian waypoint.
 
-        With ``drive_waypoints: true`` (teleop), ignore client timestamps and
-        smoothly drive from the robot clock — robust to WiFi jitter. Otherwise
-        use UMI-style wall→monotonic ``schedule_waypoint`` (policy chunks).
+        ``drop_timestamps`` (from the action, else ``cfg.drive_waypoints``)
+        ignores client timestamps and smoothly drives from the robot clock —
+        robust to WiFi jitter. Otherwise use UMI-style wall→monotonic
+        ``schedule_waypoint`` (policy chunks).
         """
         self._ensure_pose_interpolator(t_now)
         assert self.interp is not None
         pose = np.asarray(pose, dtype=np.float64)
-        if getattr(self.cfg, "drive_waypoints", False):
+        if drop_timestamps:
             target_time = t_now + self._adaptive_drive_horizon(t_now)
             self.interp = self.interp.drive_to_waypoint(
                 pose=pose,
@@ -1151,11 +1164,12 @@ class Module(Process, ABC):
         value: float,
         target_time_wall: float,
         t_now: float,
+        drop_timestamps: bool = False,
     ) -> None:
         """Insert a scalar waypoint (drive or UMI schedule; see pose helper)."""
         self._ensure_scalar_interpolator(t_now)
         assert self.interp is not None
-        if getattr(self.cfg, "drive_waypoints", False):
+        if drop_timestamps:
             target_time = t_now + self._adaptive_drive_horizon(t_now)
             self.interp = self.interp.drive_to_waypoint(
                 value=float(value),
@@ -1309,13 +1323,18 @@ class Module(Process, ABC):
 
         Controllers / skills send sparse waypoints; ``control_step`` samples at
         the module rate and writes targets (pose → IK bus, scalar → actuator).
+        ``drop_timestamps`` on the action (else ``cfg.drive_waypoints``) chooses
+        adaptive drive vs timestamped ``schedule_waypoint``.
         """
+        drop_timestamps = self._drop_timestamps(action)
         if self._is_pose_interpolator():
             extracted = self._extract_pose_waypoint(action)
             if extracted is None:
                 return True
             pose, target_time_wall = extracted
-            self._schedule_pose_waypoint(pose, target_time_wall, t_now)
+            self._schedule_pose_waypoint(
+                pose, target_time_wall, t_now, drop_timestamps=drop_timestamps
+            )
             return True
 
         if self._is_scalar_interpolator():
@@ -1323,7 +1342,9 @@ class Module(Process, ABC):
             if extracted is None:
                 return True
             value, target_time_wall = extracted
-            self._schedule_scalar_waypoint(value, target_time_wall, t_now)
+            self._schedule_scalar_waypoint(
+                value, target_time_wall, t_now, drop_timestamps=drop_timestamps
+            )
             return True
 
         return True
