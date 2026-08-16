@@ -73,10 +73,12 @@ class EESiteSpec:
     * **Body + axis** (legacy): place at the centre of ``body``'s far collision
       face along ``axis`` (a tool flange / grasp frame inferred from meshes).
     * **Site + offset**: copy an existing CAD-exported frame (``site``) and
-      translate by ``offset`` expressed in that site's local frame. Use this when
-      the arm assembly has a flange frame but the tip lives on a separate gripper
-      that is not in the CAD — measure the tip offset once and keep it in
-      ``config.json`` so it survives re-exports.
+      translate by ``offset`` expressed in that site's local frame. Optional
+      ``quat`` (wxyz) is right-composed in the same frame so the IK axes can
+      differ from the CAD site while the origin stays at ``site + offset``.
+      Use this when the arm assembly has a flange frame but the tip lives on a
+      separate gripper that is not in the CAD — measure the tip offset once
+      and keep it in ``config.json`` so it survives re-exports.
 
     IK backends reference the new site by ``name``.
     """
@@ -96,6 +98,12 @@ class EESiteSpec:
     #: Translation ``[x, y, z]`` in the referenced site's local frame. Defaults
     #: to zero (the new site coincides with ``site``, inheriting its orientation).
     offset: Optional[tuple[float, float, float]] = None
+    #: Extra rotation ``[w, x, y, z]`` in the referenced site's local frame,
+    #: right-composed onto the inherited orientation. Origin is still
+    #: ``site + offset``; axes become ``R_site @ R_quat``. Use this to align
+    #: the IK frame with a convention the CAD site does not use (e.g. OpenCV
+    #: TCP = CAD camera * Rz(180)). Ignored in body+axis mode.
+    quat: Optional[tuple[float, float, float, float]] = None
     #: Visual marker size and viewer group.
     size: float = 0.005
     group: int = 1
@@ -106,6 +114,12 @@ class EESiteSpec:
             if len(self.offset) != 3:
                 raise ValueError(
                     f"ee_site.offset must be a length-3 [x, y, z] (got {self.offset!r})"
+                )
+        if self.quat is not None:
+            self.quat = tuple(float(x) for x in self.quat)  # type: ignore[assignment]
+            if len(self.quat) != 4:
+                raise ValueError(
+                    f"ee_site.quat must be a length-4 [w, x, y, z] (got {self.quat!r})"
                 )
         has_body = self.body is not None
         has_site = self.site is not None
@@ -166,6 +180,8 @@ class SolarianExportSpec:
             ee = dict(ee)
             if "offset" in ee and ee["offset"] is not None:
                 ee["offset"] = tuple(ee["offset"])
+            if "quat" in ee and ee["quat"] is not None:
+                ee["quat"] = tuple(ee["quat"])
             spec.ee_site = EESiteSpec(**ee)
         return spec
 
@@ -400,16 +416,32 @@ def _find_site(worldbody, site_name: str):
     )
 
 
-def _site_pose_with_offset(site_elem, offset: Optional[tuple[float, float, float]]):
-    """Body-frame ``(pos, quat)`` of ``site_elem`` translated by ``offset`` in
-    the site's local frame. ``quat`` is inherited unchanged (wxyz)."""
+def _site_pose_with_offset(
+    site_elem,
+    offset: Optional[tuple[float, float, float]],
+    local_quat: Optional[tuple[float, float, float, float]] = None,
+):
+    """Body-frame ``(pos, quat)`` of ``site_elem`` translated by ``offset``
+    and optionally rotated by ``local_quat`` in the site's local frame.
+
+    ``offset`` is applied first (origin = site + R_site @ offset). ``local_quat``
+    (wxyz) is then right-composed so the new axes are ``R_site @ R_local``
+    while the origin stays put. With no ``local_quat``, orientation is inherited
+    unchanged.
+    """
     import numpy as np
-    from transforms3d.quaternions import quat2mat
+    from transforms3d.quaternions import qmult, quat2mat
 
     pos = np.array([float(x) for x in site_elem.get("pos", "0 0 0").split()])
     quat = np.array([float(x) for x in site_elem.get("quat", "1 0 0 0").split()])
     if offset is not None and any(offset):
         pos = pos + quat2mat(quat) @ np.asarray(offset, dtype=float)
+    if local_quat is not None:
+        q_local = np.asarray(local_quat, dtype=float)
+        n = float(np.linalg.norm(q_local))
+        if n == 0.0:
+            raise ValueError("ee_site.quat must be a non-zero quaternion")
+        quat = qmult(quat, q_local / n)
     return pos, quat
 
 
@@ -422,7 +454,7 @@ def _add_ee_site(worldbody, spec: SolarianExportSpec, mesh_dir: str) -> None:
 
     if ee.site is not None:
         parent, base = _find_site(worldbody, ee.site)
-        pos, quat = _site_pose_with_offset(base, ee.offset)
+        pos, quat = _site_pose_with_offset(base, ee.offset, ee.quat)
         site = ET.SubElement(parent, "site")
         site.set("name", ee.name)
         site.set("pos", "%.6f %.6f %.6f" % tuple(pos))
@@ -430,9 +462,12 @@ def _add_ee_site(worldbody, spec: SolarianExportSpec, mesh_dir: str) -> None:
         site.set("group", str(ee.group))
         site.set("size", str(ee.size))
         off = ee.offset if ee.offset is not None else (0.0, 0.0, 0.0)
+        extra = ""
+        if ee.quat is not None:
+            extra = f" quat {tuple(round(float(x), 4) for x in ee.quat)}"
         print(
-            f"* {ee.name} site = {ee.site} + offset {tuple(round(float(x), 4) for x in off)} "
-            f"-> body-frame pos {tuple(round(float(x), 4) for x in pos)}"
+            f"* {ee.name} site = {ee.site} + offset {tuple(round(float(x), 4) for x in off)}"
+            f"{extra} -> body-frame pos {tuple(round(float(x), 4) for x in pos)}"
         )
         return
 
