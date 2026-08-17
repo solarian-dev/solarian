@@ -58,6 +58,13 @@ CommandRegistry.register_lazy(
     setup_modules=("robot",),
 )
 CommandRegistry.register_lazy(
+    "calibrate-gripper",
+    module_path=f"{_pkg}.calibrate_gripper",
+    help="Calibrate gripper latency (cross-correlation) or ranges (ruler check).",
+    config_name="robot",
+    setup_modules=("robot",),
+)
+CommandRegistry.register_lazy(
     "setup-module",
     module_path=f"{_pkg}.setup_module",
     help="Setup module device.",

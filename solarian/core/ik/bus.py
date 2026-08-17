@@ -126,6 +126,12 @@ class IKActuatorBus(ActuatorBus):
         fn = getattr(self.inner_bus, "max_homing_offset_abs", None)
         return fn(name) if callable(fn) else None
 
+    def raw_to_radians(self, name: str, raw: float):
+        fn = getattr(self.inner_bus, "raw_to_radians", None)
+        if callable(fn):
+            return fn(name, raw)
+        return super().raw_to_radians(name, raw)
+
     # -- normalized <-> radian joint conversion ----------------------------
     # NOTE: ``drive_mode`` (joint direction sign) is owned by the *inner* joint
     # bus, which already applies it when normalizing raw encoder units to the

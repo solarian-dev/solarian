@@ -392,14 +392,18 @@ class ArmModule(ActuatorModule):
             return np.zeros(6, dtype=np.float64)
 
     def control_step(self):
-        """Sample joint motion if active, otherwise the Cartesian interpolator."""
+        """Sample joint motion if active, otherwise the Cartesian interpolator.
+
+        After ``moveJ`` / ``servoJ`` reach the last waypoint the joint
+        interpolator is *kept* and continues to write that target. Dropping it
+        would re-seed Cartesian hold from the measured (possibly gravity-sagged)
+        pose and overwrite the joint goal. Cartesian ``SCHEDULE_WAYPOINT`` /
+        ``servoL`` / ``moveL`` cancel joint motion via ``_cancel_joint_motion``.
+        """
         t = time.monotonic()
         joint_interp = getattr(self, "_joint_interp", None)
         if joint_interp is not None:
             self._write_joints_rad(joint_interp(t))
-            if t >= float(joint_interp.times[-1]):
-                self._joint_interp = None
-                self._clear_pose_interpolator()
             return
         if self._is_pose_interpolator() or self._cartesian_pose_names():
             self._ensure_pose_interpolator()

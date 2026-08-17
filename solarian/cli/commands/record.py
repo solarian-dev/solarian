@@ -8,7 +8,7 @@ from solarian.utils import get_class
 from solarian.core.configs import RecordConfig
 from solarian.utils import log_say
 from solarian.core.dataset import Dataset
-from solarian.core.data import PosData, SpeedData, ImageData, BoundingBoxData
+from solarian.core.data import PosData, SpeedData, ImageData, BoundingBoxData, TemperatureData
 from solarian.core import Observation
 from solarian.core import Action
 
@@ -41,7 +41,7 @@ class RecordCommand(BaseCommand):
         num_cameras = 0
 
         for obs_name, obs in Observation.get_sensor_obs().items():
-            if obs.data_class in [PosData, SpeedData, BoundingBoxData]:
+            if obs.data_class in [PosData, SpeedData, BoundingBoxData, TemperatureData]:
                 lerobot_group = settings.LEROBOT_GROUP_NAMES[obs_name]
                 features[lerobot_group]["shape"] = tuple(a + b for a, b in zip(features[lerobot_group]["shape"], obs.shape))
                 features[lerobot_group]["names"].append(obs_name)

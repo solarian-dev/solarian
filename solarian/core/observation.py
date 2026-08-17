@@ -1,5 +1,5 @@
 import numpy as np
-from .data import Data, ImageData, DataComputer
+from .data import Data, ImageData, DataComputer, threshold_level as _threshold_level
 
 
 # ---------------------------------------------------------------------------
@@ -18,10 +18,33 @@ class SensorField:
     ``depends_on`` declarations.
     """
 
-    def __init__(self, source: Data):
+    def __init__(self, source: Data, *, mid=None, high=None):
         self.source = source
         assert source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
         self._path = source.path
+        # None = inherit from the Data class (e.g. TemperatureData.mid/high).
+        self._mid = mid
+        self._high = high
+
+    @property
+    def mid(self):
+        if self._mid is not None:
+            return self._mid
+        return getattr(type(self.source), "mid", None)
+
+    @property
+    def high(self):
+        if self._high is not None:
+            return self._high
+        return getattr(type(self.source), "high", None)
+
+    def threshold_level(self, value) -> str | None:
+        """``"high"``, ``"mid"``, or ``None`` for a numeric observation value."""
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return None
+        return _threshold_level(v, self.mid, self.high)
     
     @property
     def dtype(self):

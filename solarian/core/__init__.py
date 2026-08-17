@@ -44,7 +44,7 @@ from .bus_server import BusServer, BusClient
 from .observation import Observation
 
 # core/data.py
-from .data import Data, DataComputer
+from .data import Data, DataComputer, TemperatureData
 
 # core/robot.py
 from .robot import Robot

@@ -75,6 +75,19 @@ solarian calibrate-module module_name=<attr>
 
 Runs the calibration routine for a single module on the robot. Used for arms with absolute encoders that need a one-time origin set, cameras that need intrinsics, and similar. The exact behavior is delegated to the module's `calibrate()` implementation.
 
+### `calibrate-gripper`
+
+```bash
+solarian calibrate-gripper
+```
+
+Interactive calibration for any `GripperModule` on the Robot (or Controller). You pick the gripper (auto-selected when there is only one) and a mode:
+
+- **latency** — command a sinusoid across the configured aperture range, record the measured scalar, and recover end-to-end delay by cross-correlation (UMI `calibrate_gripper_latency`). Prints the lag and shows alignment plots. Copy the number into `receive_latency` or a skill's `gripper_action_latency`; the command does not write YAML.
+- **ranges** — step the jaws from closed to open (0.5 units, centimetres when `aperture_open_cm` is set) so you can check a ruler (UMI `calibrate_gripper_ranges`). Prints the configured max; does not write files.
+
+The jaws move. The command talks to the module in-process (same as `calibrate-module`), not through the robot's action queues.
+
 ### `setup-module`
 
 ```bash

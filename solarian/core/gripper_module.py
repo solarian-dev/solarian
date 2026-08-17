@@ -19,6 +19,8 @@ from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.actuator_module import ActuatorModule
 from solarian.core.clock_sync import synced_time
 from solarian.core.data import PosData
+from solarian.utils.status_board import StatusBoard
+from solarian.utils.trajectory_interpolator import ScalarTrajectoryInterpolator
 
 logger = logging.getLogger("module")
 
@@ -31,8 +33,11 @@ class GripperModule(ActuatorModule):
     scalar_actuator: str | None = None
 
     # Target for SET_HOME in interpolator/action units. ``None`` falls back to
-    # ``cfg.aperture_open_cm`` when present.
+    # ``cfg.aperture_open_cm`` when present (fully open).
     home_value: float | None = None
+    # Exclusive SET_HOME speed in interpolator units / second. ``None`` uses
+    # ``cfg.max_speed`` (same units as the scalar interpolator, e.g. cm/s).
+    home_speed: float | None = None
 
     def _scalar_actuator_name(self) -> str | None:
         explicit = getattr(type(self), "scalar_actuator", None)
@@ -62,6 +67,43 @@ class GripperModule(ActuatorModule):
         if cfg_open is not None:
             return float(cfg_open)
         return 0.0
+
+    def scalar_limits(self) -> tuple[float, float]:
+        """Closed / open ends of travel in interpolator (action) units.
+
+        Uses ``aperture_closed_cm`` / ``aperture_open_cm`` when both are set;
+        otherwise ``(0.0, home)``.
+        """
+        closed = getattr(self.cfg, "aperture_closed_cm", None)
+        opened = getattr(self.cfg, "aperture_open_cm", None)
+        if closed is not None and opened is not None:
+            return float(closed), float(opened)
+        return 0.0, self._home_scalar()
+
+    def read_scalar(self) -> float:
+        """Live measured scalar (same units as :meth:`schedule_scalar`)."""
+        return self._read_current_scalar()
+
+    def schedule_scalar(self, value: float, target_time_wall: float) -> None:
+        """Queue a timestamped scalar waypoint (never drops client timestamps).
+
+        ``drop_timestamps=False`` so teleop ``drive_waypoints: true`` cannot
+        collapse a calibration sinusoid into adaptive "drive now".
+        """
+        self._schedule_scalar_waypoint(
+            float(value),
+            float(target_time_wall),
+            time.monotonic(),
+            drop_timestamps=False,
+        )
+
+    def _home_speed(self) -> float:
+        if self.home_speed is not None:
+            return float(self.home_speed)
+        max_speed = getattr(self.cfg, "max_speed", 1.0)
+        if isinstance(max_speed, (int, float)):
+            return float(max_speed)
+        return float(max_speed[0])
 
     def _read_current_scalar(self) -> float:
         name = self._scalar_actuator_name()
@@ -145,7 +187,53 @@ class GripperModule(ActuatorModule):
         name = self._scalar_actuator_name()
         if not name:
             return
-        self.write_actuators({name: PosData(value=self._scalar_to_actuator(value))})
+        servo = float(self._scalar_to_actuator(value))
+        self.write_actuators({name: PosData(value=servo)})
+        StatusBoard.set(f"{self.name} servo cmd", round(servo, 1))
+
+    def _aperture_status_suffix(self) -> str:
+        if getattr(self.cfg, "aperture_open_cm", None) is not None:
+            return " (cm)"
+        return ""
+
+    def _publish_aperture_status(
+        self, *, measured: float | None = None, cmd: float | None = None
+    ) -> None:
+        """Push live aperture (and command) onto the StatusBoard."""
+        suffix = self._aperture_status_suffix()
+        if measured is not None:
+            StatusBoard.set(f"{self.name} aperture{suffix}", round(float(measured), 2))
+        if cmd is not None:
+            StatusBoard.set(f"{self.name} aperture cmd{suffix}", round(float(cmd), 2))
+
+    def _scalar_from_obs(self, obs) -> float | None:
+        name = self._scalar_actuator_name()
+        if not name:
+            return None
+        fields = getattr(obs, "_fields", None)
+        if not isinstance(fields, dict) or name not in fields:
+            return None
+        field = fields[name]
+        raw = float(field["value"] if isinstance(field, dict) else field.value)
+        return self._actuator_to_scalar(raw)
+
+    def _write_aperture_obs_field(self, obs, measured: float) -> None:
+        """Put centimetres on ``obs['aperture_cm']`` so it shows in Observation."""
+        getter = getattr(type(obs), "get_calculated_fields_spec", None)
+        if getter is None:
+            return
+        spec = getter().get("aperture_cm")
+        if spec is None:
+            return
+        obs["aperture_cm"] = spec.output.duplicate({"value": float(measured)})
+
+    def enrich_observation(self, obs):
+        obs = super().enrich_observation(obs)
+        measured = self._scalar_from_obs(obs)
+        if measured is not None:
+            self._publish_aperture_status(measured=measured)
+            self._write_aperture_obs_field(obs, measured)
+        return obs
 
     def get_initial_action_values(self) -> np.ndarray:
         try:
@@ -155,8 +243,11 @@ class GripperModule(ActuatorModule):
 
     def control_step(self):
         self._ensure_scalar_interpolator()
+        cmd = None
         if self.interp is not None:
-            self._write_scalar(float(self.interp(time.monotonic())))
+            cmd = float(self.interp(time.monotonic()))
+            self._write_scalar(cmd)
+        self._publish_aperture_status(cmd=cmd)
 
     @action_handler(ActionType.SCHEDULE_WAYPOINT)
     def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
@@ -174,8 +265,42 @@ class GripperModule(ActuatorModule):
 
     @action_handler(ActionType.SET_HOME)
     def _handle_set_home(self, action: ModuleAction, t_now: float) -> bool:
+        """Exclusive move to :meth:`_home_scalar` (fully open for UMI-slim).
+
+        Same pattern as ``ArmModule.moveJ``: seed from the live scalar and drive
+        at ``home_speed``. Duration is speed-limited, not the short teleop
+        drive horizon used by ``SCHEDULE_WAYPOINT``.
+        """
         del action
-        self._schedule_scalar_waypoint(
-            self._home_scalar(), t_now, t_now, drop_timestamps=True
+        target = self._home_scalar()
+        try:
+            current = self._read_current_scalar()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Module '%s': SET_HOME could not read current scalar (%s); "
+                "seeding interpolator.",
+                self.name,
+                exc,
+            )
+            self._ensure_scalar_interpolator(t_now)
+            current = (
+                float(self.interp(t_now)) if self.interp is not None else float(target)
+            )
+        interp = ScalarTrajectoryInterpolator(
+            np.array([t_now]), np.array([current], dtype=np.float64)
+        )
+        self.interp = interp.drive_to_waypoint(
+            value=float(target),
+            time=t_now,
+            curr_time=t_now,
+            max_speed=self._home_speed(),
+        )
+        self.last_waypoint_time = float(self.interp.times[-1])
+        logger.info(
+            "Module '%s': SET_HOME %.3f → %.3f in %.2fs",
+            self.name,
+            current,
+            target,
+            self.last_waypoint_time - t_now,
         )
         return True

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Optional, Tuple, Type, TYPE_CHECKING
+from typing import Any, ClassVar, Optional, Tuple, Type, TYPE_CHECKING, Union
 from enum import Enum
 import numpy as np
 from pydantic import BaseModel, ConfigDict, model_validator, Field
@@ -50,6 +50,11 @@ class Data(BaseModel):
     shape: Tuple[int, ...] | None = None
     path: tuple[str, str, str] | None = None
     timestamp: float = Field(default_factory=time.time)
+
+    # Optional GUI / warning bands. A float is one-sided (value >= band);
+    # (lo, hi) is two-sided (value <= lo or value >= hi). ``high`` wins.
+    mid: ClassVar[Union[float, Tuple[float, float], None]] = None
+    high: ClassVar[Union[float, Tuple[float, float], None]] = None
 
     is_compressed: bool = False
     compression_codec: str | None = None
@@ -272,3 +277,45 @@ class BoundingBoxData(Data):
 class TimestampData(Data):
     dtype: Type = float
     payload: float = Field(default_factory=time.time, alias="value")
+
+
+class TemperatureData(Data):
+    """Servo / sensor temperature in degrees Celsius."""
+
+    dtype: Type = float
+    payload: float = Field(default=0.0, alias="value")
+    # Feetech over-temp cutout is 70 °C; warn well before that.
+    mid: ClassVar[Union[float, Tuple[float, float], None]] = 50.0
+    high: ClassVar[Union[float, Tuple[float, float], None]] = 60.0
+
+    if TYPE_CHECKING:
+        @property
+        def value(self) -> float: ...
+        @value.setter
+        def value(self, v: Any | None) -> None: ...
+
+
+ThresholdBand = Union[float, Tuple[float, float], None]
+
+
+def threshold_exceeded(value: float, band: ThresholdBand) -> bool:
+    """Return True if ``value`` is outside ``band``.
+
+    A float is one-sided (``value >= band``). A ``(lo, hi)`` tuple is
+    two-sided (``value <= lo or value >= hi``). ``None`` never exceeds.
+    """
+    if band is None:
+        return False
+    if isinstance(band, (tuple, list)) and len(band) == 2:
+        lo, hi = float(band[0]), float(band[1])
+        return value <= lo or value >= hi
+    return value >= float(band)
+
+
+def threshold_level(value: float, mid: ThresholdBand, high: ThresholdBand) -> str | None:
+    """Return ``"high"``, ``"mid"``, or ``None``. ``high`` wins if both match."""
+    if threshold_exceeded(value, high):
+        return "high"
+    if threshold_exceeded(value, mid):
+        return "mid"
+    return None

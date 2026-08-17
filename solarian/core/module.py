@@ -272,8 +272,11 @@ class Module(Process, ABC):
             return {}
 
         values_dict = self.module_bus.read(data_type, component_names, normalize)
-        values = values_dict.values()
-        return {name: {'value': value, 'timestamp': time.time()} for name, value in zip(component_names, values)}
+        return {
+            name: {"value": values_dict[name], "timestamp": time.time()}
+            for name in component_names
+            if name in values_dict
+        }
 
     def connect_sensors(self):
         for sensor in self.sensors.values():
@@ -855,11 +858,12 @@ class Module(Process, ABC):
         if handler_name:
             handler = getattr(self, handler_name)
             return handler(action, t_now)
-        else:
-            # Unknown action - log warning but continue
-            if self.verbose:
-                print(f"[Module] {self.name}: Unknown action type {action.action_type}, ignoring")
-            return True
+        logger.warning(
+            "Module '%s': unknown action type %s, ignoring",
+            self.name,
+            action.action_type,
+        )
+        return True
 
     # ========= observation thread ============
     def _observation_loop(self, stop_event: threading.Event):

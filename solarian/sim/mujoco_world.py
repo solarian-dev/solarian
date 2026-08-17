@@ -191,7 +191,7 @@ class MujocoWorldServer(Process):
     # RPC handlers (names match BusClient method calls)
     # ------------------------------------------------------------------
     def read(self, module: str, data_type, component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
-        from solarian.core.data import ImageData, SpeedData
+        from solarian.core.data import ImageData, SpeedData, TemperatureData
 
         out: Dict[str, Any] = {}
         if issubclass(data_type, ImageData):
@@ -200,6 +200,11 @@ class MujocoWorldServer(Process):
                 if spec is None or spec["kind"] != "camera":
                     continue
                 out[name] = self._render(spec)
+            return out
+
+        if issubclass(data_type, TemperatureData):
+            for name in component_names:
+                out[name] = 25.0
             return out
 
         want_speed = issubclass(data_type, SpeedData)

@@ -41,6 +41,9 @@ _DIM = (140, 140, 155)
 _KEY_IDLE = (90, 90, 110)
 _KEY_HELD = (90, 220, 130)
 _KEY_HELD_BG = (35, 70, 45)
+_WARN = (240, 200, 80)
+_HIGH = (240, 80, 80)
+LEVEL_COLORS = {"mid": _WARN, "high": _HIGH}
 
 
 class ControllerGUI:
@@ -196,21 +199,25 @@ class ControllerGUI:
         if two_col:
             half = col_rows
             col_w = (width - 20) // 2
-            for i, (field, value) in enumerate(rows):
+            for i, row in enumerate(rows):
+                field, value, *rest = row
+                color = rest[0] if rest else None
                 col = 0 if i < half else 1
-                row = i if i < half else i - half
+                row_i = i if i < half else i - half
                 tx = x + 10 + col * col_w
-                ty = ty0 + row * self._line_h
-                self._blit_kv(field, value, tx, ty, col_w)
+                ty = ty0 + row_i * self._line_h
+                self._blit_kv(field, value, tx, ty, col_w, color)
         else:
-            for i, (field, value) in enumerate(rows):
-                self._blit_kv(field, value, x + 10, ty0 + i * self._line_h, width - 20)
+            for i, row in enumerate(rows):
+                field, value, *rest = row
+                color = rest[0] if rest else None
+                self._blit_kv(field, value, x + 10, ty0 + i * self._line_h, width - 20, color)
         return y + height
 
-    def _blit_kv(self, field, value, x, y, width):
+    def _blit_kv(self, field, value, x, y, width, color=None):
         self._blit_text(str(field), x, y, _DIM)
         val = str(value)
-        val_surf = self.font.render(val, True, _TEXT)
+        val_surf = self.font.render(val, True, color or _TEXT)
         self.screen.blit(val_surf, (x + width - val_surf.get_width() - 6, y))
 
     def _draw_keys_panel(self, x, y, width, rows) -> int:

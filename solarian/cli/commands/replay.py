@@ -9,7 +9,7 @@ from solarian.core.configs import ReplayConfig
 from solarian.utils import log_say
 from solarian.core.dataset import Dataset
 from solarian.core import Observation
-from solarian.core.data import PosData, SpeedData, ImageData, BoundingBoxData
+from solarian.core.data import PosData, SpeedData, ImageData, BoundingBoxData, TemperatureData
 from solarian.core import Action
 
 
@@ -45,7 +45,7 @@ class ReplayCommand(BaseCommand):
         
 
         for module_name, sensor_name, data_name, data_spec in Observation.items():
-            if type(data_spec) in [PosData, SpeedData, BoundingBoxData]:
+            if type(data_spec) in [PosData, SpeedData, BoundingBoxData, TemperatureData]:
                 lerobot_group = settings.LEROBOT_GROUP_NAMES[module_name][sensor_name][data_name]
                 features[lerobot_group]["shape"] = tuple(a + b for a, b in zip(features[lerobot_group]["shape"], data_spec.shape))
                 features[lerobot_group]["names"].extend(".".join([module_name, sensor_name, data_name]))

@@ -128,6 +128,7 @@ def _build_command_list() -> str:
         "onshape-export": "Utilities",
         "run-robot": "Robot",
         "calibrate-module": "Robot",
+        "calibrate-gripper": "Robot",
         "setup-module": "Robot",
         "write-robot-calibration": "Robot",
         "run-controller": "Controller",

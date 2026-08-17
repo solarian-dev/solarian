@@ -159,6 +159,7 @@ class Skill(Process, ABC):
         params: Optional[Dict[str, Any]] = None,
         runner: "SkillRunner | int" = SkillRunner.CONTROLLER,
         action_type: Optional[int] = None,
+        status_mp_q: Optional[MpQueue] = None,
     ):
         # ``name`` defaults to the class name so subclasses can be declared
         # as class attributes on an AIController (e.g. ``pick = PickSkill()``)
@@ -180,6 +181,9 @@ class Skill(Process, ABC):
         # Capture the parent's shared log queue so the child process can route
         # its log records back to the StatusBoard Logs panel.
         self._log_queue = get_log_queue()
+        # Parent StatusBoard mp queue so child ``StatusBoard.set`` reaches the
+        # robot/controller UI (spawned skills do not inherit the singleton).
+        self._status_mp_q = status_mp_q
         # Parent can poll this for (skill_name, traceback_string) after run()
         # if it wants to surface skill crashes in its own logs.
         self._error_queue: MpQueue = MpQueue()
@@ -404,6 +408,10 @@ class Skill(Process, ABC):
             log_queue=self._log_queue,
             install_fallback=False,
         )
+        if self._status_mp_q is not None:
+            from solarian.utils.status_board import StatusBoard
+
+            StatusBoard.init_child(self._status_mp_q)
 
         self.put_skill_status(SkillStatus.RUNNING)
         final_status = SkillStatus.COMPLETED
