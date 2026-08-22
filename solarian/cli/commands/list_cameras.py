@@ -1,129 +1,585 @@
+import ctypes
+import fcntl
+import os
 import sys
-import cv2
+from pathlib import Path
+
 from omegaconf import DictConfig
 
 from solarian.cli import BaseCommand, CommandRegistry
 
 
 BACKENDS = {
-    "linux": cv2.CAP_V4L2,
-    "darwin": cv2.CAP_AVFOUNDATION,
-    "win32": cv2.CAP_MSMF,
+    "linux": "CAP_V4L2",
+    "darwin": "CAP_AVFOUNDATION",
+    "win32": "CAP_MSMF",
 }
 
+# Raspberry Pi pipeline / codec nodes that OpenCV can open but are not cameras.
+_INTERNAL_V4L2_DRIVERS = {
+    "bcm2835-codec",
+    "bcm2835-isp",
+    "bcm2835-unicam",
+    "pispbe",
+    "rp1-cfe",
+    "rpi-hevc-dec",
+    "rpivid",
+    "unicam",
+}
 
-def _find_cameras_linux(max_index: int = 16) -> list[dict]:
-    """Enumerate cameras on Linux via /dev/video* and V4L2."""
-    from pathlib import Path
+V4L2_CAP_VIDEO_CAPTURE = 0x00000001
+V4L2_CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
+V4L2_CAP_META_CAPTURE = 0x00800000
+V4L2_BUF_TYPE_VIDEO_CAPTURE = 1
+V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE = 9
+V4L2_FRMSIZE_TYPE_DISCRETE = 1
+V4L2_FRMSIZE_TYPE_CONTINUOUS = 2
+V4L2_FRMSIZE_TYPE_STEPWISE = 3
+
+
+def _IOC(dir_, type_, nr, size):
+    return (dir_ << 30) | (size << 16) | (ord(type_) << 8) | nr
+
+
+def _IOR(type_, nr, size):
+    return _IOC(2, type_, nr, size)
+
+
+def _IOWR(type_, nr, size):
+    return _IOC(3, type_, nr, size)
+
+
+class _v4l2_capability(ctypes.Structure):
+    _fields_ = [
+        ("driver", ctypes.c_char * 16),
+        ("card", ctypes.c_char * 32),
+        ("bus_info", ctypes.c_char * 32),
+        ("version", ctypes.c_uint32),
+        ("capabilities", ctypes.c_uint32),
+        ("device_caps", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32 * 3),
+    ]
+
+
+class _v4l2_fmtdesc(ctypes.Structure):
+    _fields_ = [
+        ("index", ctypes.c_uint32),
+        ("type", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("description", ctypes.c_char * 32),
+        ("pixelformat", ctypes.c_uint32),
+        ("mbus_code", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32 * 3),
+    ]
+
+
+class _v4l2_frmsize_discrete(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_uint32), ("height", ctypes.c_uint32)]
+
+
+class _v4l2_frmsize_stepwise(ctypes.Structure):
+    _fields_ = [
+        ("min_width", ctypes.c_uint32),
+        ("max_width", ctypes.c_uint32),
+        ("step_width", ctypes.c_uint32),
+        ("min_height", ctypes.c_uint32),
+        ("max_height", ctypes.c_uint32),
+        ("step_height", ctypes.c_uint32),
+    ]
+
+
+class _v4l2_frmsizeenum(ctypes.Structure):
+    class _u(ctypes.Union):
+        _fields_ = [
+            ("discrete", _v4l2_frmsize_discrete),
+            ("stepwise", _v4l2_frmsize_stepwise),
+        ]
+
+    _anonymous_ = ("_u",)
+    _fields_ = [
+        ("index", ctypes.c_uint32),
+        ("pixel_format", ctypes.c_uint32),
+        ("type", ctypes.c_uint32),
+        ("_u", _u),
+        ("reserved", ctypes.c_uint32 * 2),
+    ]
+
+
+VIDIOC_QUERYCAP = _IOR("V", 0, ctypes.sizeof(_v4l2_capability))
+VIDIOC_ENUM_FMT = _IOWR("V", 2, ctypes.sizeof(_v4l2_fmtdesc))
+VIDIOC_ENUM_FRAMESIZES = _IOWR("V", 74, ctypes.sizeof(_v4l2_frmsizeenum))
+
+
+def _clean_model(name: str) -> str:
+    """Collapse UVC names like 'Elgato HD60 X: Elgato HD60 X'."""
+    name = name.strip()
+    if ": " in name:
+        left, right = name.split(": ", 1)
+        if left.strip() == right.strip():
+            return left.strip()
+    return name
+
+
+def _fourcc_to_str(pixelformat: int) -> str:
+    return "".join(chr((pixelformat >> (8 * i)) & 0xFF) for i in range(4))
+
+
+def _v4l2_query(path: str) -> dict | None:
+    cap = _v4l2_capability()
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        fcntl.ioctl(fd, VIDIOC_QUERYCAP, cap)
+    except OSError:
+        os.close(fd)
+        return None
+    os.close(fd)
+
+    caps = cap.device_caps or cap.capabilities
+    driver = cap.driver.decode("utf-8", errors="replace").rstrip("\x00")
+    card = cap.card.decode("utf-8", errors="replace").rstrip("\x00")
+    bus_info = cap.bus_info.decode("utf-8", errors="replace").rstrip("\x00")
+    return {
+        "path": path,
+        "driver": driver,
+        "card": card,
+        "bus_info": bus_info,
+        "caps": caps,
+    }
+
+
+def _fourcc_priority(pixelformat: int) -> int:
+    name = _fourcc_to_str(pixelformat)
+    return {"YUYV": 0, "YUY2": 0, "MJPG": 1, "RGB3": 2, "BGR3": 2, "NV12": 3}.get(name, 9)
+
+
+def _v4l2_enumerate_modes(path: str) -> list[tuple[int, int, int]]:
+    """Return (width, height, pixelformat) for every advertised capture mode."""
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    except OSError:
+        return []
+
+    modes: list[tuple[int, int, int]] = []
+    try:
+        for buf_type in (V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE):
+            fmt_index = 0
+            while fmt_index < 64:
+                fmt = _v4l2_fmtdesc()
+                fmt.index = fmt_index
+                fmt.type = buf_type
+                try:
+                    fcntl.ioctl(fd, VIDIOC_ENUM_FMT, fmt)
+                except OSError:
+                    break
+                size_index = 0
+                while size_index < 128:
+                    fs = _v4l2_frmsizeenum()
+                    fs.index = size_index
+                    fs.pixel_format = fmt.pixelformat
+                    try:
+                        fcntl.ioctl(fd, VIDIOC_ENUM_FRAMESIZES, fs)
+                    except OSError:
+                        break
+                    sizes: list[tuple[int, int]] = []
+                    if fs.type == V4L2_FRMSIZE_TYPE_DISCRETE:
+                        sizes.append((fs.discrete.width, fs.discrete.height))
+                    elif fs.type in (V4L2_FRMSIZE_TYPE_STEPWISE, V4L2_FRMSIZE_TYPE_CONTINUOUS):
+                        sizes.append((fs.stepwise.max_width, fs.stepwise.max_height))
+                    for width, height in sizes:
+                        modes.append((int(width), int(height), int(fmt.pixelformat)))
+                    if fs.type != V4L2_FRMSIZE_TYPE_DISCRETE:
+                        break
+                    size_index += 1
+                fmt_index += 1
+    finally:
+        os.close(fd)
+    return modes
+
+
+def _v4l2_candidate_modes(path: str) -> list[tuple[int, int, int]]:
+    """Largest unique sizes first; prefer packed formats OpenCV handles well."""
+    by_size: dict[tuple[int, int], int] = {}
+    for width, height, pixelformat in _v4l2_enumerate_modes(path):
+        key = (width, height)
+        current = by_size.get(key)
+        if current is None or _fourcc_priority(pixelformat) < _fourcc_priority(current):
+            by_size[key] = pixelformat
+    return sorted(
+        [(w, h, pf) for (w, h), pf in by_size.items()],
+        key=lambda mode: (mode[0] * mode[1], -_fourcc_priority(mode[2])),
+        reverse=True,
+    )
+
+
+def _frame_looks_valid(frame) -> bool:
+    """Reject no-signal / wrong-resolution placeholders from HDMI capture cards."""
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return False
+    if int(frame.max()) == 0 or float(frame.std()) < 0.5:
+        return False
+    small = frame[::8, ::8]
+    if small.ndim == 3:
+        packed = (
+            small[..., 0].astype("uint32") << 16
+            | small[..., 1].astype("uint32") << 8
+            | small[..., 2].astype("uint32")
+        )
+        unique = int(len(set(packed.ravel().tolist())))
+    else:
+        unique = int(len(set(small.ravel().tolist())))
+    # Status screens are a few colors on a solid background; live video is not.
+    return unique >= 32
+
+
+def _find_cameras_linux() -> list[dict]:
+    """One V4L2 entry per physical capture device (USB card, webcam, ...)."""
+    grouped: dict[str, list[dict]] = {}
+    for dev in sorted(Path("/dev").glob("video*"), key=lambda p: int(p.name.removeprefix("video"))):
+        info = _v4l2_query(str(dev))
+        if info is None:
+            continue
+        if info["driver"] in _INTERNAL_V4L2_DRIVERS:
+            continue
+        caps = info["caps"]
+        is_capture = bool(caps & V4L2_CAP_VIDEO_CAPTURE) or bool(caps & V4L2_CAP_VIDEO_CAPTURE_MPLANE)
+        is_meta_only = bool(caps & V4L2_CAP_META_CAPTURE) and not (caps & V4L2_CAP_VIDEO_CAPTURE)
+        if not is_capture or is_meta_only:
+            continue
+        key = info["bus_info"] or info["path"]
+        grouped.setdefault(key, []).append(info)
 
     cameras = []
-    seen_indices = set()
-
-    for dev in sorted(Path("/dev").glob("video*")):
-        idx = int(dev.name.removeprefix("video"))
-        if idx in seen_indices:
-            continue
-        seen_indices.add(idx)
-
-        cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
-        if cap.isOpened():
-            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            backend_name = cap.getBackendName()
-            cap.release()
-            cameras.append({
-                "index": idx,
-                "port": str(dev),
-                "width": w,
-                "height": h,
-                "fps": fps,
-                "backend": backend_name,
-            })
-        else:
-            cap.release()
-
+    for group in grouped.values():
+        group.sort(
+            key=lambda n: (
+                0 if n["caps"] & V4L2_CAP_VIDEO_CAPTURE else 1,
+                int(Path(n["path"]).name.removeprefix("video")),
+            )
+        )
+        chosen = group[0]
+        cameras.append({
+            "port": chosen["path"],
+            "backend": "V4L2",
+            "model": _clean_model(chosen["card"]) or "unknown",
+        })
     return cameras
 
 
 def _find_cameras_probe(backend, max_index: int = 16) -> list[dict]:
-    """Enumerate cameras by probing indices 0..max_index-1."""
+    """Enumerate cameras by probing indices 0..max_index-1 (macOS / Windows)."""
+    import cv2
+
     cameras = []
     for idx in range(max_index):
         cap = cv2.VideoCapture(idx, backend)
-        if cap.isOpened():
-            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            backend_name = cap.getBackendName()
-            cap.release()
+        opened = cap.isOpened()
+        backend_name = cap.getBackendName() if opened else None
+        cap.release()
+        if opened:
             cameras.append({
-                "index": idx,
                 "port": str(idx),
-                "width": w,
-                "height": h,
-                "fps": fps,
-                "backend": backend_name,
+                "backend": backend_name or "OpenCV",
+                "model": "unknown",
             })
-        else:
-            cap.release()
     return cameras
 
 
 def _find_cameras_picamera2() -> list[dict]:
-    """Enumerate CSI / libcamera cameras via picamera2 when available.
-
-    ``port`` is the index passed to ``Picamera2(camera_num=...)`` / PiCameraBus
-    (position in ``global_camera_info()``, typically 0 = cam0 / CSI 0).
-    """
+    """CSI / libcamera cameras via picamera2. USB cameras are listed via V4L2 instead."""
     try:
         from picamera2 import Picamera2
     except ImportError:
         return []
 
-    cameras = []
     try:
         infos = Picamera2.global_camera_info()
     except Exception as e:  # noqa: BLE001
         print(f"Warning: picamera2 available but global_camera_info() failed: {e}")
         return []
 
+    cameras = []
     for i, info in enumerate(infos):
+        cam_id = str(info.get("Id", ""))
+        if "usb@" in cam_id:
+            continue
         model = info.get("Model", "unknown")
-        cam_id = info.get("Id", "")
+        camera_num = info.get("Num", i)
         cameras.append({
-            "index": i,
-            "port": str(i),
-            "width": None,
-            "height": None,
-            "fps": None,
+            "port": str(camera_num),
             "backend": "picamera2",
             "model": model,
-            "id": cam_id,
         })
     return cameras
 
 
 def find_cameras(max_index: int = 16) -> list[dict]:
+    os.environ.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")
+    cameras = _find_cameras_picamera2()
     platform = sys.platform
     if platform == "linux":
-        cameras = _find_cameras_linux(max_index)
-    else:
-        backend = BACKENDS.get(platform)
-        if backend is None:
-            print(f"Warning: unsupported platform '{platform}', using default OpenCV backend")
-            backend = cv2.CAP_ANY
-        cameras = _find_cameras_probe(backend, max_index)
+        cameras.extend(_find_cameras_linux())
+        return cameras
 
-    cameras.extend(_find_cameras_picamera2())
+    import cv2
+
+    backend_name = BACKENDS.get(platform)
+    if backend_name is None:
+        print(f"Warning: unsupported platform '{platform}', using default OpenCV backend")
+        backend = cv2.CAP_ANY
+    else:
+        backend = getattr(cv2, backend_name)
+    cameras.extend(_find_cameras_probe(backend, max_index))
     return cameras
 
 
-@CommandRegistry.register('list-cameras')
+def _print_cameras(cameras: list[dict]) -> None:
+    print(f"Found {len(cameras)} camera(s):\n")
+    for i, cam in enumerate(cameras, start=1):
+        print(f"  [{i}]")
+        print(f"  port    : {cam['port']}")
+        print(f"  backend : {cam['backend']}")
+        print(f"  model   : {cam['model']}")
+        print()
+
+
+def _prompt_camera_choice(n: int) -> int | None:
+    while True:
+        try:
+            raw = input(f"Which camera to open? (1-{n}, or q to quit): ").strip().lower()
+        except EOFError:
+            print()
+            return None
+        if raw in {"", "q", "quit"}:
+            return None
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= n:
+                return idx
+        print(f"Please enter a number between 1 and {n}, or q to quit.")
+
+
+def _fit_window(width: int, height: int, max_w: int = 1280, max_h: int = 720) -> tuple[int, int]:
+    if width <= 0 or height <= 0:
+        return max_w, max_h
+    scale = min(max_w / width, max_h / height, 1.0)
+    return max(1, int(width * scale)), max(1, int(height * scale))
+
+
+def _preview_loop(title: str, frames):
+    import cv2
+
+    cv2.namedWindow(title, cv2.WINDOW_NORMAL)
+    window_sized = False
+    try:
+        for frame in frames:
+            if frame is None:
+                print("Warning: dropped empty frame")
+                continue
+            if not window_sized:
+                h, w = frame.shape[:2]
+                win_w, win_h = _fit_window(w, h)
+                cv2.resizeWindow(title, win_w, win_h)
+                window_sized = True
+            cv2.imshow(title, frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                break
+            try:
+                if cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) < 1:
+                    break
+            except cv2.error:
+                break
+    except KeyboardInterrupt:
+        print()
+    finally:
+        try:
+            cv2.destroyAllWindows()
+            cv2.waitKey(1)
+        except cv2.error:
+            pass
+
+
+def _apply_v4l2_mode(cap, width: int, height: int, pixelformat: int) -> None:
+    import cv2
+
+    cap.set(cv2.CAP_PROP_FOURCC, pixelformat)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
+
+
+def _open_v4l2_capture(port: str, width: int | None = None, height: int | None = None, pixelformat: int | None = None):
+    import cv2
+
+    cap = cv2.VideoCapture(port, cv2.CAP_V4L2)
+    if not cap.isOpened():
+        cap.release()
+        return None
+    if width is not None and height is not None and pixelformat is not None:
+        _apply_v4l2_mode(cap, width, height, pixelformat)
+    return cap
+
+
+def _grab_valid_v4l2_frame(cap, attempts: int = 6, skip: int = 2):
+    last = None
+    for i in range(skip + attempts):
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            continue
+        if i < skip:
+            continue
+        last = frame
+        if _frame_looks_valid(frame):
+            return frame
+    return last if last is not None and _frame_looks_valid(last) else None
+
+
+def _iter_v4l2_frames(port: str):
+    import cv2
+
+    candidates = _v4l2_candidate_modes(port)
+    cap = None
+    first_frame = None
+    try:
+        for width, height, pixelformat in candidates:
+            if cap is not None:
+                cap.release()
+            cap = _open_v4l2_capture(port, width, height, pixelformat)
+            if cap is None:
+                continue
+            first_frame = _grab_valid_v4l2_frame(cap)
+            if first_frame is not None:
+                break
+        if first_frame is None:
+            if cap is not None:
+                cap.release()
+            cap = _open_v4l2_capture(port)
+            if cap is None:
+                raise RuntimeError(f"Could not open camera {port}")
+            ok, first_frame = cap.read()
+            if not ok:
+                first_frame = None
+        if first_frame is None or cap is None:
+            raise RuntimeError(f"Could not read a frame from {port}")
+
+        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"Opening {port} at {actual_w}x{actual_h}. Press q in the window to close.")
+        yield first_frame
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                raise RuntimeError(f"Could not read a frame from {port}")
+            yield frame
+    finally:
+        if cap is not None:
+            cap.release()
+
+
+def _iter_picamera_frames(port: str):
+    from picamera2 import Picamera2
+
+    camera_num = int(port)
+    picam2 = Picamera2(camera_num=camera_num)
+    try:
+        modes = getattr(picam2, "sensor_modes", None) or []
+        if modes:
+            best = max(modes, key=lambda m: m["size"][0] * m["size"][1])
+            size = tuple(best["size"])
+        else:
+            size = tuple(picam2.sensor_resolution)
+
+        try:
+            config = picam2.create_video_configuration(main={"size": size, "format": "RGB888"})
+            picam2.configure(config)
+        except Exception:
+            config = picam2.create_still_configuration(main={"size": size, "format": "RGB888"})
+            picam2.configure(config)
+
+        picam2.start()
+        cfg_size = picam2.camera_configuration()["main"]["size"]
+        print(f"Opening picamera2:{port} at {cfg_size[0]}x{cfg_size[1]}. Press q in the window to close.")
+
+        while True:
+            frame = picam2.capture_array("main")
+            if frame is None:
+                raise RuntimeError(f"Could not read a frame from picamera2 camera {port}")
+            if frame.ndim == 3 and frame.shape[2] == 4:
+                frame = frame[..., :3]
+            # picamera2 RGB888 is already B,G,R in memory (OpenCV BGR). Do not swap.
+            yield frame
+    finally:
+        try:
+            picam2.stop()
+            picam2.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _iter_opencv_frames(port: str):
+    import cv2
+
+    try:
+        index = int(port)
+    except ValueError:
+        index = port
+
+    backend_name = BACKENDS.get(sys.platform)
+    backend = getattr(cv2, backend_name) if backend_name else cv2.CAP_ANY
+    cap = cv2.VideoCapture(index, backend)
+    if not cap.isOpened():
+        cap.release()
+        cap = cv2.VideoCapture(index)
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(f"Could not open camera {port}")
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 10000)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 10000)
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"Opening camera {port} at {actual_w}x{actual_h}. Press q in the window to close.")
+
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                raise RuntimeError(f"Could not read a frame from camera {port}")
+            yield frame
+    finally:
+        cap.release()
+
+
+def open_camera_preview(cam: dict) -> None:
+    title = f"{cam['model']} ({cam['backend']})"
+    backend = cam["backend"]
+    if backend == "picamera2":
+        frames = _iter_picamera_frames(cam["port"])
+    elif backend == "V4L2":
+        frames = _iter_v4l2_frames(cam["port"])
+    else:
+        frames = _iter_opencv_frames(cam["port"])
+    try:
+        _preview_loop(title, frames)
+    finally:
+        frames.close()
+
+
+@CommandRegistry.register("list-cameras")
 class ListCamerasCommand(BaseCommand):
-    help = 'Detects and lists all cameras available on the system.'
+    help = "Detect connected cameras and optionally open a live preview."
 
     def handle(self, cfg: DictConfig) -> None:
+        os.environ.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")
+        try:
+            import cv2
+
+            cv2.setLogLevel(getattr(cv2, "LOG_LEVEL_ERROR", 2))
+        except Exception:  # noqa: BLE001
+            pass
+
         print("Scanning for cameras...\n")
         cameras = find_cameras()
 
@@ -131,21 +587,13 @@ class ListCamerasCommand(BaseCommand):
             print("No cameras detected.")
             return
 
-        print(f"Found {len(cameras)} camera(s):\n")
-        for cam in cameras:
-            lines = [
-                f"  [Camera {cam['index']}]",
-                f"  port    : {cam['port']}",
-                f"  backend : {cam['backend']}",
-            ]
-            if cam.get("model"):
-                lines.append(f"  model   : {cam['model']}")
-            if cam.get("id"):
-                lines.append(f"  id      : {cam['id']}")
-            if cam.get("width") is not None and cam.get("height") is not None:
-                lines.append(f"  size    : {cam['width']}x{cam['height']}")
-            if cam.get("fps") is not None:
-                lines.append(f"  fps     : {cam['fps']:.1f}")
-            if cam["backend"] == "picamera2":
-                lines.append("  note    : use camera_port with this index for PiCameraModule")
-            print("\n".join(lines) + "\n")
+        _print_cameras(cameras)
+        choice = _prompt_camera_choice(len(cameras))
+        if choice is None:
+            return
+
+        cam = cameras[choice - 1]
+        try:
+            open_camera_preview(cam)
+        except Exception as e:  # noqa: BLE001
+            print(f"Failed to open camera: {e}")

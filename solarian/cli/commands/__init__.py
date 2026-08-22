@@ -187,7 +187,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "list-cameras",
     module_path=f"{_pkg}.list_cameras",
-    help="Detects and lists all cameras available on the system.",
+    help="Detect connected cameras and optionally open a live preview.",
 )
 CommandRegistry.register_lazy(
     "shell",
