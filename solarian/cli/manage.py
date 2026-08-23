@@ -133,6 +133,7 @@ def _build_command_list() -> str:
         "write-robot-calibration": "Robot",
         "run-controller": "Controller",
         "calibrate-controller": "Controller",
+        "calibrate-umi-camera": "Controller",
         "write-controller-calibration": "Controller",
         "run-policy": "Controller",
         "run-server": "Controller",

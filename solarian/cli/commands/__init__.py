@@ -118,6 +118,13 @@ CommandRegistry.register_lazy(
     setup_modules=("controller",),
 )
 CommandRegistry.register_lazy(
+    "calibrate-umi-camera",
+    module_path=f"{_pkg}.calibrate_umi_camera",
+    help="Live gold vs wrist-camera overlay for UMI policy-image alignment.",
+    config_name="controller",
+    setup_modules=("robot", "observation"),
+)
+CommandRegistry.register_lazy(
     "write-controller-calibration",
     module_path=f"{_pkg}.write_controller_calibration",
     help="Writes controller calibration to the controller",
