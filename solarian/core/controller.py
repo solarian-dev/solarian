@@ -69,6 +69,7 @@ from solarian.core.clock_sync import (
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
 from solarian.core.data import ImageData, BoundingBoxData
+from solarian.perception.processor import field_name_for_input
 from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
 from solarian.utils.shared_memory.skill_status_buffer import SkillStatusBuffer
 from solarian.utils.configs import load_config_yaml
@@ -640,17 +641,13 @@ class Controller(ABC):
                 if field_spec.data_class is ImageData:
                     image_keys.append((module_name, field_name))
 
-            source_to_field = {}
-            for fname, sf in sensor_fields.items():
-                source_to_field[id(sf.source)] = fname
-            for fname, cf in calculated_fields.items():
-                source_to_field[id(cf.output)] = fname
-
             for field_name, cf in calculated_fields.items():
                 if cf.data_class is not BoundingBoxData:
                     continue
                 for inp in cf.inputs:
-                    input_field = source_to_field.get(id(inp))
+                    input_field = field_name_for_input(
+                        inp, sensor_fields, calculated_fields
+                    )
                     if input_field:
                         img_key = (module_name, input_field)
                         bbox_map.setdefault(img_key, []).append(

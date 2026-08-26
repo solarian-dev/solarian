@@ -132,23 +132,30 @@ class ActuatorModule(Module):
             "\nRecording positions. Move every joint through its entire range of "
             "motion, then press ENTER to stop..."
         )
-        while not enter_pressed():
-            status_min, status_pos, status_max = {}, {}, {}
-            for port, actuator_names in hw_by_port.items():
-                bus = self.module_bus.component_bus_by_port[port]
-                positions = bus.read(PosData, actuator_names, normalize=False)
-                for name in actuator_names:
-                    pos = int(positions[name])
-                    trackers[name].update(pos)
-                    t = trackers[name]
-                    status_pos[name] = pos
-                    status_min[name] = t.raw_min
-                    status_max[name] = t.raw_max
-                    if t.rejected:
-                        StatusBoard.set(f"{name}_ignored", t.rejected)
-            StatusBoard.set("MIN", status_min)
-            StatusBoard.set("POS", status_pos)
-            StatusBoard.set("MAX", status_max)
+        # Standalone calibrate-module never starts the robot UI; without this
+        # the MIN/POS/MAX writes go nowhere. Stop before the drive-mode prompts
+        # (Live would eat ``input()``) and before any later module fork.
+        StatusBoard.start_ui()
+        try:
+            while not enter_pressed():
+                status_min, status_pos, status_max = {}, {}, {}
+                for port, actuator_names in hw_by_port.items():
+                    bus = self.module_bus.component_bus_by_port[port]
+                    positions = bus.read(PosData, actuator_names, normalize=False)
+                    for name in actuator_names:
+                        pos = int(positions[name])
+                        trackers[name].update(pos)
+                        t = trackers[name]
+                        status_pos[name] = pos
+                        status_min[name] = t.raw_min
+                        status_max[name] = t.raw_max
+                        if t.rejected:
+                            StatusBoard.set(f"{name}_ignored", t.rejected)
+                StatusBoard.set("MIN", status_min)
+                StatusBoard.set("POS", status_pos)
+                StatusBoard.set("MAX", status_max)
+        finally:
+            StatusBoard.stop()
 
         derived: dict[str, DerivedHoming] = {}
         try:

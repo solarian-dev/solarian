@@ -5,6 +5,37 @@ if TYPE_CHECKING:
     from solarian.core.data import Data
 
 
+def field_name_for_input(inp, sensor_fields, calculated_fields) -> str | None:
+    """Map a schema ``Data`` ref to its observation field name.
+
+    ``id()`` is not stable across multiprocessing spawn: the parent pickles
+    processor ``inputs``, the child unpickles copies, and
+    ``get_sensor_fields_spec()`` still points at the re-imported class-level
+    objects. ``Data.path`` is pickled with the object, so it is the identity
+    that survives. ``id()`` remains a same-process fallback for
+    ``CalculatedField.output`` values that have no path.
+    """
+    path = getattr(inp, "path", None)
+    if path is not None:
+        path_t = tuple(path)
+        for fname, sf in sensor_fields.items():
+            src_path = getattr(sf.source, "path", None)
+            if src_path is not None and tuple(src_path) == path_t:
+                return fname
+        for fname, cf in calculated_fields.items():
+            out_path = getattr(cf.output, "path", None)
+            if out_path is not None and tuple(out_path) == path_t:
+                return fname
+    inp_id = id(inp)
+    for fname, sf in sensor_fields.items():
+        if id(sf.source) == inp_id:
+            return fname
+    for fname, cf in calculated_fields.items():
+        if id(cf.output) == inp_id:
+            return fname
+    return None
+
+
 class Processor:
     """
     Base class for observation/action processors.
@@ -67,12 +98,14 @@ class Processor:
         sensor_fields = actual_cls.get_sensor_fields_spec()
         calculated_fields = actual_cls.get_calculated_fields_spec()
 
-        source_to_field: dict[int, str] = {}
-        for fname, sf in sensor_fields.items():
-            source_to_field[id(sf.source)] = fname
-        for fname, cf in calculated_fields.items():
-            source_to_field[id(cf.output)] = fname
-
-        self._input_field_names = [
-            source_to_field[id(inp)] for inp in self.inputs
-        ]
+        names: list[str] = []
+        for inp in self.inputs:
+            fname = field_name_for_input(inp, sensor_fields, calculated_fields)
+            if fname is None:
+                raise KeyError(
+                    f"Processor input {inp!r} (path={getattr(inp, 'path', None)}) "
+                    f"does not match any SensorField.source or "
+                    f"CalculatedField.output on {actual_cls.__name__}"
+                )
+            names.append(fname)
+        self._input_field_names = names

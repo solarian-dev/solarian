@@ -162,8 +162,8 @@ class SimMirror:
             if values:
                 try:
                     client.write(values, normalize=True)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("SimMirror write failed for %s/%s: %s", module_name, port, exc)
 
     def mirror(
         self,
@@ -197,10 +197,21 @@ class SimMirror:
 def joints_present(module, joints: Iterable[str]) -> Dict[str, float]:
     """Read the real module's present normalized joint positions.
 
-    Convenience for :meth:`SimMirror.mirror` / :meth:`SimMirror.show` callers.
+    Joints without a calibration entry are skipped. Continuous joints (e.g.
+    SO-106 ``wrist_roll``) are omitted by ``calibrate-module``, so including
+    them here would KeyError inside the servo ``_normalize`` and freeze the
+    whole live mirror.
     """
     from solarian.core.data import PosData
 
     names = list(joints)
-    present = module.read_sensors(PosData, names)
-    return {name: float(present[name]["value"]) for name in names}
+    calib = getattr(module, "calibration", None) or {}
+    readable = [n for n in names if n in calib]
+    if not readable:
+        return {}
+    present = module.read_sensors(PosData, readable)
+    return {
+        name: float(present[name]["value"])
+        for name in readable
+        if name in present and present[name] is not None
+    }

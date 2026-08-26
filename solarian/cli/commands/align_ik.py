@@ -15,10 +15,13 @@ assumes a calibration exists and fixes the sim<->real correspondence on top of i
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
 from solarian.cli import BaseCommand, CommandRegistry
+
+logger = logging.getLogger("calibrate_ik")
 
 
 class _MirrorThread(threading.Thread):
@@ -48,12 +51,18 @@ class _MirrorThread(threading.Thread):
     def run(self):
         from solarian.sim.mirror import joints_present
 
+        last_err = None
+        last_log = 0.0
         while not self._stop_evt.is_set():
             if not self._paused.is_set():
                 try:
                     self.mirror.show(self.module_name, joints_present(self.module, self.joints))
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    now = time.monotonic()
+                    if str(exc) != last_err or now - last_log > 5.0:
+                        logger.warning("Live sim mirror failed: %s", exc)
+                        last_err = str(exc)
+                        last_log = now
             time.sleep(self.period)
 
 
@@ -84,6 +93,13 @@ class CalibrateIKCommand(BaseCommand):
             if not isinstance(module.actuators[n], CartesianIKActuator)
         ]
         continuous = set(getattr(type(module), "ik_continuous_joints", []) or [])
+        missing = [n for n in joints if n not in (module.calibration or {})]
+        if missing:
+            print(
+                f"\nNote: {missing} have no calibration yet (typical for continuous "
+                f"joints skipped by calibrate-module). They will not track in the\n"
+                f"sim until Step 2 sets their zero. The other joints should follow now."
+            )
 
         print("\nStarting the live MuJoCo view (this may take a few seconds)...")
         mirror = SimMirror(robot)

@@ -8,7 +8,7 @@ export const metadata = {
 
 Solarian's core framework ships almost no batteries: no hardware drivers, no policies, no robot definitions. Everything that talks to real hardware or adds a capability lives in a standalone **plugin package** named `solarian-<name>`. This keeps the core slim and lets anyone publish and share extensions independently. {{ className: 'lead' }}
 
-This page explains what a plugin is and the kinds you can build. See [Using Plugins](/docs/using-plugins) to install and wire one into a project, and [Creating Plugins](/docs/creating-plugins) to scaffold and publish your own.
+This page explains what a plugin is and the kinds you can build. Browse published packages in the [Plugin Directory](/plugins), see [Using Plugins](/docs/using-plugins) to install and wire one into a project, and [Creating Plugins](/docs/creating-plugins) to scaffold and publish your own.
 
 ## What is a plugin?
 
@@ -63,6 +63,8 @@ Discovery is powered by standard Python entry points read via `importlib.metadat
 | Command | `solarian.commands` | `solarian` CLI |
 
 ## Available plugins
+
+Browse every published listing — official and community — in the [Plugin Directory](/plugins). You can also [submit a plugin](/plugins/submit) for review.
 
 The Solarian organization ships these reference plugins (under [`plugins/`](https://github.com/solarian-dev/solarian/tree/main/plugins) in the monorepo):
 

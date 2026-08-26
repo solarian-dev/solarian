@@ -120,9 +120,9 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "calibrate-umi-camera",
     module_path=f"{_pkg}.calibrate_umi_camera",
-    help="Live gold vs wrist-camera overlay for UMI policy-image alignment.",
+    help="Calibrate a connected camera onto GoPro Hero 10 + Max Lens Mod optics and overlay vs UMI gold.",
     config_name="controller",
-    setup_modules=("robot", "observation"),
+    setup_modules=(),
 )
 CommandRegistry.register_lazy(
     "write-controller-calibration",

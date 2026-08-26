@@ -946,6 +946,14 @@ class Module(Process, ABC):
         logger.info(f"Starting module {self.name} process")
         self._register_action_handlers()
 
+        # Spawn pickles processor ``inputs`` into copies whose ``id()`` no
+        # longer matches class-level SensorField sources. Rebuild from the
+        # schema in this process so CalculatedFields resolve.
+        if getattr(self, "_module_obs_cls", None) is not None:
+            self._robot_processors = self._module_obs_cls.create_processors(
+                DataComputer.ROBOT
+            )
+
         # Reconnect hardware in the subprocess — device handles inherited
         # from the parent (via fork) are not reliably usable (e.g. AVFoundation cameras).
         # Keep per-port calibration so normalized reads work immediately.

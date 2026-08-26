@@ -72,23 +72,23 @@ class ActuatorBus(ComponentBus):
         mins = start_positions.copy()
         maxes = start_positions.copy()
 
-        user_pressed_enter = False
-        while not user_pressed_enter:
-            positions = self.read(PosData, actuator_names, normalize=False)
-            mins = {motor: min(positions[motor], min_) for motor, min_ in mins.items()}
-            maxes = {motor: max(positions[motor], max_) for motor, max_ in maxes.items()}
+        from solarian.utils.status_board import StatusBoard
+        StatusBoard.start_ui()
+        try:
+            user_pressed_enter = False
+            while not user_pressed_enter:
+                positions = self.read(PosData, actuator_names, normalize=False)
+                mins = {motor: min(positions[motor], min_) for motor, min_ in mins.items()}
+                maxes = {motor: max(positions[motor], max_) for motor, max_ in maxes.items()}
 
-            # print("\n-------------------------------------------")
-            # print(f"{'NAME':<15} | {'MIN':>6} | {'POS':>6} | {'MAX':>6}")
-            # for motor in actuator_names:
-            #     print(f"{motor:<15} | {mins[motor]:>6} | {positions[motor]:>6} | {maxes[motor]:>6}")
-            from solarian.utils.status_board import StatusBoard
-            StatusBoard.set("MIN", mins)
-            StatusBoard.set("POS", positions)
-            StatusBoard.set("MAX", maxes)
+                StatusBoard.set("MIN", mins)
+                StatusBoard.set("POS", positions)
+                StatusBoard.set("MAX", maxes)
 
-            if enter_pressed():
-                user_pressed_enter = True
+                if enter_pressed():
+                    user_pressed_enter = True
+        finally:
+            StatusBoard.stop()
 
         same_min_max = [motor for motor in actuator_names if mins[motor] == maxes[motor]]
         if same_min_max:

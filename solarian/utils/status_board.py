@@ -325,6 +325,21 @@ def value_str(value):
     elif type(value) == list:
         return "[" + ", ".join([f"{x:.0f}" if isinstance(x, (float, np.floating)) else str(x) for x in value]) + "]"
     elif type(value) == dict:
+        if value and all(
+            isinstance(v, (int, float, np.integer, np.floating, type(None)))
+            for v in value.values()
+        ):
+            inner = Table(box=None, show_header=False, pad_edge=False)
+            inner.add_column("key", style="cyan", no_wrap=True)
+            inner.add_column("val", justify="right")
+            for k, v in value.items():
+                if isinstance(v, (int, np.integer)):
+                    inner.add_row(str(k), str(int(v)))
+                elif isinstance(v, (float, np.floating)):
+                    inner.add_row(str(k), f"{float(v):.2f}")
+                else:
+                    inner.add_row(str(k), str(v))
+            return inner
         return JSON.from_data(format_floats(value, "{:.3f}"), indent=2)
     elif isinstance(value, Action) or isinstance(value, Observation):
         return render_action_or_observation(value)
@@ -371,6 +386,7 @@ class StatusBoard:
             self._stopped_event = threading.Event()
             self._console = Console()
             self._ui_started = False
+            self._ui_thread: threading.Thread | None = None
             self._initialized = True
 
             remove_fallback_handlers()
@@ -379,11 +395,17 @@ class StatusBoard:
                 self._start_ui_thread()
 
     def _start_ui_thread(self) -> None:
-        if getattr(self, "_ui_started", False):
+        thread = getattr(self, "_ui_thread", None)
+        if thread is not None and thread.is_alive():
             return
+        # Allow a second start after stop() (e.g. calibrate-module sweep,
+        # then later run-robot). Reset the events the previous loop flipped.
+        self._stop_event = threading.Event()
+        self._stopped_event = threading.Event()
         self._ui_started = True
         target = self.ui_loop if self._live else self.ui_loop_plain
-        threading.Thread(target=target, daemon=True).start()
+        self._ui_thread = threading.Thread(target=target, daemon=True)
+        self._ui_thread.start()
 
     @classmethod
     def start_ui(cls) -> "StatusBoard":
@@ -447,12 +469,22 @@ class StatusBoard:
 
     @classmethod
     def stop(cls):
-        """Stop the live display so exceptions/tracebacks render cleanly."""
+        """Stop the live display so exceptions/tracebacks render cleanly.
+
+        Safe to call when the UI was never started (no-op, no timeout).
+        After this returns the display thread is dead, so a later
+        :meth:`start_ui` can spawn a new one.
+        """
         inst = cls._instance
         if inst is None:
             return
+        thread = getattr(inst, "_ui_thread", None)
+        if thread is None or not thread.is_alive():
+            inst._stopped_event.set()
+            return
         inst._stop_event.set()
         inst._stopped_event.wait(timeout=5.0)
+        thread.join(timeout=1.0)
 
     @classmethod
     def print_exception(cls, exc: BaseException | None = None):
