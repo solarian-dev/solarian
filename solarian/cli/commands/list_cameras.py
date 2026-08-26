@@ -417,8 +417,12 @@ def _open_v4l2_capture(port: str, width: int | None = None, height: int | None =
     if not cap.isOpened():
         cap.release()
         return None
-    if width is not None and height is not None and pixelformat is not None:
-        _apply_v4l2_mode(cap, width, height, pixelformat)
+    if width is not None and height is not None:
+        if pixelformat is not None:
+            _apply_v4l2_mode(cap, width, height, pixelformat)
+        else:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
     return cap
 
 
@@ -436,17 +440,28 @@ def _grab_valid_v4l2_frame(cap, attempts: int = 6, skip: int = 2):
     return last if last is not None and _frame_looks_valid(last) else None
 
 
-def _iter_v4l2_frames(port: str):
+def _iter_v4l2_frames(port: str, width: int | None = None, height: int | None = None):
     import cv2
 
-    candidates = _v4l2_candidate_modes(port)
+    if width and height:
+        candidates = _v4l2_candidate_modes(port)
+        matching = [m for m in candidates if m[0] == int(width) and m[1] == int(height)]
+        ordered = matching + [m for m in candidates if m not in matching]
+        if not ordered:
+            ordered = [(int(width), int(height), None)]
+    else:
+        ordered = _v4l2_candidate_modes(port)
+
     cap = None
     first_frame = None
     try:
-        for width, height, pixelformat in candidates:
+        for w, h, pixelformat in ordered:
             if cap is not None:
                 cap.release()
-            cap = _open_v4l2_capture(port, width, height, pixelformat)
+            if pixelformat is not None:
+                cap = _open_v4l2_capture(port, w, h, pixelformat)
+            else:
+                cap = _open_v4l2_capture(port, w, h)
             if cap is None:
                 continue
             first_frame = _grab_valid_v4l2_frame(cap)
@@ -466,7 +481,7 @@ def _iter_v4l2_frames(port: str):
 
         actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f"Opening {port} at {actual_w}x{actual_h}. Press q in the window to close.")
+        print(f"Opening {port} at {actual_w}x{actual_h}.")
         yield first_frame
         while True:
             ok, frame = cap.read()
@@ -478,18 +493,21 @@ def _iter_v4l2_frames(port: str):
             cap.release()
 
 
-def _iter_picamera_frames(port: str):
+def _iter_picamera_frames(port: str, width: int | None = None, height: int | None = None):
     from picamera2 import Picamera2
 
     camera_num = int(port)
     picam2 = Picamera2(camera_num=camera_num)
     try:
-        modes = getattr(picam2, "sensor_modes", None) or []
-        if modes:
-            best = max(modes, key=lambda m: m["size"][0] * m["size"][1])
-            size = tuple(best["size"])
+        if width and height:
+            size = (int(width), int(height))
         else:
-            size = tuple(picam2.sensor_resolution)
+            modes = getattr(picam2, "sensor_modes", None) or []
+            if modes:
+                best = max(modes, key=lambda m: m["size"][0] * m["size"][1])
+                size = tuple(best["size"])
+            else:
+                size = tuple(picam2.sensor_resolution)
 
         try:
             config = picam2.create_video_configuration(main={"size": size, "format": "RGB888"})
@@ -500,7 +518,7 @@ def _iter_picamera_frames(port: str):
 
         picam2.start()
         cfg_size = picam2.camera_configuration()["main"]["size"]
-        print(f"Opening picamera2:{port} at {cfg_size[0]}x{cfg_size[1]}. Press q in the window to close.")
+        print(f"Opening picamera2:{port} at {cfg_size[0]}x{cfg_size[1]}.")
 
         while True:
             frame = picam2.capture_array("main")
@@ -518,7 +536,7 @@ def _iter_picamera_frames(port: str):
             pass
 
 
-def _iter_opencv_frames(port: str):
+def _iter_opencv_frames(port: str, width: int | None = None, height: int | None = None):
     import cv2
 
     try:
@@ -536,11 +554,15 @@ def _iter_opencv_frames(port: str):
         cap.release()
         raise RuntimeError(f"Could not open camera {port}")
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 10000)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 10000)
+    if width and height:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
+    else:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 10000)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 10000)
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"Opening camera {port} at {actual_w}x{actual_h}. Press q in the window to close.")
+    print(f"Opening camera {port} at {actual_w}x{actual_h}.")
 
     try:
         while True:
@@ -552,15 +574,24 @@ def _iter_opencv_frames(port: str):
         cap.release()
 
 
-def open_camera_preview(cam: dict) -> None:
-    title = f"{cam['model']} ({cam['backend']})"
+def iter_camera_frames(
+    cam: dict,
+    width: int | None = None,
+    height: int | None = None,
+):
+    """Yield BGR frames from a ``find_cameras()`` entry."""
     backend = cam["backend"]
     if backend == "picamera2":
-        frames = _iter_picamera_frames(cam["port"])
+        yield from _iter_picamera_frames(cam["port"], width, height)
     elif backend == "V4L2":
-        frames = _iter_v4l2_frames(cam["port"])
+        yield from _iter_v4l2_frames(cam["port"], width, height)
     else:
-        frames = _iter_opencv_frames(cam["port"])
+        yield from _iter_opencv_frames(cam["port"], width, height)
+
+
+def open_camera_preview(cam: dict) -> None:
+    title = f"{cam['model']} ({cam['backend']})"
+    frames = iter_camera_frames(cam)
     try:
         _preview_loop(title, frames)
     finally:

@@ -43,6 +43,7 @@ class PiCameraBus(SensorBus):
         super().__init__(port, components, calibration)
         self.picam2 = None
         self.components = components
+        self._optical_remap = None
 
     @property
     def is_connected(self) -> bool:
@@ -83,6 +84,9 @@ class PiCameraBus(SensorBus):
         )
         self.picam2.configure(config)
         self.picam2.start()
+        from solarian.core.optical_remap import load_bus_remap
+
+        self._optical_remap = load_bus_remap(cfg)
         # Let AE/AWB begin to converge before the first read.
         time.sleep(0.5)
 
@@ -94,6 +98,7 @@ class PiCameraBus(SensorBus):
             except Exception:  # noqa: BLE001
                 logger.exception("Error closing picamera2")
             self.picam2 = None
+            self._optical_remap = None
 
     def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         import cv2
@@ -128,13 +133,9 @@ class PiCameraBus(SensorBus):
         elif cfg.rotation == Rotation.ROTATE_270.value:
             processed = cv2.rotate(processed, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-        if cfg.resize_width is not None and cfg.resize_height is not None:
-            if processed.shape[0] != cfg.resize_height or processed.shape[1] != cfg.resize_width:
-                processed = cv2.resize(
-                    processed,
-                    (cfg.resize_width, cfg.resize_height),
-                    interpolation=cv2.INTER_AREA,
-                )
+        from solarian.core.optical_remap import finish_camera_frame
+
+        processed = finish_camera_frame(processed, cfg, self._optical_remap)
 
         if not isinstance(processed, np.ndarray):
             raise TypeError(f"Expected numpy.ndarray, got {type(processed)}")

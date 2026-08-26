@@ -21,12 +21,9 @@ class PiCamera(Camera):
     def __init__(self, cfg: CameraConfig | None = None, name: str | None = None):
         super().__init__(cfg)
         if cfg is not None:
-            if cfg.resize_width is not None and cfg.resize_height is not None:
-                h, w = cfg.resize_height, cfg.resize_width
-            elif cfg.rotation in (90, -90):
-                h, w = cfg.width, cfg.height
-            else:
-                h, w = cfg.height, cfg.width
+            from solarian.core.optical_remap import camera_output_hw
+
+            h, w = camera_output_hw(cfg)
             # Mutate the class-level ImageData descriptor so that SensorField
             # references (used by Observation.zeros() to size shared-memory
             # buffers) reflect the actual camera output dimensions.

@@ -96,6 +96,10 @@ class SensorConfig(ComponentConfig):
     video_format: str
     resize_width: int | None
     resize_height: int | None
+    #: Path to a GoPro optical-remap JSON from ``solarian calibrate-umi-camera``.
+    #: Applied after color/rotation and before ``resize_*``. Relative paths are
+    #: resolved against the project / conf directory.
+    optical_remap: str | None = None
     #: Optional simulation mapping; used only when the robot runs with is_sim.
     sim: SimSensorConfig | None = None
 
@@ -109,6 +113,7 @@ class CameraConfig(SensorConfig):
     video_format: str
     resize_width: int | None
     resize_height: int | None
+    optical_remap: str | None = None
 
 class ActuatorConfig(ComponentConfig):
     model: str

@@ -54,6 +54,7 @@ class OpenCVCameraBus(SensorBus):
         super().__init__(port, components, calibration)
         self.capture = None
         self.components = components
+        self._optical_remap = None
 
     @property
     def is_connected(self) -> bool:
@@ -96,12 +97,16 @@ class OpenCVCameraBus(SensorBus):
         fps = self.capture.get(cv2.CAP_PROP_FPS)
         width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        from solarian.core.optical_remap import load_bus_remap
+
+        self._optical_remap = load_bus_remap(cfg)
         # logger.info(f"Camera opened: port={self.port}, {width}x{height} @ {fps:.1f} fps")
 
     def disconnect(self):
         if self.capture is not None:
             self.capture.release()
             self.capture = None
+            self._optical_remap = None
 
     def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         import cv2
@@ -134,9 +139,9 @@ class OpenCVCameraBus(SensorBus):
         elif cfg.rotation == Rotation.ROTATE_270.value:
             processed = cv2.rotate(processed, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-        if cfg.resize_width is not None and cfg.resize_height is not None:
-            if processed.shape[0] != cfg.resize_height or processed.shape[1] != cfg.resize_width:
-                processed = cv2.resize(processed, (cfg.resize_width, cfg.resize_height), interpolation=cv2.INTER_AREA)
+        from solarian.core.optical_remap import finish_camera_frame
+
+        processed = finish_camera_frame(processed, cfg, self._optical_remap)
 
         if not isinstance(processed, np.ndarray):
             raise TypeError(f"Expected numpy.ndarray, got {type(processed)}")
