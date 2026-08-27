@@ -193,9 +193,6 @@ class Controller(ABC):
         }
 
         self.last_observation = Observation({})
-        # Last threshold band per (module, field): None / "mid" / "high".
-        # Used so GUI warnings log on the rising edge, not every tick.
-        self._threshold_levels: dict[tuple[str, str], str | None] = {}
 
         # Shared-memory infrastructure mirroring what Robot owns on its side.
         # The controller keeps a per-module ObservationRingBuffer so downstream
@@ -781,20 +778,6 @@ class Controller(ABC):
             spec = module_obs_cls.get_calculated_fields_spec().get(field_name)
         return spec
 
-    def _note_threshold_level(self, module_name: str, field_name: str, level: str | None, display: str) -> None:
-        key = (module_name, field_name)
-        prev = self._threshold_levels.get(key)
-        if level == prev:
-            return
-        self._threshold_levels[key] = level
-        label = f"{module_name}/{field_name}"
-        if level == "high":
-            logger.warning("%s = %s exceeded high threshold", label, display)
-        elif level == "mid":
-            logger.warning("%s = %s exceeded mid threshold", label, display)
-        elif prev is not None:
-            logger.info("%s = %s back within limits", label, display)
-
     def _gui_dashboard_sections(self) -> list[tuple[str, list[tuple]]]:
         """Build ``(title, [(field, value, color?), ...])`` panels from the latest
         observation and action, skipping image fields."""
@@ -826,7 +809,6 @@ class Controller(ABC):
                 spec = self._gui_field_spec(module_name, field)
                 if isinstance(spec, SensorField):
                     level = spec.threshold_level(raw)
-                    self._note_threshold_level(module_name, field, level, display)
                     if level is not None:
                         color = LEVEL_COLORS[level]
                 row = (field, display, color) if color is not None else (field, display)
