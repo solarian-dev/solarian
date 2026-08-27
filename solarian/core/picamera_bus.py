@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any, Dict, TYPE_CHECKING
 from enum import Enum
@@ -30,6 +31,18 @@ class ColorMode(str, Enum):
     BGR = "bgr"
 
 
+# CSI cameras (IMX477 HQ especially) drop frames or stall on ribbon/power
+# glitches. libcamera's dequeue watchdog is ~1s; after that capture_array
+# hangs or raises and the pipeline is dead until Picamera2 is recreated.
+_CAPTURE_TIMEOUT_S = 1.5
+_AE_SETTLE_S = 0.5
+_RECONNECT_SETTLE_S = 0.0
+_RECONNECT_MIN_DELAY_S = 0.05
+_RECONNECT_MAX_DELAY_S = 1.0
+_CLOSE_TIMEOUT_S = 2.0
+_BUFFER_COUNT = 6
+
+
 class PiCameraBus(SensorBus):
     """Sensor bus for Raspberry Pi CSI cameras via picamera2.
 
@@ -37,6 +50,10 @@ class PiCameraBus(SensorBus):
     not a ``/dev/video*`` path. ``picamera2`` is a system package
     (``apt install python3-picamera2``); use a venv created with
     ``--system-site-packages`` so it is importable.
+
+    Capture uses a timeout. On stall, empty frame, or libcamera error the
+    bus closes the handle and recreates ``Picamera2`` until the camera
+    comes back, so a CSI glitch does not kill the module process.
     """
 
     def __init__(self, port: str, components: Dict[str, PiCamera], calibration=None):
@@ -44,26 +61,38 @@ class PiCameraBus(SensorBus):
         self.picam2 = None
         self.components = components
         self._optical_remap = None
+        self._optical_remap_loaded = False
+        self.capture_timeout_s = _CAPTURE_TIMEOUT_S
+        self.ae_settle_s = _AE_SETTLE_S
+        self.reconnect_settle_s = _RECONNECT_SETTLE_S
+        self.reconnect_min_delay_s = _RECONNECT_MIN_DELAY_S
+        self.reconnect_max_delay_s = _RECONNECT_MAX_DELAY_S
+        self.close_timeout_s = _CLOSE_TIMEOUT_S
+        self.buffer_count = _BUFFER_COUNT
 
     @property
     def is_connected(self) -> bool:
         return self.picam2 is not None
 
-    def connect(self):
+    def _cfg(self) -> CameraConfig:
+        return next(iter(self.components.values())).cfg  # type: ignore[return-value]
+
+    def _camera_num(self) -> int:
         if isinstance(self.port, str) and self.port.startswith("/dev/"):
             raise ValueError(
                 f"PiCameraBus port must be a CSI camera index (e.g. '0' or '1'), "
                 f"not a V4L2 device path: {self.port!r}. "
                 f"CSI cameras on Raspberry Pi use libcamera via picamera2."
             )
-
         try:
-            camera_num = int(self.port)
+            return int(self.port)
         except (TypeError, ValueError) as e:
             raise ValueError(
                 f"PiCameraBus port must be an integer CSI index, got {self.port!r}"
             ) from e
 
+    @staticmethod
+    def _picamera2_class():
         try:
             from picamera2 import Picamera2
         except ImportError as e:
@@ -72,33 +101,129 @@ class PiCameraBus(SensorBus):
                 "with `sudo apt install python3-picamera2` and create your venv with "
                 "`--system-site-packages` so the system package is importable."
             ) from e
+        return Picamera2
 
-        cfg: CameraConfig = next(iter(self.components.values())).cfg  # type: ignore[assignment]
-
+    def _open(self, *, settle: float) -> None:
+        camera_num = self._camera_num()
+        Picamera2 = self._picamera2_class()
+        cfg = self._cfg()
         # Instantiate only here (after fork/reconnect in the module child process).
         self.picam2 = Picamera2(camera_num=camera_num)
         main = {"format": "RGB888", "size": (int(cfg.width), int(cfg.height))}
-        config = self.picam2.create_video_configuration(
-            main=main,
-            controls={"FrameRate": float(cfg.fps)},
-        )
+        controls = {"FrameRate": float(cfg.fps)}
+        try:
+            config = self.picam2.create_video_configuration(
+                main=main,
+                controls=controls,
+                buffer_count=int(self.buffer_count),
+            )
+        except TypeError:
+            config = self.picam2.create_video_configuration(
+                main=main,
+                controls=controls,
+            )
         self.picam2.configure(config)
         self.picam2.start()
-        from solarian.core.optical_remap import load_bus_remap
+        if not self._optical_remap_loaded:
+            from solarian.core.optical_remap import load_bus_remap
 
-        self._optical_remap = load_bus_remap(cfg)
-        # Let AE/AWB begin to converge before the first read.
-        time.sleep(0.5)
+            self._optical_remap = load_bus_remap(cfg)
+            self._optical_remap_loaded = True
+        if settle > 0:
+            time.sleep(settle)
+
+    def connect(self):
+        if self.picam2 is not None:
+            return
+        self._open(settle=self.ae_settle_s)
+
+    @staticmethod
+    def _close_picam2(picam2) -> None:
+        try:
+            cancel = getattr(picam2, "cancel_all_and_flush", None)
+            if cancel is not None:
+                cancel()
+        except Exception:  # noqa: BLE001
+            logger.debug("picamera2 cancel_all_and_flush failed", exc_info=True)
+        try:
+            picam2.stop()
+            picam2.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("Error closing picamera2")
 
     def disconnect(self):
-        if self.picam2 is not None:
+        picam2 = self.picam2
+        self.picam2 = None
+        if picam2 is None:
+            return
+        closer = threading.Thread(
+            target=self._close_picam2,
+            args=(picam2,),
+            name="picamera-close",
+            daemon=True,
+        )
+        closer.start()
+        closer.join(timeout=self.close_timeout_s)
+        if closer.is_alive():
+            logger.warning(
+                "picamera2 close timed out on CSI %s; abandoning handle",
+                self.port,
+            )
+
+    def _capture_frame(self):
+        if self.picam2 is None:
+            raise RuntimeError("Camera not connected")
+        timeout = self.capture_timeout_s
+        try:
+            frame = self.picam2.capture_array("main", wait=timeout)
+        except TypeError:
+            # Older picamera2: wait is bool/None only.
+            frame = self.picam2.capture_array("main")
+        if frame is None:
+            raise RuntimeError("Could not read frame from camera")
+        return frame
+
+    def _reconnect(self, reason: BaseException | str) -> None:
+        logger.warning(
+            "PiCamera CSI %s dropped (%s); reconnecting",
+            self.port,
+            reason,
+        )
+        self.disconnect()
+        delay = self.reconnect_min_delay_s
+        attempt = 0
+        while True:
+            attempt += 1
+            if delay > 0:
+                time.sleep(delay)
             try:
-                self.picam2.stop()
-                self.picam2.close()
-            except Exception:  # noqa: BLE001
-                logger.exception("Error closing picamera2")
-            self.picam2 = None
-            self._optical_remap = None
+                self._open(settle=self.reconnect_settle_s)
+                logger.warning(
+                    "PiCamera CSI %s reconnected after %d attempt(s)",
+                    self.port,
+                    attempt,
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                delay = (
+                    min(delay * 2.0, self.reconnect_max_delay_s)
+                    if delay > 0
+                    else self.reconnect_min_delay_s
+                )
+                logger.warning(
+                    "PiCamera CSI %s reconnect attempt %d failed: %s; retry in %.2fs",
+                    self.port,
+                    attempt,
+                    exc,
+                    delay,
+                )
+
+    def _capture_or_reconnect(self):
+        while True:
+            try:
+                return self._capture_frame()
+            except Exception as exc:  # noqa: BLE001
+                self._reconnect(exc)
 
     def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         import cv2
@@ -106,12 +231,7 @@ class PiCameraBus(SensorBus):
         if not issubclass(data_type, ImageData):
             raise ValueError(f"PiCameraBus only supports ImageData, got {data_type}")
 
-        if self.picam2 is None:
-            raise RuntimeError("Camera not connected")
-
-        frame = self.picam2.capture_array("main")
-        if frame is None:
-            raise ValueError("Could not read frame from camera")
+        frame = self._capture_or_reconnect()
 
         if frame.ndim == 3 and frame.shape[2] == 4:
             frame = frame[..., :3]
@@ -121,7 +241,7 @@ class PiCameraBus(SensorBus):
         # OpenCVCameraBus.
         processed = np.ascontiguousarray(frame)
 
-        cfg: CameraConfig = next(iter(self.components.values())).cfg  # type: ignore[assignment]
+        cfg = self._cfg()
 
         if cfg.color_mode == ColorMode.RGB.value:
             processed = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
