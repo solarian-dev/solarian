@@ -5,6 +5,7 @@ A runtime behavior for ${plugin_name}. Discovered through the
 ``solarian.skills`` entry-point group.
 """
 
+from solarian.core.action import Action, ActionType
 from solarian.core.ai.system1.skill import Skill
 
 
@@ -15,13 +16,24 @@ class ${class_prefix}Skill(Skill):
         # Called once before the control loop. Load models / allocate buffers.
         pass
 
-    def control_step(self) -> bool:
-        # Called in a loop at self.frequency Hz. Read observations, compute
-        # actions, submit them, and return True when the skill is complete.
+    def control_step(self, dt):
+        # Called at self.frequency Hz. Read self.observations for state and
+        # self.events for what just happened, and return the actions you
+        # want performed. Call self.finish() when complete.
         #
-        #   obs = self.get_observation("arm")
-        #   self.put_action(action_data)
-        return False
+        # Module names travel in params (params["arm"] = "right_arm").
+        # Occupancy is the writer keys arm / gripper.
+        #
+        #   pose = self.observations[self.params["arm"]].latest()
+        #   return Action(
+        #       action_type=ActionType.MODULE_ACTION,
+        #       data={self.params["arm"]: {
+        #           "action_type": ActionType.SCHEDULE_WAYPOINT,
+        #           "data": fields,
+        #           "drop_timestamps": True,
+        #       }},
+        #   )
+        return None
 
     def teardown(self):
         # Called once after the control loop ends. Release resources.

@@ -6,16 +6,17 @@ export const metadata = {
 
 # Modules
 
-A **Module** is a self-contained unit of robot hardware — an arm, a gripper, a camera, a base, a leg — that bundles together every actuator and sensor on the same hardware port and runs in its own OS process at its own configurable rate. {{ className: 'lead' }}
+A **Module** is anything connected to the runtime — an arm, a gripper, a camera, a base, a leg, a keyboard, a joystick. It bundles together every actuator and sensor on the same hardware port and ticks at its own configurable rate. {{ className: 'lead' }}
 
 Each module is responsible for:
 
 - Reading its sensors and writing its actuators on a real-time loop.
 - Publishing observations into a shared-memory ring buffer the [`Robot`](/docs/robots) drains at `cfg.fps`.
+- Emitting [events](/docs/events) for the discrete things that happen to it.
 - Pulling actions off a shared-memory queue and dispatching them to `@action_handler`-decorated methods.
-- Optional one-time setup (`initialize`), and optional per-tick interpolation (`control_step`).
+- Optional one-time setup (`initialize`), and per-tick logic (`control_step`).
 
-Defined in [`solarian/core/module.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/module.py). `Module` extends `multiprocessing.Process`.
+Defined in [`solarian/core/module.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/module.py). `Module` is an abstract class; *how* it is scheduled is a separate property — see [Execution Modes](#execution-modes).
 
 ## Declaring a Module
 
@@ -97,6 +98,9 @@ actuators:
   <Property name="interpolator_type" type="InterpolatorType">
     One of <code>joint</code>, <code>scalar</code>, or <code>pose</code>. Selects the trajectory interpolator used by the default <code>SCHEDULE_WAYPOINT</code> handler. See <a href="/docs/modules/scheduling-waypoints">Scheduling Waypoints</a>.
   </Property>
+  <Property name="execution" type="ExecutionMode | None">
+    Overrides the class's <code>execution_mode</code> for this deployment. See <a href="#execution-modes">Execution Modes</a>.
+  </Property>
 </Properties>
 
 To add module-specific config fields, set `config_class` on your subclass:
@@ -156,7 +160,9 @@ class ArmModule(Module):
             self.next_position = None
 ```
 
-The base implementation is a no-op — modules that just stream sensor data don't need to override it.
+`control_step` is **abstract**: every module says explicitly what it does per tick, even if the answer is nothing. Modules that only stream sensor data — cameras, for instance — override it with an empty body rather than inheriting a silent no-op.
+
+Actuator modules already implement it. `ActuatorModule.control_step` samples the active trajectory interpolator and writes the result, which is what makes `SCHEDULE_WAYPOINT` work; `ArmModule` and `GripperModule` inherit that. Override it only if you need something else.
 
 ## Action handlers
 
@@ -184,31 +190,129 @@ A handler must return a `bool`:
 
 If an action arrives with no registered handler, the module logs a warning and ignores it.
 
-See [Action Types](/docs/action-types) for the standard types (`STOP`, `MODULE_ACTION`, `SCHEDULE_WAYPOINT`, `RESTART_PUT`) and how to declare your own. For the built-in pose/scalar waypoint path, see [Scheduling Waypoints](/docs/modules/scheduling-waypoints).
+See [Action Types](/docs/action-types) for the standard types (`STOP`, `MODULE_ACTION`, `SCHEDULE_WAYPOINT`, `RESTART_PUT`) and how to declare your own. For the built-in pose/scalar waypoint path — streaming and exclusive speed-limited moves alike — see [Scheduling Waypoints](/docs/modules/scheduling-waypoints).
+
+## Who builds the actions
+
+A module interprets actions; it does not build them for anyone else. That asymmetry is deliberate: the caller is usually a [skill](/docs/skills), which addresses modules by **name** so the same skill can run on the controller or on the robot. A name crosses a link, a `Module` object cannot, so giving modules builder methods would have quietly tied every skill to running in the same process as its hardware.
+
+A skill therefore constructs the [`SCHEDULE_WAYPOINT` envelope](/docs/action-types#waypoint-params) itself, and one `Action` may key several modules at once.
+
+### Named poses
+
+A pose name like `"home"` is the *skill's* vocabulary, not a module's — the module knows its ends of travel and its speed limits, which are facts about the hardware, but nothing about what a task considers home. So named poses live in the skill's `conf/<config_name>.yaml`, keyed pose then module then actuator, in each actuator's own command units (normalized `[-100, 100]` for a range-mode servo, cm of aperture for a gripper):
+
+```yaml
+# conf/move.yaml
+poses:
+    home:
+        right_arm:
+            shoulder_pan: 0.0
+            shoulder_lift: -80.4
+            elbow_flex: 69.5
+            wrist_flex: -46.0
+            wrist_yaw: 0.0
+            wrist_roll: 0.0
+        right_gripper:
+            gripper: 8.5
+```
+
+`MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"})` looks up that pose and sends each module its own targets. A dict in `pose` is an inline joint or Cartesian target for the arm instead.
+
+## Execution modes
+
+*What* a module is and *how* it is scheduled are separate concerns. A camera is conceptually a `CameraModule`; "runs in its own process" is an operational decision about it. Keeping the two apart means you can change one without touching the other — and it keeps the class hierarchy from encoding your deployment topology.
+
+So a module declares a default and the runtime builds the matching **runner**:
+
+<Properties>
+  <Property name="ExecutionMode.PROCESS" type="process">
+    Its own OS process. For cameras, arms, grippers — expensive or high-frequency hardware whose timing must not be disturbed by anything else. The default.
+  </Property>
+  <Property name="ExecutionMode.THREAD" type="thread">
+    A daemon thread on the host. For blocking device APIs: joystick/HID readers, serial event sources.
+  </Property>
+  <Property name="ExecutionMode.INLINE" type="inline">
+    Ticked by the host's own control loop. For cheap, event-driven modules like a keyboard, where a dedicated process would buy isolation nobody needs and add a queue hop to every keypress.
+  </Property>
+</Properties>
+
+```python
+class CameraModule(Module):
+    execution_mode = ExecutionMode.PROCESS
+
+class KeyboardModule(Module):
+    execution_mode = ExecutionMode.INLINE
+```
+
+All three expose the same external interface — `start()`, `stop()`, `is_alive()`, `join()` — so nothing that uses a module has to know which it got. The class attribute is only a default: override it per instance, or per deployment in YAML.
+
+```python
+camera = CameraModule(execution_mode=ExecutionMode.INLINE)   # e.g. in a test
+```
+
+```yaml
+# conf/camera.yaml
+execution: process
+```
+
+The same axis applies to [skills](/docs/skills#where-the-skill-runs-executionplace-and-executionmode), which share the runner machinery.
 
 ## The run loop
 
-When the parent `Robot` calls `module.start()`, Solarian forks a new OS process and runs `Module.run()`:
+`module.start()` hands the module to its runner, which drives the same three-step worker protocol whatever the execution mode:
 
 ```text
-run() in child process
-   │
-   ├── reconnect hardware (the parent's handles are not safe across fork)
-   ├── reset()
-   └── loop forever:
-         drain action_queue   →  _dispatch_action(action, t_now)
-         control_step()
-         update_observations()  (writes to shared-memory ring buffer)
-         precise_wait(1/frequency)
+worker_setup(reconnect)
+   │   reconnect hardware when forked — the parent's handles do not survive fork
+   └── reset()
+
+worker_tick()                       ← looped by the runner, or called by the
+   ├── drain action_queue  →  _dispatch_action(action, t_now)     host's own
+   ├── control_step()                                             tick when INLINE
+   └── update_observations()   (writes to shared-memory ring buffer)
+
+worker_teardown(exit_reason)
 ```
 
-The first successful iteration sets `ready_event`, telling the parent `Robot` that the module is live and the next observation is real.
+`PROCESS` and `THREAD` runners own the loop and its `precise_wait(1/frequency)` regulation; the `INLINE` runner sets up once and ticks on the host's loop instead.
+
+The first successful iteration marks the module ready, telling the parent `Robot` that it is live and the next observation is real.
 
 ## Sensor reads and observation publishing
 
-`update_observations()` walks every sensor on the module, reads its current value (through the `ComponentBus` if needed), wraps it in the appropriate [`Data`](/docs/core) subclass, and writes a snapshot into the module's `ObservationRingBuffer`. The robot's `_observation_sender` thread reads the latest snapshot from each module and combines them into a single [`Observation`](/docs/observations) at the configured `fps`.
+`update_observations()` walks every sensor on the module, reads its current value (through the `ComponentBus` if needed), wraps it in the appropriate [`Data`](/docs/core) subclass, and writes a snapshot into the module's `ObservationBuffer`. The robot's `_observation_sender` thread reads the latest snapshot from each module and combines them into a single [`Observation`](/docs/observations) at the configured `fps`.
 
 You don't normally call `update_observations()` yourself — it's called for you at the end of every iteration.
+
+It is the one way a module reports state, whichever runner hosts it. A module in its own process publishes across shared memory; a module inline on a controller's loop publishes into a local `ObservationBuffer.local()`, which accepts any Python object rather than only numbers and arrays. Either way a [skill](/docs/skills) reads it the same way, so a leader arm on the controller offers its joint positions to a teleop skill exactly as a follower arm on the robot does.
+
+A module whose state has no entry in the project's `Observation` schema — a leader arm, a keyboard — has nothing typed to publish, so it overrides `update_observations()` and puts what it does have:
+
+```python
+class KeyboardModule(Module):
+    def update_observations(self):
+        self.observation_buffer.put({"held_keys": self.held_keys})
+```
+
+## Emitting events
+
+Observations say what the world looks like; **events** say what just happened. A module declares the types it produces and calls `emit()`:
+
+```python
+from solarian.core.event import EventType
+
+class FootPedalModule(Module):
+    events = (EventType.BUTTON_DOWN, EventType.BUTTON_UP)
+
+    def control_step(self):
+        if self._pedal_just_went_down():
+            self.emit(EventType.BUTTON_DOWN, button="pedal")
+```
+
+`emit()` writes to a sink the runner provides — a `deque` for inline and threaded modules, a `multiprocessing.Queue` for process-backed ones — and the host reads them back with `drain_events()` on its own control tick. Keep the payload small and picklable.
+
+Reserve events for transitions. Continuous signals stay observations, so that the event path remains useful for the discrete things it is good at. See [Events](/docs/events).
 
 ## Multi-port modules
 
@@ -219,6 +323,7 @@ If your module has actuators on more than one port (for example, two daisy-chain
 - [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose and scalar `SCHEDULE_WAYPOINT` on `Module`.
 - [Robots](/docs/robots) — how modules are attached to a robot and dispatched.
 - [Observations](/docs/observations) — the schema your module publishes into.
+- [Events](/docs/events) — the discrete happenings your module emits.
 - [Actions](/docs/actions) — the schema your module consumes from.
 - [Action Types](/docs/action-types) — built-in and custom action types.
 - [Core](/docs/core) — `Actuator`, `Sensor`, `Servo`, `ComponentBus`, and `Data` classes.

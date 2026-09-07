@@ -1,44 +1,57 @@
 """
-Skill — Base class for skills that run as separate processes.
+Skill — Base class for control logic: consumes observations, produces actions.
 
-Skills are launched by the ThinkProcess when it decides an action should be taken.
-Each skill runs at its own frequency, reads robot observations from shared-memory
-observation buffers, and produces actions pushed to the action queue.
+Skills are launched by the Controller or the ThinkProcess when it decides an
+action should be taken. Each skill runs at its own frequency, reads robot
+observations from shared-memory observation buffers, and produces actions
+pushed to the action queue.
+
+How a skill is scheduled is not part of what it is: ``execution_place`` says which
+runtime owns it and ``execution_mode`` says how it is scheduled there, and a
+:class:`~solarian.core.runner.Runner` carries that out.
 
 Lifecycle::
 
-    ThinkProcess.decide()  →  launches Skill
+    Controller / ThinkProcess.decide()  →  launches Skill
           ↓
-    Skill.setup()
+    Skill.begin()  → setup()
           ↓
-    Skill.execute()  ← called in a loop at ``self.frequency`` Hz
+    Skill.control_step(dt)  ← at ``self.frequency`` Hz
           ↓
     Skill.teardown()
 
-During ``execute()``, the skill should:
-    1. Read observations via ``get_observation(module_name)``
-    2. Compute actions (e.g. run a diffusion policy)
-    3. Submit them via ``put_action(action_data)``
-    4. Optionally report progress via ``put_skill_status(status)``
+``control_step`` reads ``self.observations`` and ``self.events`` — both wired
+up by the host and refreshed each step, whichever runtime the skill lives in —
+and returns the action(s) it wants performed; the host routes them. It signals
+its own completion with ``finish()`` rather than through the return value, so a
+one-shot skill can command a pose and complete on the same step.
 """
 
 import logging
 import time
-import traceback
-import multiprocessing
-from multiprocessing import Process
 from multiprocessing import Queue as MpQueue
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from enum import IntEnum
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from solarian.core.execution import ExecutionMode, ExecutionPlace, WorkerExit
+from solarian.core.runner import Runner, make_runner
 from solarian.utils import get_log_queue, setup_process_logging
-from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
-from solarian.utils.shared_memory.action_queue import ActionQueue, ModuleActionQueue
+from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
+from solarian.utils.shared_memory.action_queue import ModuleActionQueue
 from solarian.utils.shared_memory.skill_status_buffer import SkillStatusBuffer
+
+if TYPE_CHECKING:
+    # Imported for annotations only: solarian.core.action reaches back here.
+    from solarian.core.action import Action
 
 
 logger = logging.getLogger(__name__)
+
+# Param keys whose values are module names this skill *writes*. Occupancy and
+# action-queue wiring read these; read-only roles (leader, camera) stay out.
+_WRITER_KEYS = ("arm", "gripper")
 
 
 class SkillStatus(IntEnum):
@@ -51,37 +64,30 @@ class SkillStatus(IntEnum):
     STOPPED = 4
 
 
-class SkillRunner(IntEnum):
-    """Where a :class:`Skill` is executed.
+_EXIT_STATUS = {
+    WorkerExit.COMPLETED: SkillStatus.COMPLETED,
+    WorkerExit.STOPPED: SkillStatus.STOPPED,
+    WorkerExit.FAILED: SkillStatus.FAILED,
+}
 
-    * ``CONTROLLER`` — the skill runs as a subprocess of the
-      :class:`AIController`'s :class:`ThinkProcess` (typical for "digital"
-      skills like a diffusion policy).  The skill pushes per-module actions
-      into the robot's shared-memory action queues via :meth:`put_action`.
-    * ``ROBOT`` — the skill runs on the robot process.  The think process
-      does **not** spawn it locally; instead it enqueues a top-level
-      :class:`Action` (with ``action_type`` configured on the skill) that
-      the robot's action handler uses to start the skill on its side.
-    * ``SERVER`` — same dispatch as ``ROBOT`` but semantically the skill
-      lives on the relay server.  The think process still only enqueues an
-      action; where the robot vs server picks it up is transport-layer
-      concern.
+
+class Skill(ABC):
     """
+    Base class for skills: control logic that consumes observations and
+    produces actions.
 
-    CONTROLLER = 0
-    ROBOT = 1
-    SERVER = 2
-
-
-class Skill(Process, ABC):
-    """
-    Base class for skills that execute as separate processes.
-
-    Skills read observations from shared :class:`ObservationRingBuffer`
+    Skills read observations from per-module :class:`ObservationBuffer`
     instances and produce actions that are placed into per-module
     :class:`ModuleActionQueue` shared-memory queues.  They also report their
     lifecycle status through a shared-memory :class:`SkillStatusBuffer` so
     the think process can incorporate them when making decisions.
+
+    Where a skill lives and how it is scheduled are two separate axes:
+    :attr:`execution_place` (controller / robot / server) and
+    :attr:`execution_mode` (process / thread / inline). A keyboard teleop
+    skill is ``CONTROLLER`` + ``INLINE``; a diffusion policy on the robot is
+    ``ROBOT`` + ``PROCESS``. Remote placements are not launched locally at
+    all — the controller enqueues an ``Action`` the remote side picks up.
 
     Subclasses **must** implement :meth:`control_step`.
     They may also override :meth:`setup` and :meth:`teardown`.
@@ -102,31 +108,41 @@ class Skill(Process, ABC):
         skill_id: Integer id assigned by the orchestrator (e.g. index in
             ``available_skills``).  Used as the key in
             :class:`SkillStatusBuffer` records.
-        observation_buffers: Dict mapping module names to shared-memory
-            :class:`ObservationRingBuffer` instances.
-        action_queues: Dict mapping module names to shared-memory
-            :class:`ModuleActionQueue` instances where this skill pushes
-            per-module actions destined for the robot (robot-side skills).
-        action_queue: Shared-memory :class:`ActionQueue` carrying top-level
-            :class:`Action` objects.  Controller-side skills push actions
-            here so the controller's ``control_step`` can forward them to
-            the robot; it is typically ``None`` for robot-side skills.
+        observations: Dict mapping module names to their
+            :class:`ObservationBuffer`. Populated by whichever host starts
+            the skill, and read by :meth:`control_step` as
+            :attr:`observations`.
+        action_queues: Dict mapping module names to the
+            :class:`ModuleActionQueue` this skill pushes that module's actions
+            into. The only channel out of a skill, whichever host started it:
+            robot-side the module reads it directly, controller-side the
+            controller drains it and merges before sending to the robot.
         skills_status_buffer: Shared-memory :class:`SkillStatusBuffer` where
             the skill publishes status transitions.
+        event_inbox: Queue the host fills with each tick's drained events.
+            :meth:`step` empties it into :attr:`events`. Assigned by the host
+            when the skill starts, so a skill constructed by hand simply sees
+            no events.
         frequency: How often :meth:`control_step` is called, in Hz.
-        params: Skill-specific parameters forwarded from the think process
-            decision.
-        runner: Where this skill is executed (see :class:`SkillRunner`).
+        params: Skill-specific parameters. Module names this skill writes
+            live here as ``params["arm"]`` / ``params["gripper"]`` (plain
+            strings); everything else the skill needs does too.
+        execution_place: Which runtime owns this skill (see :class:`ExecutionPlace`).
             Declared by the subclass/controller author at attribute-decl
-            time, and used by :class:`ThinkProcess` to decide whether to
-            spawn the skill locally or send an ``Action`` to the robot /
-            server instead.
-        action_type: Integer action type used when ``runner`` is
-            ``ROBOT``/``SERVER`` — the think process will build an
-            ``Action(action_type=...)`` and push it to the controller's
-            :class:`ActionQueue` so the remote side can launch the skill.
-            Ignored when ``runner`` is ``CONTROLLER``.
+            time, and used to decide whether to launch the skill locally or
+            send an ``Action`` to the robot / server instead.
+        execution_mode: How the skill is scheduled where it lives (see
+            :class:`ExecutionMode`).
     """
+
+    #: Which runtime owns this skill. Overridable per instance.
+    execution_place: ExecutionPlace = ExecutionPlace.CONTROLLER
+
+    #: How this skill is scheduled where it lives. Overridable per instance.
+    execution_mode: ExecutionMode = ExecutionMode.PROCESS
+
+    #: Skills never outlive the runtime that launched them.
+    daemon: bool = True
 
     #: Importable module that runs this skill's policy server (``python -m
     #: <module>``).  The module's ``main()`` must be built on
@@ -151,62 +167,74 @@ class Skill(Process, ABC):
         self,
         name: Optional[str] = None,
         skill_id: Optional[int] = None,
-        observation_buffers: Optional[Dict[str, ObservationRingBuffer]] = None,
+        observations: Optional[Dict[str, ObservationBuffer]] = None,
         action_queues: Optional[Dict[str, ModuleActionQueue]] = None,
-        action_queue: Optional[ActionQueue] = None,
         skills_status_buffer: Optional[SkillStatusBuffer] = None,
         frequency: float = 10.0,
         params: Optional[Dict[str, Any]] = None,
-        runner: "SkillRunner | int" = SkillRunner.CONTROLLER,
-        action_type: Optional[int] = None,
+        execution_place: "ExecutionPlace | str | None" = None,
+        execution_mode: "ExecutionMode | str | None" = None,
         status_mp_q: Optional[MpQueue] = None,
+        event_inbox: Optional[MpQueue] = None,
     ):
-        # ``name`` defaults to the class name so subclasses can be declared
-        # as class attributes on an AIController (e.g. ``pick = PickSkill()``)
-        # without having to pass constructor arguments — the registry-building
-        # code then picks up ``type(instance)`` by attribute name.
-        resolved_name = name or type(self).__name__
-        super().__init__(name=f"Skill-{resolved_name}", daemon=True)
+        # Defaults to :meth:`registry_name` so a running skill is filed under
+        # the same name the registry and a ``START_SKILL`` action use, rather
+        # than under a second one only its host knows.
+        resolved_name = name or type(self).registry_name()
+        self.name = f"Skill-{resolved_name}"
         self.skill_name = resolved_name
-        self.skill_id = int(skill_id) if skill_id is not None else 0
-        self.observation_buffers = observation_buffers or {}
+        if skill_id is None:
+            class_id = type(self).__dict__.get("skill_id")
+            skill_id = class_id if isinstance(class_id, int) else 0
+        self.skill_id = int(skill_id)
+        #: Every module's :class:`ObservationBuffer`, keyed by module name.
+        #: The host that starts this skill points it at its own buffers.
+        self.observations = observations or {}
+        #: Where this skill's per-module actions go, keyed by module name.
+        #: The host that starts it decides what backs each queue.
         self.action_queues = action_queues or {}
-        self.action_queue = action_queue
+        #: Where the host posts each tick's drained events for this skill.
+        self.event_inbox = event_inbox
+        #: What happened since the previous step, oldest first. Refreshed by
+        #: :meth:`step`, so it is this tick's batch for the whole step.
+        self.events: list = []
         self.skills_status_buffer = skills_status_buffer
         self.frequency = frequency
-        self.params = params or {}
-        self.runner = SkillRunner(int(runner)) if not isinstance(runner, SkillRunner) else runner
-        self.action_type = int(action_type) if action_type is not None else None
-        self._stop_event = multiprocessing.Event()
+        self.params = dict(params or {})
+        if execution_place is not None:
+            self.execution_place = ExecutionPlace(execution_place)
+        if execution_mode is not None:
+            self.execution_mode = ExecutionMode(execution_mode)
+        self._finished = False
+        self._t_last_step: float | None = None
+        self._runner: Runner | None = None
         # Capture the parent's shared log queue so the child process can route
         # its log records back to the StatusBoard Logs panel.
         self._log_queue = get_log_queue()
         # Parent StatusBoard mp queue so child ``StatusBoard.set`` reaches the
         # robot/controller UI (spawned skills do not inherit the singleton).
         self._status_mp_q = status_mp_q
-        # Parent can poll this for (skill_name, traceback_string) after run()
-        # if it wants to surface skill crashes in its own logs.
-        self._error_queue: MpQueue = MpQueue()
 
-    # ------------------------------------------------------------------
-    # Observation helpers
-    # ------------------------------------------------------------------
+    @classmethod
+    def registry_name(cls) -> str:
+        """This skill's identity everywhere a name has to travel.
 
-    def get_observation(self, module_name: str):
+        The registry the VLM reads, the ``START_SKILL`` action the controller
+        sends the robot, and the robot's lookup of what to construct all key
+        off this one string, so a skill cannot be known by one name on one
+        side of the link and another name on the other. ``config_name`` is
+        preferred because it is what a plugin publishes as its entry-point
+        name; the class name is the fallback.
         """
-        Get the latest observation for *module_name* from shared memory.
+        return cls.config_name or cls.__name__
 
-        Returns:
-            The latest ``ModuleObs`` from the ring buffer, or ``None``
-            if the buffer is empty or the module name is unknown.
-        """
-        buffer = self.observation_buffers.get(module_name)
-        if buffer is None:
-            return None
-        try:
-            return buffer.get()
-        except Exception:
-            return None
+    def commanded_module_names(self) -> set[str]:
+        """Module names this skill writes (for occupancy / preemption)."""
+        return {
+            self.params[key]
+            for key in _WRITER_KEYS
+            if isinstance(self.params.get(key), str)
+        }
 
     # ------------------------------------------------------------------
     # Action / status helpers
@@ -379,120 +407,206 @@ class Skill(Process, ABC):
 
     def request_stop(self):
         """Signal this skill to stop after the current ``control_step`` call."""
-        self._stop_event.set()
+        self.runner.stop(wait=False)
 
     @property
     def stopped(self) -> bool:
         """Whether a stop has been requested."""
-        return self._stop_event.is_set()
+        return not self.runner.is_alive()
+
+    def finish(self) -> None:
+        """Declare this skill done; the host stops it after the current step.
+
+        Symmetric with :meth:`request_stop`, which is how *someone else* ends
+        the skill. Keeping completion in state rather than in the return value
+        lets :meth:`control_step` return an action on the very step it
+        finishes — a one-shot move both commands the pose and completes.
+        """
+        self._finished = True
+
+    @property
+    def finished(self) -> bool:
+        """Whether the skill has declared itself complete."""
+        return self._finished
 
     # ------------------------------------------------------------------
-    # Process entry point
+    # Lifecycle (delegated to the runner)
     # ------------------------------------------------------------------
 
-    def run(self):
-        """
-        Main process entry point (called by ``Process.start()``).
+    @property
+    def runner(self) -> Runner:
+        """The scheduler for this skill, created on first use."""
+        if self._runner is None:
+            self._runner = make_runner(self)
+        return self._runner
 
-        Runs :meth:`setup`, then loops :meth:`control_step` at
-        ``self.frequency`` Hz, and finally runs :meth:`teardown`.
+    def start(self, wait: bool = False) -> None:
+        """Hand this skill to its runner."""
+        self.runner.start(wait=wait)
 
-        Subclasses that need full control over the loop may override this
-        method entirely.
-        """
-        # Route log records from this child process back to the parent's
-        # shared log queue so exceptions show up in the StatusBoard Logs
-        # panel instead of being silently swallowed.
-        setup_process_logging(
-            logger_name=None,
-            log_queue=self._log_queue,
-            install_fallback=False,
-        )
-        if self._status_mp_q is not None:
-            from solarian.utils.status_board import StatusBoard
+    def stop(self, wait: bool = True) -> None:
+        self.runner.stop(wait=wait)
 
-            StatusBoard.init_child(self._status_mp_q)
+    def terminate(self) -> None:
+        self.runner.terminate()
 
-        self.put_skill_status(SkillStatus.RUNNING)
-        final_status = SkillStatus.COMPLETED
-        try:
-            self.setup()
-            while not self._stop_event.is_set():
-                t0 = time.monotonic()
-                try:
-                    finished = self.control_step()
-                    if finished:
-                        break
-                except Exception as exc:
-                    logger.exception(
-                        "Skill '%s' control_step crashed: %s",
-                        self.skill_name,
-                        exc,
-                    )
-                    self._push_error(exc)
-                    final_status = SkillStatus.FAILED
-                    break
+    def is_alive(self) -> bool:
+        return self.runner.is_alive()
 
-                elapsed = time.monotonic() - t0
-                sleep_time = (1.0 / self.frequency) - elapsed
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+    def join(self, timeout: float | None = None) -> None:
+        self.runner.join(timeout)
 
-            if self._stop_event.is_set():
-                final_status = SkillStatus.STOPPED
-            else:
-                final_status = SkillStatus.COMPLETED
-        except Exception as exc:
-            logger.exception(
-                "Skill '%s' setup/loop crashed: %s",
-                self.skill_name,
-                exc,
-            )
-            self._push_error(exc)
-            final_status = SkillStatus.FAILED
-        finally:
-            try:
-                self.teardown()
-            except Exception as exc:
-                logger.exception(
-                    "Skill '%s' teardown crashed: %s",
-                    self.skill_name,
-                    exc,
-                )
-                self._push_error(exc)
-            finally:
-                try:
-                    self.put_skill_status(final_status)
-                except Exception as exc:
-                    logger.exception(
-                        "Skill '%s' failed to publish final status: %s",
-                        self.skill_name,
-                        exc,
-                    )
-
-    def _push_error(self, exc: BaseException) -> None:
-        """Send (skill_name, traceback) back to the parent process.
-
-        Kept best-effort: failing to push (e.g. queue full during shutdown)
-        must never mask the original exception.
-        """
-        try:
-            tb_str = "".join(
-                traceback.format_exception(type(exc), exc, exc.__traceback__)
-            )
-            self._error_queue.put_nowait((self.skill_name, tb_str))
-        except Exception:
-            pass
+    @property
+    def pid(self) -> int | None:
+        """OS pid when this skill runs in its own process, else ``None``."""
+        return self.runner.pid
 
     def get_error(self) -> tuple[str, str] | None:
         """Return ``(skill_name, traceback_string)`` if this skill crashed, else None.
 
-        Safe to call from the parent process only.
+        Safe to call from the host process only.
         """
+        return self.runner.get_error()
+
+    # ------------------------------------------------------------------
+    # Worker protocol (driven by the runner)
+    # ------------------------------------------------------------------
+
+    def worker_setup(self, reconnect: bool) -> None:
+        """Announce RUNNING and run the subclass :meth:`setup`."""
+        if reconnect:
+            # Route log records from this child process back to the parent's
+            # shared log queue so exceptions show up in the StatusBoard Logs
+            # panel instead of being silently swallowed.
+            setup_process_logging(
+                logger_name=None,
+                log_queue=self._log_queue,
+                install_fallback=False,
+            )
+            if self._status_mp_q is not None:
+                from solarian.utils.status_board import StatusBoard
+
+                StatusBoard.init_child(self._status_mp_q)
+
+        self.put_skill_status(SkillStatus.RUNNING)
+        self.begin()
+
+    def worker_tick(self) -> bool:
+        """One control step. Returns False once the skill reports completion."""
+        self.dispatch(self.step())
+        return not self._finished
+
+    def _drain_inbox(self) -> list:
+        """Take everything the host has posted since the previous step.
+
+        Without an inbox — a skill constructed by hand, with no host attached
+        — there is nothing to take and the step simply sees no events.
+        """
+        if self.event_inbox is None:
+            return []
+        events = []
+        while True:
+            try:
+                events.append(self.event_inbox.get_nowait())
+            except Exception:  # noqa: BLE001 - an empty inbox is the normal case
+                return events
+
+    # ------------------------------------------------------------------
+    # Stepping
+    # ------------------------------------------------------------------
+
+    def begin(self) -> None:
+        """Clear per-run step state, then run the subclass :meth:`setup`.
+
+        Called by whichever host is about to start stepping this skill, so a
+        skill that finished once and is started again does not begin already
+        finished, nor with a stale ``dt``.
+        """
+        self._finished = False
+        self._t_last_step = None
+        self.setup()
+
+    def step(self):
+        """Refresh this tick's inputs, then call :meth:`control_step`.
+
+        The single entry point for both hosts — the runner loop and the
+        host's inline tick — so ``dt`` is measured and :attr:`events` is
+        collected the same way whether a skill runs in its own process or on
+        someone else's loop. Taking the whole batch up front is what makes
+        it stable for the length of the step.
+        """
+        self.events = self._drain_inbox()
+        now = time.monotonic()
+        dt = (
+            now - self._t_last_step
+            if self._t_last_step is not None
+            else 1.0 / max(float(self.frequency), 1e-9)
+        )
+        self._t_last_step = now
+        return self.control_step(dt)
+
+    @staticmethod
+    def as_actions(actions) -> list:
+        """Normalize a ``control_step`` return value to a list.
+
+        A step may want to do nothing, one thing, or — when it is scheduling a
+        chunk of future waypoints — many things, so all three are accepted.
+        """
+        if actions is None:
+            return []
+        if isinstance(actions, (list, tuple)):
+            return [a for a in actions if a is not None]
+        return [actions]
+
+    def dispatch(self, actions) -> None:
+        """Push what :meth:`control_step` returned onto the module queues.
+
+        The one way out of a skill, on either host. Robot-side the module at
+        the other end applies it; controller-side the controller drains it,
+        merges it with what the other skills commanded, and sends one message
+        to the robot.
+        """
+        from solarian.core.action import ActionType
+
+        for action in self.as_actions(actions):
+            if int(action.action_type) != int(ActionType.MODULE_ACTION):
+                logger.warning(
+                    "Skill '%s' returned a non-module action (%s); skills "
+                    "command modules, and starting or stopping another skill "
+                    "is the host's call",
+                    self.skill_name,
+                    action.action_type,
+                )
+                continue
+            for module_name, module_action in action.items():
+                queue = self.action_queues.get(module_name)
+                if queue is None:
+                    logger.warning(
+                        "Skill '%s' has no action queue for module '%s'",
+                        self.skill_name,
+                        module_name,
+                    )
+                    continue
+                queue.put(module_action)
+
+    def worker_teardown(self, exit_reason: WorkerExit) -> None:
+        """Release resources and publish the final status."""
+        final_status = _EXIT_STATUS[exit_reason]
         try:
-            return self._error_queue.get_nowait()
-        except Exception:
-            return None
+            self.teardown()
+        except Exception as exc:
+            logger.exception(
+                "Skill '%s' teardown crashed: %s", self.skill_name, exc
+            )
+            final_status = SkillStatus.FAILED
+        try:
+            self.put_skill_status(final_status)
+        except Exception as exc:
+            logger.exception(
+                "Skill '%s' failed to publish final status: %s",
+                self.skill_name,
+                exc,
+            )
 
     # ------------------------------------------------------------------
     # Hooks for subclasses
@@ -511,12 +625,22 @@ class Skill(Process, ABC):
         """
 
     @abstractmethod
-    def control_step(self) -> bool:
-        """
-        Control step implementation.
+    def control_step(self, dt: float) -> "Action | list[Action] | None":
+        """One step of control logic: state and happenings in, intent out.
 
-        Subclasses should implement this method to define the control step logic.
+        Reads :attr:`observations` for what the world looks like and
+        :attr:`events` for what just happened. Both are set up by whichever
+        host started the skill and refreshed by :meth:`step`, so they mean the
+        same thing whether this skill runs in its own process or inline on the
+        host's loop, and a test can populate them directly.
+
+        Args:
+            dt: Seconds since the previous call, for rate-dependent maths.
+                The one input that is genuinely per-call, hence an argument:
+                on the first step it is the nominal ``1 / frequency``.
 
         Returns:
-            bool: ``True`` if the skill was completed.
+            An :class:`~solarian.core.action.Action` to perform, or ``None``
+            for "nothing this tick". Completion is *not* signalled here: call
+            :meth:`finish` for that, so the return type stays single-purpose.
         """

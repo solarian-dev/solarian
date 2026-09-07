@@ -15,7 +15,7 @@ Run `solarian --help` to print the grouped command list.
 
 ## Global flags
 
-Every `solarian` subcommand accepts two top-level flags before the subcommand name:
+Every `solarian` subcommand accepts these top-level flags before the subcommand name:
 
 <Properties>
   <Property name="--conf" type="string">
@@ -23,6 +23,9 @@ Every `solarian` subcommand accepts two top-level flags before the subcommand na
   </Property>
   <Property name="--settings" type="string">
     Path to your project's <code>settings.py</code>. Auto-discovered when omitted (looks for <code>{`{package_name}`}/settings.py</code> based on <code>pyproject.toml</code>, then <code>conf/settings.py</code>).
+  </Property>
+  <Property name="--version, -V" type="flag">
+    Print the installed Solarian version and exit. Works on its own, without a subcommand.
   </Property>
 </Properties>
 

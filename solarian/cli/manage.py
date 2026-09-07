@@ -72,6 +72,16 @@ COMMAND_ENTRY_POINT_GROUP = "solarian.commands"
 PLUGIN_NO_HYDRA_COMMANDS = {"feetech-set-id"}
 
 
+def _get_version() -> str:
+    """Return the installed solarian version, or "unknown" outside an install."""
+    import importlib.metadata
+
+    try:
+        return importlib.metadata.version("solarian")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 def _iter_entry_points(group: str):
     """Yield entry points for *group* across importlib.metadata API versions."""
     import importlib.metadata
@@ -198,6 +208,8 @@ def main() -> None:
     )
     parser.add_argument("--conf", type=str, default="conf", help="The conf directory with yaml config files to use.")
     parser.add_argument("--settings", type=str, default=None, help="Path to settings.py (auto-discovered if not given).")
+    parser.add_argument("--version", "-V", action="version", version=f"%(prog)s {_get_version()}",
+                        help="Print the installed solarian version and exit.")
     
     # If no arguments provided, print help and exit
     if len(sys.argv) < 2:

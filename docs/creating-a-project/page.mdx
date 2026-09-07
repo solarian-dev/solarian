@@ -108,11 +108,12 @@ class MyrobotAction(Action):
 
 ## 4. Wire up keyboard teleop in the controller
 
-Override `control_step` and the keyboard hooks on your `Controller` subclass to send actions on key presses. Solarian uses [pynput](https://pynput.readthedocs.io/) under the hood.
+Every controller comes with a keyboard module that turns key transitions into [events](/docs/events). Handle them with `@event_handler`, and return an action from `control_step`:
 
 ```python
 from solarian.core import Controller
 from solarian.core.action import ActionType
+from solarian.core.event import Event, EventType, event_handler
 from myrobot.action import MyrobotAction
 
 class MyrobotController(Controller):
@@ -120,10 +121,11 @@ class MyrobotController(Controller):
         super().__init__(*args, **kwargs)
         self.target = MyrobotAction.zeros()
 
-    def on_key_press(self, char: str):
-        if char == 'a':
+    @event_handler(EventType.KEY_DOWN)
+    def on_key_down(self, event: Event):
+        if event.data["key"] == 'a':
             self.target.arm.shoulder_pan.value -= 0.05
-        elif char == 'd':
+        elif event.data["key"] == 'd':
             self.target.arm.shoulder_pan.value += 0.05
 
     def control_step(self) -> MyrobotAction:
@@ -131,7 +133,9 @@ class MyrobotController(Controller):
         return self.target
 ```
 
-See [Controllers](/docs/controllers) for the full lifecycle and [Action Types](/docs/action-types) for the enum.
+Handlers run on the control thread when the tick drains, so they never race the control loop. For keys you *hold* rather than tap, read `self.held_keys` in `control_step` instead.
+
+See [Controllers](/docs/controllers) for the full lifecycle, [Events](/docs/events) for other input devices, and [Action Types](/docs/action-types) for the enum.
 
 ## 5. Run the three nodes
 

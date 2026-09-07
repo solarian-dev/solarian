@@ -11,12 +11,12 @@ Architecture overview::
     │    └─ display_loop (main thread)                                 │
     │                                                                  │
     │  AIController                                                    │
-    │    ├─ action_queue    (mp.Queue)  ← skills push actions here    │
+    │    ├─ skill_command_queue  ← think process starts/stops skills  │
     │    ├─ skill_status_buffer(mp.Queue)  ← skills push status here     │
     │    └─ user_msg_queue  (mp.Queue)  ← user pushes commands here   │
     │                                                                  │
     │  control_step():                                                 │
-    │    drains action_queue → deep-merges → returns single Action     │
+    │    drains every skill's action_queues → merges → one Action      │
     │                                                                  │
     │  on_start():                                                     │
     │    spawns ThinkProcess                                           │
@@ -34,7 +34,7 @@ Architecture overview::
     ┌────────────── Skill Processes (per-skill frequency) ────────────┐
     │  - Read observations from shared observation_buffers             │
     │  - Execute skill logic (diffusion policies, motion planners …)  │
-    │  - put_action() → controller's action_queue                     │
+    │  - control_step() → per-module action_queues → controller merge │
     │  - put_skill_status() → think process's skill_status_buffer      │
     └──────────────────────────────────────────────────────────────────┘
 """
@@ -51,10 +51,7 @@ from solarian.core.action import Action
 from solarian.core.configs import ControllerConfig
 from solarian.utils import get_class, StatusBoard
 from solarian.conf import settings
-from solarian.core.ai.system1.skill import Skill, SkillRunner
-from solarian.core.ai.system1.registry import discover_available_skills
 from solarian.core.ai.system2.think import ThinkProcess
-from solarian.utils.shared_memory.action_queue import ActionQueue
 
 try:
     from pynput import keyboard as _pynput_keyboard
@@ -88,10 +85,11 @@ class AIController(Controller):
     AI-driven controller that combines VLM perception with skill-based execution.
 
     * The **control loop** (inherited from ``Controller``) calls
-      :meth:`control_step` at the configured frequency.  ``control_step``
-      drains the ``action_queue``, deep-merges all pending skill actions into
-      a single ``Action`` (as defined by ``settings.ACTION_CLASS``), and
-      returns it so the base class can send it to the robot.
+      ``control_step`` at the configured frequency.  This class does not
+      override it: the inherited one steps the running skills, drains their
+      per-module ``action_queues``, and merges what they commanded into a
+      single ``Action`` (as defined by ``settings.ACTION_CLASS``) for the
+      base class to send to the robot.
 
     * :meth:`on_start` spawns a :class:`ThinkProcess` in a separate OS
       process.  The think process reads camera images from the shared
@@ -100,8 +98,8 @@ class AIController(Controller):
 
     * **Skills** (subclasses of :class:`~solarian.control.ai.system2.skill.Skill`)
       run as individual processes at their own frequencies.  They read
-      observations from the shared buffers and push actions into the
-      ``action_queue``.
+      observations from the shared buffers and push per-module actions into
+      their own ``action_queues``.
 
     Usage::
 
@@ -109,8 +107,7 @@ class AIController(Controller):
         from my_project.skills import PickSkill, PlaceSkill
 
         class MyAIController(AIController):
-            pick  = PickSkill()
-            place = PlaceSkill()
+            skills = (PickSkill, PlaceSkill)
 
         ctrl = MyAIController(cfg)
         ctrl.connect()
@@ -118,9 +115,11 @@ class AIController(Controller):
         ctrl.send_user_message("Pick up the red cup and place it on the saucer")
         ctrl.start()
 
-    The registry passed to the think process is built from every ``Skill``
-    instance declared as a class attribute on the subclass; the attribute
-    name becomes the skill name.
+    The registry passed to the think process is the controller's own: the
+    ``skills`` classes plus any installed skill plugins, keyed by
+    :meth:`Skill.registry_name`.  The VLM therefore names a skill class and
+    supplies its arguments as params, rather than picking a pre-configured
+    instance.
 
     Prompt templates
     ----------------
@@ -239,17 +238,8 @@ class AIController(Controller):
 
         # Inter-process communication queues.
         # ``observation_buffers`` and ``skill_status_buffer`` come from the
-        # base ``Controller`` (shared memory).  ``action_queue`` is a
-        # shared-memory :class:`ActionQueue` that the think process pushes
-        # top-level :class:`Action` objects into — either as skill-launch
-        # actions destined for the robot / server, or controller-side
-        # actions produced by skills running locally.  ``control_step``
-        # drains it.  ``user_msg_queue`` carries natural-language commands.
-        self.action_queue: ActionQueue = ActionQueue(
-            shm_manager=self.shm_manager,
-            buffer_size=256,
-            max_payload_bytes=8192,
-        )
+        # base ``Controller`` (shared memory), as does ``skill_command_queue``,
+        # which is how the ThinkProcess asks for a skill to start or stop.
         self.user_msg_queue: Queue = multiprocessing.Queue()
 
         # Shared event to coordinate shutdown
@@ -304,34 +294,28 @@ class AIController(Controller):
             "action_map": {},
         }
 
-        # Skill registry — collect every ``Skill`` instance declared as a
-        # class attribute on this subclass (mirrors how ``Robot`` collects
-        # modules).  The attribute name becomes the skill name used by the
-        # think process / VLM.  Each entry carries enough metadata for the
-        # think process to decide how to dispatch the skill:
-        #
-        #     {"cls": SkillClass, "runner": SkillRunner, "action_type": int | None}
-        #
-        # Controller-side skills are spawned as subprocesses; robot/server
-        # skills are launched by pushing an ``Action`` with the declared
-        # ``action_type`` onto ``self.action_queue``.
-        self.available_skills: Dict[str, Dict[str, Any]] = self._collect_available_skills()
+        # The menu the VLM picks from is the controller's own skill registry:
+        # this subclass's ``skills`` list plus whatever plugins publish under
+        # the ``solarian.skills`` entry-point group, keyed by
+        # :meth:`Skill.registry_name`. One registry rather than two, so the
+        # name the VLM names a skill by is the name the controller resolves.
+        self.available_skills: Dict[str, Dict[str, Any]] = self._skill_registry
 
         self._stdin_thread: Optional[threading.Thread] = None
 
-        # Interactive prompt capture driven by the pynput listener that the
-        # base ``Controller`` already runs.  Pressing Enter toggles
-        # ``_prompt_active``; while active every key is consumed by the
-        # prompt (so teleop hooks like ``on_key_press`` do not fire).  The
-        # current buffer is mirrored on the shared ``StatusBoard`` so the
-        # operator can see what they are typing.
+        # Interactive prompt capture driven by the keyboard module's listener.
+        # Pressing Enter toggles ``_prompt_active``; while active every key is
+        # consumed by the prompt, so no KEY_DOWN / KEY_UP event reaches the
+        # skills.  The current buffer is mirrored on the shared ``StatusBoard``
+        # so the operator can see what they are typing.
         self._prompt_active: bool = False
         self._prompt_buffer: str = ""
         self._prompt_lock = threading.Lock()
+        self.keyboard.interceptor = self._intercept_key
 
         self._think_process = ThinkProcess(
             observation_buffers=self.observation_buffers,
-            action_queue=self.action_queue,
+            skill_command_queue=self.skill_command_queue,
             skill_status_buffer=self.skill_status_buffer,
             user_msg_queue=self.user_msg_queue,
             vlm_config=self.vlm_config,
@@ -344,106 +328,8 @@ class AIController(Controller):
         )
 
     # ------------------------------------------------------------------
-    # Skill discovery
-    # ------------------------------------------------------------------
-
-    def _collect_available_skills(self) -> Dict[str, Dict[str, Any]]:
-        """Collect skills declared as class attributes on this subclass.
-
-        Every ``Skill`` instance found on a class in this ``AIController``'s
-        MRO (walked leaf → root, with subclass attributes taking priority)
-        becomes an entry keyed by its attribute name.  The stored value is a
-        dict with the class, runner, and (optional) remote ``action_type``
-        read from the template instance — the think process uses these to
-        decide whether to launch the skill locally or to push an
-        :class:`Action` onto ``self.action_queue`` for the robot / server to
-        handle.
-
-        Example::
-
-            from solarian.core.ai.system1.skill import SkillRunner
-
-            class UR5AIController(AIController):
-                gripper_skill = MoveGripperSkill(
-                    runner=SkillRunner.ROBOT,
-                    action_type=UR5ActionType.MOVE_GRIPPER,
-                )
-                arm_skill = MoveArmSkill(
-                    runner=SkillRunner.ROBOT,
-                    action_type=UR5ActionType.MOVE_ARM,
-                )
-                policy_skill = PolicyEvalSkill(runner=SkillRunner.CONTROLLER)
-
-            ctrl = UR5AIController(cfg)
-            # ctrl.available_skills == {
-            #     "gripper_skill": {
-            #         "cls": MoveGripperSkill,
-            #         "runner": SkillRunner.ROBOT,
-            #         "action_type": UR5ActionType.MOVE_GRIPPER,
-            #     },
-            #     ...
-            # }
-        """
-        skills: Dict[str, Dict[str, Any]] = {}
-        for klass in type(self).__mro__:
-            if klass is AIController or klass is object:
-                continue
-            for attr_name, attr_value in klass.__dict__.items():
-                if attr_name.startswith("_"):
-                    continue
-                if attr_name in skills:
-                    continue
-                if isinstance(attr_value, Skill):
-                    skills[attr_name] = {
-                        "cls": type(attr_value),
-                        "runner": attr_value.runner,
-                        "action_type": attr_value.action_type,
-                        "skill_id": (
-                            int(attr_value.skill_id)
-                            if getattr(attr_value, "skill_id", 0)
-                            else None
-                        ),
-                        "docstring": (type(attr_value).__doc__ or "").strip(),
-                    }
-
-        # Merge in skills installed as plugins (``solarian.skills`` entry
-        # points).  Class-attribute skills declared on the controller take
-        # priority, so a project can override or re-configure a discovered
-        # skill simply by declaring it explicitly.
-        try:
-            discovered = discover_available_skills()
-        except Exception:  # noqa: BLE001 - discovery must never break startup
-            logger.exception("Skill plugin discovery failed")
-            discovered = {}
-        for name, spec in discovered.items():
-            if name not in skills:
-                skills[name] = spec
-
-        return skills
-
-    # ------------------------------------------------------------------
     # Controller interface
     # ------------------------------------------------------------------
-
-    def control_step(self) -> Optional[Action]:
-        """
-        Pop the next :class:`Action` from the shared-memory ``action_queue``.
-
-        The queue carries both skill-launch actions (destined for the
-        robot / server) pushed by the think process, and controller-side
-        actions pushed by locally-running skills.  The control loop picks
-        them up one at a time and forwards them to the robot via
-        ``_send_action``.
-
-        Returns:
-            The next pending ``Action``, or ``None`` if the queue is empty.
-        """
-        if self.action_queue.empty():
-            return None
-        try:
-            return self.action_queue.get()
-        except Exception:
-            return None
 
     def on_start(self):
         """
@@ -481,39 +367,29 @@ class AIController(Controller):
 
     PROMPT_STATUS_KEY = "user prompt"
 
-    def _on_pynput_press(self, key) -> None:
-        """Intercept global key presses.
+    def _intercept_key(self, key, is_press: bool) -> bool:
+        """Claim keys for the prompt buffer; report whether one was consumed.
 
-        While the prompt is active every key is consumed here and routed
-        into the prompt buffer, so the base ``Controller._on_pynput_press``
-        never dispatches to ``on_key_press`` (which keyboard-teleop
-        subclasses use to drive the robot).  Outside of prompt mode we
-        delegate to the base implementation, with the one exception that
-        a bare ``Enter`` press opens the prompt.
+        Installed on the keyboard module, so consuming a key here means it
+        never becomes a KEY_DOWN / KEY_UP event and the robot does not react
+        to the characters being typed.  Enter is claimed unconditionally: it
+        is what opens the prompt in the first place.
         """
+        if not is_press:
+            return self._prompt_active
+
         if _pynput_keyboard is not None and key == _pynput_keyboard.Key.enter:
             if self._prompt_active:
                 self._submit_prompt()
             else:
                 self._start_prompt()
-            return
+            return True
 
         if self._prompt_active:
             self._handle_prompt_key(key)
-            return
+            return True
 
-        super()._on_pynput_press(key)
-
-    def _on_pynput_release(self, key) -> None:
-        """Swallow releases while the prompt is capturing input.
-
-        Keyboard-teleop subclasses act in ``on_key_release``; suppressing
-        releases during prompt mode prevents the robot from reacting to
-        the characters being typed.
-        """
-        if self._prompt_active:
-            return
-        super()._on_pynput_release(key)
+        return False
 
     def _start_prompt(self) -> None:
         with self._prompt_lock:

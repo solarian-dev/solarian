@@ -20,6 +20,8 @@ class ActionType:
     MODULE_ACTION    = 1
     SCHEDULE_WAYPOINT = 2
     RESTART_PUT      = 3
+    START_SKILL      = 4
+    STOP_SKILL       = 5
     CUSTOM_START     = 100
 ```
 
@@ -31,15 +33,73 @@ class ActionType:
     The most common type. The action carries one or more <code>ModuleAction</code> sub-actions in <code>action.data</code>; the robot pushes each one onto the corresponding module's <code>action_queue</code>.
   </Property>
   <Property name="SCHEDULE_WAYPOINT" type="int = 2">
-    Tells a module to schedule a target value at a future timestamp. Core <code>Module</code> implements this with a <code>TrajectoryInterpolator</code> (pose or scalar) selected by yaml <code>{'interpolator_type'}</code>. See <a href="/docs/modules/scheduling-waypoints">Scheduling Waypoints</a>.
+    Tells a module to move a target value. Core <code>Module</code> implements this with a <code>TrajectoryInterpolator</code> (pose or scalar) selected by yaml <code>{'interpolator_type'}</code>. Covers both streaming and exclusive go-to moves — see <a href="#waypoint-params">Waypoint params</a> and <a href="/docs/modules/scheduling-waypoints">Scheduling Waypoints</a>.
   </Property>
   <Property name="RESTART_PUT" type="int = 3">
     Resets a module's internal <code>put</code> timing — used when the controller resynchronizes the rate.
+  </Property>
+  <Property name="START_SKILL" type="int = 4">
+    Start a registered skill by name, carrying <code>{'{"skill": name, "params": {...}}'}</code>. Module names the skill writes live in <code>params["arm"]</code> / <code>params["gripper"]</code>. One shape for two channels: on the <code>skill_command_queue</code> it asks the controller to start the skill, and on the wire to the robot it asks the robot to. The direction is the channel's, not the type's. Never forwarded to a module.
+  </Property>
+  <Property name="STOP_SKILL" type="int = 5">
+    The counterpart to <code>START_SKILL</code>, carrying just the name.
   </Property>
   <Property name="CUSTOM_START" type="int = 100">
     The first integer reserved for user-defined action types. Anything <code>&gt;= 100</code> is yours.
   </Property>
 </Properties>
+
+## Waypoint params {{ id: 'waypoint-params' }}
+
+`SCHEDULE_WAYPOINT` covers both streaming teleop and one-shot go-to moves. Which one you get depends on **who supplies the timing**, expressed through the optional `params` dict on a `ModuleAction`:
+
+<Properties>
+  <Property name="speed" type="float | None">
+    A velocity limit rather than a deadline: <code>moveJ</code> in rad/s, <code>moveL</code> in m/s, gripper in interpolator units/s. <code>None</code> means "use the module default". Merely including the key hands timing to the module.
+  </Property>
+  <Property name="rot_speed" type="float">
+    Rotational limit for <code>moveL</code>, in rad/s.
+  </Property>
+  <Property name="frame" type="str = 'world'">
+    <code>{'"ee"'}</code> composes the Cartesian payload as a delta in the current end-effector frame before moving.
+  </Property>
+</Properties>
+
+With `speed` present the module drives the target to completion at its speed limit (`moveJ` / `moveL`), taking as long as the distance requires. Without it the caller owns the timing: `drop_timestamps` servos over the module's adaptive drive horizon, and a plain waypoint blends into the trajectory at its own `timestamp`.
+
+A [skill](/docs/skills) builds this envelope itself, keyed by module **name**. Modules interpret actions; they do not manufacture them for someone else, which is what lets the same skill run on the controller or on the robot — a name crosses a link, a `Module` object cannot.
+
+```python
+# Streaming: the caller's timestamps drive the trajectory.
+Action(
+    action_type=ActionType.MODULE_ACTION,
+    data={
+        "right_arm": {
+            "action_type": ActionType.SCHEDULE_WAYPOINT,
+            "data": pose_fields,
+            "drop_timestamps": True,
+        },
+        # One action can address several modules; the host splits it per module.
+        "right_gripper": {
+            "action_type": ActionType.SCHEDULE_WAYPOINT,
+            "data": grip_fields,
+            "drop_timestamps": True,
+        },
+    },
+)
+
+# Exclusive: including `speed` hands timing to the module.
+Action(
+    action_type=ActionType.MODULE_ACTION,
+    data={
+        "right_arm": {
+            "action_type": ActionType.SCHEDULE_WAYPOINT,
+            "data": joint_fields,
+            "params": {"frame": "world", "speed": None},
+        }
+    },
+)
+```
 
 ## Declaring custom action types
 

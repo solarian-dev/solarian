@@ -1,0 +1,164 @@
+"""The robot starts and stops skills by name, without a handler per skill."""
+
+from __future__ import annotations
+
+import pytest
+
+from solarian.core.action import Action, ActionType
+from solarian.core.actuator_module import ActuatorModule
+from solarian.core.ai.system1.skill import Skill
+from solarian.core.robot import Robot
+
+
+def module(name):
+    instance = ActuatorModule.__new__(ActuatorModule)
+    instance.name = name
+    return instance
+
+
+class WaveSkill(Skill):
+    """Stands in for a robot-side skill; ``start`` is a no-op so nothing forks."""
+
+    config_name = "wave"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.did_start = False
+        self.was_asked_to_stop = False
+
+    def start(self):
+        self.did_start = True
+
+    def is_alive(self) -> bool:
+        return self.did_start and not self.was_asked_to_stop
+
+    @property
+    def pid(self):
+        return None
+
+    def request_stop(self):
+        self.was_asked_to_stop = True
+
+    def join(self, timeout=None):
+        pass
+
+    def control_step(self, dt):
+        return None
+
+
+class ArmWaveSkill(WaveSkill):
+    config_name = "arm_wave"
+
+
+class FakeRobot(Robot):
+    """Enough of a robot for the skill handlers: no zmq, no shared memory."""
+
+    skills = (WaveSkill, ArmWaveSkill)
+
+    def __init__(self):
+        self.modules = {"arm": module("arm"), "gripper": module("gripper")}
+        self.observation_buffers = {"arm": object()}
+        self.action_queues = {"arm": object()}
+        self.skills_status_buffer = None
+        self._local_skills = {}
+
+    def control_loop(self):
+        pass
+
+    def disconnect(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def clear_skill_cache():
+    FakeRobot._skill_class_cache = None
+    yield
+    FakeRobot._skill_class_cache = None
+
+
+def start(robot, **data):
+    robot.start_named_skill(Action(action_type=ActionType.START_SKILL, data=data), 0.0)
+
+
+def test_a_named_skill_is_looked_up_and_started():
+    robot = FakeRobot()
+
+    start(robot, skill="wave", params={"amplitude": 2.0})
+
+    skill = robot._local_skills["wave"]
+    assert skill.did_start
+    assert skill.params["amplitude"] == 2.0
+
+
+def test_a_started_skill_is_wired_to_the_robots_shared_memory():
+    robot = FakeRobot()
+
+    start(robot, skill="wave")
+
+    skill = robot._local_skills["wave"]
+    assert skill.observations is robot.observation_buffers
+    assert skill.action_queues is robot.action_queues
+    assert skill.event_inbox is not None
+
+
+def test_module_names_travel_in_params():
+    """The names the controller sent are what the skill addresses."""
+    robot = FakeRobot()
+
+    start(robot, skill="wave", params={"arm": "arm", "gripper": "gripper"})
+
+    skill = robot._local_skills["wave"]
+    assert skill.commanded_module_names() == {"arm", "gripper"}
+    assert skill.params["arm"] == "arm"
+
+
+def test_absent_writer_params_command_nothing():
+    robot = FakeRobot()
+
+    start(robot, skill="arm_wave")
+
+    assert robot._local_skills["arm_wave"].commanded_module_names() == set()
+
+
+def test_a_name_no_plugin_publishes_is_refused(caplog):
+    robot = FakeRobot()
+
+    with caplog.at_level("WARNING"):
+        start(robot, skill="nope")
+
+    assert "unknown skill 'nope'" in caplog.text
+    assert robot._local_skills == {}
+
+
+def test_starting_a_skill_that_is_already_running_is_a_no_op():
+    robot = FakeRobot()
+    start(robot, skill="wave")
+    first = robot._local_skills["wave"]
+
+    start(robot, skill="wave")
+
+    assert robot._local_skills["wave"] is first
+
+
+def test_stop_skill_asks_the_skill_to_stop_and_forgets_it():
+    robot = FakeRobot()
+    start(robot, skill="wave")
+    skill = robot._local_skills["wave"]
+
+    robot.stop_named_skill(
+        Action(action_type=ActionType.STOP_SKILL, data={"skill": "wave"}), 0.0
+    )
+
+    assert skill.was_asked_to_stop
+    assert robot._local_skills == {}
+
+
+def test_both_handlers_are_registered_on_every_robot():
+    handlers = {}
+    for cls in reversed(Robot.__mro__):
+        for name, value in cls.__dict__.items():
+            if callable(value) and hasattr(value, "_handles_action"):
+                handlers[int(getattr(value, "_handles_action"))] = name
+
+    assert handlers[int(ActionType.START_SKILL)] == "start_named_skill"
+    assert handlers[int(ActionType.STOP_SKILL)] == "stop_named_skill"

@@ -1,0 +1,53 @@
+---
+description: How skills and modules talk to each other in Solarian
+globs: **/skills/*.py,**/skills/**/*.py,solarian/core/*module*.py
+alwaysApply: false
+---
+
+# Skills and modules
+
+## A skill never holds a Module
+
+A skill reaches a module through exactly two channels, both keyed by **module name**:
+
+- `self.observations[name]` — an `ObservationBuffer` to read from
+- `self.action_queues[name]` — where its actions for that module go
+
+Construct with `params={"arm": "right_arm", "gripper": "right_gripper", ...}`.
+Occupancy is those writer keys. `leader` and `camera` are read-only and stay out
+of it. This is what lets the same skill run on the controller or on the robot:
+a name crosses a link, a `Module` object cannot.
+
+```python
+# BAD - holds the module, so it cannot be started remotely
+def control_step(self, dt):
+    return self.params["arm"].waypoint(fields)
+
+# GOOD - addresses it by name and builds its own envelope
+def control_step(self, dt):
+    return Action(
+        action_type=ActionType.MODULE_ACTION,
+        data={self.params["arm"]: {
+            "action_type": ActionType.SCHEDULE_WAYPOINT,
+            "data": fields,
+            "drop_timestamps": True,
+        }},
+    )
+```
+
+Corollary: modules do not get action-builder methods. A module interprets actions; it
+does not manufacture them for someone else.
+
+## Config belongs to whoever owns the concept
+
+A named pose ("home", "ground") is a skill's vocabulary, so it lives in the skill's
+`conf/<config_name>.yaml`, not in `ModuleConfig`. A module knows its ends of travel and
+its speed limits, because those are facts about the hardware. Ask "who would have to
+change this if the task changed?" and put it there.
+
+## Never reach into another object's private
+
+If a host has to set `other._x`, either `_x` should be public or the host should not be
+setting it. Both hosts wire a skill's channels in `start_skill` through public
+attributes, on purpose — a skill built by an operator's key handler knows nothing about
+buffers, so it cannot receive them at construction.

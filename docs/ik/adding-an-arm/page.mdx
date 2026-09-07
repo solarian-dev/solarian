@@ -34,7 +34,7 @@ A new arm reuses the core path when it provides:
 4. **Yaml** — `interpolator_type: pose`, `max_speed: [max_pos_m_s, max_rot_rad_s]`, and a module `frequency` higher than the controller (e.g. 90 Hz).
 5. **Callers** — emit `ActionType.SCHEDULE_WAYPOINT` with pose fields and wall-clock `timestamp` (one control period ahead for teleop; policy chunks use absolute target times minus action latency).
 
-No per-arm interpolator code. Optional extras: `SET_HOME` (joint-space bypass + clear interpolator), servo gains in `initialize()`.
+No per-arm interpolator code. Optional extras: servo gains in `initialize()`, and `default_joint_speed` if 1.05 rad/s is the wrong `moveJ` limit for this arm.
 
 ## Example: SO-106
 
@@ -78,7 +78,7 @@ class ArmModule(Module):
     )
 ```
 
-See [`projects/so106/so106/modules/follower_so106_arm.py`](https://github.com/solarian-dev/solarian/blob/main/projects/so106/so106/modules/follower_so106_arm.py) for servo gains and `SET_HOME`.
+See [`projects/so106/so106/modules/follower_so106_arm.py`](https://github.com/solarian-dev/solarian/blob/main/projects/so106/so106/modules/follower_so106_arm.py) for servo gains, and `conf/move.yaml` for the named poses a skill can drive this arm to.
 
 ### Arm yaml
 

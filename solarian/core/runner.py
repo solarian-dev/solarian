@@ -1,0 +1,485 @@
+"""Runtime machinery that schedules a component according to its execution mode.
+
+:class:`~solarian.core.module.Module` and
+:class:`~solarian.core.ai.system1.skill.Skill` describe *what* to do; a
+:class:`Runner` decides *when and where* it runs. Both expose the same worker
+protocol, so both share these runners:
+
+.. code-block:: text
+
+    worker_setup(reconnect)  -> prepare per-execution-context state
+    worker_tick() -> bool    -> do one unit of work; False means "finished"
+    worker_teardown(exit)    -> release resources, report final status
+
+The runner owns the loop, the frequency pacing, readiness signalling, crash
+capture, and the event sink, so those behave identically whether the component
+is a process, a thread, or ticked inline by its host.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+import traceback as _tb
+from abc import ABC, abstractmethod
+from collections import deque
+from multiprocessing import Event as MpEvent, Process, Queue as MpQueue
+from typing import Any, Protocol
+
+from solarian.core.execution import ExecutionMode, WorkerExit
+from solarian.utils.precise_sleep import precise_wait
+from solarian.utils.profiling import get_stats_snapshot
+
+logger = logging.getLogger("runner")
+
+
+class Runnable(Protocol):
+    """What a :class:`Runner` needs from the component it schedules."""
+
+    name: str
+    frequency: float
+
+    def worker_setup(self, reconnect: bool) -> None: ...
+
+    def worker_tick(self) -> bool: ...
+
+    def worker_teardown(self, exit_reason: WorkerExit) -> None: ...
+
+
+class Runner(ABC):
+    """Base scheduler for a :class:`Runnable`.
+
+    Subclasses supply the concurrency primitives (readiness flag, error and
+    profiling channels, event sink) and the mechanism that gets
+    :meth:`_run_worker` executing in the right context.
+    """
+
+    #: Whether the worker body executes in a different process than the caller.
+    crosses_process_boundary: bool = False
+
+    def __init__(self, target: Runnable):
+        self.target = target
+        self._exit_reason = WorkerExit.COMPLETED
+
+    @property
+    def name(self) -> str:
+        return getattr(self.target, "name", type(self.target).__name__)
+
+    # ========= lifecycle =============
+    @abstractmethod
+    def start(self, wait: bool = True) -> None:
+        """Begin execution. When *wait*, block until the worker is ready."""
+
+    @abstractmethod
+    def stop(self, wait: bool = True) -> None:
+        """Request a graceful stop, optionally waiting for the worker to exit."""
+
+    @abstractmethod
+    def is_alive(self) -> bool: ...
+
+    def terminate(self) -> None:
+        """Stop as abruptly as the execution mode allows."""
+        self.stop(wait=False)
+
+    def join(self, timeout: float | None = None) -> None:
+        """Wait for the worker to finish."""
+
+    @property
+    def is_ready(self) -> bool:
+        return self._ready_is_set()
+
+    @property
+    def pid(self) -> int | None:
+        """OS pid of the worker, or ``None`` when it shares the host process."""
+        return None
+
+    @property
+    def exitcode(self) -> int | None:
+        """Worker exit code, or ``None`` when it shares the host process."""
+        return None
+
+    def start_wait(self) -> None:
+        """Block until the worker completes its first tick, or raise."""
+        self._ready_wait(getattr(self.target, "launch_timeout", 3.0))
+        if not self._ready_is_set():
+            raise RuntimeError(
+                f"'{self.name}' did not become ready within "
+                f"launch_timeout={getattr(self.target, 'launch_timeout', 3.0)}s."
+            )
+
+    # ========= parent-side channels =============
+    def get_error(self) -> tuple[str, str] | None:
+        """Return ``(name, traceback)`` if the worker crashed, else ``None``."""
+        return None
+
+    def get_profiling_stats(self) -> dict | None:
+        """Return the worker's profiling snapshot if it has published one."""
+        return None
+
+    def drain_events(self) -> list:
+        """Pop everything the component has emitted since the last drain."""
+        return []
+
+    @property
+    def event_sink(self) -> Any:
+        """Where the component's ``emit()`` writes. ``None`` disables events."""
+        return None
+
+    # ========= worker-side body =============
+    def _run_worker(self) -> None:
+        """Setup, loop at the target frequency, tear down. Runs in the worker."""
+        target = self.target
+        exit_reason = WorkerExit.COMPLETED
+        try:
+            target.worker_setup(self.crosses_process_boundary)
+
+            t_start = time.monotonic()
+            idx = 0
+            keep_running = True
+            while keep_running:
+                if self._stop_requested():
+                    exit_reason = WorkerExit.STOPPED
+                    break
+
+                keep_running = target.worker_tick()
+
+                # Ready means "has completed a full cycle", so late failures
+                # during the first tick surface as a crash rather than a hang.
+                if idx == 0:
+                    self._set_ready()
+                idx += 1
+
+                period = 1.0 / max(float(getattr(target, "frequency", 0.0) or 0.0), 1e-9)
+                precise_wait(t_end=t_start + period * idx, time_func=time.monotonic)
+        except Exception as exc:  # noqa: BLE001
+            exit_reason = WorkerExit.FAILED
+            tb_str = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+            logger.exception("'%s' crashed: %s", self.name, exc)
+            self._put_error(tb_str)
+        finally:
+            self._set_ready()
+            self._put_profiling()
+            try:
+                target.worker_teardown(exit_reason)
+            except Exception:  # noqa: BLE001
+                logger.exception("'%s' teardown failed", self.name)
+
+    # ========= hooks for subclasses =============
+    def _stop_requested(self) -> bool:
+        return False
+
+    def _set_ready(self) -> None: ...
+
+    def _ready_is_set(self) -> bool:
+        return True
+
+    def _ready_wait(self, timeout: float) -> None: ...
+
+    def _put_error(self, tb_str: str) -> None: ...
+
+    def _put_profiling(self) -> None: ...
+
+
+class ProcessModuleRunner(Runner):
+    """Runs the component in its own OS process.
+
+    Isolates its loop timing from everything else, at the cost of a fork/spawn
+    and shared-memory or queue plumbing for anything that has to cross back.
+    """
+
+    crosses_process_boundary = True
+
+    def __init__(self, target: Runnable):
+        super().__init__(target)
+        self._process: Process | None = None
+        self._ready = MpEvent()
+        self._stop = MpEvent()
+        self._error_queue: MpQueue = MpQueue()
+        self._profiling_queue: MpQueue = MpQueue()
+        self._event_queue: MpQueue = MpQueue()
+
+    def start(self, wait: bool = True) -> None:
+        if self._process is not None:
+            return
+        self._process = Process(target=self._run_worker, name=f"Worker-{self.name}")
+        # Skills opt into daemon so they cannot outlive the runtime that
+        # launched them; modules are torn down explicitly at shutdown.
+        self._process.daemon = bool(getattr(self.target, "daemon", False))
+        self._process.start()
+        if wait:
+            self.start_wait()
+
+    def start_wait(self) -> None:
+        timeout = float(getattr(self.target, "launch_timeout", 3.0))
+        self._ready.wait(timeout)
+        if not self.is_alive():
+            error = self.get_error()
+            if error:
+                worker_name, tb_str = error
+                raise RuntimeError(
+                    f"'{worker_name}' process died during startup:\n{tb_str}"
+                )
+            raise RuntimeError(
+                f"'{self.name}' process died during startup "
+                f"(exit code {self.exitcode}). Check stderr for details."
+            )
+        if not self._ready.is_set():
+            # Alive but never reached the first loop iteration — usually a
+            # post-fork deadlock (ZMQ / StatusBoard threads in the parent).
+            raise RuntimeError(
+                f"'{self.name}' process (pid {self.pid}) did not become ready "
+                f"within launch_timeout={timeout}s. The child is likely stuck "
+                f"after fork; restart and check that the parent is not "
+                f"multithreaded before start()."
+            )
+
+    def stop(self, wait: bool = True) -> None:
+        self._stop.set()
+        if wait:
+            self.join()
+
+    def terminate(self) -> None:
+        self._stop.set()
+        if self._process is not None and self._process.is_alive():
+            self._process.terminate()
+
+    def is_alive(self) -> bool:
+        return self._process is not None and self._process.is_alive()
+
+    def join(self, timeout: float | None = None) -> None:
+        if self._process is not None:
+            self._process.join(timeout)
+
+    @property
+    def pid(self) -> int | None:
+        return self._process.pid if self._process is not None else None
+
+    @property
+    def exitcode(self) -> int | None:
+        return self._process.exitcode if self._process is not None else None
+
+    def get_error(self) -> tuple[str, str] | None:
+        try:
+            return self._error_queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            return None
+
+    def get_profiling_stats(self) -> dict | None:
+        try:
+            return self._profiling_queue.get_nowait()
+        except Exception:  # noqa: BLE001
+            return None
+
+    @property
+    def event_sink(self) -> Any:
+        return self._event_queue
+
+    def drain_events(self) -> list:
+        events = []
+        while True:
+            try:
+                events.append(self._event_queue.get_nowait())
+            except Exception:  # noqa: BLE001
+                return events
+
+    def _stop_requested(self) -> bool:
+        return self._stop.is_set()
+
+    def _set_ready(self) -> None:
+        self._ready.set()
+
+    def _ready_is_set(self) -> bool:
+        return self._ready.is_set()
+
+    def _ready_wait(self, timeout: float) -> None:
+        self._ready.wait(timeout)
+
+    def _put_error(self, tb_str: str) -> None:
+        try:
+            self._error_queue.put_nowait((self.name, tb_str))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _put_profiling(self) -> None:
+        try:
+            self._profiling_queue.put_nowait(get_stats_snapshot())
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class ThreadModuleRunner(Runner):
+    """Runs the component on a daemon thread in the host process.
+
+    For blocking device APIs that must not stall the host loop but do not
+    justify a process — no pickling, no shared memory, just the GIL.
+    """
+
+    def __init__(self, target: Runnable):
+        super().__init__(target)
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+        self._stop = threading.Event()
+        self._error: tuple[str, str] | None = None
+        self._profiling: dict | None = None
+        self._events: deque = deque()
+
+    def start(self, wait: bool = True) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._run_worker, name=f"Worker-{self.name}", daemon=True
+        )
+        self._thread.start()
+        if wait:
+            self.start_wait()
+
+    def stop(self, wait: bool = True) -> None:
+        self._stop.set()
+        if wait:
+            self.join()
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def join(self, timeout: float | None = None) -> None:
+        if self._thread is not None:
+            self._thread.join(timeout)
+
+    def get_error(self) -> tuple[str, str] | None:
+        error, self._error = self._error, None
+        return error
+
+    def get_profiling_stats(self) -> dict | None:
+        stats, self._profiling = self._profiling, None
+        return stats
+
+    @property
+    def event_sink(self) -> Any:
+        return self._events
+
+    def drain_events(self) -> list:
+        events = []
+        while self._events:
+            try:
+                events.append(self._events.popleft())
+            except IndexError:
+                break
+        return events
+
+    def _stop_requested(self) -> bool:
+        return self._stop.is_set()
+
+    def _set_ready(self) -> None:
+        self._ready.set()
+
+    def _ready_is_set(self) -> bool:
+        return self._ready.is_set()
+
+    def _ready_wait(self, timeout: float) -> None:
+        self._ready.wait(timeout)
+
+    def _put_error(self, tb_str: str) -> None:
+        self._error = (self.name, tb_str)
+
+    def _put_profiling(self) -> None:
+        try:
+            self._profiling = get_stats_snapshot()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class InlineModuleRunner(Runner):
+    """Runs the component on the host's own loop, one tick per host tick.
+
+    There is no worker body and no pacing of its own: :meth:`start` prepares
+    the component and the host calls :meth:`tick`. Cheapest possible option
+    for event-driven components, and it keeps their state changes on the
+    host's thread, so the host never reads half-updated state.
+    """
+
+    def __init__(self, target: Runnable):
+        super().__init__(target)
+        self._started = False
+        self._finished = False
+        self._error: tuple[str, str] | None = None
+        self._events: deque = deque()
+
+    def start(self, wait: bool = True) -> None:
+        if self._started:
+            return
+        self.target.worker_setup(self.crosses_process_boundary)
+        self._started = True
+
+    def tick(self) -> None:
+        """Advance the component one step. Called by the host's control loop."""
+        if not self._started or self._finished:
+            return
+        try:
+            if not self.target.worker_tick():
+                self._finish(WorkerExit.COMPLETED)
+        except Exception as exc:  # noqa: BLE001
+            tb_str = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+            logger.exception("Inline '%s' crashed: %s", self.name, exc)
+            self._put_error(tb_str)
+            self._finish(WorkerExit.FAILED)
+
+    def stop(self, wait: bool = True) -> None:
+        self._finish(WorkerExit.STOPPED)
+
+    def _finish(self, exit_reason: WorkerExit) -> None:
+        if not self._started or self._finished:
+            return
+        self._finished = True
+        try:
+            self.target.worker_teardown(exit_reason)
+        except Exception:  # noqa: BLE001
+            logger.exception("Inline '%s' teardown failed", self.name)
+
+    def is_alive(self) -> bool:
+        return self._started and not self._finished
+
+    @property
+    def is_ready(self) -> bool:
+        return self._started
+
+    def start_wait(self) -> None:
+        return None
+
+    def get_error(self) -> tuple[str, str] | None:
+        error, self._error = self._error, None
+        return error
+
+    @property
+    def event_sink(self) -> Any:
+        return self._events
+
+    def drain_events(self) -> list:
+        events = []
+        while self._events:
+            try:
+                events.append(self._events.popleft())
+            except IndexError:
+                break
+        return events
+
+    def _put_error(self, tb_str: str) -> None:
+        self._error = (self.name, tb_str)
+
+
+_RUNNERS: dict[ExecutionMode, type[Runner]] = {
+    ExecutionMode.PROCESS: ProcessModuleRunner,
+    ExecutionMode.THREAD: ThreadModuleRunner,
+    ExecutionMode.INLINE: InlineModuleRunner,
+}
+
+
+def make_runner(
+    target: Runnable, execution_mode: ExecutionMode | str | None = None
+) -> Runner:
+    """Build the runner for *target*, defaulting to its own execution mode."""
+    if execution_mode is None:
+        execution_mode = getattr(
+            target, "execution_mode", ExecutionMode.PROCESS
+        )
+    return _RUNNERS[ExecutionMode(execution_mode)](target)

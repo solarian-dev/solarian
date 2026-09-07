@@ -26,3 +26,6 @@ class PiCameraModule(Module):
     config_class = PiCameraConfig
 
     camera = PiCamera()
+
+    def control_step(self):
+        """Sensor-only: frames are published by ``update_observations``."""

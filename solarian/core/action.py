@@ -13,13 +13,9 @@ class ActionType:
     MODULE_ACTION = 1
     SCHEDULE_WAYPOINT = 2
     RESTART_PUT = 3
-    # Safety controls (see Robot.safety_arming). SAFETY_ARM opens the motion
-    # gate and ramps torque to operating level; SAFETY_ESTOP cuts torque and
-    # re-holds. Both are broadcast to every module.
-    SAFETY_ARM = 4
-    SAFETY_ESTOP = 5
-    # Move a module to its predefined home (arm: moveJ(home_q); gripper: fully open).
-    SET_HOME = 6
+    # Controller-orchestrated skill lifecycle (not forwarded to modules).
+    START_SKILL = 4
+    STOP_SKILL = 5
     CUSTOM_START = 100
 
     def __init__(self, value: int = 0):
@@ -199,9 +195,11 @@ class ModuleAction:
         action_type: "int | ActionType" = ActionType.STOP,
         data: dict = {},
         drop_timestamps: bool | None = None,
+        params: dict | None = None,
     ):
         self.action_type = action_type
         self.drop_timestamps = self._coerce_drop_timestamps(drop_timestamps)
+        self.params = dict(params or {})
         data = data if data is not None else {}
         self._fields = {}
 
@@ -289,6 +287,7 @@ class ModuleAction:
             'data': data,
             'action_type': int(self.action_type),
             'drop_timestamps': drop,
+            'params': dict(self.params),
         }
 
     # -- Compression -------------------------------------------------------
@@ -302,6 +301,16 @@ class ModuleAction:
         for field in self._fields.values():
             field.uncompress()
         self.is_compressed = False
+
+
+class _LooseModuleAction:
+    """Raw nested MODULE_ACTION payload when no project Action subclass is loaded."""
+
+    def __init__(self, payload: dict):
+        self._payload = dict(payload)
+
+    def to_dict(self):
+        return dict(self._payload)
 
 
 class Action:
@@ -335,37 +344,47 @@ class Action:
         valid_keys = set(module_actions_spec.keys())
 
         if action_type == ActionType.MODULE_ACTION:
-            for key in data:
-                if key not in valid_keys:
-                    raise ValueError(
-                        f"Invalid action key '{key}' for {actual_cls.__name__}. "
-                        f"Valid keys: {sorted(valid_keys)}"
-                    )
+            if not valid_keys:
+                for key, payload in data.items():
+                    if not isinstance(payload, dict):
+                        raise ValueError(
+                            f"Invalid action value for '{key}' in {actual_cls.__name__}. "
+                            f"Value must be a dictionary."
+                        )
+                    self._module_actions[key] = _LooseModuleAction(payload)
+            else:
+                for key in data:
+                    if key not in valid_keys:
+                        raise ValueError(
+                            f"Invalid action key '{key}' for {actual_cls.__name__}. "
+                            f"Valid keys: {sorted(valid_keys)}"
+                        )
 
-                if not isinstance(data[key], dict):
-                    raise ValueError(
-                        f"Invalid action value for '{key}' in {actual_cls.__name__}. "
-                        f"Value must be a dictionary."
-                    )
+                    if not isinstance(data[key], dict):
+                        raise ValueError(
+                            f"Invalid action value for '{key}' in {actual_cls.__name__}. "
+                            f"Value must be a dictionary."
+                        )
 
-                keys = set(data[key].keys())
-                if not {'data', 'action_type'}.issubset(keys):
-                    raise ValueError(
-                        f"Invalid action value for '{key}' in {actual_cls.__name__}. "
-                        f"Value must be a dictionary with keys 'data' and 'action_type'."
-                    )
-                extra = keys - {'data', 'action_type', 'drop_timestamps'}
-                if extra:
-                    raise ValueError(
-                        f"Invalid action value for '{key}' in {actual_cls.__name__}. "
-                        f"Unknown keys: {sorted(extra)}."
-                    )
+                    keys = set(data[key].keys())
+                    if not {'data', 'action_type'}.issubset(keys):
+                        raise ValueError(
+                            f"Invalid action value for '{key}' in {actual_cls.__name__}. "
+                            f"Value must be a dictionary with keys 'data' and 'action_type'."
+                        )
+                    extra = keys - {'data', 'action_type', 'drop_timestamps', 'params'}
+                    if extra:
+                        raise ValueError(
+                            f"Invalid action value for '{key}' in {actual_cls.__name__}. "
+                            f"Unknown keys: {sorted(extra)}."
+                        )
 
-                self._module_actions[key] = module_actions_spec[key].__class__(
-                    data=data[key]["data"],
-                    action_type=data[key]['action_type'],
-                    drop_timestamps=data[key].get('drop_timestamps'),
-                )
+                    self._module_actions[key] = module_actions_spec[key].__class__(
+                        data=data[key]["data"],
+                        action_type=data[key]['action_type'],
+                        drop_timestamps=data[key].get('drop_timestamps'),
+                        params=data[key].get('params'),
+                    )
         
 
     # -- Schema introspection ----------------------------------------------

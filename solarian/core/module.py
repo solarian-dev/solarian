@@ -8,32 +8,26 @@ from dataclasses import dataclass, asdict
 from abc import ABC, abstractmethod
 import numpy as np
 from typing import Dict, List, Tuple, Any, Callable, Union
-import traceback as _tb
-from multiprocessing import Process, Event, Queue as MpQueue, get_start_method
+from multiprocessing import get_start_method
 from solarian.core.calibration import MotorCalibration
 
 from solarian.core.joint import Joint
 from solarian.core.actuator import Actuator
 from solarian.core.sensor import Sensor
 from solarian.core.servo import Servo
-from solarian.core.data import Data, PosData, DataComputer, TimestampData
+from solarian.core.data import Data, DataComputer, TimestampData
 from solarian.core.clock_sync import synced_time, sync_with_server, get_offset
 from solarian.core.module_bus import ModuleBus
 from solarian.core.action import Action, ActionType, ModuleAction, action_handler
-from solarian.core.configs import InterpolatorType, ModuleConfig
+from solarian.core.configs import ModuleConfig
 from solarian.core.observation import Observation, ModuleObs
+from solarian.core.event import Event
+from solarian.core.execution import ExecutionMode, WorkerExit
+from solarian.core.runner import Runner, make_runner
 from solarian.utils import manual_profile, profile, setup_process_logging, get_log_queue
-from solarian.utils.profiling import get_stats_snapshot, merge_stats as merge_profiling_stats
 from solarian.utils.shared_memory.shared_memory_queue import Empty
 from solarian.utils.shared_memory.action_queue import ModuleActionQueue
-from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
-from solarian.utils.precise_sleep import precise_wait
-from solarian.utils.trajectory_interpolator import (
-    JointTrajectoryInterpolator,
-    PoseTrajectoryInterpolator,
-    ScalarTrajectoryInterpolator,
-    TrajectoryInterpolator,
-)
+from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 from solarian.utils import get_class
 from solarian.utils.status_board import StatusBoard
 # TODO: remove speed from calibration required
@@ -45,12 +39,20 @@ import logging
 logger = logging.getLogger(f"module")
 
 
-class Module(Process, ABC):
+class Module(ABC):
     """
     Base class for robot modules.
-    
-    Modules run as separate processes and communicate via shared memory if the start() method is called.
-    Otherwise, they run in the same process as the caller, eg: to just read sensors or write actuators without time sensitive operations.
+
+    A module is a *logical* device: it produces observations, may emit events,
+    and consumes actions. How it is scheduled is a separate, operational
+    decision expressed by :attr:`execution_mode` and carried out by a
+    :class:`~solarian.core.runner.Runner` — so the same class can run in its
+    own process on a robot and inline inside a test.
+
+    Calling :meth:`start` hands the module to its runner. Without it the module
+    is simply usable in-process, e.g. to read sensors or write actuators
+    without time-sensitive operations.
+
     They support an extensible action system where subclasses can register
     custom action handlers using the @action_handler decorator.
     
@@ -61,13 +63,31 @@ class Module(Process, ABC):
     
     
     
-    Standard actions (STOP, SCHEDULE_WAYPOINT) are handled by default.
-    :class:`ArmModule` and :class:`GripperModule` override waypoint handling
-    and add ``SET_HOME``. Subclasses can override these or add new actions.
+    STOP is handled by default. SCHEDULE_WAYPOINT lives on
+    :class:`~solarian.core.actuator_module.ActuatorModule`, which owns the
+    trajectory interpolator; :class:`ArmModule` and :class:`GripperModule`
+    extend it with exclusive speed-limited moves (``params.named`` /
+    ``params.speed``). Subclasses can override these or add new actions.
     """
 
     # Override in subclasses to use a custom config class (must extend ModuleConfig)
     config_class: type = ModuleConfig
+
+    #: Config to use when the project ships no ``conf/<name>.yaml``. Set this
+    #: on modules that have nothing to configure (input devices), so a project
+    #: does not have to carry an empty YAML file for them. ``None`` keeps the
+    #: YAML mandatory.
+    default_config: dict | None = None
+
+    #: How this module is scheduled by default. Hardware with its own timing
+    #: requirements wants a process; cheap event sources can run inline.
+    #: Overridable per instance and via ``execution:`` in the module YAML.
+    execution_mode: ExecutionMode = ExecutionMode.PROCESS
+
+    #: Event types this module can emit, for discovery and documentation.
+    #: Declaring an event type here does not by itself emit anything; the
+    #: module calls :meth:`emit` when the thing actually happens.
+    events: tuple = ()
 
     field_name = "component"
 
@@ -146,8 +166,17 @@ class Module(Process, ABC):
         return self    
 
 
-    def __init__(self, cfg: ModuleConfig | None = None, name: str | None = None, observation_buffer: ObservationRingBuffer | None = None, action_queue: ModuleActionQueue | None = None):
-        super().__init__()
+    def __init__(
+        self,
+        cfg: ModuleConfig | None = None,
+        name: str | None = None,
+        observation_buffer: ObservationBuffer | None = None,
+        action_queue: ModuleActionQueue | None = None,
+        execution_mode: ExecutionMode | str | None = None,
+    ):
+        # Class-level declarations (``right_arm = So106ArmModule()``) are
+        # placeholders resolved later against the module YAML.
+        self._runner: Runner | None = None
 
         if cfg is None:
             return
@@ -158,27 +187,16 @@ class Module(Process, ABC):
         self.observation_buffer = observation_buffer
         self.action_queue = action_queue
 
+        # Explicit argument beats YAML, which beats the class default.
+        resolved = execution_mode or getattr(cfg, "execution", None)
+        if resolved is not None:
+            self.execution_mode = ExecutionMode(resolved)
+
         self._register_action_handlers()
 
         self.verbose = True
         self.is_connected = False
         self.calibration = None
-
-        # Interpolator runtime (pose / scalar / joint). Sensor-only modules
-        # keep interpolator_type JOINT and never seed ``interp``.
-        self.interp: TrajectoryInterpolator | None = None
-        self.last_waypoint_time: float = 0.0
-        self.speed_kwargs: dict[str, Any] = {}
-        self._late_waypoint_warn_t: float = 0.0
-        self._late_waypoint_suppressed: int = 0
-        self._last_action_time: float | None = None
-        self._action_interval_ema: float = float(
-            getattr(self.cfg, "drive_horizon_min_s", 1.0 / 30.0)
-        )
-
-        self.ready_event = Event()
-        self._error_queue: MpQueue = MpQueue()
-        self._profiling_queue: MpQueue = MpQueue()
 
         self.launch_timeout = self.cfg.launch_timeout
         self.commands_per_cycle = self.cfg.commands_per_cycle
@@ -481,59 +499,57 @@ class Module(Process, ABC):
         return f"{self.name} module"
 
     # ========= launch method ===========
+    @property
+    def runner(self) -> Runner:
+        """The scheduler for this module, created on first use."""
+        if self._runner is None:
+            self._runner = make_runner(self)
+        return self._runner
+
     def start(self, wait=True):
-        super().start()
-        if wait:
-            self.start_wait()
+        """Hand this module to its runner (process, thread, or inline host)."""
+        self.runner.start(wait=wait)
         if self.verbose:
-            logger.info(f"[Module] {self.name} process spawned at {self.pid}")
+            logger.info(
+                f"[Module] {self.name} started ({self.execution_mode.value})"
+            )
 
     def stop(self, wait=True):
-        """Stop the module process."""
-        # self.process_action(Action.stop())
-        self._dispatch_action(ModuleAction(ActionType.STOP), time.time())
-        if wait:
-            self.stop_wait()
+        """Ask the runner to stop the module."""
+        self.runner.stop(wait=wait)
 
-    def start_wait(self):
-        self.ready_event.wait(self.launch_timeout)
-        if not self.is_alive():
-            error = self.get_error()
-            if error:
-                mod_name, tb_str = error
-                raise RuntimeError(
-                    f"Module '{mod_name}' process died during startup:\n{tb_str}"
-                )
-            raise RuntimeError(
-                f"Module '{self.name}' process died during startup "
-                f"(exit code {self.exitcode}). Check stderr for details."
-            )
-        if not self.ready_event.is_set():
-            # Alive but never reached the first control-loop iteration — usually
-            # a post-fork deadlock (ZMQ / StatusBoard threads in the parent).
-            raise RuntimeError(
-                f"Module '{self.name}' process (pid {self.pid}) did not become "
-                f"ready within launch_timeout={self.launch_timeout}s. The child "
-                f"is likely stuck after fork; restart and check that the parent "
-                f"is not multithreaded before module.start()."
-            )
-    
-    def stop_wait(self):
-        self.join()
-    
+    def terminate(self):
+        self.runner.terminate()
+
+    def is_alive(self) -> bool:
+        return self.runner.is_alive()
+
+    def join(self, timeout: float | None = None):
+        self.runner.join(timeout)
+
+    @property
+    def pid(self) -> int | None:
+        """OS pid when this module runs in its own process, else ``None``."""
+        return self.runner.pid
+
+    @property
+    def exitcode(self) -> int | None:
+        return self.runner.exitcode
+
     @property
     def is_ready(self):
-        return self.ready_event.is_set()
+        return self.runner.is_ready
 
     def get_error(self) -> tuple[str, str] | None:
-        """Return (module_name, traceback_string) if the process crashed, else None.
-        
-        Safe to call from the parent process only.
+        """Return (module_name, traceback_string) if the module crashed, else None.
+
+        Safe to call from the host process only.
         """
-        try:
-            return self._error_queue.get_nowait()
-        except Exception:
-            return None
+        return self.runner.get_error()
+
+    def get_profiling_stats(self) -> dict | None:
+        """Return the worker's profiling snapshot, if it published one."""
+        return self.runner.get_profiling_stats()
 
     # ========= context manager ===========
     def __enter__(self):
@@ -584,7 +600,18 @@ class Module(Process, ABC):
 
 
     def update_observations(self):
+        """Publish this module's current state into its observation buffer.
 
+        The one way a module reports state. Called by the runner on every
+        tick, whichever execution mode that runner implements, so a skill
+        reads the same buffer whether this module sits in its own process on
+        the robot or inline on the controller's loop.
+
+        The base handles modules that have an entry in the project's
+        ``Observation`` schema, reading each declared sensor field. A module
+        with no schema entry has nothing typed to publish and overrides this
+        to report whatever it does have.
+        """
         if self.observation_buffer is None:
             raise ValueError("Observation buffer is not initialized.")
 
@@ -613,28 +640,73 @@ class Module(Process, ABC):
 
         self.observation_buffer.put(obs)
 
+    # ========= events ============
+    def emit(self, event_type, **data) -> None:
+        """Queue an :class:`~solarian.core.event.Event` for the host to drain.
+
+        Emitting never runs a handler: the event lands in the runner's sink
+        and the host pulls it on its next control tick. That keeps handlers on
+        the control thread even when the event originated on a device callback
+        thread or in another process.
+        """
+        sink = self.runner.event_sink
+        if sink is None:
+            return
+        event = Event(type=int(event_type), source=self.name, data=dict(data))
+        try:
+            sink.put_nowait(event) if hasattr(sink, "put_nowait") else sink.append(event)
+        except Exception:  # noqa: BLE001 - a dropped event must not stall the loop
+            logger.debug("Module '%s': dropped event %r", self.name, event)
+
+    def drain_events(self) -> list[Event]:
+        """Pop every event this module has emitted since the last drain.
+
+        A module with no runner yet cannot have emitted anything, and building
+        one just to read an empty sink would allocate queues for every module
+        that never emits.
+        """
+        if self._runner is None:
+            return []
+        return self._runner.drain_events()
+
     def reset(self):
         """Reset the module. Eg: set to home position"""
         pass
 
-    def _coalesce_actions(self, actions: list) -> list:
-        """Keep only the latest SCHEDULE_WAYPOINT in a drained burst.
+    def _drop_timestamps(self, action: ModuleAction) -> bool:
+        # ``None`` is not "false" here: it means the action expressed no
+        # preference, so the module's own config decides.
+        if action.drop_timestamps is not None:
+            return bool(action.drop_timestamps)
+        return bool(getattr(self.cfg, "drive_waypoints", False))
 
-        Backlogged teleop waypoints with stale stamps cause interpolator thrash
-        (and used to be discarded). Other action types keep their order.
+    def _is_drive_waypoint(self, action) -> bool:
+        return int(action.action_type) == int(
+            ActionType.SCHEDULE_WAYPOINT
+        ) and self._drop_timestamps(action)
+
+    def _coalesce_actions(self, actions: list) -> list:
+        """Keep only the latest of the waypoints whose timing this module owns.
+
+        A drive waypoint means "be here as soon as you can", so a backlogged
+        burst of them is stale and only thrashes the interpolator. A
+        timestamped waypoint names its own moment instead, and a policy chunk
+        is seconds of trajectory expressed as several of them, so collapsing
+        those would flatten the whole motion onto its final setpoint. Other
+        action types keep their order.
         """
         if len(actions) <= 1:
             return actions
-        last_sw = None
+        last_drive = None
         for i, action in enumerate(actions):
-            if int(action.action_type) == int(ActionType.SCHEDULE_WAYPOINT):
-                last_sw = i
-        if last_sw is None:
+            if self._is_drive_waypoint(action):
+                last_drive = i
+        if last_drive is None:
             return actions
         return [
             action
             for i, action in enumerate(actions)
-            if int(action.action_type) != int(ActionType.SCHEDULE_WAYPOINT) or i == last_sw
+            if i == last_drive or not self._is_drive_waypoint(action)
         ]
 
     def _register_action_handlers(self) -> None:
@@ -644,202 +716,6 @@ class Module(Process, ABC):
             for attr_name, value in cls.__dict__.items():
                 if callable(value) and hasattr(value, "_handles_action"):
                     self.action_handlers[int(getattr(value, "_handles_action"))] = attr_name
-
-    # ========= interpolator helpers ============
-    def _is_pose_interpolator(self) -> bool:
-        return self.cfg.interpolator_type == InterpolatorType.POSE
-
-    def _is_scalar_interpolator(self) -> bool:
-        return self.cfg.interpolator_type == InterpolatorType.SCALAR
-
-    def _is_joint_interpolator(self) -> bool:
-        return self.cfg.interpolator_type == InterpolatorType.JOINT
-
-    def _warn_late_waypoint(
-        self, target_time: float, t_now: float, *, clamped: bool = False
-    ) -> None:
-        late_ms = (t_now - target_time) * 1000.0
-        now_wall = time.time()
-        if now_wall - self._late_waypoint_warn_t < 1.0:
-            self._late_waypoint_suppressed += 1
-            return
-        suppressed = self._late_waypoint_suppressed
-        self._late_waypoint_warn_t = now_wall
-        self._late_waypoint_suppressed = 0
-        extra = f" ({suppressed} more suppressed)" if suppressed else ""
-        action = "clamping" if clamped else "discarding"
-        logger.warning(
-            "Module '%s': %s late SCHEDULE_WAYPOINT (%.1f ms late)%s",
-            self.name,
-            action,
-            late_ms,
-            extra,
-        )
-
-    def _resolve_waypoint_time(self, target_time: float, t_now: float) -> float:
-        if target_time > t_now:
-            return float(target_time)
-        self._warn_late_waypoint(target_time, t_now, clamped=True)
-        horizon = 1.0 / max(float(self.frequency), 1.0)
-        return float(t_now + horizon)
-
-    def _adaptive_drive_horizon(self, t_now: float) -> float:
-        min_h = float(getattr(self.cfg, "drive_horizon_min_s", 1.0 / 30.0))
-        max_h = float(getattr(self.cfg, "drive_horizon_max_s", 0.12))
-        alpha = float(getattr(self.cfg, "drive_horizon_ema_alpha", 0.2))
-        mult = float(getattr(self.cfg, "drive_horizon_multiplier", 1.5))
-        if self._last_action_time is not None:
-            dt = t_now - self._last_action_time
-            if dt > 0:
-                self._action_interval_ema = (
-                    alpha * dt + (1.0 - alpha) * self._action_interval_ema
-                )
-        self._last_action_time = t_now
-        horizon = min(max(self._action_interval_ema * mult, min_h), max_h)
-        StatusBoard.set(
-            f"{self.name} drive horizon (ms)",
-            round(horizon * 1000.0, 1),
-        )
-        return horizon
-
-    def _drop_timestamps(self, action: ModuleAction) -> bool:
-        flag = getattr(action, "drop_timestamps", None)
-        if flag is not None:
-            return bool(flag)
-        return bool(getattr(self.cfg, "drive_waypoints", False))
-
-    def _create_interpolator(
-        self, times: np.ndarray, values: np.ndarray
-    ) -> TrajectoryInterpolator:
-        interp_type = self.cfg.interpolator_type
-        if interp_type == InterpolatorType.SCALAR:
-            return ScalarTrajectoryInterpolator(times, values)
-        if interp_type == InterpolatorType.JOINT:
-            return JointTrajectoryInterpolator(times, values)
-        if interp_type == InterpolatorType.POSE:
-            return PoseTrajectoryInterpolator(times, values)
-        raise ValueError(f"Unknown interpolator type: {interp_type}")
-
-    def _get_max_speed_kwargs(self) -> dict:
-        interp_type = self.cfg.interpolator_type
-        max_speed = self.cfg.max_speed
-        if interp_type == InterpolatorType.SCALAR:
-            return {
-                "max_speed": max_speed if isinstance(max_speed, (int, float)) else max_speed[0]
-            }
-        if interp_type == InterpolatorType.JOINT:
-            return {"max_joint_speed": max_speed}
-        if interp_type == InterpolatorType.POSE:
-            if isinstance(max_speed, (int, float)):
-                return {"max_pos_speed": max_speed, "max_rot_speed": max_speed}
-            return {
-                "max_pos_speed": max_speed[0],
-                "max_rot_speed": max_speed[1] if len(max_speed) > 1 else max_speed[0],
-            }
-        raise ValueError(f"Unknown interpolator type: {interp_type}")
-
-    def _scalar_actuator_name(self) -> str | None:
-        explicit = getattr(type(self), "scalar_actuator", None)
-        if explicit:
-            return str(explicit)
-        from solarian.core.ik.actuator import CartesianIKActuator
-
-        names = [
-            n
-            for n, act in self.actuators.items()
-            if not isinstance(act, CartesianIKActuator)
-        ]
-        return names[0] if names else None
-
-    def _scalar_to_actuator(self, value: float) -> float:
-        return float(value)
-
-    def _actuator_to_scalar(self, value: float) -> float:
-        return float(value)
-
-    def _read_current_scalar(self) -> float:
-        name = self._scalar_actuator_name()
-        if not name:
-            return 0.0
-        readings = self.read_sensors(PosData, [name])
-        entry = readings[name]
-        raw = float(entry["value"] if isinstance(entry, dict) else entry.value)
-        return self._actuator_to_scalar(raw)
-
-    def _ensure_scalar_interpolator(self, t_now: float | None = None) -> None:
-        if self.interp is not None:
-            return
-        t = float(t_now if t_now is not None else time.monotonic())
-        try:
-            value = self._read_current_scalar()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Module '%s': could not seed scalar interpolator (%s); using 0.",
-                self.name,
-                exc,
-            )
-            value = 0.0
-        self.interp = self._create_interpolator(
-            np.array([t]), np.array([value], dtype=np.float64)
-        )
-        self.last_waypoint_time = t
-
-    def _extract_scalar_waypoint(
-        self, action: ModuleAction
-    ) -> tuple[float, float] | None:
-        name = self._scalar_actuator_name()
-        if not name:
-            return None
-        fields = action.values()
-        if name not in fields:
-            if len(fields) == 1:
-                field = next(iter(fields.values()))
-                return float(field.value), float(field.timestamp)
-            logger.warning(
-                "Module '%s': SCHEDULE_WAYPOINT missing scalar field %r; ignoring.",
-                self.name,
-                name,
-            )
-            return None
-        field = fields[name]
-        return float(field.value), float(field.timestamp)
-
-    def _schedule_scalar_waypoint(
-        self,
-        value: float,
-        target_time_wall: float,
-        t_now: float,
-        drop_timestamps: bool = False,
-    ) -> None:
-        self._ensure_scalar_interpolator(t_now)
-        assert self.interp is not None
-        if drop_timestamps:
-            target_time = t_now + self._adaptive_drive_horizon(t_now)
-            self.interp = self.interp.drive_to_waypoint(
-                value=float(value),
-                time=target_time,
-                curr_time=t_now,
-                **self._get_max_speed_kwargs(),
-            )
-            self.last_waypoint_time = target_time
-            return
-
-        target_time = time.monotonic() - synced_time() + float(target_time_wall)
-        target_time = self._resolve_waypoint_time(target_time, t_now)
-        self.interp = self.interp.schedule_waypoint(
-            value=float(value),
-            time=target_time,
-            curr_time=t_now,
-            last_waypoint_time=self.last_waypoint_time,
-            **self._get_max_speed_kwargs(),
-        )
-        self.last_waypoint_time = target_time
-
-    def _write_scalar(self, value: float) -> None:
-        name = self._scalar_actuator_name()
-        if not name:
-            return
-        self.write_actuators({name: PosData(value=self._scalar_to_actuator(value))})
 
     # ========= action dispatch system ============
     def _dispatch_action(self, action: ModuleAction, t_now: float) -> bool:
@@ -880,89 +756,57 @@ class Module(Process, ABC):
                     print(f"[Module] {self.name}: observation error: {e}")
                 break
 
-    @action_handler(ActionType.SCHEDULE_WAYPOINT)
-    def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
-        """Schedule a timestamped waypoint into the module interpolator.
-
-        * ``interpolator_type: pose`` — Cartesian ``x..rz`` (ArmModule).
-        * ``interpolator_type: scalar`` — single actuator (grippers).
-        Other interpolator types ignore the waypoint.
-        """
-        drop_timestamps = self._drop_timestamps(action)
-        if self._is_pose_interpolator():
-            extract = getattr(self, "_extract_pose_waypoint", None)
-            schedule = getattr(self, "_schedule_pose_waypoint", None)
-            if extract is None or schedule is None:
-                return True
-            extracted = extract(action)
-            if extracted is None:
-                return True
-            pose, target_time_wall = extracted
-            schedule(pose, target_time_wall, t_now, drop_timestamps=drop_timestamps)
-            return True
-
-        if self._is_scalar_interpolator():
-            extracted = self._extract_scalar_waypoint(action)
-            if extracted is None:
-                return True
-            value, target_time_wall = extracted
-            self._schedule_scalar_waypoint(
-                value, target_time_wall, t_now, drop_timestamps=drop_timestamps
-            )
-            return True
-
-        return True
-
+    @abstractmethod
     def control_step(self):
-        """Sample pose/scalar interpolators when configured.
+        """Drive the module's outputs once, between action drain and observation
+        publish.
 
-        Subclasses may override; call ``super().control_step()`` to keep
-        upsampling, or replace entirely (ArmModule joint motion).
+        Called every iteration at ``self.frequency`` Hz. Sensor-only modules
+        (cameras) have nothing to drive and implement this as a no-op;
+        :class:`~solarian.core.actuator_module.ActuatorModule` samples its
+        trajectory interpolator here.
         """
-        if self._is_pose_interpolator():
-            ensure = getattr(self, "_ensure_pose_interpolator", None)
-            write = getattr(self, "_write_pose", None)
-            if ensure is not None and write is not None:
-                ensure()
-                if self.interp is not None:
-                    write(self.interp(time.monotonic()))
-            return
-        if self._is_scalar_interpolator():
-            self._ensure_scalar_interpolator()
-            if self.interp is not None:
-                self._write_scalar(float(self.interp(time.monotonic())))
 
-    # ========= main loop in process ============
-    def run(self):
-        """Main control loop running in a separate process."""
+    # ========= worker protocol (driven by the runner) ============
+    def worker_setup(self, reconnect: bool) -> None:
+        """Prepare this module to run in its execution context.
 
-        status_mp_q = getattr(self, '_status_mp_q', None)
-        if status_mp_q is not None:
-            StatusBoard.init_child(status_mp_q)
+        Args:
+            reconnect: True when the worker body executes in a different
+                process than the one that built the module. Device handles,
+                log routing, and processor graphs do not survive that boundary
+                and are rebuilt here; an inline module already owns valid ones.
+        """
+        if reconnect:
+            status_mp_q = getattr(self, '_status_mp_q', None)
+            if status_mp_q is not None:
+                StatusBoard.init_child(status_mp_q)
 
-        logger.info(f"Module {self.name} process start method: {get_start_method()}")
-        setup_process_logging(logger_name=None, log_queue=self._log_queue, install_fallback=False)
+            logger.info(f"Module {self.name} process start method: {get_start_method()}")
+            setup_process_logging(
+                logger_name=None, log_queue=self._log_queue, install_fallback=False
+            )
 
-        logger.info(f"Starting module {self.name} process")
+        logger.info(f"Starting module {self.name}")
         self._register_action_handlers()
 
-        # Spawn pickles processor ``inputs`` into copies whose ``id()`` no
-        # longer matches class-level SensorField sources. Rebuild from the
-        # schema in this process so CalculatedFields resolve.
-        if getattr(self, "_module_obs_cls", None) is not None:
-            self._robot_processors = self._module_obs_cls.create_processors(
-                DataComputer.ROBOT
-            )
+        if reconnect:
+            # Spawn pickles processor ``inputs`` into copies whose ``id()`` no
+            # longer matches class-level SensorField sources. Rebuild from the
+            # schema in this process so CalculatedFields resolve.
+            if getattr(self, "_module_obs_cls", None) is not None:
+                self._robot_processors = self._module_obs_cls.create_processors(
+                    DataComputer.ROBOT
+                )
 
-        # Reconnect hardware in the subprocess — device handles inherited
-        # from the parent (via fork) are not reliably usable (e.g. AVFoundation cameras).
-        # Keep per-port calibration so normalized reads work immediately.
-        calibration = self.get_calibration() or {}
-        self.disconnect()
-        logger.info(f"Module {self.name} process disconnected")
-        self.connect(calibration)
-
-        logger.info(f"Module {self.name} process connected")
+            # Device handles inherited from the parent (via fork) are not
+            # reliably usable (e.g. AVFoundation cameras). Keep per-port
+            # calibration so normalized reads work immediately.
+            calibration = self.get_calibration() or {}
+            self.disconnect()
+            logger.info(f"Module {self.name} process disconnected")
+            self.connect(calibration)
+            logger.info(f"Module {self.name} process connected")
 
         endpoint = getattr(self, "_clock_sync_endpoint", None)
         if endpoint is not None:
@@ -977,69 +821,38 @@ class Module(Process, ABC):
                     get_offset() * 1000.0,
                 )
 
+        self.reset()
+        self._t_last_control_step = time.monotonic()
+
+    def worker_tick(self) -> bool:
+        """One control iteration: drain actions, drive outputs, publish state.
+
+        Returns:
+            False when a STOP action asked the module to shut down.
+        """
+        t_now = time.monotonic()
+
+        # Drain actions first so control_step() sees the latest target
+        keep_running = True
         try:
-            self.reset()
+            # No queue is normal for a module that only produces: a keyboard
+            # or a leader arm on the controller is never sent actions.
+            if self.action_queue is not None and not self.action_queue.empty():
+                actions = self._coalesce_actions(self.action_queue.get_all())
+                for action in actions:
+                    keep_running = self._dispatch_action(action, t_now)
+        except Empty:
+            pass
 
+        manual_profile("control_step", time.monotonic() - self._t_last_control_step)
+        self._t_last_control_step = time.monotonic()
+        self.control_step()
 
-            self._t_start = time.monotonic()
-            self._iter_idx = 0
-            
-            keep_running = True
+        self.update_observations()
+        return keep_running
 
-            # obs_thread.start()
-
-
-            t_last_control_step = time.monotonic()
-
-
-            while keep_running:
-                t_now = time.monotonic()
-
-                # Drain actions first so control_step() sees the latest target
-                action = None
-                try:
-                    if self.action_queue is None:
-                        logger.error("Action queue is not initialized.")
-                    elif not self.action_queue.empty():
-                        actions = self._coalesce_actions(self.action_queue.get_all())
-                        for action in actions:
-                            keep_running = self._dispatch_action(action, t_now)
-
-                except Empty:
-                    pass
-
-                manual_profile("control_step", time.monotonic() - t_last_control_step)
-                t_last_control_step = time.monotonic()
-                self.control_step()
-
-                self.update_observations()
-
-                
-                # first loop successful, ready to receive actions
-                if self._iter_idx == 0:
-                    self.ready_event.set()
-                self._iter_idx += 1
-                
-                # regulate frequency
-                dt = 1 / self.frequency
-                t_end = self._t_start + dt * self._iter_idx
-                precise_wait(t_end=t_end, time_func=time.monotonic)
-                
-        except Exception as _run_exc:
-            tb_str = "".join(
-                _tb.format_exception(type(_run_exc), _run_exc, _run_exc.__traceback__)
-            )
-            logger.exception(
-                "Module '%s' crashed: %s", self.name, _run_exc
-            )
-            self._error_queue.put_nowait((self.name, tb_str))
-        finally:
-            self.ready_event.set()
-            try:
-                self._profiling_queue.put_nowait(get_stats_snapshot())
-            except Exception:
-                pass
-            if self.verbose:
-                print(f"[Module] {self.name} process terminated")
+    def worker_teardown(self, exit_reason: WorkerExit) -> None:
+        if self.verbose:
+            print(f"[Module] {self.name} terminated ({exit_reason.value})")
 
     

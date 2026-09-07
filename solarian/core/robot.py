@@ -24,11 +24,13 @@ from .bus_server import BusServer, BusClient
 from solarian.core import Observation
 from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard, setup_process_logging
 from solarian.utils.profiling import merge_stats as merge_profiling_stats
-from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
+from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 from solarian.utils.shared_memory.action_queue import ModuleActionQueue
 from solarian.utils.shared_memory.skill_status_buffer import SkillStatusBuffer
 from solarian.conf import settings
-from solarian.core.action import ActionType, ModuleAction
+from solarian.core.action import ActionType, ModuleAction, action_handler
+from solarian.core.event import EventHost, event_inbox_for
+from solarian.core.execution import ExecutionMode
 
 import logging
 logger = logging.getLogger("robot")
@@ -75,7 +77,33 @@ class RobotSchemaError(Exception):
         super().__init__(message)
 
 
-class Robot(ABC):
+class ModuleMap(dict):
+    """Attribute-accessible mapping of module name → :class:`Module`."""
+
+    def __getattr__(self, name: str):
+        try:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+
+class _ModulesDescriptor:
+    """``Robot.modules`` on the class (templates) and instance (live modules)."""
+
+    def __get__(self, obj, cls=None):
+        cls = cls if cls is not None else type(obj)
+        if obj is not None:
+            inst_map = obj.__dict__.get("_module_map")
+            if inst_map is not None:
+                return inst_map
+        ns = ModuleMap()
+        for name, val in cls.__dict__.items():
+            if isinstance(val, Module):
+                ns[name] = val
+        return ns
+
+
+class Robot(EventHost, ABC):
 
     _instance = None
 
@@ -89,6 +117,8 @@ class Robot(ABC):
     #: delegate to :mod:`solarian.sim.runtime` instead of opening hardware.
     is_sim: bool = False
 
+    modules = _ModulesDescriptor()
+
     #: Simulation scene (:class:`~solarian.sim.configs.SceneConfig`). Required
     #: when ``is_sim`` is true; describes the environment and how each module's
     #: MJCF attaches. Ignored on hardware.
@@ -97,6 +127,15 @@ class Robot(ABC):
     #: Show a live overview window of the whole scene while running in sim.
     #: Overridable at runtime with the ``SOLARIAN_SIM_VIEW`` env var.
     view: bool = False
+
+    #: Skill classes this robot can be asked to run, on top of the ones
+    #: installed skill plugins publish. Declare a class here when the skill
+    #: lives in the project rather than in a plugin.
+    skills: tuple[type, ...] = ()
+
+    #: Filled on first use by :meth:`_skill_classes`; entry-point discovery
+    #: reads installed package metadata, so it is worth doing once.
+    _skill_class_cache: dict[str, type] | None = None
 
     
     @classmethod
@@ -173,9 +212,9 @@ class Robot(ABC):
         self._obs_compress_latency = LatencyEma()
         set_image_jpeg_quality(getattr(cfg, "img_compression_quality", None))
 
-        self.modules = {}
+        self._module_map = ModuleMap()
         self._bus_servers: list[BusServer] = []
-        self.observation_buffers = dict[str, ObservationRingBuffer]()
+        self.observation_buffers = dict[str, ObservationBuffer]()
         self.action_queues = {}
 
         # IMPORTANT: Store the manager so it doesn't get garbage collected
@@ -204,8 +243,8 @@ class Robot(ABC):
                 module_class = val.__class__
                 module_cfg = self.load_module_config(name, module_class)
                 module_configs[name] = (module_class, module_cfg)
-                self.modules[name] = module_class(module_cfg, name)
-                setattr(self, name, self.modules[name])
+                self._module_map[name] = module_class(module_cfg, name)
+                setattr(self, name, self._module_map[name])
 
         # Phase 2: Build example observations/actions (now with correct shapes).
         example_observation = Observation.zeros()
@@ -235,7 +274,7 @@ class Robot(ABC):
                     base_name="ModuleAction",
                 ) from None
 
-            self.observation_buffers[name] = ObservationRingBuffer.create_from_example(
+            self.observation_buffers[name] = ObservationBuffer.create_from_example(
                 shm_manager=self.shm_manager,
                 example_observation=module_obs,
                 get_time_budget=0.2,
@@ -255,7 +294,12 @@ class Robot(ABC):
             method = getattr(type(self), attr_name, None)
             if callable(method) and hasattr(method, '_handles_action'):
                 self.action_handlers[getattr(method, '_handles_action')] = attr_name
-        
+
+        #: Robot-side skills currently running, keyed by skill name. Kept so
+        #: each tick's events can reach them.
+        self._local_skills: dict[str, Any] = {}
+        self._init_events()
+
 
     def load_module_config(self, module_name: str, module_class: type):
         """Load module config from YAML using the module's own config class"""
@@ -488,12 +532,143 @@ class Robot(ABC):
             self._check_module_health()
             self.update()
 
+            # Same shape as the controller's tick: drain first so handlers run
+            # on this thread, then advance the inline modules, whose loop this
+            # is. A robot-side skill sees the batch through its inbox.
+            events = self._drain_events()
+            self._tick_local_modules()
+            self._fan_out_events(events)
+
             if poller.poll(timeout=1):
                 action = self.get_action()
                 if action is not None:
                     StatusBoard.set("Action", action)
                     self.process_action(action)
             # actions that are generated by a skill running on the robot are pushed to the action queue directly by the skill itself
+
+    def _tick_local_modules(self) -> None:
+        """Advance every inline module once per control-loop iteration.
+
+        An inline module is set up by :meth:`start` and then has no loop of
+        its own; without this it would never publish an observation or emit
+        an event after startup.
+        """
+        for module in self.modules.values():
+            if module.execution_mode is ExecutionMode.INLINE:
+                module.runner.tick()
+
+    # ========= robot-side skills ============
+    def start_skill(self, skill):
+        """Wire a skill to this robot's shared memory and start it.
+
+        Robot-side skills are launched from :meth:`start_named_skill` when the
+        controller asks for one. Going through here rather than starting the
+        skill directly is what connects it to the robot's buffers and gives
+        it an event inbox, so it sees the same events the robot does.
+
+        Wiring here rather than at construction is what keeps a skill the same
+        thing on either side of the link: the controller's ``start_skill``
+        takes a skill an operator's key handler built, which knows nothing
+        about buffers, so it cannot pass them in — and a skill initialised one
+        way on the robot and another way on the controller would be a worse
+        trade than four assignments in the one place that owns the buffers.
+        """
+        skill.observations = self.observation_buffers
+        skill.action_queues = self.action_queues
+        skill.skills_status_buffer = self.skills_status_buffer
+        skill.event_inbox = event_inbox_for(skill)
+        self._local_skills[skill.skill_name] = skill
+        skill.start()
+        return skill
+
+    def forget_skill(self, skill) -> None:
+        """Drop a stopped skill from the registry so it stops receiving events."""
+        self._local_skills.pop(skill.skill_name, None)
+
+    @classmethod
+    def _skill_classes(cls) -> dict[str, type]:
+        """Skill classes this robot can be asked to run, by registry name.
+
+        The ``solarian.skills`` entry points plus this class's own ``skills``,
+        so a skill becomes startable on the robot by being installed or
+        declared rather than by the robot growing a handler for it.
+        """
+        if cls.__dict__.get("_skill_class_cache") is None:
+            from solarian.core.ai.system1.registry import discover_skill_classes
+
+            found = {
+                skill_cls.registry_name(): skill_cls
+                for skill_cls in discover_skill_classes().values()
+                if isinstance(skill_cls, type)
+            }
+            found.update(
+                {skill_cls.registry_name(): skill_cls for skill_cls in cls.skills}
+            )
+            cls._skill_class_cache = found
+        return cls._skill_class_cache
+
+    @action_handler(ActionType.START_SKILL)
+    def start_named_skill(self, action, t_now: float) -> bool:
+        """Start the skill the controller named, with the params it sent.
+
+        Generic on purpose: a project adds a robot-side skill by publishing it
+        as a skill plugin, not by writing a per-skill action type and handler
+        on both sides of the link.
+
+        Every read here is a ``.get``: this payload was deserialized off the
+        wire, and an unknown or missing skill name should log and carry on
+        rather than take the control loop down with a ``KeyError``.
+        """
+        data = action.data
+        name = str(data.get("skill") or "")
+        skill_cls = self._skill_classes().get(name)
+        if skill_cls is None:
+            logger.warning(
+                "Cannot start unknown skill '%s'; installed: %s",
+                name,
+                sorted(self._skill_classes()),
+            )
+            return True
+        running = self._local_skills.get(name)
+        if running is not None and running.is_alive():
+            logger.info("Skill '%s' already running (pid=%s)", name, running.pid)
+            return True
+        try:
+            skill = self.start_skill(
+                skill_cls(
+                    params=data.get("params", {}),
+                    status_mp_q=StatusBoard.get_mp_queue(),
+                )
+            )
+        except Exception:
+            logger.exception("Could not start skill '%s'", name)
+            return True
+        logger.info("Started skill '%s' (pid=%s)", name, skill.pid)
+        return True
+
+    @action_handler(ActionType.STOP_SKILL)
+    def stop_named_skill(self, action, t_now: float) -> bool:
+        self.stop_skill(str(action.data.get("skill") or ""))
+        return True
+
+    def stop_skill(self, name: str, timeout: float = 5.0) -> None:
+        """Ask a robot-side skill to stop, then make sure it did."""
+        skill = self._local_skills.get(name)
+        if skill is None:
+            return
+        if skill.is_alive():
+            logger.info("Stopping skill '%s' (pid=%s)", name, skill.pid)
+            skill.request_stop()
+            skill.join(timeout=timeout)
+            if skill.is_alive():
+                logger.warning("Skill '%s' did not stop; terminating", name)
+                skill.terminate()
+                skill.join(timeout=2.0)
+        self.forget_skill(skill)
+
+    def stop_all_skills(self, timeout: float = 5.0) -> None:
+        for name in list(self._local_skills):
+            self.stop_skill(name, timeout=timeout)
 
     def connect(self):
         # Align wall-clock stamps with the relay before accepting actions.
@@ -663,13 +838,11 @@ class Robot(ABC):
             if module.is_alive():
                 module.terminate()
                 module.join(timeout=5)
-            try:
-                child_stats = module._profiling_queue.get_nowait()
+            child_stats = module.get_profiling_stats()
+            if child_stats is not None:
                 merge_profiling_stats(child_stats)
-            except Exception:
-                pass
             module.disconnect()
-        for srv in getattr(self, '_bus_servers', []):
+        for srv in self._bus_servers:
             if srv.is_alive():
                 srv.terminate()
                 srv.join(timeout=5)

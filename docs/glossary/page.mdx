@@ -110,11 +110,11 @@ A method decorated with `@action_handler(action_type)` on a [Robot](/docs/robots
 
 ### Action queue
 
-A shared-memory queue per module that the [Robot](/docs/robots) writes incoming actions into, and the module's run loop drains. Implemented as `ModuleActionQueue`.
+A queue per module, implemented as `ModuleActionQueue`. On the [Robot](/docs/robots) it is what incoming actions are written into and what the module's run loop drains. A [Skill](/docs/skills) owns one per module it commands, and pushes there rather than returning actions to its host. Shared memory when it has to cross a process boundary, an in-process ring when it does not.
 
 ### Action type
 
-An integer tag on every [Action](/docs/actions) that controls how it's dispatched. Built-ins are `STOP`, `MODULE_ACTION`, `SCHEDULE_WAYPOINT`, `RESTART_PUT`. Custom types live at `>= ActionType.CUSTOM_START`. See [Action Types](/docs/action-types).
+An integer tag on every [Action](/docs/actions) that controls how it's dispatched. Built-ins are `STOP`, `MODULE_ACTION`, `SCHEDULE_WAYPOINT`, `RESTART_PUT`, plus `START_SKILL` and `STOP_SKILL`, which serve both the think process → controller channel and the controller → robot one. Custom types live at `>= ActionType.CUSTOM_START`. See [Action Types](/docs/action-types).
 
 ### `ActuatorBus`
 
@@ -146,7 +146,7 @@ The abstract base for buses. Subclasses: `ActuatorBus`, `SensorBus`, plus per-ve
 
 ### Controller
 
-The node that decides what the robot does — keyboard teleop, learned policy, AI controller. Subclasses must implement `control_step()`. See [Controllers](/docs/controllers).
+The node that decides what the robot does — keyboard teleop, learned policy, AI controller. Subclasses either start [Skills](/docs/skills) and let the base `control_step()` merge what those skills emit, or override `control_step()` outright. See [Controllers](/docs/controllers).
 
 ### `ControllerConfig`
 
@@ -160,9 +160,25 @@ The Pydantic-typed wrapper around every value flowing through Solarian. Subclass
 
 Enum (`SERVER`, `ROBOT`, `CONTROLLER`) used by `CalculatedField` to choose where a processor runs.
 
+### Event
+
+Something that *happened*, at a point in time — a key went down, a button was clicked. Emitted by a [Module](/docs/modules), queued, and drained by the host on its control tick. Continuous state stays an [Observation](#observation) instead. See [Events](/docs/events).
+
+### Event handler
+
+A method decorated with `@event_handler(event_type)` on a [Controller](/docs/controllers). All handlers for a type run, so a subclass adds to the base class's reaction rather than replacing it. See [Events](/docs/events).
+
+### Event type
+
+An integer tag on every [Event](#event). Built-ins are `KEY_DOWN`, `KEY_UP`, `BUTTON_DOWN`, `BUTTON_UP`. Custom types live at `>= EventType.CUSTOM_START`. See [Events](/docs/events).
+
 ### Hydra
 
 The configuration framework Solarian uses to compose YAML. See [Project Configs](/docs/project-configs).
+
+### `KeyboardModule`
+
+The default input [Module](/docs/modules) on every [Controller](/docs/controllers). Emits `KEY_DOWN` / `KEY_UP` events and publishes the set of held keys as a local observation. Runs `INLINE`.
 
 ### `ModuleAction`
 
@@ -178,7 +194,7 @@ The per-module schema bound to a [Module](/docs/modules)'s sensors via `SensorFi
 
 ### Module
 
-A self-contained unit of robot hardware that runs in its own OS process — an arm, a gripper, a camera. See [Modules](/docs/modules).
+Anything connected to the runtime — an arm, a gripper, a camera, a keyboard. Produces observations and events, and/or consumes actions. How it is scheduled is a separate property, its [`ExecutionMode`](#executionmode). See [Modules](/docs/modules).
 
 ### `ModuleConfig`
 
@@ -188,9 +204,9 @@ Pydantic model for `conf/<module_name>.yaml` (`frequency`, `actuators`, `sensors
 
 The typed schema of every sensor reading the robot publishes per frame. Groups [`ModuleObs`](#moduleobs) instances by module name. See [Observations](/docs/observations).
 
-### `ObservationRingBuffer`
+### `ObservationBuffer`
 
-Shared-memory ring buffer between a module process and the main robot process. Each module writes its latest observation snapshot here; the robot's observation-sender thread reads the latest snapshot per module.
+Every module's history of recent observations, and the one place a skill reads state from. Backed by shared memory when the module runs in its own process, by a plain in-process ring when it runs inline on its host. Read the newest sample with `latest()` or a window with `last_k(n)`.
 
 ### Plug-in
 
@@ -207,6 +223,10 @@ The on-robot node that owns hardware. Subclasses attach [Modules](/docs/modules)
 ### `RobotConfig`
 
 Pydantic model for `conf/robot.yaml` (`fps`, `img_compression_quality`, `connection`).
+
+### `Runner`
+
+The machinery that actually schedules a [Module](/docs/modules) or [Skill](/docs/skills): `ProcessModuleRunner`, `ThreadModuleRunner`, or `InlineModuleRunner`, picked by `make_runner()` from the target's [`ExecutionMode`](#executionmode). All three drive the same `worker_setup` / `worker_tick` / `worker_teardown` protocol and expose the same `start` / `stop` / `is_alive` / `join` interface, so callers never learn which they got.
 
 ### `SensorBus`
 
@@ -226,11 +246,15 @@ The project's `settings.py` registry that holds `ROBOT_CLASS`, `CONTROLLER_CLASS
 
 ### Skill
 
-A self-contained, restartable behavior the [AI Controller](/docs/ai_controller) launches in response to a VLM decision. Runs in its own process, reads observations, emits actions. See [Skills](/docs/skills).
+A self-contained, restartable behavior the [Controller](/docs/controllers) launches in response to an event or a VLM decision. Consumes observations and events, produces actions. See [Skills](/docs/skills).
 
-### `SkillRunner`
+### `ExecutionPlace`
 
-Enum (`CONTROLLER`, `ROBOT`, `SERVER`) that tells the `ThinkProcess` where to launch a [Skill](/docs/skills).
+Enum (`CONTROLLER`, `ROBOT`, `SERVER`) naming which runtime owns a [Skill](/docs/skills). Remote placements are started by enqueuing an `Action` rather than launching locally.
+
+### `ExecutionMode`
+
+Enum (`PROCESS`, `THREAD`, `INLINE`) naming how a [Module](/docs/modules) or [Skill](/docs/skills) is scheduled. It is a property, not a base class: a `Runner` reads it at launch time, so the same class can run in its own process in production and inline in a test.
 
 ### `SkillStatus`
 

@@ -1,11 +1,11 @@
-"""Reusable gripper module: scalar interpolator and SET_HOME → fully open.
+"""Reusable gripper module: a scalar interpolator driven by ``SCHEDULE_WAYPOINT``.
 
 Concrete grippers declare a single actuator (``scalar_actuator``) and optionally
 override :meth:`_scalar_to_actuator` when the action space differs from the
 servo command space (e.g. aperture cm → normalized ``[-100, 100]``).
 
-``SET_HOME`` drives the scalar interpolator to :attr:`home_value`, or to
-``cfg.aperture_open_cm`` when that config field is present.
+:attr:`open_value`, or ``cfg.aperture_open_cm`` when that config field is
+present, is the open end of travel that bounds every commanded aperture.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ import numpy as np
 
 from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.actuator_module import ActuatorModule
-from solarian.core.clock_sync import synced_time
 from solarian.core.data import PosData
 from solarian.utils.status_board import StatusBoard
 from solarian.utils.trajectory_interpolator import ScalarTrajectoryInterpolator
@@ -32,37 +31,17 @@ class GripperModule(ActuatorModule):
     # sole non-Cartesian actuator when unset.
     scalar_actuator: str | None = None
 
-    # Target for SET_HOME in interpolator/action units. ``None`` falls back to
-    # ``cfg.aperture_open_cm`` when present (fully open).
-    home_value: float | None = None
-    # Exclusive SET_HOME speed in interpolator units / second. ``None`` uses
-    # ``cfg.max_speed`` (same units as the scalar interpolator, e.g. cm/s).
-    home_speed: float | None = None
+    # Fully-open end of travel in interpolator/action units. ``None`` falls
+    # back to ``cfg.aperture_open_cm`` when present.
+    open_value: float | None = None
+    # Default exclusive-move speed in interpolator units / second, used when
+    # ``params.speed`` is absent. ``None`` uses ``cfg.max_speed`` (same units as
+    # the scalar interpolator, e.g. cm/s).
+    default_speed: float | None = None
 
-    def _scalar_actuator_name(self) -> str | None:
-        explicit = getattr(type(self), "scalar_actuator", None)
-        if explicit:
-            return str(explicit)
-        from solarian.core.ik.actuator import CartesianIKActuator
-
-        names = [
-            n
-            for n, act in self.actuators.items()
-            if not isinstance(act, CartesianIKActuator)
-        ]
-        return names[0] if names else None
-
-    def _scalar_to_actuator(self, value: float) -> float:
-        """Map interpolator/action units to ``write_actuators`` units."""
-        return float(value)
-
-    def _actuator_to_scalar(self, value: float) -> float:
-        """Inverse of :meth:`_scalar_to_actuator` (for seeding from sensors)."""
-        return float(value)
-
-    def _home_scalar(self) -> float:
-        if self.home_value is not None:
-            return float(self.home_value)
+    def _open_scalar(self) -> float:
+        if self.open_value is not None:
+            return float(self.open_value)
         cfg_open = getattr(self.cfg, "aperture_open_cm", None)
         if cfg_open is not None:
             return float(cfg_open)
@@ -72,13 +51,13 @@ class GripperModule(ActuatorModule):
         """Closed / open ends of travel in interpolator (action) units.
 
         Uses ``aperture_closed_cm`` / ``aperture_open_cm`` when both are set;
-        otherwise ``(0.0, home)``.
+        otherwise ``(0.0, open)``.
         """
         closed = getattr(self.cfg, "aperture_closed_cm", None)
         opened = getattr(self.cfg, "aperture_open_cm", None)
         if closed is not None and opened is not None:
             return float(closed), float(opened)
-        return 0.0, self._home_scalar()
+        return 0.0, self._open_scalar()
 
     def read_scalar(self) -> float:
         """Live measured scalar (same units as :meth:`schedule_scalar`)."""
@@ -97,91 +76,13 @@ class GripperModule(ActuatorModule):
             drop_timestamps=False,
         )
 
-    def _home_speed(self) -> float:
-        if self.home_speed is not None:
-            return float(self.home_speed)
+    def _default_speed(self) -> float:
+        if self.default_speed is not None:
+            return float(self.default_speed)
         max_speed = getattr(self.cfg, "max_speed", 1.0)
         if isinstance(max_speed, (int, float)):
             return float(max_speed)
         return float(max_speed[0])
-
-    def _read_current_scalar(self) -> float:
-        name = self._scalar_actuator_name()
-        if not name:
-            return 0.0
-        readings = self.read_sensors(PosData, [name])
-        entry = readings[name]
-        raw = float(entry["value"] if isinstance(entry, dict) else entry.value)
-        return self._actuator_to_scalar(raw)
-
-    def _ensure_scalar_interpolator(self, t_now: float | None = None) -> None:
-        if self.interp is not None:
-            return
-        t = float(t_now if t_now is not None else time.monotonic())
-        try:
-            value = self._read_current_scalar()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Module '%s': could not seed scalar interpolator (%s); using 0.",
-                self.name,
-                exc,
-            )
-            value = 0.0
-        self.interp = self._create_interpolator(
-            np.array([t]), np.array([value], dtype=np.float64)
-        )
-        self.last_waypoint_time = t
-
-    def _extract_scalar_waypoint(
-        self, action: ModuleAction
-    ) -> tuple[float, float] | None:
-        name = self._scalar_actuator_name()
-        if not name:
-            return None
-        fields = action.values()
-        if name not in fields:
-            if len(fields) == 1:
-                field = next(iter(fields.values()))
-                return float(field.value), float(field.timestamp)
-            logger.warning(
-                "Module '%s': SCHEDULE_WAYPOINT missing scalar field %r; ignoring.",
-                self.name,
-                name,
-            )
-            return None
-        field = fields[name]
-        return float(field.value), float(field.timestamp)
-
-    def _schedule_scalar_waypoint(
-        self,
-        value: float,
-        target_time_wall: float,
-        t_now: float,
-        drop_timestamps: bool = False,
-    ) -> None:
-        self._ensure_scalar_interpolator(t_now)
-        assert self.interp is not None
-        if drop_timestamps:
-            target_time = t_now + self._adaptive_drive_horizon(t_now)
-            self.interp = self.interp.drive_to_waypoint(
-                value=float(value),
-                time=target_time,
-                curr_time=t_now,
-                **self._get_max_speed_kwargs(),
-            )
-            self.last_waypoint_time = target_time
-            return
-
-        target_time = time.monotonic() - synced_time() + float(target_time_wall)
-        target_time = self._resolve_waypoint_time(target_time, t_now)
-        self.interp = self.interp.schedule_waypoint(
-            value=float(value),
-            time=target_time,
-            curr_time=t_now,
-            last_waypoint_time=self.last_waypoint_time,
-            **self._get_max_speed_kwargs(),
-        )
-        self.last_waypoint_time = target_time
 
     def _write_scalar(self, value: float) -> None:
         name = self._scalar_actuator_name()
@@ -251,6 +152,18 @@ class GripperModule(ActuatorModule):
 
     @action_handler(ActionType.SCHEDULE_WAYPOINT)
     def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
+        """Stream a scalar waypoint, or run an exclusive speed-limited move.
+
+        Whoever supplies the timing owns the path. With ``params.speed`` (see
+        :meth:`_is_exclusive_move`) the module drives the scalar at a speed
+        limit, taking as long as it takes. Otherwise the caller owns timing —
+        ``drop_timestamps`` drives over the adaptive horizon, and a plain
+        waypoint blends in at its own timestamp.
+        """
+        params = action.params
+        if self._is_exclusive_move(params):
+            return self._move_exclusive(action, t_now, params)
+
         extracted = self._extract_scalar_waypoint(action)
         if extracted is None:
             return True
@@ -263,21 +176,25 @@ class GripperModule(ActuatorModule):
         )
         return True
 
-    @action_handler(ActionType.SET_HOME)
-    def _handle_set_home(self, action: ModuleAction, t_now: float) -> bool:
-        """Exclusive move to :meth:`_home_scalar` (fully open for UMI-slim).
+    def _move_exclusive(
+        self, action: ModuleAction, t_now: float, params: dict
+    ) -> bool:
+        """Speed-limited go-to the action's scalar field.
 
         Same pattern as ``ArmModule.moveJ``: seed from the live scalar and drive
-        at ``home_speed``. Duration is speed-limited, not the short teleop
-        drive horizon used by ``SCHEDULE_WAYPOINT``.
+        at a speed limit, so the duration comes from the distance rather than
+        the short teleop drive horizon.
         """
-        del action
-        target = self._home_scalar()
+        extracted = self._extract_scalar_waypoint(action)
+        if extracted is None:
+            return True
+        target = extracted[0]
+
         try:
             current = self._read_current_scalar()
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "Module '%s': SET_HOME could not read current scalar (%s); "
+                "Module '%s': exclusive move could not read current scalar (%s); "
                 "seeding interpolator.",
                 self.name,
                 exc,
@@ -286,6 +203,8 @@ class GripperModule(ActuatorModule):
             current = (
                 float(self.interp(t_now)) if self.interp is not None else float(target)
             )
+
+        speed = params.get("speed")
         interp = ScalarTrajectoryInterpolator(
             np.array([t_now]), np.array([current], dtype=np.float64)
         )
@@ -293,11 +212,11 @@ class GripperModule(ActuatorModule):
             value=float(target),
             time=t_now,
             curr_time=t_now,
-            max_speed=self._home_speed(),
+            max_speed=float(speed) if speed is not None else self._default_speed(),
         )
         self.last_waypoint_time = float(self.interp.times[-1])
         logger.info(
-            "Module '%s': SET_HOME %.3f → %.3f in %.2fs",
+            "Module '%s': exclusive move %.3f → %.3f in %.2fs",
             self.name,
             current,
             target,

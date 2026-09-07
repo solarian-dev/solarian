@@ -6,18 +6,18 @@ export const metadata = {
 
 # Skills
 
-A **Skill** is a self-contained, restartable behavior that the [AI Controller](/docs/ai_controller) can launch in response to a high-level decision. A skill is "open the gripper", "track the red cup", "run a diffusion policy", or "navigate to waypoint X". Each runs in its own OS process at its own rate, reads from the shared observation buffers, and emits actions back to the controller. {{ className: 'lead' }}
+A **Skill** is a self-contained, restartable behavior that the [AI Controller](/docs/ai_controller) can launch in response to a high-level decision. A skill is "open the gripper", "track the red cup", "run a diffusion policy", or "navigate to waypoint X". Each runs at its own rate, reads the observations and events its host wires up for it, and returns actions. {{ className: 'lead' }}
 
 Defined in [`solarian/core/ai/system1/skill.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/system1/skill.py).
 
 ## Anatomy
 
-A `Skill` is an `abstract` `multiprocessing.Process` subclass. It owns:
+A `Skill` is an abstract class — not a `Process`. How it is scheduled is a separate property (see [ExecutionPlace and ExecutionMode](#where-the-skill-runs-executionplace-and-executionmode)). It owns:
 
 - A reference to the shared **observation ring buffers** (read-only).
-- A reference to the **action queues** (per-module) and/or the controller's **top-level action queue**.
+- A per-module **action queue** for each module it commands — the one channel out.
 - A handle to the **skill status buffer** for reporting lifecycle transitions.
-- A `frequency` (Hz) and a `params` dict (forwarded by the think process).
+- A `frequency` (Hz) and a `params` dict (its construction arguments, and what the think process forwards).
 
 ```python
 from solarian.core.ai.system1.skill import Skill, SkillStatus
@@ -26,16 +26,19 @@ class PickSkill(Skill):
     def setup(self):
         self.target_position = self.params.get("target", [0.0] * 6)
 
-    def control_step(self) -> bool:
-        obs = self.get_observation("arm")
-        # ... compute next action ...
-        action = ArmAction.zeros()
-        action.shoulder_pan.value = self.target_position[0]
-        self.put_action("arm", action)
-        return False    # return True to mark skill as COMPLETED
-
-    def teardown(self):
-        pass
+    def control_step(self, dt):
+        pose = self.observations[self.params["arm"]].latest()
+        # ... compute the next target from pose ...
+        return Action(
+            action_type=ActionType.MODULE_ACTION,
+            data={
+                self.params["arm"]: {
+                    "action_type": ActionType.SCHEDULE_WAYPOINT,
+                    "data": self.target_position,
+                    "params": {"speed": None},
+                }
+            },
+        )
 ```
 
 ## Required and optional methods
@@ -44,27 +47,73 @@ class PickSkill(Skill):
   <Property name="setup()">
     Optional one-time setup (load model weights, allocate buffers, open files). Called once before the loop starts.
   </Property>
-  <Property name="control_step() -> bool">
-    <strong>Required.</strong> Called in a loop at <code>self.frequency</code>. Read observations, compute the next action, and submit it. Return <code>True</code> when the skill has finished its job; the loop ends and the framework reports <code>SkillStatus.COMPLETED</code>.
+  <Property name="control_step(dt) -> actions">
+    <strong>Required.</strong> Called at <code>self.frequency</code>. Reads <code>self.observations</code> and <code>self.events</code>; returns one <code>Action</code>, a list of them, or <code>None</code>.
   </Property>
   <Property name="teardown()">
     Optional cleanup. Called once after the loop exits, regardless of whether it stopped normally or crashed.
   </Property>
 </Properties>
 
-## Submitting actions
+## What a step reads
 
-Two helpers cover both run targets:
+Whichever host starts a skill — a `Robot` or a `Controller` — points these at its own buffers and gives the skill an event inbox. `step()` then refreshes them before each `control_step`, so they mean the same thing whether the skill runs in its own process, on a thread, or inline on the host's loop. A skill never branches on how it happens to be scheduled.
+
+<Properties>
+  <Property name="self.observations" type="mapping">
+    <code>{'{module_name: ObservationBuffer}'}</code>. Robot modules and controller-side modules share one mapping — they cannot collide, since module names are unique — and one buffer type, whichever runtime hosts the module. Nothing is copied until the step asks, so a skill that only reads joint positions never pays for a camera frame.
+  </Property>
+  <Property name="self.events" type="list">
+    What happened since this skill's previous step, oldest first. Taken from the inbox in one go, so it is stable for the length of the step. A tick the host skips keeps its events for the step that does run rather than losing them. Continuous state (held keys, joystick axes) arrives as an <em>observation</em> instead; see [Events](/docs/events).
+  </Property>
+  <Property name="dt" type="float">
+    The one genuinely per-call input, hence the only argument: seconds since the previous step. On the first step this is the nominal period, <code>1 / frequency</code>.
+  </Property>
+</Properties>
+
+A buffer holds recent history, not just the current sample, which is what a policy conditioning on the last few frames needs:
 
 ```python
-# Per-module action — for skills that target a specific module on the robot
-self.put_action("arm", ArmAction(...))
-
-# Top-level Action — for controller-side skills that emit a complete Action
-self.action_queue.put(MyAction(...))
+frames = self.observations["wrist_camera"].last_k(16)   # oldest first, clamped
+pose = self.observations["arm"].latest()                # None on an empty buffer
 ```
 
-The first form is used by **robot-side skills** (running on the robot process) that push directly into a module's `action_queue`. The second form is used by **controller-side skills** that hand a complete `Action` back to `AIController.control_step` for forwarding to the robot.
+`last_k` never raises for asking too much: it clamps to what the buffer actually holds. Read a module once into a local rather than twice through the buffer — for a process-backed module the two reads can straddle an incoming message.
+
+A step reads its own attributes and its own [config](#configuration), never its host. That is what lets the same skill run on the robot, on the controller, or in a test that just assigns to `skill.observations` and calls `step()`.
+
+## Returning actions
+
+A step returns intent; the host decides where it goes. Return a single `Action`, a list (a chunk of future waypoints), or `None` to do nothing this tick.
+
+A skill builds the [envelope](/docs/action-types#waypoint-params) itself, keyed by module **name**, and one action may carry several modules — `dispatch` splits it per module anyway, so that is one fewer thing for the host to merge:
+
+```python
+def control_step(self, dt):
+    return Action(
+        action_type=ActionType.MODULE_ACTION,
+        data={
+            self.params["arm"]: {
+                "action_type": ActionType.SCHEDULE_WAYPOINT,
+                "data": pose_fields,
+                "drop_timestamps": True,
+            },
+            self.params["gripper"]: {
+                "action_type": ActionType.SCHEDULE_WAYPOINT,
+                "data": grip_fields,
+                "drop_timestamps": True,
+            },
+        },
+    )
+```
+
+Names, not `Module` objects: construct with `PickSkill(params={"arm": "right_arm", ...})`. Occupancy is those writer keys (`arm`, `gripper`). That is what lets one skill class run on either host: a name crosses a link, a `Module` cannot.
+
+Whichever host runs it, the returned `MODULE_ACTION` is split per module and pushed onto the skill's own `action_queues` — one queue per module it commands. On the robot the module at the other end applies it directly. On the controller the control loop drains those queues, merges what every running skill commanded, and sends one message to the robot.
+
+The queues are shared memory when the skill runs in its own process and a plain in-process ring when it does not, the same way observation buffers and event inboxes are chosen. A skill never sees the difference.
+
+Merging is index-wise *per queue*, so both properties hold at once: actions for different modules sit at index 0 of their own queues and so leave together in one message, while a chunk of successive waypoints for one module keeps every one of them — element 0 goes out this tick and the rest follow on the ticks after it.
 
 ## Reporting status
 
@@ -90,7 +139,7 @@ The `SkillStatus` enum:
     Skill is in its execution loop.
   </Property>
   <Property name="COMPLETED" type="2">
-    <code>control_step()</code> returned <code>True</code> and the loop exited cleanly.
+    The skill called <code>finish()</code> and the loop exited cleanly.
   </Property>
   <Property name="FAILED" type="3">
     The skill crashed; a traceback is queued for the parent.
@@ -100,35 +149,39 @@ The `SkillStatus` enum:
   </Property>
 </Properties>
 
-## Where the skill runs: `SkillRunner`
+## Where the skill runs: `ExecutionPlace` and `ExecutionMode`
 
-The `SkillRunner` enum tells the think process *where* to launch the skill:
+Where a skill lives and how it is scheduled are two independent axes.
+
+`ExecutionPlace` says which runtime owns the skill:
 
 <Properties>
-  <Property name="SkillRunner.CONTROLLER" type="0">
-    The skill is spawned as a subprocess of the controller. It reads observations from the controller-side shared buffers and emits actions into the controller's <code>action_queue</code>; the controller forwards them. Best for digital skills (policies, planners, scripted controllers).
+  <Property name="ExecutionPlace.CONTROLLER" type="controller">
+    The skill runs on the controller. It reads observations from the controller-side buffers and pushes actions onto its own <code>action_queues</code>; the controller merges and forwards them. Best for digital skills (policies, planners, scripted controllers).
   </Property>
-  <Property name="SkillRunner.ROBOT" type="1">
-    The skill lives on the robot process. The think process does *not* spawn it locally — instead it pushes a top-level <code>Action</code> with the skill's declared <code>action_type</code> onto the controller action queue. The robot's <code>@action_handler</code> for that action type starts the skill on its side.
+  <Property name="ExecutionPlace.ROBOT" type="robot">
+    The skill lives on the robot runtime. The controller does *not* launch it locally — instead it sends a <code>START_SKILL</code> action naming the skill and its params. The robot's generic handler looks the name up and starts it on its side.
   </Property>
-  <Property name="SkillRunner.SERVER" type="2">
-    Same as <code>ROBOT</code> but semantically the skill runs on the relay server.
+  <Property name="ExecutionPlace.SERVER" type="server">
+    Same dispatch as <code>ROBOT</code> but semantically the skill runs on the relay server.
   </Property>
 </Properties>
 
-Declare the runner (and `action_type` if remote) when you attach the skill to your `AIController`:
+`ExecutionMode` says how it is scheduled where it lives — `PROCESS` (its own OS process), `THREAD` (a daemon thread on the host), or `INLINE` (ticked by the host's own control loop). It is the same axis modules use; see [Execution Modes](/docs/modules#execution-modes). Inline is the right choice for cheap, latency-sensitive skills like teleop, which want to run on the controller's tick rather than pay for a process.
+
+Both are class attributes on the skill, because they are properties of the behaviour rather than of the call site:
 
 ```python
-from solarian.core.ai.system1.skill import SkillRunner
-from myproject.action_types import MyActionType
+from solarian.core.execution import ExecutionMode, ExecutionPlace
 
-class MyAIController(AIController):
-    pick = PickSkill(runner=SkillRunner.CONTROLLER)
-    move_arm = MoveArmSkill(
-        runner=SkillRunner.ROBOT,
-        action_type=MyActionType.MOVE_ARM,
-    )
+class TeleopSkill(Skill):
+    execution_mode = ExecutionMode.INLINE
+
+class CupArrangeSkill(Skill):
+    execution_place = ExecutionPlace.ROBOT
 ```
+
+A caller can still override either per instance — `MoveSkill(params={"pose": "home", "arm": "right_arm"}, execution_mode=ExecutionMode.INLINE)` — for the case where the same behaviour is worth scheduling differently in a test or on a small host.
 
 ## How the think process selects skills
 
@@ -146,36 +199,88 @@ class MyAIController(AIController):
 
 For each entry in `skills_to_start`:
 
-- If the skill's `runner` is `CONTROLLER`, the think process spawns a fresh `Skill` subprocess with `params` forwarded.
-- If the runner is `ROBOT`/`SERVER`, the think process builds an `Action(action_type=..., data={"params": ..., "skill_id": ...})` and pushes it onto the controller's `action_queue`. The controller forwards it; the robot's `@action_handler` receives it and runs the skill on the remote side.
+The think process puts a `START_SKILL` action carrying `{"skill": name, "params": {...}}` on the controller's `skill_command_queue`. The controller looks the name up in its registry, constructs the class with those params, and hands the instance to `start_skill()` — which then decides where it runs. A `CONTROLLER` skill is launched locally; a `ROBOT`/`SERVER` one is forwarded as a `START_SKILL` action with the same shape, and the robot's generic handler constructs it there. The channel decides the direction, not the action type.
 
-For each entry in `skills_to_stop`, `request_stop()` is called on the active skill (or a stop `Action` is sent for remote skills).
+For each entry in `skills_to_stop`, `request_stop()` is called on the active skill, or a `STOP_SKILL` action naming it is sent for a remote one.
 
 ## Stopping yourself
 
-A controller-side skill can also self-terminate by:
+A skill can self-terminate by:
 
-- Returning `True` from `control_step()` — the run loop exits and the final status becomes `COMPLETED`.
+- Calling `self.finish()` — the host stops it after the current step and the final status becomes `COMPLETED`.
 - Calling `self.request_stop()` from another thread / signal — the run loop exits at the next iteration with status `STOPPED`.
+
+Completion is state rather than a return value, so the step that finishes can still return an action. A one-shot move commands the pose *and* completes in the same call:
 
 ```python
 class TimedSkill(Skill):
     def setup(self):
         self.t0 = time.monotonic()
 
-    def control_step(self) -> bool:
+    def control_step(self, dt):
         if time.monotonic() - self.t0 > 5.0:
-            return True            # done after 5 seconds
+            self.finish()          # done after 5 seconds
+            return self.final_pose_action()
         # ... do work ...
-        return False
+        return None
 ```
 
 ## Discovering skills
 
-Skills are discovered two ways, both merged into `AIController.available_skills`:
+A controller's registry has two sources, keyed by `Skill.registry_name()` — the skill's `config_name` if it has one, otherwise its class name. That one string is the skill's identity everywhere a name has to travel: the menu the VLM picks from, the `START_SKILL` action the controller sends the robot, and the robot's lookup of what to construct.
 
-1. **Class attributes.** `AIController._collect_available_skills()` walks the MRO and registers every `Skill` instance attached as a class attribute. The attribute name becomes the skill name the VLM uses; the value's `runner` and `action_type` are recorded so the think process can dispatch correctly.
-2. **Installed plugins.** Any package that declares a `solarian.skills` entry point is discovered automatically (see [`registry.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/system1/registry.py)). Class-attribute skills take priority, so a project can still override or re-configure a discovered skill by declaring it explicitly.
+1. **The `skills` class attribute.** A tuple of skill *classes* the controller can run. Classes rather than configured instances, so the VLM names a class and supplies its arguments as params — `MoveSkill` with `{"pose": "home", "arm": "right_arm"}` rather than a pre-built `home` entry.
+2. **Installed plugins.** Any package that declares a `solarian.skills` entry point is discovered automatically (see [`registry.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/system1/registry.py)). A declared class wins over a discovered one of the same name.
+
+A robot has the same two sources for what a `START_SKILL` name may resolve to, and the same `skills` attribute for skills that live in the project rather than in a plugin.
+
+## Configuration
+
+Skills resolve their config by deep-merging two layers, with the project layer
+winning:
+
+1. **Bundled defaults** — a `conf.yaml` shipped next to the skill module. A skill living in a project rather than a plugin usually skips this and keeps its defaults as class attributes, since sibling skills in one package cannot each own a file of that name.
+2. **Project override** — `conf/<config_name>.yaml` in your project, where `config_name` is a class attribute on the skill (for a plugin, its `solarian.skills` entry-point name, e.g. `cup_arrange`).
+
+At launch, individual `params` keys override both. This keeps project-specific
+values — most importantly the **policy checkpoint path** — in your project's
+`conf/` rather than baked into the installed plugin. A project only sets what it
+needs and inherits the rest:
+
+```yaml
+# <your-project>/conf/cup_arrange.yaml — overrides plugin defaults
+policy_server_url: http://localhost:8001
+policy_server:
+  managed: false
+  checkpoint: data/models/cup_wild_vit_l_1img.ckpt
+  host: 127.0.0.1
+  port: 8001
+```
+
+The same merged config backs `solarian run-policy <skill>`, so the launcher
+reuses the project's checkpoint. A skill that declares a `policy_server_module`
+but has no checkpoint (in any layer, and none passed on the CLI) errors clearly.
+
+Nothing about this is specific to policies. Any value an operator wants to tune
+per robot belongs here rather than on the controller, which is how
+`CartesianTeleopSkill` gets its jog rates:
+
+```yaml
+# <your-project>/conf/cartesian_teleop.yaml
+pos_step: 0.004      # metres per tick a held key jogs the pose
+rot_step: 0.012      # radians
+gripper_max_cm: 8.5
+```
+
+```python
+class CartesianTeleopSkill(Skill):
+    config_name = "cartesian_teleop"
+    POS_STEP = 0.004      # the default, when the YAML omits it
+
+    def setup(self):
+        cfg = self.load_config()
+        self.pos_step = float(cfg.get("pos_step", self.POS_STEP))
+```
 
 ## Skills as plugins
 
@@ -198,33 +303,6 @@ A skill only *calls* a policy over HTTP, so it does not host one itself. The
 policy (training + serving) lives in a separate **policy plugin** (see
 [Training](/docs/training)), which ships the `PolicyServer` the skill connects
 to via `policy_server_url`.
-
-### Configuring a skill (project-level config)
-
-Skills resolve their config by deep-merging two layers, with the project layer
-winning:
-
-1. **Bundled defaults** — a `conf.yaml` shipped next to the skill module in the plugin.
-2. **Project override** — `conf/<config_name>.yaml` in your project, where `config_name` is a class attribute on the skill (set it to the `solarian.skills` entry-point name, e.g. `cup_arrange`).
-
-At launch, individual `params` keys override both. This keeps project-specific
-values — most importantly the **policy checkpoint path** — in your project's
-`conf/` rather than baked into the installed plugin. A project only sets what it
-needs and inherits the rest:
-
-```yaml
-# <your-project>/conf/cup_arrange.yaml — overrides plugin defaults
-policy_server_url: http://localhost:8001
-policy_server:
-  managed: false
-  checkpoint: data/models/cup_wild_vit_l_1img.ckpt
-  host: 127.0.0.1
-  port: 8001
-```
-
-The same merged config backs `solarian run-policy <skill>`, so the launcher
-reuses the project's checkpoint. A skill that declares a `policy_server_module`
-but has no checkpoint (in any layer, and none passed on the CLI) errors clearly.
 
 ### Example plugin
 

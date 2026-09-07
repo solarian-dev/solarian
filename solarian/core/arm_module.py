@@ -24,12 +24,13 @@ from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.actuator_module import ActuatorModule
 from solarian.core.clock_sync import synced_time
 from solarian.core.data import PosData
+from solarian.core.pose import compose_ee_delta
 from solarian.utils.trajectory_interpolator import JointTrajectoryInterpolator
 
 logger = logging.getLogger("module")
 
 # Default moveJ speed (rad/s), matching UMI's UR5 ``moveJ(..., speed=1.05)``.
-_DEFAULT_HOME_SPEED = 1.05
+_DEFAULT_JOINT_SPEED = 1.05
 
 
 class ArmModule(ActuatorModule):
@@ -40,15 +41,13 @@ class ArmModule(ActuatorModule):
     # are declared.
     ik_backend = None
 
-    # Home joint configuration in radians, ordered as ``ik_backend`` joints.
-    # ``None`` → zeros. A dict keyed by joint name is also accepted.
-    home_q: np.ndarray | dict[str, float] | None = None
-    home_speed: float = _DEFAULT_HOME_SPEED
+    # Joint speed limit (rad/s) for an exclusive move that names no ``speed``.
+    default_joint_speed: float = _DEFAULT_JOINT_SPEED
 
     def __init__(self, cfg=None, name=None, observation_buffer=None, action_queue=None):
         super().__init__(cfg, name, observation_buffer, action_queue)
-        if cfg is None:
-            return
+        # Set even for a schema-only instance (``cfg is None``), so readers
+        # need no guard.
         self._cached_ik_backend = None
         self._joint_interp: JointTrajectoryInterpolator | None = None
 
@@ -72,9 +71,8 @@ class ArmModule(ActuatorModule):
         """Build (and cache) the :class:`DifferentialIKBackend` from ``ik_backend``."""
         from solarian.core.ik.base import DifferentialIKBackend
 
-        cached = getattr(self, "_cached_ik_backend", None)
-        if cached is not None:
-            return cached
+        if self._cached_ik_backend is not None:
+            return self._cached_ik_backend
 
         spec = type(self).ik_backend
         if spec is None:
@@ -171,15 +169,6 @@ class ArmModule(ActuatorModule):
             }
         )
 
-    def _home_q_rad(self) -> np.ndarray:
-        names = self._ik_joint_names()
-        hq = self.home_q
-        if hq is None:
-            return np.zeros(len(names), dtype=np.float64)
-        if isinstance(hq, dict):
-            return np.array([float(hq[n]) for n in names], dtype=np.float64)
-        return np.asarray(hq, dtype=np.float64).reshape(-1)
-
     # ========= Cartesian pose interpolator ============
     def _cartesian_pose_names(self) -> list[str]:
         """Ordered Cartesian actuator names (by ``cfg.id`` 0..5)."""
@@ -234,17 +223,59 @@ class ArmModule(ActuatorModule):
         if not names:
             return None
         fields = action.values()
-        missing = [n for n in names if n not in fields]
-        if missing:
-            logger.warning(
-                "Module '%s': SCHEDULE_WAYPOINT missing pose fields %s; ignoring.",
-                self.name,
-                missing,
-            )
+        if any(n not in fields for n in names):
             return None
         pose = np.array([float(fields[n].value) for n in names], dtype=np.float64)
         target_time_wall = float(fields[names[0]].timestamp)
         return pose, target_time_wall
+
+    def _extract_joint_waypoint(
+        self, action: ModuleAction
+    ) -> tuple[np.ndarray, float] | None:
+        names = self._ik_joint_names()
+        if not names:
+            return None
+        fields = action.values()
+        if any(n not in fields for n in names):
+            return None
+        q = np.array(
+            [self._norm_to_rad(n, float(fields[n].value)) for n in names],
+            dtype=np.float64,
+        )
+        target_time_wall = float(fields[names[0]].timestamp)
+        return q, target_time_wall
+
+    def _schedule_joint_waypoint(
+        self,
+        q: np.ndarray,
+        target_time_wall: float,
+        t_now: float,
+        drop_timestamps: bool = False,
+    ) -> None:
+        self._clear_pose_interpolator()
+        q = np.asarray(q, dtype=np.float64).reshape(-1)
+        if self._joint_interp is None:
+            q_now = self._read_joints_rad()
+            self._joint_interp = JointTrajectoryInterpolator(
+                times=np.array([t_now]), values=q_now[None, :]
+            )
+        if drop_timestamps:
+            duration = self._min_servo_duration(self._adaptive_drive_horizon(t_now))
+            self._joint_interp = self._joint_interp.drive_to_waypoint(
+                q, time=t_now + duration, curr_time=t_now, max_joint_speed=np.inf
+            )
+            self.last_waypoint_time = t_now + duration
+            return
+        target_time = time.monotonic() - synced_time() + float(target_time_wall)
+        target_time = self._resolve_waypoint_time(target_time, t_now)
+        self._joint_interp = self._joint_interp.schedule_waypoint(
+            q,
+            time=target_time,
+            curr_time=t_now,
+            last_waypoint_time=self.last_waypoint_time,
+            max_joint_speed=np.inf,
+        )
+        self.last_waypoint_time = target_time
 
     def _pose_speed_kwargs(
         self,
@@ -319,7 +350,7 @@ class ArmModule(ActuatorModule):
         return max(float(duration), period)
 
     # ========= UR-style motion API (SI units) ============
-    def moveJ(self, q, speed: float = _DEFAULT_HOME_SPEED, acceleration: float = 1.4, t_now: float | None = None) -> None:
+    def moveJ(self, q, speed: float = _DEFAULT_JOINT_SPEED, acceleration: float = 1.4, t_now: float | None = None) -> None:
         """Exclusive joint-space move to ``q`` (radians).
 
         Stops Cartesian servo (UR ``servoStop`` + ``moveJ``). ``acceleration`` is
@@ -338,7 +369,14 @@ class ArmModule(ActuatorModule):
             q_target, time=t, curr_time=t, max_joint_speed=float(speed)
         )
 
-    def moveL(self, pose, speed: float = 0.25, acceleration: float = 1.2, t_now: float | None = None) -> None:
+    def moveL(
+        self,
+        pose,
+        speed: float = 0.25,
+        acceleration: float = 1.2,
+        t_now: float | None = None,
+        rot_speed: float | None = None,
+    ) -> None:
         """Exclusive linear Cartesian move to ``pose`` (metres + rotvec)."""
         del acceleration
         t = float(t_now if t_now is not None else time.monotonic())
@@ -350,7 +388,10 @@ class ArmModule(ActuatorModule):
             pose=pose,
             time=t,
             curr_time=t,
-            **self._pose_speed_kwargs(max_pos_speed=float(speed)),
+            **self._pose_speed_kwargs(
+                max_pos_speed=float(speed),
+                max_rot_speed=float(rot_speed) if rot_speed is not None else None,
+            ),
         )
         self.last_waypoint_time = float(self.interp.times[-1])
 
@@ -401,9 +442,8 @@ class ArmModule(ActuatorModule):
         ``servoL`` / ``moveL`` cancel joint motion via ``_cancel_joint_motion``.
         """
         t = time.monotonic()
-        joint_interp = getattr(self, "_joint_interp", None)
-        if joint_interp is not None:
-            self._write_joints_rad(joint_interp(t))
+        if self._joint_interp is not None:
+            self._write_joints_rad(self._joint_interp(t))
             return
         if self._is_pose_interpolator() or self._cartesian_pose_names():
             self._ensure_pose_interpolator()
@@ -412,21 +452,97 @@ class ArmModule(ActuatorModule):
 
     @action_handler(ActionType.SCHEDULE_WAYPOINT)
     def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
-        extracted = self._extract_pose_waypoint(action)
-        if extracted is None:
+        """Stream a waypoint, or run an exclusive speed-limited move.
+
+        Whoever supplies the timing owns the path. With ``params.speed`` (see
+        :meth:`_is_exclusive_move`) the module drives the target at a speed
+        limit (``moveJ`` / ``moveL``), taking as long as it takes. Otherwise
+        the caller owns timing — ``drop_timestamps`` servos over the adaptive
+        drive horizon, and a plain waypoint blends into the trajectory at its
+        own timestamp.
+        """
+        params = action.params
+        if self._is_exclusive_move(params):
+            return self._move_exclusive(action, t_now, params)
+
+        pose_extracted = self._extract_pose_waypoint(action)
+        if pose_extracted is not None:
+            pose, target_time_wall = pose_extracted
+            if self._drop_timestamps(action):
+                self.servoL(
+                    pose, duration=self._adaptive_drive_horizon(t_now), t_now=t_now
+                )
+            else:
+                self._cancel_joint_motion()
+                self._schedule_pose_waypoint(
+                    pose, target_time_wall, t_now, drop_timestamps=False
+                )
             return True
-        pose, target_time_wall = extracted
-        if self._drop_timestamps(action):
-            self.servoL(pose, duration=self._adaptive_drive_horizon(t_now), t_now=t_now)
-        else:
-            self._cancel_joint_motion()
-            self._schedule_pose_waypoint(
-                pose, target_time_wall, t_now, drop_timestamps=False
-            )
+
+        joint_extracted = self._extract_joint_waypoint(action)
+        if joint_extracted is not None:
+            q, target_time_wall = joint_extracted
+            if self._drop_timestamps(action):
+                self.servoJ(
+                    q, duration=self._adaptive_drive_horizon(t_now), t_now=t_now
+                )
+            else:
+                self._schedule_joint_waypoint(
+                    q, target_time_wall, t_now, drop_timestamps=False
+                )
+            return True
+
+        logger.warning(
+            "Module '%s': SCHEDULE_WAYPOINT has neither complete pose fields %s "
+            "nor complete joint fields %s; ignoring.",
+            self.name,
+            self._cartesian_pose_names(),
+            self._ik_joint_names(),
+        )
         return True
 
-    @action_handler(ActionType.SET_HOME)
-    def _handle_set_home(self, action: ModuleAction, t_now: float) -> bool:
-        del action
-        self.moveJ(self._home_q_rad(), speed=float(self.home_speed), t_now=t_now)
+    def _move_exclusive(
+        self, action: ModuleAction, t_now: float, params: dict
+    ) -> bool:
+        """Speed-limited go-to: a Cartesian pose or a joint configuration."""
+        frame = str(params.get("frame") or "world")
+        speed = params.get("speed")
+        rot_speed = params.get("rot_speed")
+
+        pose_extracted = self._extract_pose_waypoint(action)
+        if pose_extracted is not None:
+            pose, _ = pose_extracted
+            if frame == "ee":
+                try:
+                    current = self._read_current_pose()
+                except Exception:  # noqa: BLE001
+                    current = np.zeros(6, dtype=np.float64)
+                pose = compose_ee_delta(current, pose)
+            self.moveL(
+                pose,
+                speed=float(speed) if speed is not None else 0.25,
+                rot_speed=float(rot_speed) if rot_speed is not None else None,
+                t_now=t_now,
+            )
+            return True
+
+        joint_extracted = self._extract_joint_waypoint(action)
+        if joint_extracted is not None:
+            q, _ = joint_extracted
+            self.moveJ(
+                q,
+                speed=(
+                    float(speed)
+                    if speed is not None
+                    else float(self.default_joint_speed)
+                ),
+                t_now=t_now,
+            )
+            return True
+
+        logger.warning(
+            "Module '%s': exclusive move has neither complete Cartesian fields "
+            "nor complete joint fields; ignoring.",
+            self.name,
+        )
         return True

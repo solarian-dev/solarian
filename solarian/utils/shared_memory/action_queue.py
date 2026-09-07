@@ -3,11 +3,15 @@ Shared-memory FIFO queues for actions.
 
 Two classes are exposed:
 
-* :class:`ModuleActionQueue` — one queue per robot module.  Stores
+* :class:`ModuleActionQueue` — one queue per module.  Stores
   :class:`ModuleAction` instances with a fixed schema derived from an
   example action (flat ``dict[str, np.ndarray | number]``).  Used by the
   robot to deliver per-module actuator commands to modules with zero
-  pickle overhead.
+  pickle overhead, and by the controller to collect what its skills
+  command.  Its ``params`` ride along as a ``msgpack`` blob, being
+  open-ended rather than actuator data.  :meth:`ModuleActionQueue.local`
+  drops the shared memory for the case where producer and consumer share
+  a process.
 
 * :class:`ActionQueue` — one queue for the top-level :class:`Action`
   objects that flow from the think process to the controller's
@@ -18,6 +22,7 @@ Two classes are exposed:
 """
 
 from typing import Dict, Any, List, Optional, Union
+from collections import deque
 import numbers
 from multiprocessing.managers import SharedMemoryManager
 
@@ -98,32 +103,102 @@ def unflatten_dict(d: Dict[str, Any], sep: str = '.') -> Dict[str, Any]:
     return result
 
 
+class _LocalActionRing:
+    """In-process FIFO of whole :class:`ModuleAction` objects.
+
+    Mirrors the slice of :class:`SharedMemoryQueue` that
+    :class:`ModuleActionQueue` uses, ``Empty`` included, so the queue above it
+    needs no branch beyond skipping the flatten/reconstruct step.
+    """
+
+    def __init__(self, buffer_size: int):
+        self._items: deque = deque(maxlen=buffer_size)
+
+    def qsize(self) -> int:
+        return len(self._items)
+
+    def empty(self) -> bool:
+        return not self._items
+
+    def clear(self) -> None:
+        self._items.clear()
+
+    def put(self, action: ModuleAction) -> None:
+        self._items.append(action)
+
+    def get(self) -> ModuleAction:
+        if not self._items:
+            raise Empty()
+        return self._items.popleft()
+
+    def get_k(self, k: int) -> List[ModuleAction]:
+        if not self._items:
+            raise Empty()
+        assert k <= len(self._items)
+        return [self._items.popleft() for _ in range(k)]
+
+    def get_all(self) -> List[ModuleAction]:
+        if not self._items:
+            raise Empty()
+        drained = list(self._items)
+        self._items.clear()
+        return drained
+
+
 class ModuleActionQueue:
     """
-    A shared memory queue for :class:`ModuleAction` objects (one queue per module).
+    A FIFO queue of :class:`ModuleAction` objects (one queue per module).
 
-    Converts ``ModuleAction`` objects to flattened dictionaries for efficient
-    storage in :class:`SharedMemoryQueue`. No pickle serialization overhead.
+    Backed by shared memory when built from an example action, so a producer
+    or consumer in another process can reach it; backed by a plain in-process
+    ring when built with :meth:`local`, for the case where both ends sit on
+    the same loop and neither the schema nor the copy buys anything.
 
-    Requirements for action data:
-    - Values must be numbers, np.ndarray, or nested dicts with same constraints
-    - The schema (keys and array shapes) must be consistent across all actions
+    Shared-memory mode converts ``ModuleAction`` objects to flattened
+    dictionaries rather than pickling them, which is why the actuator data has
+    to be numbers, np.ndarray, or nested dicts of those, with a schema
+    consistent across every put.
+
+    ``params`` is the exception. It is a module's control vocabulary rather
+    than actuator data -- a frame name, a speed limit -- so its keys and types
+    are open-ended and cannot be flattened into the fixed numeric schema. It
+    travels as one ``msgpack`` blob in a fixed-size ``uint8`` field, the same
+    way :class:`ActionQueue` carries a whole action.
 
     Args:
-        shm_manager: SharedMemoryManager instance
-        example_action: An example ``ModuleAction`` to define the schema
+        shm_manager: SharedMemoryManager instance, or None for a local ring
+        example_action: An example ``ModuleAction`` defining the schema, or
+            None for a local ring
         buffer_size: Number of actions the queue can hold
+        max_params_bytes: Maximum serialized size of a single ``params`` dict
     """
     
     PRESENT_PREFIX = '_present'
+    #: Flat-dict fields holding the serialized ``params`` and its byte count.
+    #: Underscored so they cannot collide with an actuator field name.
+    PARAMS_KEY = '_params'
+    PARAMS_LEN_KEY = '_params_len'
 
     def __init__(
         self,
-        shm_manager: SharedMemoryManager,
-        example_action: ModuleAction,
-        buffer_size: int
+        shm_manager: SharedMemoryManager | None = None,
+        example_action: ModuleAction | None = None,
+        buffer_size: int = 1024,
+        max_params_bytes: int = 512,
     ):
         self.buffer_size = buffer_size
+        self.max_params_bytes = int(max_params_bytes)
+
+        if shm_manager is None or example_action is None:
+            # No schema to size shared memory from: keep the actions as they
+            # were built. ``_module_action_class`` is None, which is also the
+            # flag the read/write paths use to skip flattening.
+            self._module_action_class = None
+            self._actuator_field_names: List[str] = []
+            self._template_flat_dict: Dict[str, Any] = {}
+            self._queue: Any = _LocalActionRing(buffer_size)
+            return
+
         self._module_action_class = type(example_action)
 
         actual_cls = self._module_action_class._resolve_class()
@@ -132,9 +207,15 @@ class ModuleActionQueue:
         # Build the full-schema flat dict from the example (should come from
         # zeros() so every field is present).  Append one int8 presence flag
         # per actuator field so the consumer knows which fields were real.
-        example_dict = flatten_dict(example_action.to_dict())
+        example_payload = example_action.to_dict()
+        example_payload.pop('params', None)
+        example_dict = flatten_dict(example_payload)
         for name in self._actuator_field_names:
             example_dict[f'{self.PRESENT_PREFIX}.{name}'] = np.int8(1)
+        example_dict[self.PARAMS_LEN_KEY] = np.int64(0)
+        example_dict[self.PARAMS_KEY] = np.zeros(
+            self.max_params_bytes, dtype=np.uint8
+        )
         self._template_flat_dict = example_dict
 
         self._queue = SharedMemoryQueue.create_from_examples(
@@ -148,12 +229,29 @@ class ModuleActionQueue:
         cls,
         shm_manager: SharedMemoryManager,
         example_action,
-        buffer_size: int = 1024
+        buffer_size: int = 1024,
+        max_params_bytes: int = 512,
     ) -> "ModuleActionQueue":
         """
         Create a :class:`ModuleActionQueue` from an example ``ModuleAction``.
         """
-        return cls(shm_manager, example_action, buffer_size)
+        return cls(shm_manager, example_action, buffer_size, max_params_bytes)
+
+    @classmethod
+    def local(cls, buffer_size: int = 1024) -> "ModuleActionQueue":
+        """
+        Create an in-process queue holding whatever ``ModuleAction`` it is given.
+
+        For a producer and consumer the host owns directly, where there is no
+        fork to cross and so no reason to demand a schema or a flattenable
+        payload.
+        """
+        return cls(buffer_size=buffer_size)
+
+    @property
+    def is_local(self) -> bool:
+        """Whether this queue is in-process only and cannot cross a fork."""
+        return isinstance(self._queue, _LocalActionRing)
     
     def _action_to_flat_dict(self, action: ModuleAction) -> Dict[str, Union[np.ndarray, numbers.Number]]:
         """Convert a ModuleAction to a flattened dictionary.
@@ -167,15 +265,40 @@ class ModuleActionQueue:
 
         action_dict = action.to_dict()
         present_fields = set(action_dict.get('data', {}).keys())
+        params = action_dict.pop('params', None)
         flat = flatten_dict(action_dict)
 
         full = self._template_flat_dict.copy()
         full.update(flat)
+        full.update(self._encode_params(params))
 
         for name in self._actuator_field_names:
             full[f'{self.PRESENT_PREFIX}.{name}'] = np.int8(1 if name in present_fields else 0)
 
         return full
+
+    def _encode_params(self, params: dict | None) -> Dict[str, Any]:
+        """Serialize ``params`` into the fixed-size blob fields."""
+        payload = msgpack.packb(params or {}, use_bin_type=True)
+        n = len(payload)
+        if n > self.max_params_bytes:
+            raise ValueError(
+                f"Serialized ModuleAction params is {n}B, exceeds "
+                f"max_params_bytes={self.max_params_bytes}."
+            )
+        buf = np.zeros(self.max_params_bytes, dtype=np.uint8)
+        buf[:n] = np.frombuffer(payload, dtype=np.uint8)
+        return {self.PARAMS_LEN_KEY: np.int64(n), self.PARAMS_KEY: buf}
+
+    def _decode_params(self, flat_dict: Dict[str, Any]) -> dict:
+        """Rebuild ``params`` from the blob fields, ``{}`` when none was sent."""
+        n = int(flat_dict.get(self.PARAMS_LEN_KEY, 0))
+        if n <= 0:
+            return {}
+        payload = np.asarray(
+            flat_dict[self.PARAMS_KEY], dtype=np.uint8
+        )[:n].tobytes()
+        return msgpack.unpackb(payload, raw=False)
 
     @staticmethod
     def _to_native(v):
@@ -195,10 +318,12 @@ class ModuleActionQueue:
             if int(flat_dict.get(f'{self.PRESENT_PREFIX}.{name}', 0)) == 1
         }
 
-        # Strip presence flags and convert 0-d arrays to native scalars
+        # Strip presence flags and the params blob, and convert 0-d arrays to
+        # native scalars
         data_flat = {
             k: self._to_native(v) for k, v in flat_dict.items()
             if not k.startswith(self.PRESENT_PREFIX)
+            and k not in (self.PARAMS_KEY, self.PARAMS_LEN_KEY)
         }
         nested = unflatten_dict(data_flat)
 
@@ -212,6 +337,7 @@ class ModuleActionQueue:
             action_type=action_type,
             data=filtered_data,
             drop_timestamps=nested.get('drop_timestamps'),
+            params=self._decode_params(flat_dict),
         )
     
     def qsize(self) -> int:
@@ -237,6 +363,9 @@ class ModuleActionQueue:
             Full: If the queue is full
             TypeError: If the action contains unsupported types
         """
+        if self.is_local:
+            self._queue.put(action)
+            return
         self._queue.put(self._action_to_flat_dict(action))
     
     def get(self) -> ModuleAction:
@@ -249,6 +378,8 @@ class ModuleActionQueue:
         Raises:
             Empty: If the queue is empty
         """
+        if self.is_local:
+            return self._queue.get()
         return self._flat_dict_to_action(self._queue.get())
     
     def get_k(self, k: int) -> List[ModuleAction]:
@@ -264,6 +395,9 @@ class ModuleActionQueue:
         Raises:
             Empty: If the queue is empty
         """
+        if self.is_local:
+            return self._queue.get_k(k)
+
         flat_results = self._queue.get_k(k)
         
         # Convert each row back to an Action
@@ -286,6 +420,9 @@ class ModuleActionQueue:
         Raises:
             Empty: If the queue is empty
         """
+        if self.is_local:
+            return self._queue.get_all()
+
         flat_results = self._queue.get_all()
         
         # Convert each row back to an ModuleAction

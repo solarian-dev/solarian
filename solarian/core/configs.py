@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import numpy as np
 
+from solarian.core.execution import ExecutionMode
+
 
 def _convert_numpy_to_float(v):
     """Convert numpy types to Python float."""
@@ -134,6 +136,9 @@ class ModuleConfig(BaseModel):
     commands_per_cycle: int = 1  # max commands to process per control loop iteration
     command_queue_size: int = 1024  # size of the command input queue
     launch_timeout: float = 3.0  # timeout for process launch in seconds
+    #: Overrides the module class's ``execution_mode``. Lets the same module
+    #: run in a process in production and inline in a test or on a small host.
+    execution: ExecutionMode | None = None
 
     actuators: dict[str, ActuatorConfig] = {}
     sensors: dict[str, SensorConfig] = {}

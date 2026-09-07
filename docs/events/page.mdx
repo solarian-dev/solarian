@@ -1,0 +1,165 @@
+export const metadata = {
+  title: 'Events',
+  description:
+    'An Event is something that happened — a key went down, a button was clicked, a limit switch tripped. Modules emit them, their host drains them on its own tick, and handlers and skills react.',
+}
+
+# Events
+
+An **Event** is something that *happened*, at a point in time. It is the third of Solarian's three data types, and the one that carries discrete occurrences rather than state or intent. {{ className: 'lead' }}
+
+| Type | Means | Flows |
+| --- | --- | --- |
+| **Observation** | what the world currently looks like | module → controller → skill |
+| **Event** | something that happened | module → controller → skill |
+| **Action** | something we want to happen | skill → controller → robot → module |
+
+Defined in [`solarian/core/event.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/event.py).
+
+## Events vs. observations
+
+The line matters, and it is easy to get wrong. **Continuous signals stay observations.** Joint positions, a joystick axis, the set of keys currently held — sampling those into one event per tick would flood the event path and make it useless for the discrete things it is good at.
+
+Events are for *transitions*: a key went down, a button was clicked, a limit switch tripped. A skill jogging an arm wants to ask "is `w` down right now" — an observation. A controller starting a skill wants to know "`w` was just pressed" — an event.
+
+So a `KeyboardModule` emits `KEY_DOWN` / `KEY_UP` events *and* publishes `held_keys` as an observation, recomputed from those same events.
+
+## Drained on the control tick
+
+Modules only ever *enqueue*. The host drains the queue on its own control tick and dispatches from there:
+
+```python
+while running:
+    events = drain()                 # dispatches to @event_handler methods
+    tick_local_modules()             # each publishes into its own buffer
+    fan_out(events)                  # a copy into every skill's inbox
+    for skill in active_skills:
+        actions += skill.step()      # drains its inbox, then control_step(dt)
+    dispatch(actions)
+```
+
+Two consequences worth relying on:
+
+- **Handlers run on the control thread**, not on whatever device callback thread produced the event. A pynput listener thread can no longer mutate state the control loop is mid-read.
+- **Ordering is deterministic.** Every handler and every running skill sees the same batch, in the same order, at the same instant.
+
+The transport underneath depends on how the emitting module is scheduled — a `deque` for inline and threaded modules, a `multiprocessing.Queue` for process-backed ones — but the host does not care which. `drain_events()` reads them back the same way. See [Execution Modes](/docs/modules#execution-modes).
+
+The host is whoever owns the module. Both `Controller` and `Robot` are event hosts, sharing the same `EventHost` machinery, so a limit switch on the robot reaches a robot-side handler without a round trip to the controller.
+
+Every skill the host is running gets its own copy of each drained batch, posted to the skill's `event_inbox` and emptied into `self.events` at the top of its next step. That holds whether the skill runs in a process, on a thread, or inline on the host's own loop, so a skill never has to know which it is to read its events — only the kind of queue differs, and nothing above it can tell. It also means a skill the host skips on some tick keeps those events for the step that does run, instead of losing them.
+
+## Declaring what a module emits
+
+A module lists its event types in an `events` class attribute and calls `emit()`:
+
+```python
+from solarian.core.event import EventType
+from solarian.core.execution import ExecutionMode
+from solarian.core.module import Module
+
+class FootPedalModule(Module):
+    execution_mode = ExecutionMode.THREAD
+    events = (EventType.BUTTON_DOWN, EventType.BUTTON_UP)
+
+    def control_step(self):
+        if self._pedal_just_went_down():
+            self.emit(EventType.BUTTON_DOWN, button="pedal")
+```
+
+`emit(event_type, **data)` stamps the event with the module's name and the current time. Keep `data` small and picklable — events from a process-backed module cross a queue.
+
+## Reacting: `@event_handler`
+
+`@event_handler` mirrors `@action_handler`. Decorate a method on a controller — or on a robot — with the event type it handles:
+
+```python
+from solarian.core.event import Event, EventType, event_handler
+
+class MyController(Controller):
+    @event_handler(EventType.KEY_DOWN)
+    def on_key_down(self, event: Event) -> None:
+        if event.data["key"] == "q":
+            self.stop_all_skills()
+```
+
+Handlers are collected by walking the MRO root → leaf. **Several methods may handle the same event type and all of them run**, so a subclass can react to a key press without displacing the base class's own reaction to it. Redeclaring a handler *by the same method name* does override it, which is how you replace inherited behavior deliberately.
+
+Skills receive the same batch as their `control_step`'s `events` argument, so a skill can react to a transition without the controller having to route it.
+
+## The `Event` record
+
+`Event` is frozen — it is a record of the past, and the same instance is handed to every handler and every running skill on a tick.
+
+<Properties>
+  <Property name="type" type="int">
+    An <code>EventType</code> value.
+  </Property>
+  <Property name="source" type="str">
+    Name of the module that emitted it.
+  </Property>
+  <Property name="data" type="mapping">
+    Payload, e.g. <code>{'{"key": "w"}'}</code>.
+  </Property>
+  <Property name="timestamp" type="float">
+    Wall-clock time the event occurred.
+  </Property>
+</Properties>
+
+## Event types
+
+`EventType` is an open registry, exactly like [`ActionType`](/docs/action-types). Core reserves values below `CUSTOM_START` (100):
+
+<Properties>
+  <Property name="KEY_DOWN" type="0">
+    A key was pressed. <code>data</code> carries <code>key</code>.
+  </Property>
+  <Property name="KEY_UP" type="1">
+    A key was released. <code>data</code> carries <code>key</code>.
+  </Property>
+  <Property name="BUTTON_DOWN" type="2">
+    A pointing-device or controller button went down.
+  </Property>
+  <Property name="BUTTON_UP" type="3">
+    A pointing-device or controller button came up.
+  </Property>
+</Properties>
+
+Projects and plugins subclass to add their own, starting at 100:
+
+```python
+from solarian.core.event import EventType
+
+class MyEventType(EventType):
+    LIMIT_SWITCH = 100
+    TAG_DETECTED = 101
+```
+
+Reusing a reserved value raises at class-definition time.
+
+## Binding keys to skills
+
+The common case — a key starts a skill — is one handler that constructs the skill it wants:
+
+```python
+class So106Controller(Controller):
+    keyboard = KeyboardModule()
+
+    @event_handler(EventType.KEY_DOWN)
+    def start_bound_skill(self, event: Event) -> None:
+        match event.data.get("key"):
+            case "h":
+                self.start_skill(MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"}))
+            case "l":
+                self.start_skill(LeaderFollowSkill(params={"leader": "leader_arm", "arm": "right_arm", "gripper": "right_gripper"}))
+```
+
+`start_skill` preempts whatever holds the same modules, so a key never has to check what is running. `space` stops everything, and is the only key the framework itself binds.
+
+## See also
+
+- [Modules](/docs/modules) — what emits events, and how each is scheduled.
+- [Observations](/docs/observations) — for continuous state.
+- [Actions](/docs/actions) — for intent.
+- [Controller](/docs/controllers) and [Robot](/docs/robots) — the loops that drain and dispatch.
+- [Skills](/docs/skills) — which receive the batch in `control_step`.

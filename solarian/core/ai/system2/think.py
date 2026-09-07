@@ -35,11 +35,12 @@ from typing import Callable, Dict, List, Any, Optional
 import jinja2
 import numpy as np
 
-from solarian.core.action import Action
-from solarian.core.ai.system1.skill import Skill, SkillStatus, SkillRunner
+from solarian.core.action import Action, ActionType
+from solarian.core.execution import ExecutionPlace
+from solarian.core.ai.system1.skill import Skill, SkillStatus
 from solarian.core.data import ImageData
 from solarian.utils import setup_process_logging, get_log_queue
-from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
+from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 from solarian.utils.shared_memory.action_queue import ActionQueue
 from solarian.utils.shared_memory.skill_status_buffer import SkillStatusBuffer
 
@@ -105,7 +106,7 @@ class _FieldView:
     __slots__ = ("_values", "_full_name")
 
     def __init__(self, values: List[Any], full_name: str = ""):
-        # ``values`` is oldest-first, matching ``ObservationRingBuffer.get_last_k``.
+        # ``values`` is oldest-first, matching ``ObservationBuffer.get_last_k``.
         self._values = values
         self._full_name = full_name
 
@@ -521,11 +522,11 @@ class ThinkProcess(Process):
     (``decide``).
 
     Args:
-        observation_buffers: Shared-memory ``ObservationRingBuffer`` dict
+        observation_buffers: Shared-memory ``ObservationBuffer`` dict
             (module_name → buffer).
-        action_queue: Shared-memory :class:`ActionQueue` that both locally
-            running skills and this process push top-level :class:`Action`
-            objects into.  The controller's ``control_step`` drains it.
+        skill_command_queue: Shared-memory :class:`ActionQueue` this process
+            pushes ``START_SKILL`` / ``STOP_SKILL`` actions into.  The
+            controller drains it and runs the skill lifecycle accordingly.
         skill_status_buffer: Skills put status records here for the think
             process.
         user_msg_queue: User commands arrive here.
@@ -535,8 +536,9 @@ class ThinkProcess(Process):
             JPEG-encoding; ``None`` disables resizing — default 512),
             ``image_jpeg_quality`` (int 0..100, default 80).
         available_skills: Registry mapping skill name → metadata dict
-            ``{"cls": SkillClass, "runner": SkillRunner,
-              "action_type": int | None, "docstring": str}``.
+            ``{"cls": SkillClass, "execution_place": ExecutionPlace,
+              "execution_mode": ExecutionMode, "skill_id": int | None,
+              "docstring": str}``.
         system_prompt: Jinja2 template for the VLM ``system`` message.
             See the module docstring for the supported variables
             (observation fields + context vars).
@@ -555,8 +557,8 @@ class ThinkProcess(Process):
 
     def __init__(
         self,
-        observation_buffers: Dict[str, ObservationRingBuffer],
-        action_queue: ActionQueue,
+        observation_buffers: Dict[str, ObservationBuffer],
+        skill_command_queue: ActionQueue,
         skill_status_buffer: SkillStatusBuffer,
         user_msg_queue: Queue,
         vlm_config: Dict[str, Any],
@@ -569,7 +571,7 @@ class ThinkProcess(Process):
     ):
         super().__init__(name="ThinkProcess", daemon=True)
         self.observation_buffers = observation_buffers
-        self.action_queue = action_queue
+        self.skill_command_queue = skill_command_queue
         self.skill_status_buffer = skill_status_buffer
         self.user_msg_queue = user_msg_queue
         self.vlm_config = vlm_config
@@ -1391,71 +1393,44 @@ class ThinkProcess(Process):
     ) -> Optional[int]:
         """Start a skill and return the invocation number, or ``None``.
 
-        ``None`` is returned for unknown skills, remote skills that lack
-        an ``action_type`` (can't dispatch), and controller skills that
-        are already running (launch is a no-op).
+        ``None`` is returned for an unknown skill, and for one whose start
+        could not be enqueued.
         """
         spec = self.available_skills.get(skill_name)
         if spec is None:
             logger.warning(f"Unknown skill: {skill_name}")
             return None
 
-        runner: SkillRunner = spec.get("runner", SkillRunner.CONTROLLER)
+        execution_place = spec.get("execution_place", ExecutionPlace.CONTROLLER)
 
-        # Remote skills (ROBOT / SERVER) are not spawned here.  Instead we
-        # push a top-level Action onto the shared-memory action queue so
-        # ``control_step``/``control_loop`` can forward it over the wire,
-        # and the remote side's action handler is what actually starts the
-        # corresponding Skill.
-        if runner != SkillRunner.CONTROLLER:
-            action_type = spec.get("action_type")
-            if action_type is None:
-                logger.error(
-                    f"Skill '{skill_name}' declared runner={runner.name} "
-                    f"but has no action_type — cannot dispatch."
-                )
-                return None
-            try:
-                action = Action(action_type=int(action_type), data=dict(params or {}))
-                self.action_queue.put(action)
-                number = self._assign_invocation(skill_name, params)
-                logger.info(
-                    f"Enqueued action (action_type={int(action_type)}) "
-                    f"to launch remote skill '{skill_name}' on {runner.name}"
-                )
-                return number
-            except Exception as exc:
-                logger.error(f"Failed to enqueue action for '{skill_name}': {exc}")
-                return None
-
-        # Controller-side skill — spawn it as a subprocess and track its
-        # lifecycle locally.
-        if skill_name in self.active_skills:
-            logger.info(f"Skill '{skill_name}' already active, skipping")
+        try:
+            action = Action(
+                action_type=int(ActionType.START_SKILL),
+                data={"skill": skill_name, "params": dict(params or {})},
+            )
+            self.skill_command_queue.put(action)
+            number = self._assign_invocation(skill_name, params)
+            logger.info(
+                "Requested start of skill '%s' (execution_place=%s)",
+                skill_name,
+                getattr(execution_place, "value", execution_place),
+            )
+            return number
+        except Exception as exc:
+            logger.error(f"Failed to enqueue start for '{skill_name}': {exc}")
             return None
 
-        cls = spec["cls"]
-        skill = cls(
-            name=skill_name,
-            skill_id=spec.get("skill_id"),
-            observation_buffers=self.observation_buffers,
-            action_queue=self.action_queue,
-            skills_status_buffer=self.skill_status_buffer,
-            params=params,
-            runner=runner,
-            action_type=spec.get("action_type"),
-        )
-        skill.start()
-        self.active_skills[skill_name] = skill
-        number = self._assign_invocation(skill_name, params)
-        logger.info(f"Launched skill '{skill_name}' (PID {skill.pid})")
-        return number
-
     def _stop_skill(self, skill_name: str):
-        skill = self.active_skills.get(skill_name)
-        if skill is not None and skill.is_alive():
-            skill.request_stop()
-            logger.info(f"Requested stop for skill '{skill_name}'")
+        try:
+            self.skill_command_queue.put(
+                Action(
+                    action_type=int(ActionType.STOP_SKILL),
+                    data={"skill": skill_name},
+                )
+            )
+            logger.info("Requested stop of skill '%s'", skill_name)
+        except Exception as exc:
+            logger.error("Failed to enqueue stop for '%s': %s", skill_name, exc)
 
     # ------------------------------------------------------------------
     # Main loop

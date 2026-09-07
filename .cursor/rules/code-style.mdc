@@ -1,0 +1,58 @@
+---
+description: Solarian coding standards - no thin wrappers, no dead defensiveness, no narrating comments
+alwaysApply: true
+---
+
+# Code style
+
+## No single-use wrapper methods
+
+A method that only forwards to one call, at one call site, is boilerplate. Inline it.
+A helper earns its name by having several callers or by naming a non-obvious concept.
+
+```python
+# BAD
+def on_start(self):
+    self._start_teleop()
+
+def _start_teleop(self) -> None:
+    self.start_skill(CartesianTeleopSkill(arm=ARM, gripper=GRIPPER))
+
+# GOOD
+def on_start(self):
+    self.start_skill(CartesianTeleopSkill(arm=ARM, gripper=GRIPPER))
+```
+
+Also delete: methods with zero call sites, and overrides whose body is `pass` when the
+base hook already does nothing.
+
+## No defensive reads of attributes `__init__` always sets
+
+`getattr(self, "x", default)` and `(d or {}).get(k) or ""` say "this might not exist".
+When it always exists, that is a lie that hides the real optional cases. Fix the
+initialisation order if that is what made the guard necessary, then read directly.
+
+```python
+# BAD
+self._local_skills.pop(getattr(skill, "skill_name", ""), None)
+name = str((action.data or {}).get("skill") or "")
+
+# GOOD
+self._local_skills.pop(skill.skill_name, None)
+name = str(action.data.get("skill") or "")
+```
+
+Keep the defensiveness where it is real: payloads deserialized off the wire, genuinely
+optional config, and polymorphic attributes only some subclasses declare. Say why in a
+comment when it is not obvious.
+
+## Use imported classes directly
+
+Do not alias an imported class onto `self`. `self._arm_action_cls = RightArmAction`
+adds indirection and hides which class runs. Call `RightArmAction(...)`.
+
+## Comments state constraints, never narrate
+
+A comment earns its line by saying something the code cannot: a unit, an invariant, a
+reason this order matters, a trade-off. Never restate what the next line does, and never
+explain a change for a reviewer — that belongs in the commit message.

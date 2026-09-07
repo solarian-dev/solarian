@@ -22,4 +22,7 @@ class OpenCVCameraModule(Module):
     
     camera = OpenCVCamera()
 
+    def control_step(self):
+        """Sensor-only: frames are published by ``update_observations``."""
+
 

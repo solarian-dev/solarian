@@ -9,46 +9,10 @@ import random
 import math
 import string
 import numpy as np
-from abc import ABC, abstractmethod
+from abc import ABC
+from dataclasses import dataclass, field
 from typing import Any
 from multiprocessing.managers import SharedMemoryManager
-
-# pynput is imported lazily inside ``_start_keyboard_listener`` instead of
-# at module load. On macOS ``pynput.keyboard`` transitively initializes
-# ``Quartz`` / ``AppKit`` / ``AVFoundation`` (``AVCaptureDevice``,
-# ``NSResponder``, ...) the moment it's imported. Once those Obj-C classes
-# have been ``+initialize``'d in a process, any subsequent ``fork()`` of
-# that process aborts the child the moment it touches Cocoa (Apple's
-# hard-coded fork-safety net; not bypassed by
-# ``OBJC_DISABLE_INITIALIZE_FORK_SAFETY``). Importing this module in a
-# parent process that later forks camera / robot / gripper workers (as
-# UMI's eval_real.py does on macOS) therefore breaks those forks unless
-# the pynput load is deferred until after the forks. ``None`` here is the
-# "not yet loaded" sentinel; the lazy loader below replaces it with the
-# real module the first time ``_start_keyboard_listener`` runs, or with
-# ``False`` if pynput is not installed / fails to import.
-_pynput_keyboard = None
-_PYNPUT_TRIED = False
-
-
-def _get_pynput_keyboard():
-    """Return ``pynput.keyboard`` (cached), or ``None`` if unavailable.
-
-    Deferred so that merely importing this module does NOT initialize
-    Cocoa in the parent process; see comment above.
-    """
-    global _pynput_keyboard, _PYNPUT_TRIED
-    if _PYNPUT_TRIED:
-        return _pynput_keyboard
-    _PYNPUT_TRIED = True
-    try:
-        from pynput import keyboard as _kb
-        _pynput_keyboard = _kb
-    except Exception:  # pragma: no cover - pynput is optional / may fail on some platforms
-        _pynput_keyboard = None
-    return _pynput_keyboard
-
-
 
 from solarian.utils import busy_wait
 from solarian.core import Action
@@ -66,11 +30,22 @@ from solarian.core.clock_sync import (
     LatencyEma,
     format_latency_status,
 )
+from solarian.core.event import (
+    Event,
+    EventHost,
+    EventType,
+    event_handler,
+    event_inbox_for,
+)
+from solarian.core.execution import ExecutionMode, ExecutionPlace
+from solarian.core.keyboard_module import KeyboardModule
+from solarian.core.ai.system1.skill import Skill, SkillStatus
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
 from solarian.core.data import ImageData, BoundingBoxData
 from solarian.perception.processor import field_name_for_input
-from solarian.utils.shared_memory.observation_ring_buffer import ObservationRingBuffer
+from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
+from solarian.utils.shared_memory.action_queue import ModuleActionQueue
 from solarian.utils.shared_memory.skill_status_buffer import SkillStatusBuffer
 from solarian.utils.configs import load_config_yaml
 
@@ -114,7 +89,64 @@ def _get_screen_geometry():
     return sw, sh, sx, sy
 
 
-class Controller(ABC):
+@dataclass
+class SkillRecord:
+    """A skill the controller believes is running, local or remote."""
+
+    name: str
+    execution_place: ExecutionPlace
+    execution_mode: ExecutionMode = ExecutionMode.PROCESS
+    status: SkillStatus = SkillStatus.RUNNING
+    skill_id: int | None = None
+    modules: set[str] = field(default_factory=set)
+
+
+def _skill_spec(cls) -> dict:
+    """Registry entry for a skill, read off the class without constructing it.
+
+    A declared skill class may be an expensive one that only ever runs on the
+    robot, so nothing here instantiates it.
+    """
+    skill_id = cls.__dict__.get("skill_id")
+    return {
+        "cls": cls,
+        "execution_place": ExecutionPlace(cls.execution_place),
+        "execution_mode": ExecutionMode(cls.execution_mode),
+        "skill_id": int(skill_id) if isinstance(skill_id, int) and skill_id else None,
+        "docstring": (cls.__doc__ or "").strip(),
+    }
+
+
+def _deep_merge_module_actions(base: dict, overlay: dict) -> dict:
+    for key, value in overlay.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            nested = dict(base[key])
+            if "data" in nested and "data" in value and isinstance(nested["data"], dict) and isinstance(value["data"], dict):
+                merged_data = dict(nested["data"])
+                merged_data.update(value["data"])
+                nested.update(value)
+                nested["data"] = merged_data
+                base[key] = nested
+            else:
+                _deep_merge_module_actions(nested, value)
+                base[key] = nested
+        else:
+            base[key] = value
+    return base
+
+
+class Controller(EventHost, ABC):
+
+    # Every controller has a keyboard: it is how an operator stops everything.
+    # Inline, so its events land on the control thread rather than on the OS
+    # listener's.
+    keyboard = KeyboardModule()
+
+    # Skill classes this controller can run. Only a registry: it is what the
+    # think process picks from and what a ``START_SKILL`` name resolves to,
+    # not a set of ready-made instances — a key handler constructs the skill
+    # it wants with the arguments it wants.
+    skills: tuple[type[Skill], ...] = ()
 
     # When True and not running headless, use the single-window pygame GUI
     # (dashboard + camera grid + on-window key capture) instead of the OpenCV
@@ -171,10 +203,13 @@ class Controller(ABC):
 
         self.modules = {}
 
-        # Create modules from class-level attributes
-        for name in self.__class__.__dict__:
-            val = getattr(self, name, None)
-            if isinstance(val, Module):
+        # Create modules from class-level attributes. Walks the MRO so that
+        # modules declared on a base controller -- the keyboard, for one --
+        # exist on every subclass, matching how Robot collects modules.
+        for klass in type(self).__mro__:
+            for name, val in klass.__dict__.items():
+                if name in self.modules or not isinstance(val, Module):
+                    continue
                 module_class = val.__class__
                 module_cfg = self.load_module_config(name, module_class)
                 self.modules[name] = module_class(module_cfg, name)
@@ -195,7 +230,7 @@ class Controller(ABC):
         self.last_observation = Observation({})
 
         # Shared-memory infrastructure mirroring what Robot owns on its side.
-        # The controller keeps a per-module ObservationRingBuffer so downstream
+        # The controller keeps a per-module ObservationBuffer so downstream
         # consumers (e.g. ThinkProcess and skill processes) can read the
         # latest observation without draining the buffer; the buffer is a
         # ring and simply overwrites itself on each new ``put``.
@@ -216,23 +251,33 @@ class Controller(ABC):
         # instantiate its modules (schema-only, no hardware connections) so
         # that class-level data descriptors (e.g. ``OpenCVCamera.rgb_image.shape``)
         # are populated before we call ``Observation.zeros()``.
-        self.observation_buffers: dict[str, ObservationRingBuffer] = {}
+        self.observation_buffers: dict[str, ObservationBuffer] = {}
         self._setup_remote_observation_schema()
         self._create_observation_buffers()
+        self._create_local_observation_buffers()
 
-        # Global keyboard listener (pynput) that delivers real OS key-down
-        # / key-up events to the on_key_press / on_key_release hooks.
-        # Started in :meth:`start`, stopped when ``start`` returns.
-        self._keyboard_listener = None
-        # Tracks which chars pynput currently reports as held, so we can
-        # filter out OS auto-repeat and only fire :meth:`on_key_press`
-        # once per physical press.
-        self._keyboard_held: set[str] = set()
+        self._init_skill_orchestration()
+        from solarian.utils.shared_memory.action_queue import ActionQueue
+        #: Control-plane inbox: START_SKILL / STOP_SKILL from the think
+        #: process. Skills command modules through their own queues, not here.
+        self.skill_command_queue = ActionQueue(
+            shm_manager=self.shm_manager,
+            buffer_size=256,
+            max_payload_bytes=8192,
+        )
 
     def load_module_config(self, module_name: str, module_class: type):
-        """Load module config from YAML using the module's own config class"""
+        """Load module config from YAML using the module's own config class.
+
+        Modules with nothing to describe -- an input device has no ports,
+        calibration, or limits -- declare a ``default_config`` and are used
+        without the project shipping an empty YAML file for them.
+        """
         conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
         yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
+        default_config = getattr(module_class, "default_config", None)
+        if default_config is not None and not os.path.exists(yaml_path):
+            return module_class.config_class(**default_config)
         module_cfg = load_config_yaml(yaml_path, module_class.config_class)
         return module_cfg
 
@@ -275,14 +320,14 @@ class Controller(ABC):
             module_class(module_cfg, name)
 
     def _create_observation_buffers(self) -> None:
-        """Create a shared-memory ``ObservationRingBuffer`` for every module
+        """Create a shared-memory ``ObservationBuffer`` for every module
         declared in the active ``Observation`` subclass."""
         example_observation = Observation.zeros()
         for name, module_obs in example_observation.items():
             if name in self.observation_buffers:
                 continue
             try:
-                self.observation_buffers[name] = ObservationRingBuffer.create_from_example(
+                self.observation_buffers[name] = ObservationBuffer.create_from_example(
                     shm_manager=self.shm_manager,
                     example_observation=module_obs,
                     get_time_budget=0.2,
@@ -292,6 +337,25 @@ class Controller(ABC):
                 logger.warning(
                     f"Could not create observation buffer for '{name}': {e}"
                 )
+
+    def _create_local_observation_buffers(self) -> None:
+        """Give each controller-side module a buffer and register it.
+
+        Local rather than shared-memory: these modules run on this process's
+        own loop, so there is no fork to cross, and no reason to require them
+        to appear in the robot's ``Observation`` schema or to flatten what
+        they report. Registering them in the same dict is what lets a skill
+        read any module by name without knowing which side it sits on.
+        """
+        for name, module in self.modules.items():
+            if name in self.observation_buffers:
+                logger.debug(
+                    f"Controller module '{name}' shadows a robot module of "
+                    f"the same name in the observation schema"
+                )
+            buffer = ObservationBuffer.local()
+            self.observation_buffers[name] = buffer
+            module.observation_buffer = buffer
 
     def _verify_connection(self, timeout=5000):
         """Verify that we can connect to the relay server"""
@@ -349,7 +413,9 @@ class Controller(ABC):
             StatusBoard.set("Observation", self.last_observation)
 
         if "skill_status" in msg.data:
-            for rec in msg.data["skill_status"]:
+            recs = msg.data["skill_status"]
+            self._ingest_skill_status_records(recs)
+            for rec in recs:
                 try:
                     self.skill_status_buffer.put(
                         skill_id=int(rec["skill_id"]),
@@ -405,7 +471,7 @@ class Controller(ABC):
         self.action_socket.send(msg.serialize())
 
     def _put_module_observation(self, module_name: str, module_observation) -> None:
-        """Push *module_observation* into its ``ObservationRingBuffer``.
+        """Push *module_observation* into its ``ObservationBuffer``.
 
         The buffer is a ring and overwrites itself, so reads by the think
         process or skills never drain it — they all see the latest entry.
@@ -444,11 +510,11 @@ class Controller(ABC):
         self.sync_clock()
 
         for module_name, module in self.modules.items():
-            module.load_calibration()
-
             if module.cfg.calibration_file is None:
-                logger.error(f"No calibration required for module {module_name}")
+                # Input devices and other calibration-free modules.
                 continue
+
+            module.load_calibration()
 
             module.connect()
 
@@ -495,6 +561,19 @@ class Controller(ABC):
         logger.info("Initializing modules")
         for module_name, module in self.modules.items():
             module.initialize()
+            # A controller-side module publishes into a local ObservationBuffer,
+            # which a fork does not carry, so in PROCESS mode every reader on
+            # this side would poll an empty buffer forever.
+            if module.execution_mode is ExecutionMode.PROCESS:
+                raise ValueError(
+                    f"Controller module '{module_name}' has execution_mode "
+                    f"'process'; a controller-side module must be 'inline' or "
+                    f"'thread'. Set execution_mode on the class, or "
+                    f"'execution:' in conf/{module_name}.yaml."
+                )
+            # Started here rather than at the first tick so a module can emit
+            # before the control loop asks it for anything.
+            module.start()
         logger.info("Controller initialized")
 
     def disconnect(self):
@@ -556,8 +635,8 @@ class Controller(ABC):
                     ch = sys.stdin.read(1).lower()
                     # Headless cbreak mode has no release event, so every
                     # character read is treated as a full click (down+up).
-                    self._dispatch_key_press(ch)
-                    self._dispatch_key_release(ch)
+                    self.keyboard.on_press(ch)
+                    self.keyboard.on_release(ch)
                     if ch == 'q':
                         break
 
@@ -837,14 +916,16 @@ class Controller(ABC):
     def gui_key_help(self) -> list[tuple[str, str]]:
         """Key-binding rows ``(keys, description)`` shown in the GUI keys panel.
 
-        Override in keyboard-teleop controllers. Keys listed here (split on
-        whitespace) are highlighted while held.
+        Only the one row the framework can know about, the universal stop.
+        Which keys start which skills is application policy living in a
+        subclass's ``@event_handler``, so a subclass that binds keys should
+        extend this with its own rows.
         """
-        return []
+        return [("space", "stop all skills")]
 
     def _gui_loop(self, episode_time_s):
         """Main loop for GUI mode: render the single-window dashboard/cameras
-        and route this window's key events to on_key_press / on_key_release."""
+        and feed this window's key events into the keyboard module."""
         from solarian.core.controller_gui import ControllerGUI
 
         try:
@@ -864,9 +945,11 @@ class Controller(ABC):
             while timestamp < episode_time_s and self.running:
                 start_loop_t = time.time_ns()
 
+                # The window owns key events here, so it feeds the keyboard
+                # module directly and no OS-level listener is needed.
                 quit_requested = gui.poll(
-                    on_press=self._dispatch_key_press,
-                    on_release=self._dispatch_key_release,
+                    on_press=self.keyboard.on_press,
+                    on_release=self.keyboard.on_release,
                 )
                 if quit_requested:
                     break
@@ -896,6 +979,13 @@ class Controller(ABC):
                 start_loop_t = time.time_ns()
                 timestamp = time.perf_counter() - start_episode_t
 
+                # Events and local state are refreshed by the loop, not by
+                # control_step, so a controller that overrides control_step
+                # still gets its event handlers run and its modules read.
+                events = self._drain_events()
+                self._tick_local_modules()
+                self._fan_out_events(events)
+
                 self.last_action = self.control_step()
 
                 if self.last_action is not None:
@@ -924,115 +1014,423 @@ class Controller(ABC):
         pass
 
     # -- Keyboard handling ---------------------------------------------------
-    # We use pynput for global OS-level key-down / key-up events instead of
-    # cv2.waitKey synthesis.  cv2 reports key events inconsistently across
-    # platforms (especially on macOS with the cocoa backend, where we saw
-    # per-frame bursts of synthesised releases), so bypassing it entirely
-    # gives reliable one-press-one-release semantics.
-
-    @staticmethod
-    def _pynput_char(key) -> str | None:
-        """Return the lowercase character for a pynput key, or ``None`` for
-        non-character keys (arrows, modifiers, function keys, ...)."""
-        try:
-            char = key.char
-        except AttributeError:
-            return None
-        if not char:
-            return None
-        return char.lower()
-
-    def _on_pynput_press(self, key) -> None:
-        char = self._pynput_char(key)
-        logger.debug("pynput press: key=%r char=%r held=%r", key, char, self._keyboard_held)
-        if char is None:
-            return
-        # Filter OS auto-repeat: only fire on the rising edge.
-        if char in self._keyboard_held:
-            return
-        self._keyboard_held.add(char)
-        self._dispatch_key_press(char)
-
-    def _on_pynput_release(self, key) -> None:
-        char = self._pynput_char(key)
-        logger.debug("pynput release: key=%r char=%r held=%r", key, char, self._keyboard_held)
-        if char is None:
-            return
-        # We deliberately do NOT gate release on having seen a matching
-        # press: pynput on macOS occasionally reports slightly different
-        # ``key.char`` values for the same physical key across press and
-        # release (e.g. during IME / dead-key / layout transitions), and
-        # swallowing those releases is worse than letting a stray one
-        # through.  ``_keyboard_held`` is still used to suppress auto-
-        # repeat presses.
-        self._keyboard_held.discard(char)
-        self._dispatch_key_release(char)
+    # Key input arrives as KEY_DOWN / KEY_UP events from the keyboard module
+    # and is dispatched on the control thread. Whether those events come from
+    # a global OS listener or from the GUI window is the controller's call,
+    # made here; the module does not decide for itself.
 
     def _start_keyboard_listener(self) -> None:
-        """Start a daemon pynput listener that routes global keyboard
-        events through :meth:`on_key_press` / :meth:`on_key_release`.
-        """
-        if self._keyboard_listener is not None:
-            return
-        pynput_keyboard = _get_pynput_keyboard()
-        if pynput_keyboard is None:
-            logger.warning(
-                "pynput is not available; keyboard hooks (on_key_press / "
-                "on_key_release) will not be invoked in this controller."
-            )
-            return
-        try:
-            listener = pynput_keyboard.Listener(
-                on_press=self._on_pynput_press,
-                on_release=self._on_pynput_release,
-            )
-            listener.daemon = True
-            listener.start()
-            self._keyboard_listener = listener
-            logger.info("pynput keyboard listener started")
-        except Exception:
-            logger.exception("Failed to start pynput keyboard listener")
-            self._keyboard_listener = None
+        """Listen for global OS key events (no window of our own)."""
+        keyboard = self.modules.get("keyboard")
+        if keyboard is not None:
+            keyboard.start_listener()
 
     def _stop_keyboard_listener(self) -> None:
-        listener = self._keyboard_listener
-        if listener is None:
+        keyboard = self.modules.get("keyboard")
+        if keyboard is not None:
+            keyboard.stop_listener()
+
+    def _collect_controller_skills(self) -> dict:
+        """Registry of this controller's ``skills`` plus plugin entry points.
+
+        Keyed by :meth:`Skill.registry_name`, the same identity a
+        ``START_SKILL`` action carries, so a name that reaches the controller
+        from the think process resolves to the same class the robot would
+        resolve it to.
+        """
+        from solarian.core.ai.system1.registry import discover_available_skills
+
+        skills: dict = {}
+        for cls in type(self).skills:
+            skills[cls.registry_name()] = _skill_spec(cls)
+        try:
+            discovered = discover_available_skills()
+        except Exception:
+            logger.exception("Skill plugin discovery failed")
+            discovered = {}
+        for name, spec in discovered.items():
+            if name in skills:
+                if not skills[name].get("skill_id"):
+                    skills[name]["skill_id"] = spec.get("skill_id")
+            else:
+                skills[name] = spec
+        return skills
+
+    # ========= observations ============
+    def _tick_local_modules(self) -> None:
+        """Advance every inline controller-side module once per tick.
+
+        An inline module has no loop of its own, so the host's tick *is* its
+        tick: this is where its ``update_observations`` runs and its buffer
+        gains a sample. One read per module per tick, shared by every skill —
+        two skills both following the leader arm must not turn into two
+        blocking serial reads, nor see the arm at two different instants.
+        """
+        for name, module in self.modules.items():
+            if module.execution_mode is ExecutionMode.INLINE:
+                # The runner logs and retires a module that raises, so one
+                # unplugged device cannot take the control loop down with it.
+                module.runner.tick()
+
+            # ``get_state`` puts the robot's observation on the board; a
+            # controller-side module publishes only into its own buffer, so
+            # its sample is surfaced here or not at all.
+            latest = self.observation_buffers[name].latest()
+            if not isinstance(latest, dict):
+                continue
+            # A local buffer holds whatever its module put there: actuator
+            # reads are ``{field: {value, timestamp}}``, a keyboard's held-key
+            # set is not, and only the former has numeric rows to show.
+            values = {
+                field: reading["value"]
+                for field, reading in latest.items()
+                if isinstance(reading, dict) and "value" in reading
+            }
+            if values:
+                StatusBoard.set(name, values)
+
+    @property
+    def observations(self) -> dict:
+        """Every module's observation buffer, keyed by module name.
+
+        The robot's modules and the controller's own are one mapping rather
+        than two, because a skill should not have to know which side of the
+        link a module sits on to read it — and module names are unique across
+        both, so there is nothing to disambiguate.
+
+        Buffers rather than values: a skill that wants the latest sample
+        calls ``.latest()``, one that needs history calls ``.last_k(n)``, and
+        one that cares about neither pays for neither.
+        """
+        return self.observation_buffers
+
+    # ========= skill orchestration ============
+    def _init_skill_orchestration(self) -> None:
+        self._local_skills: dict[str, Skill] = {}
+        self._pending_actions: list[Action] = []
+        self._remote_running: dict[str, SkillRecord] = {}
+        self._skill_registry: dict[str, dict[str, Any]] = (
+            self._collect_controller_skills()
+        )
+        self._init_events()
+
+    @property
+    def held_keys(self) -> set[str]:
+        """Keys currently held, as reported by the keyboard module(s).
+
+        This is state, not a stream of events, and it only changes when the
+        control loop drains — so a skill reading it mid-tick sees a stable
+        snapshot rather than a set an input thread is mutating underneath it.
+        """
+        held: set[str] = set()
+        for module in self.modules.values():
+            held |= set(getattr(module, "held_keys", ()))
+        return held
+
+    def _module_action_queue(self, skill, module_name: str):
+        """Build the queue a skill pushes ``module_name``'s actions into.
+
+        Shared memory only when the skill runs in its own process; otherwise
+        a plain in-process ring, since producer and consumer are both on this
+        loop and there is no fork for the flattening to serve.
+
+        Returns ``None`` when the module has no action schema to size shared
+        memory from, matching how :meth:`_setup_remote_observation_schema`
+        skips a module with no config.
+        """
+        if not skill.execution_mode.crosses_process_boundary:
+            return ModuleActionQueue.local()
+        try:
+            example = Action.zeros()[module_name]
+        except (KeyError, TypeError):
+            example = None
+        if example is None:
+            logger.warning(
+                "No action schema for module '%s'; skill '%s' cannot command it "
+                "from another process",
+                module_name,
+                skill.skill_name,
+            )
+            return None
+        return ModuleActionQueue(
+            shm_manager=self.shm_manager,
+            example_action=example,
+            buffer_size=1024,
+        )
+
+    def _modules_overlap(
+        self, a: "Skill | SkillRecord", b: "Skill | SkillRecord"
+    ) -> bool:
+        def names(x) -> set[str]:
+            return x.commanded_module_names() if isinstance(x, Skill) else set(x.modules)
+
+        return bool(names(a) & names(b))
+
+    @property
+    def running_skills(self) -> dict[str, SkillRecord]:
+        out: dict[str, SkillRecord] = {}
+        for name, skill in self._local_skills.items():
+            out[name] = SkillRecord(
+                name=name,
+                execution_place=skill.execution_place,
+                execution_mode=skill.execution_mode,
+                status=SkillStatus.RUNNING,
+                skill_id=int(skill.skill_id) if skill.skill_id else None,
+                modules=skill.commanded_module_names(),
+            )
+        for name, rec in self._remote_running.items():
+            if name not in out:
+                out[name] = rec
+        return out
+
+    @event_handler(EventType.KEY_DOWN)
+    def stop_all_on_space(self, event: Event) -> None:
+        """Space is the operator's stop-everything, on every controller.
+
+        The only key the framework claims. Which other keys start which skills
+        is application policy, so subclasses bind those in their own
+        ``@event_handler`` — theirs runs alongside this one, not instead of it.
+        """
+        if event.data.get("key") in (" ", "space"):
+            self.stop_all_skills()
+
+    def start_skill(self, skill: Skill) -> str:
+        """Run a skill the caller built, preempting whatever overlaps it.
+
+        The caller constructs the skill with the arguments it wants, so this
+        needs no spec to rebuild one from; all it decides is *where* the skill
+        runs. A remote skill is not launched here at all — the robot or server
+        owns it, and gets a ``START_SKILL`` naming the class and its params.
+        """
+        name = skill.skill_name
+        if name in self.running_skills:
+            # Starting is not toggling: pressing the same key twice re-runs the
+            # skill rather than leaving nothing commanding the modules.
+            self.stop_skill(name)
+        for other in list(self._local_skills.values()):
+            if self._modules_overlap(skill, other):
+                self.stop_skill(other.skill_name)
+        for other_name, rec in list(self.running_skills.items()):
+            if other_name in self._local_skills:
+                continue
+            if rec.execution_place.is_remote and self._modules_overlap(skill, rec):
+                self.stop_skill(other_name)
+        if skill.execution_place.is_remote:
+            self._pending_actions.append(
+                Action(
+                    action_type=ActionType.START_SKILL,
+                    data={
+                        "skill": type(skill).registry_name(),
+                        "params": skill.params,
+                    },
+                )
+            )
+            self._remote_running[name] = SkillRecord(
+                name=name,
+                execution_place=skill.execution_place,
+                execution_mode=skill.execution_mode,
+                status=SkillStatus.RUNNING,
+                skill_id=int(skill.skill_id) if skill.skill_id else None,
+                modules=skill.commanded_module_names(),
+            )
+        else:
+            # Every locally-run skill reads its inputs off itself and writes
+            # its actions the same way, so wire both here whichever way it
+            # turns out to be scheduled.
+            skill.observations = self.observation_buffers
+            skill.event_inbox = event_inbox_for(skill)
+            skill.action_queues = {
+                module_name: queue
+                for module_name, queue in (
+                    (n, self._module_action_queue(skill, n))
+                    for n in skill.commanded_module_names()
+                )
+                if queue is not None
+            }
+            if skill.execution_mode is ExecutionMode.INLINE:
+                # No runner: the controller's own loop steps this skill.
+                skill.begin()
+            else:
+                skill.skills_status_buffer = self.skill_status_buffer
+                skill.start()
+        self._local_skills[name] = skill
+        logger.info(
+            "Started skill '%s' execution_place=%s execution=%s",
+            name,
+            skill.execution_place.value,
+            skill.execution_mode.value,
+        )
+        return name
+
+    def stop_skill(self, name: str) -> None:
+        rec = self.running_skills.get(name)
+        if rec is None:
             return
-        self._keyboard_listener = None
-        try:
-            listener.stop()
-        except Exception:
-            logger.debug("pynput listener.stop() raised", exc_info=True)
-        self._keyboard_held.clear()
+        skill = self._local_skills.pop(name, None)
+        self._remote_running.pop(name, None)
+        if skill is not None and not skill.execution_place.is_remote:
+            if skill.execution_mode is ExecutionMode.INLINE:
+                skill.teardown()
+            else:
+                skill.request_stop()
+        else:
+            remote_name = (
+                type(skill).registry_name() if skill is not None else rec.name
+            )
+            self._pending_actions.append(
+                Action(action_type=ActionType.STOP_SKILL, data={"skill": remote_name})
+            )
+        logger.info("Stopped skill '%s'", name)
 
-    def _dispatch_key_press(self, char: str) -> None:
-        logger.debug("dispatching on_key_press(%r)", char)
-        try:
-            self.on_key_press(char)
-        except Exception:
-            logger.exception("on_key_press(%r) raised", char)
+    def stop_all_skills(self) -> None:
+        for name in list(self.running_skills):
+            self.stop_skill(name)
 
-    def _dispatch_key_release(self, char: str) -> None:
-        logger.debug("dispatching on_key_release(%r)", char)
-        try:
-            self.on_key_release(char)
-        except Exception:
-            logger.exception("on_key_release(%r) raised", char)
+    def _ingest_skill_status_records(self, records) -> None:
+        """Update remote-running table from robot/server ``skill_status`` rows."""
+        id_to_name = {
+            int(spec["skill_id"]): name
+            for name, spec in self._skill_registry.items()
+            if spec.get("skill_id") is not None
+        }
+        for rec in records:
+            if isinstance(rec, dict):
+                skill_id = int(rec.get("skill_id", 0))
+                status = int(rec.get("status", 0))
+            else:
+                skill_id = int(getattr(rec, "skill_id", 0))
+                status = int(getattr(rec, "status", 0))
+            name = id_to_name.get(skill_id)
+            if name is None:
+                continue
+            if status == int(SkillStatus.RUNNING):
+                spec = self._skill_registry.get(name, {})
+                existing = self._remote_running.get(name)
+                self._remote_running[name] = SkillRecord(
+                    name=name,
+                    execution_place=spec.get("execution_place", ExecutionPlace.ROBOT),
+                    execution_mode=spec.get(
+                        "execution_mode", ExecutionMode.PROCESS
+                    ),
+                    status=SkillStatus.RUNNING,
+                    skill_id=skill_id,
+                    # Status rows carry no params; keep what start_skill stored.
+                    modules=existing.modules if existing is not None else set(),
+                )
+            elif status in (
+                int(SkillStatus.COMPLETED),
+                int(SkillStatus.FAILED),
+                int(SkillStatus.STOPPED),
+            ):
+                self._remote_running.pop(name, None)
+                self._local_skills.pop(name, None)
 
-    def on_key_press(self, char: str):
-        """Called once when *char* transitions from released to pressed.
+    def _tick_skills(self) -> Action | None:
+        if self._pending_actions:
+            return self._pending_actions.pop(0)
 
-        Override in subclasses.  OS auto-repeat while the key is held does
-        not re-fire this hook.
+        queue = self.skill_command_queue
+        if not queue.empty():
+            try:
+                queued = queue.get()
+            except Exception:
+                queued = None
+            if queued is not None:
+                qtype = int(queued.action_type)
+                if qtype == int(ActionType.START_SKILL):
+                    name = queued.data.get("skill")
+                    params = queued.data.get("params", {})
+                    spec = self._skill_registry.get(name)
+                    if spec is None:
+                        logger.warning(
+                            "Cannot start unknown skill '%s'; known: %s",
+                            name,
+                            sorted(self._skill_registry),
+                        )
+                    else:
+                        try:
+                            self.start_skill(spec["cls"](params=params))
+                        except Exception:
+                            logger.exception("Could not start skill '%s'", name)
+                elif qtype == int(ActionType.STOP_SKILL):
+                    name = queued.data.get("skill")
+                    if name:
+                        self.stop_skill(str(name))
+                else:
+                    logger.warning(
+                        "Ignoring %s on the skill command queue, which carries "
+                        "START_SKILL and STOP_SKILL only",
+                        ActionType.name_of(qtype),
+                    )
+                return self._tick_skills()
+
+        # Inline skills get stepped the way a runner steps the others, so
+        # both end up writing into their own per-module queues rather than
+        # one of them taking a shortcut the merge below cannot see.
+        finished: list[str] = []
+        for name, skill in list(self._local_skills.items()):
+            if skill.execution_place.is_remote:
+                continue
+            if skill.execution_mode is not ExecutionMode.INLINE:
+                continue
+            try:
+                skill.dispatch(skill.step())
+            except Exception:
+                logger.exception("Inline skill '%s' crashed", name)
+                finished.append(name)
+                continue
+            if skill.finished:
+                finished.append(name)
+
+        # One slot per position in what each skill queued. Slot 0 goes out
+        # now; the rest queue up behind it. Merging index-wise rather than
+        # flattening keeps both properties that matter: skills stepping on
+        # the same tick stay simultaneous, and a skill that queued a chunk
+        # of successive waypoints does not collapse to its last one.
+        slots: list[dict] = []
+        for skill in list(self._local_skills.values()):
+            if skill.execution_place.is_remote:
+                continue
+            for module_name, module_queue in skill.action_queues.items():
+                if module_queue is None or module_queue.empty():
+                    continue
+                try:
+                    queued_actions = module_queue.get_all()
+                except Exception:
+                    logger.exception(
+                        "Could not drain '%s' actions from skill '%s'",
+                        module_name,
+                        skill.skill_name,
+                    )
+                    continue
+                for index, module_action in enumerate(queued_actions):
+                    while len(slots) <= index:
+                        slots.append({})
+                    _deep_merge_module_actions(
+                        slots[index], {module_name: module_action.to_dict()}
+                    )
+        for name in finished:
+            self.stop_skill(name)
+
+        slots = [slot for slot in slots if slot]
+        if not slots:
+            return None
+        self._pending_actions.extend(
+            Action(action_type=ActionType.MODULE_ACTION, data=slot)
+            for slot in slots[1:]
+        )
+        return Action(action_type=ActionType.MODULE_ACTION, data=slots[0])
+
+    def control_step(self):
+        """Tick the running skills and merge what they emit into one action.
+
+        This is the declarative path: the loop has already dispatched this
+        tick's events and ticked the local modules, so all that is left is to
+        let the skills act. Overriding it is still supported — the
+        control loop sends whatever it returns — and an override loses only
+        skill orchestration, not event handling.
         """
-        pass
-
-    def on_key_release(self, char: str):
-        """Called once when *char* transitions from pressed to released.
-
-        Override in subclasses.
-        """
-        pass
+        return self._tick_skills()
 
     def start(self, dataset=None, episode_time_s=None, single_task=None):
         """Implements the control loop
@@ -1062,14 +1460,14 @@ class Controller(ABC):
 
         gui_mode = (not self.cfg.headless) and self.use_gui
 
-        # Global keyboard listener — provides real OS key-down / key-up
-        # events to the on_key_press / on_key_release hooks.  Skipped in
-        # headless mode (we read stdin) and in GUI mode (the window captures
-        # keys itself, needing no OS accessibility permission).
+        # Global OS key events, needed only when nothing else is capturing
+        # them: headless mode reads stdin, and the GUI window captures keys
+        # itself without needing OS accessibility permission.
         if not self.cfg.headless and not gui_mode:
             self._start_keyboard_listener()
 
-        # Hook for subclasses to start additional threads
+        # Hook for subclasses to start additional threads, and to bring up
+        # whatever skill the application wants running from the start.
         self.on_start()
 
         try:
@@ -1103,17 +1501,6 @@ class Controller(ABC):
         if self._thread_error is not None:
             raise self._thread_error
 
-
-    @abstractmethod
-    def control_step(self) -> Action:
-        """Implements the control step
-        
-        Args:
-        
-        Returns:
-            Action: The action to be sent to the robot
-        """
-        pass
 
     def is_calibrated(self):
         for module_name, module in self.modules.items():

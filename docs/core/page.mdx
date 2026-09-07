@@ -235,7 +235,7 @@ Module (your subclass)
                    └── BusServer ←→ BusClient   (only when multiple modules share a port)
 ```
 
-When the module's run loop ticks, it asks `module_bus.read(PosData, ["shoulder_pan", ...])`, the bus speaks the wire protocol to the hardware, returns a `dict[str, PosData]`, and the module writes those into its `ObservationRingBuffer`. The reverse path runs on `write()`.
+When the module's run loop ticks, it asks `module_bus.read(PosData, ["shoulder_pan", ...])`, the bus speaks the wire protocol to the hardware, returns a `dict[str, PosData]`, and the module writes those into its `ObservationBuffer`. The reverse path runs on `write()`.
 
 ## See also
 

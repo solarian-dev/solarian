@@ -8,14 +8,14 @@ from solarian.core.gripper_module import GripperModule
 def test_scalar_limits_from_aperture_cfg():
     module = GripperModule.__new__(GripperModule)
     module.cfg = SimpleNamespace(aperture_closed_cm=0.0, aperture_open_cm=8.5)
-    module.home_value = None
+    module.open_value = None
     assert module.scalar_limits() == (0.0, 8.5)
 
 
-def test_scalar_limits_fallback_home():
+def test_scalar_limits_fall_back_to_the_declared_open_value():
     module = GripperModule.__new__(GripperModule)
     module.cfg = SimpleNamespace()
-    module.home_value = 1.0
+    module.open_value = 1.0
     assert module.scalar_limits() == (0.0, 1.0)
 
 

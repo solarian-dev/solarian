@@ -19,7 +19,7 @@ A single control loop can't be both:
 
 Solarian splits the responsibility:
 
-- **System 1 — fast loop.** Reactive `Skill`s push the next `Action` into a shared-memory queue. The controller's `control_step` drains the queue every tick and forwards a single deep-merged action to the robot.
+- **System 1 — fast loop.** Reactive `Skill`s push their next per-module actions onto their own queues. The controller's `control_step` drains those every tick and forwards a single merged action to the robot.
 - **System 2 — `ThinkProcess`.** Runs in its own OS process at `cfg.tps` Hz (typically 1 Hz). Reads the latest observation + a user message, calls a VLM, and decides which skills to start or stop.
 
 ```text
@@ -31,7 +31,7 @@ Solarian splits the responsibility:
 │   └── display_loop (main)                                   │
 │                                                             │
 │  AIController                                               │
-│   ├── action_queue       (shm)  ← skills push actions       │
+│   ├── skill_command_queue(shm)  ← think starts/stops skills │
 │   ├── skill_status_buffer(shm)  ← skills push status        │
 │   └── user_msg_queue     (shm)  ← user types commands       │
 └────────────────────────────────────────────────────────────┘
@@ -49,41 +49,34 @@ Solarian splits the responsibility:
 ┌─────────  Skill processes (per-skill frequency)  ──────────┐
 │  - Read observations from shared buffers                   │
 │  - Compute actions (diffusion policy, MP, scripted, …)     │
-│  - put_action()      → controller's action_queue           │
+│  - control_step()    → own per-module action_queues        │
 │  - put_skill_status()→ skill_status_buffer                 │
 └────────────────────────────────────────────────────────────┘
 ```
 
 ## Defining an `AIController`
 
-Subclass `AIController` and attach `Skill` instances as class attributes. The attribute name becomes the canonical skill name used by the VLM.
+Subclass `AIController` and list the skill *classes* it can run. Each is known by its `registry_name()` — its `config_name` if it has one, otherwise the class name — and that is the name the VLM uses.
 
 ```python
 from solarian.core.ai.ai_controller import AIController
-from solarian.core.ai.system1.skill import SkillRunner
 from myproject.skills import PickSkill, PlaceSkill, MoveArmSkill
-from myproject.action_types import MyActionType
 
 class MyAIController(AIController):
-    pick = PickSkill(runner=SkillRunner.CONTROLLER)
-    place = PlaceSkill(runner=SkillRunner.CONTROLLER)
-    move_arm = MoveArmSkill(
-        runner=SkillRunner.ROBOT,
-        action_type=MyActionType.MOVE_ARM,
-    )
+    skills = (PickSkill, PlaceSkill, MoveArmSkill)
 ```
 
-`AIController.__init__` walks the MRO, collects every `Skill` instance, and builds a registry:
+`AIController.__init__` reads the controller's own registry, which is that list plus any installed skill plugins:
 
 ```python
 {
-  "pick":     {"cls": PickSkill,    "runner": SkillRunner.CONTROLLER, "action_type": None},
-  "place":    {"cls": PlaceSkill,   "runner": SkillRunner.CONTROLLER, "action_type": None},
-  "move_arm": {"cls": MoveArmSkill, "runner": SkillRunner.ROBOT,      "action_type": MyActionType.MOVE_ARM},
+  "PickSkill":    {"cls": PickSkill,    "execution_place": ExecutionPlace.CONTROLLER},
+  "PlaceSkill":   {"cls": PlaceSkill,   "execution_place": ExecutionPlace.CONTROLLER},
+  "MoveArmSkill": {"cls": MoveArmSkill, "execution_place": ExecutionPlace.ROBOT},
 }
 ```
 
-The think process uses this registry to decide whether to spawn a skill locally (`CONTROLLER`) or to push an `Action` with the declared `action_type` onto the action queue so the robot or server picks it up (`ROBOT`/`SERVER`). See [Skills](/docs/skills).
+Classes rather than configured instances, so a skill that takes arguments appears once and the VLM supplies them as `params` — `MoveArmSkill` with `{"named": "home"}` rather than separate `home` and `ground` entries. The think process names a skill; `execution_place` (declared on the class) is what decides whether the controller launches it locally or forwards a `START_SKILL` action to the robot. See [Skills](/docs/skills).
 
 ## Registering with the project
 
@@ -200,7 +193,7 @@ class MyAIController(AIController):
 ## Lifecycle
 
 ```text
-AIController(cfg)         # __init__ — build skill registry, action_queue, ThinkProcess
+AIController(cfg)         # __init__ — build skill registry, skill_command_queue, ThinkProcess
    │
    ├── connect()          # connect controller-side modules
    ├── initialize()       # one-time setup
@@ -212,7 +205,7 @@ AIController(cfg)         # __init__ — build skill registry, action_queue, Thi
         └── display_loop  # OpenCV window per camera + interactive prompt
 ```
 
-`AIController.control_step` drains every action sitting in `self.action_queue`, deep-merges them into a single `Action`, and returns it. Skills running concurrently can each emit per-module actions; the merge resolves overlaps last-write-wins.
+`AIController` does not override `control_step`: the one it inherits from `Controller` steps the running skills, drains each one's per-module `action_queues`, and merges what they queued into a single `Action`. Skills running concurrently each command their own modules, so the merge normally has nothing to resolve; where two do overlap, last write wins.
 
 ## Sending user commands
 

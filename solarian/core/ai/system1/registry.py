@@ -55,15 +55,16 @@ def discover_available_skills(
 ) -> Dict[str, Dict[str, Any]]:
     """Build an ``available_skills``-style registry from installed plugins.
 
-    The returned mapping has the same shape as
-    :meth:`AIController._collect_available_skills`: ``name -> {cls, runner,
-    action_type, skill_id, docstring}``.  Runner / action_type / skill_id
-    are read from a default-constructed template instance when possible
-    (mirroring how class-attribute skills are introspected); skills that
-    cannot be default-constructed fall back to sensible defaults.
+    The returned mapping has the same shape as the one
+    :meth:`Controller._collect_controller_skills` builds from its own
+    ``skills`` list: ``name -> {cls, execution_place, execution_mode,
+    skill_id, docstring}``.  Those fields are read from a
+    default-constructed template instance when possible; skills that cannot
+    be default-constructed fall back to sensible defaults.
     """
     # Imported here to avoid a circular import at module load time.
-    from solarian.core.ai.system1.skill import Skill, SkillRunner
+    from solarian.core.execution import ExecutionMode, ExecutionPlace
+    from solarian.core.ai.system1.skill import Skill
 
     skills: Dict[str, Dict[str, Any]] = {}
     next_id = start_skill_id
@@ -76,13 +77,13 @@ def discover_available_skills(
             )
             continue
 
-        runner: Any = SkillRunner.CONTROLLER
-        action_type = None
+        execution_place: Any = ExecutionPlace.CONTROLLER
+        execution_mode: Any = ExecutionMode.PROCESS
         skill_id = None
         try:
             template = cls()
-            runner = template.runner
-            action_type = template.action_type
+            execution_place = template.execution_place
+            execution_mode = template.execution_mode
             skill_id = template.skill_id or None
         except Exception:  # noqa: BLE001 - skill may require constructor args
             logger.debug(
@@ -98,8 +99,8 @@ def discover_available_skills(
 
         skills[name] = {
             "cls": cls,
-            "runner": runner,
-            "action_type": action_type,
+            "execution_place": execution_place,
+            "execution_mode": execution_mode,
             "skill_id": skill_id,
             "docstring": (cls.__doc__ or "").strip(),
         }

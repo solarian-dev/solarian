@@ -30,6 +30,8 @@ Yaml selects the path with `interpolator_type`. The default [`Module._handle_sch
 
 Do **not** run a second interpolator in the skill/controller for the same stream — that double-smooths and adds lag. Forward policy waypoints straight onto the module.
 
+The same action type also carries one-shot go-to moves, where the module owns the timing instead of the caller: add `params` with a `named` target or a `speed` limit and `ArmModule` / `GripperModule` drive it to completion rather than blending it in. See [Waypoint params](/docs/action-types#waypoint-params).
+
 ## Yaml
 
 ```yaml
