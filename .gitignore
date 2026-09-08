@@ -16,17 +16,21 @@ conf_dev
 conf_test
 
 # Projects
+# projects
 projects/lekiwi_old
 projects/ur5
 projects/my_solarian
 projects/so100
 projects/lekiwi
+# Tracked in its own repository
+projects/so106
 
-plugins/solarian-feetech
-plugins/solarian-dynamixel
+plugins
+# plugins/solarian-feetech
+# plugins/solarian-dynamixel
 
 # Ignore WIP
-examples
+example
 examples/assets
 examples/other
 examples/umi_code
@@ -39,6 +43,8 @@ backups
 datasets
 notes.txt
 
+
+solarian.code-workspace
 
 # Apple
 .DS_Store
@@ -189,3 +195,5 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+onshape_keys.txt

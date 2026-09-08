@@ -124,7 +124,7 @@ The module converts wall time → monotonic, inserts the waypoint with speed lim
 
 ### Policy / skill path
 
-Skills should **not** own a second arm `PoseTrajectoryInterpolator` (that double-smooths). Forward each predicted pose with its absolute `target_time` (minus `robot_action_latency`) as `SCHEDULE_WAYPOINT` on the arm module — same as UMI `exec_actions` → `schedule_waypoint` on the RTDE controller.
+Skills should **not** own a second arm `PoseTrajectoryInterpolator` (that double-smooths). Forward each predicted pose with its absolute `target_time` (minus [`arm_action_latency`](/docs/latency)) as `SCHEDULE_WAYPOINT` on the arm module — same as UMI `exec_actions` → `schedule_waypoint` on the RTDE controller.
 
 ### Robot + scene
 

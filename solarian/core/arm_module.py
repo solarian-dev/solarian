@@ -23,6 +23,7 @@ import numpy as np
 from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.actuator_module import ActuatorModule
 from solarian.core.clock_sync import synced_time
+from solarian.core.configs import SafeState
 from solarian.core.data import PosData
 from solarian.core.pose import compose_ee_delta
 from solarian.utils.trajectory_interpolator import JointTrajectoryInterpolator
@@ -31,6 +32,12 @@ logger = logging.getLogger("module")
 
 # Default moveJ speed (rad/s), matching UMI's UR5 ``moveJ(..., speed=1.05)``.
 _DEFAULT_JOINT_SPEED = 1.05
+
+# Enough solve+integrate passes for `reachable_travel` to settle against the
+# model's configuration limits, and the headroom below which a joint counts as
+# the thing that stopped it.
+_REACH_ITERATIONS = 300
+_LIMIT_MARGIN_RAD = np.deg2rad(1.0)
 
 
 class ArmModule(ActuatorModule):
@@ -192,6 +199,65 @@ class ArmModule(ActuatorModule):
             entry = readings[name]
             pose[i] = float(entry["value"] if isinstance(entry, dict) else entry.value)
         return pose
+
+    def read_pose(self) -> np.ndarray:
+        """Live measured EE pose (metres + rotvec), same frame as :meth:`schedule_pose`."""
+        return self._read_current_pose()
+
+    def schedule_pose(self, pose, target_time_wall: float) -> None:
+        """Queue a timestamped Cartesian waypoint (never drops client timestamps).
+
+        ``drop_timestamps=False`` so teleop ``drive_waypoints: true`` cannot
+        collapse a calibration sinusoid into adaptive "drive now".
+        """
+        self._cancel_joint_motion()
+        self._schedule_pose_waypoint(
+            np.asarray(pose, dtype=np.float64),
+            float(target_time_wall),
+            time.monotonic(),
+            drop_timestamps=False,
+        )
+
+    def hold_measured_pose(self) -> None:
+        """Latch goal positions onto the measured joints.
+
+        Servos keep their last ``Goal_Position`` while torque is off, so
+        re-energising after the arm was moved by hand snaps it back to wherever
+        it was commanded before. Writing the measured configuration first makes
+        that transition silent.
+        """
+        self._write_joints_rad(self._read_joints_rad())
+
+    def reachable_travel(self, start_pose, axis: int, distance: float) -> tuple[float, list[str]]:
+        """Signed travel actually achievable along *axis*, and the joints stopping it.
+
+        Differential IK enforces the model's configuration limits, so a target
+        past the arm's reach never reports failure — the solver just converges
+        short. Asking for more than this returns clips the motion, and a clipped
+        sinusoid cross-correlates to the clip, not to the command pipeline.
+        """
+        backend = self._resolve_ik_backend()
+        target = np.asarray(start_pose, dtype=np.float64).copy()
+        target[axis] += distance
+
+        # Leaves the model at the converged configuration: the control path
+        # re-seeds set_q from freshly measured joints every tick, so this does
+        # not leak into motion.
+        backend.set_q(self._read_joints_rad())
+        origin = float(backend.get_pose()[axis])
+        dt = 1.0 / max(float(self.frequency), 1.0)
+        q = np.zeros(0)
+        for _ in range(_REACH_ITERATIONS):
+            q = np.asarray(backend.integrate(backend.solve(target, dt), dt), dtype=np.float64)
+            backend.set_q(q)
+
+        limits = self._joint_limits()
+        blocked = [
+            name
+            for name, value in zip(self._ik_joint_names(), q)
+            if min(value - limits[name][0], limits[name][1] - value) < _LIMIT_MARGIN_RAD
+        ]
+        return float(backend.get_pose()[axis]) - origin, blocked
 
     def _ensure_pose_interpolator(self, t_now: float | None = None) -> None:
         if self.interp is not None:
@@ -449,6 +515,23 @@ class ArmModule(ActuatorModule):
             self._ensure_pose_interpolator()
             if self.interp is not None:
                 self._write_pose(self.interp(t))
+
+    @action_handler(ActionType.HOLD_SAFE)
+    def _handle_hold_safe(self, action: ModuleAction, t_now: float) -> bool:
+        """Hold or relax, including the joint trajectory ``control_step`` prefers."""
+        if self._joint_interp is not None:
+            if self.cfg.link_lost == SafeState.RELAX:
+                self._cancel_joint_motion()
+            else:
+                self._joint_interp = self._joint_interp.trim(t_now, t_now)
+        return super()._handle_hold_safe(action, t_now)
+
+    @action_handler(ActionType.CANCEL_TRAJECTORY)
+    def _handle_cancel_trajectory(self, action: ModuleAction, t_now: float) -> bool:
+        """Also drop the joint trajectory ``control_step`` prefers."""
+        if self._joint_interp is not None:
+            self._joint_interp = self._joint_interp.trim(t_now, t_now)
+        return super()._handle_cancel_trajectory(action, t_now)
 
     @action_handler(ActionType.SCHEDULE_WAYPOINT)
     def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:

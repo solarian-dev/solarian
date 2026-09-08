@@ -1,4 +1,4 @@
-"""Unit tests for GripperModule scalar helpers used by calibrate-gripper."""
+"""Unit tests for GripperModule scalar helpers used by the calibrate commands."""
 
 from types import SimpleNamespace
 
@@ -22,9 +22,9 @@ def test_scalar_limits_fall_back_to_the_declared_open_value():
 def test_aperture_unit_suffix_when_open_cm_set():
     module = GripperModule.__new__(GripperModule)
     module.cfg = SimpleNamespace(aperture_open_cm=8.5)
-    assert module._aperture_status_suffix() == " (cm)"
+    assert module.aperture_unit_suffix() == " (cm)"
     module.cfg = SimpleNamespace()
-    assert module._aperture_status_suffix() == ""
+    assert module.aperture_unit_suffix() == ""
 
 
 def test_schedule_scalar_never_drops_timestamps():

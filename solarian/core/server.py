@@ -3,6 +3,7 @@ import zmq
 import threading
 import time
 
+from solarian.core import curve
 from solarian.core.message import Message
 from solarian.core.configs import ServerConfig
 from solarian.core.clock_sync import serve_clock_sync_reply
@@ -20,11 +21,18 @@ class RelayServer:
         self.running = False
         self.cfg = cfg
         self.captured_click = None
-        
+
+        # ZAP first: the authenticator has to be running before any CURVE server
+        # socket completes a handshake, or early connections are refused.
+        self._authenticator = curve.start_authenticator(
+            self.context, cfg.curve_allowed_client_keys
+        )
+
         # Setup action relay (Client → Relay → Robot)
         self.client_cmd_receiver = self.context.socket(zmq.PULL)
         self.client_cmd_receiver.setsockopt(zmq.CONFLATE, 1)
         self.client_cmd_receiver.setsockopt(zmq.LINGER, 0)
+        curve.apply_server(self.client_cmd_receiver, cfg.connection, "action receiver")
         self.client_cmd_receiver.bind(f"tcp://*:{self.cfg.connection.action_receiver_port}")  # Clients send here
         
         self.robot_cmd_sender = self.context.socket(zmq.PUSH)
@@ -36,23 +44,32 @@ class RelayServer:
         # (which previously caused the robot to auto-launch the last
         # controller-issued skill on startup).
         self.robot_cmd_sender.setsockopt(zmq.IMMEDIATE, 1)
+        curve.apply_server(self.robot_cmd_sender, cfg.connection, "action sender")
         self.robot_cmd_sender.bind(f"tcp://*:{self.cfg.connection.action_sender_port}")  # Robot connects here
 
         # Setup image relay (Robot → Relay → Client)
         self.robot_state_receiver = self.context.socket(zmq.SUB)
         self.robot_state_receiver.setsockopt(zmq.CONFLATE, 1)
         self.robot_state_receiver.setsockopt(zmq.LINGER, 0)
+        curve.apply_server(self.robot_state_receiver, cfg.connection, "state receiver")
         self.robot_state_receiver.bind(f"tcp://*:{self.cfg.connection.state_receiver_port}")  # Robot publishes here
         self.robot_state_receiver.setsockopt(zmq.SUBSCRIBE, b"")
         
         self.client_state_sender = self.context.socket(zmq.PUB)
         self.client_state_sender.setsockopt(zmq.CONFLATE, 1)
         self.client_state_sender.setsockopt(zmq.LINGER, 0)
+        curve.apply_server(self.client_state_sender, cfg.connection, "state sender")
         self.client_state_sender.bind(f"tcp://*:{self.cfg.connection.state_sender_port}")  # Clients subscribe here
 
         # Application clock authority for controller/robot SCHEDULE_WAYPOINT stamps.
         self.clock_sync_socket = self.context.socket(zmq.REP)
         self.clock_sync_socket.setsockopt(zmq.LINGER, 0)
+        curve.apply_server(self.clock_sync_socket, cfg.connection, "clock sync")
+        if curve.is_enabled(cfg.connection):
+            logger.info(
+                "Relay sockets are CURVE servers; public key %s",
+                cfg.connection.curve_public_key,
+            )
         self.clock_sync_socket.bind(f"tcp://*:{self.cfg.connection.clock_sync_port}")
 
         self._processors = Observation.create_processors(DataComputer.SERVER)

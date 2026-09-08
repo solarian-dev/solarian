@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 from omegaconf import DictConfig, OmegaConf
-from typing import Any
-from solarian.core.configs import ModuleConfig
+from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 import os
+
+if TYPE_CHECKING:
+    from solarian.core.configs import ModuleConfig
 
 
 def parse_with_friendly_errors(model_class, data):
@@ -30,6 +34,11 @@ DEFAULT_DEPLOYMENT = "localhost"
 _deployment_cache: dict[tuple[str, str], DictConfig] = {}
 
 
+#: Names another deployment to inherit from, so a profile that changes one thing
+#: does not have to restate the device paths it shares.
+EXTENDS_KEY = "extends"
+
+
 def load_deployment_config() -> DictConfig:
     """The active deployment: relay address and device paths for this host layout.
 
@@ -49,20 +58,54 @@ def load_deployment_config() -> DictConfig:
     if not os.path.isdir(deployment_dir):
         conf = OmegaConf.create({})
     else:
-        yaml_path = os.path.join(deployment_dir, f"{name}.yaml")
-        if not os.path.exists(yaml_path):
-            choices = sorted(
-                f[: -len(".yaml")] for f in os.listdir(deployment_dir) if f.endswith(".yaml")
-            )
-            raise ValueError(
-                f"Unknown deployment '{name}': {yaml_path} does not exist.\n"
-                f"  Available deployments: {', '.join(choices) or '(none)'}\n"
-                f"  Select one with `--deployment <name>` or SOLARIAN_DEPLOYMENT=<name>."
-            )
-        conf = OmegaConf.load(yaml_path)
+        conf = _load_deployment_file(deployment_dir, name)
 
     _deployment_cache[key] = conf
     return conf
+
+
+def _load_deployment_file(
+    deployment_dir: str, name: str, extended_by: tuple[str, ...] = ()
+) -> DictConfig:
+    """One deployment file, merged over whatever it ``extends``.
+
+    Deployments differ from each other in one or two values far more often than
+    they differ throughout — moving the relay to another host changes an address,
+    not which port the arm is on — and a copy of the whole profile per variation
+    is a set of device paths that drift apart silently.
+    """
+    if name in extended_by:
+        chain = " -> ".join([*extended_by, name])
+        raise ValueError(f"Deployment '{name}' extends itself: {chain}")
+
+    yaml_path = os.path.join(deployment_dir, f"{name}.yaml")
+    if not os.path.exists(yaml_path):
+        choices = sorted(
+            f[: -len(".yaml")] for f in os.listdir(deployment_dir) if f.endswith(".yaml")
+        )
+        if extended_by:
+            raise ValueError(
+                f"Deployment '{extended_by[-1]}' extends '{name}', which does not "
+                f"exist: {yaml_path}\n"
+                f"  Available deployments: {', '.join(choices) or '(none)'}"
+            )
+        raise ValueError(
+            f"Unknown deployment '{name}': {yaml_path} does not exist.\n"
+            f"  Available deployments: {', '.join(choices) or '(none)'}\n"
+            f"  Select one with `--deployment <name>` or SOLARIAN_DEPLOYMENT=<name>."
+        )
+
+    conf = OmegaConf.load(yaml_path)
+    base_name = conf.pop(EXTENDS_KEY, None)
+    if base_name is None:
+        return conf
+    if not isinstance(base_name, str):
+        raise ValueError(
+            f"Deployment '{name}' has {EXTENDS_KEY}: {base_name!r}; expected the "
+            f"name of one other deployment."
+        )
+    base = _load_deployment_file(deployment_dir, base_name, (*extended_by, name))
+    return OmegaConf.merge(base, conf)
 
 
 def resolve_with_deployment(cfg: DictConfig | dict) -> dict:
@@ -83,6 +126,11 @@ def load_config_yaml(yaml_path: str, config_class: type) -> Any:
 
 
 def load_module_config_yaml(yaml_path: str) -> ModuleConfig:
+    # Imported here because solarian.core's package init reaches back into this
+    # module, so a top-level import makes it depend on which side was imported
+    # first.
+    from solarian.core.configs import ModuleConfig
+
     return load_config_yaml(yaml_path, ModuleConfig)
 
 

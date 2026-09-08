@@ -28,7 +28,9 @@ class SyncClockCommand(BaseCommand):
             f"(server must be running)..."
         )
         try:
-            result = sync_with_server(conn.ip, int(conn.clock_sync_port), samples=12)
+            result = sync_with_server(
+                conn.ip, int(conn.clock_sync_port), samples=12, connection=conn
+            )
         except Exception as exc:  # noqa: BLE001
             print(f"Clock sync failed: {exc}")
             raise SystemExit(1) from exc

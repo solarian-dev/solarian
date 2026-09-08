@@ -655,6 +655,14 @@ class CalibrateUmiCameraCommand(BaseCommand):
         "save the remap, and overlay fingers/holders/screws vs the shipped UMI gold image "
         "(override with gold=<path>)."
     )
+    params = (
+        "gold",
+        "camera_yaml",
+        "images",
+        "gopro_images",
+        "overlay_only",
+        "skip_overlay",
+    )
 
     def handle(self, cfg: DictConfig) -> None:
         from solarian.cli.commands.list_cameras import (

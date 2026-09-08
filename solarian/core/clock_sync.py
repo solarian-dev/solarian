@@ -168,10 +168,17 @@ def sync_with_server(
     samples: int = 8,
     timeout_ms: int = 2000,
     context: zmq.Context | None = None,
+    connection=None,
 ) -> ClockSyncResult:
     """Exchange timestamps with the relay and install the process offset.
 
     Raises on transport failure so callers can decide whether to soft-fail.
+
+    Args:
+        connection: Optional :class:`~solarian.core.configs.ConnectionConfig` to
+            take CURVE keys from. Required when the relay runs CURVE, since the
+            clock port is one of its five sockets and refuses plaintext like the
+            rest.
     """
     global _offset_s, _rtt_s, _synced
 
@@ -181,6 +188,10 @@ def sync_with_server(
     socket.setsockopt(zmq.LINGER, 0)
     socket.setsockopt(zmq.RCVTIMEO, int(timeout_ms))
     socket.setsockopt(zmq.SNDTIMEO, int(timeout_ms))
+    if connection is not None:
+        from solarian.core.curve import apply_client
+
+        apply_client(socket, connection, "clock sync")
     socket.connect(f"tcp://{ip}:{port}")
 
     collected: list[tuple[float, float, float]] = []

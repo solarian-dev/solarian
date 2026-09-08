@@ -1,5 +1,7 @@
-"""ArmModule dual-space waypoints and exclusive params-driven moves."""
+"""ArmModule dual-space waypoints, exclusive params-driven moves, and the pose
+API the calibrate-arm-* commands drive."""
 
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -7,6 +9,7 @@ import pytest
 
 from solarian.core.action import ActionType, ModuleAction
 from solarian.core.arm_module import ArmModule
+from solarian.core.configs import InterpolatorType
 from solarian.core.pose import compose_ee_delta
 
 
@@ -206,3 +209,125 @@ def test_module_action_params_roundtrip():
     )
     assert restored.params["frame"] == "ee"
     assert restored.params["speed"] == pytest.approx(0.5)
+
+
+def _bare_arm(drive_waypoints: bool) -> ArmModule:
+    """An ArmModule with just enough state for the pose interpolator path."""
+    module = ArmModule.__new__(ArmModule)
+    module.name = "test_arm"
+    module.frequency = 90.0
+    module.cfg = SimpleNamespace(
+        interpolator_type=InterpolatorType.POSE,
+        max_speed=[0.25, 0.6],
+        drive_waypoints=drive_waypoints,
+    )
+    module.interp = None
+    module.last_waypoint_time = 0.0
+    module._joint_interp = None
+    module._read_current_pose = lambda: np.zeros(6, dtype=np.float64)
+    return module
+
+
+def test_read_pose_delegates_to_current():
+    module = ArmModule.__new__(ArmModule)
+    module._read_current_pose = lambda: np.arange(6, dtype=np.float64)
+    assert module.read_pose().tolist() == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+def test_schedule_pose_never_drops_timestamps():
+    module = ArmModule.__new__(ArmModule)
+    captured: dict = {}
+
+    module._cancel_joint_motion = lambda: captured.setdefault("cancelled", True)
+    module._schedule_pose_waypoint = (
+        lambda pose, target_time_wall, t_now, drop_timestamps=False: captured.update(
+            pose=pose, wall=target_time_wall, drop=drop_timestamps
+        )
+    )
+
+    module.schedule_pose([0.1, 0.2, 0.3, 0.0, 0.0, 0.0], 123.0)
+    assert captured["cancelled"] is True
+    assert captured["wall"] == 123.0
+    assert captured["drop"] is False
+
+
+class _StubBackend:
+    """One joint driving +z at 0.1 m/rad, clamped like mink's configuration limit."""
+
+    def __init__(self, limit_rad: float):
+        self._limit = limit_rad
+        self._q = np.zeros(1)
+
+    def set_q(self, q) -> None:
+        self._q = np.clip(np.asarray(q, dtype=float), -self._limit, self._limit)
+
+    def solve(self, target_pose, dt: float):
+        return np.array([0.5 * (target_pose[2] - 0.1 * self._q[0]) / 0.1 / dt])
+
+    def integrate(self, v, dt: float):
+        return self._q + np.asarray(v, dtype=float) * dt
+
+    def get_pose(self) -> np.ndarray:
+        pose = np.zeros(6)
+        pose[2] = 0.1 * self._q[0]
+        return pose
+
+
+def _ik_arm(limit_rad: float) -> ArmModule:
+    backend = _StubBackend(limit_rad)
+    module = ArmModule.__new__(ArmModule)
+    module.frequency = 90.0
+    module._resolve_ik_backend = lambda: backend
+    module._read_joints_rad = lambda: np.zeros(1)
+    module._ik_joint_names = lambda: ["j"]
+    module._joint_limits = lambda: {"j": (-limit_rad, limit_rad)}
+    return module
+
+
+def test_reachable_travel_reports_the_full_amplitude_when_it_fits():
+    module = _ik_arm(limit_rad=1.0)
+    travel, blocked = module.reachable_travel(np.zeros(6), 2, 0.02)
+    assert travel == pytest.approx(0.02, abs=1e-4)
+    assert blocked == []
+
+
+def test_reachable_travel_converges_short_against_a_joint_limit():
+    """Differential IK clamps rather than failing, so a too-large sweep is only
+    visible as travel that falls short of what was asked."""
+    module = _ik_arm(limit_rad=0.15)
+    travel, blocked = module.reachable_travel(np.zeros(6), 2, 0.02)
+    assert travel == pytest.approx(0.015, abs=1e-4)
+    assert blocked == ["j"]
+
+
+def test_reachable_travel_handles_the_negative_direction():
+    module = _ik_arm(limit_rad=0.15)
+    travel, blocked = module.reachable_travel(np.zeros(6), 2, -0.02)
+    assert travel == pytest.approx(-0.015, abs=1e-4)
+    assert blocked == ["j"]
+
+
+def test_hold_measured_pose_writes_back_what_it_read():
+    """Goal position survives torque-off, so re-energising snaps the arm unless
+    the measured configuration is latched first."""
+    module = ArmModule.__new__(ArmModule)
+    written: dict = {}
+    module._read_joints_rad = lambda: np.array([0.1, -0.2, 0.3])
+    module._write_joints_rad = lambda q: written.update(q=np.asarray(q))
+
+    module.hold_measured_pose()
+    assert written["q"].tolist() == [0.1, -0.2, 0.3]
+
+
+def test_schedule_pose_honours_its_timestamp_under_drive_waypoints():
+    """`drive_waypoints: true` is a teleop setting; a calibration sweep must
+    still land where it asked, not on the adaptive drive horizon (<= 120 ms)."""
+    module = _bare_arm(drive_waypoints=True)
+    lead = 0.5
+
+    t_before = time.monotonic()
+    module.schedule_pose(np.array([0.01, 0.0, 0.0, 0.0, 0.0, 0.0]), time.time() + lead)
+    t_after = time.monotonic()
+
+    assert module.last_waypoint_time - t_before == pytest.approx(lead, abs=0.05)
+    assert module.last_waypoint_time > t_after

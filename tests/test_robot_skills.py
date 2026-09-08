@@ -13,7 +13,20 @@ from solarian.core.robot import Robot
 def module(name):
     instance = ActuatorModule.__new__(ActuatorModule)
     instance.name = name
+    # What the module answers to, which is what the robot asks before putting
+    # a lifecycle action on its queue.
+    instance._register_action_handlers()
     return instance
+
+
+class FakeQueue:
+    """A module's action queue, keeping what was put on it for the test."""
+
+    def __init__(self):
+        self.actions = []
+
+    def put(self, action):
+        self.actions.append(action)
 
 
 class WaveSkill(Skill):
@@ -25,12 +38,14 @@ class WaveSkill(Skill):
         super().__init__(**kwargs)
         self.did_start = False
         self.was_asked_to_stop = False
+        self.was_terminated = False
+        self.join_calls = 0
 
     def start(self):
         self.did_start = True
 
     def is_alive(self) -> bool:
-        return self.did_start and not self.was_asked_to_stop
+        return self.did_start and not (self.was_asked_to_stop or self.was_terminated)
 
     @property
     def pid(self):
@@ -39,8 +54,11 @@ class WaveSkill(Skill):
     def request_stop(self):
         self.was_asked_to_stop = True
 
+    def terminate(self):
+        self.was_terminated = True
+
     def join(self, timeout=None):
-        pass
+        self.join_calls += 1
 
     def control_step(self, dt):
         return None
@@ -50,17 +68,27 @@ class ArmWaveSkill(WaveSkill):
     config_name = "arm_wave"
 
 
+class StubbornWaveSkill(WaveSkill):
+    """Still alive after being asked to stop, the way an inference in flight is."""
+
+    config_name = "stubborn_wave"
+
+    def is_alive(self) -> bool:
+        return self.did_start and not self.was_terminated
+
+
 class FakeRobot(Robot):
     """Enough of a robot for the skill handlers: no zmq, no shared memory."""
 
-    skills = (WaveSkill, ArmWaveSkill)
+    skills = (WaveSkill, ArmWaveSkill, StubbornWaveSkill)
 
     def __init__(self):
         self.modules = {"arm": module("arm"), "gripper": module("gripper")}
         self.observation_buffers = {"arm": object()}
-        self.action_queues = {"arm": object()}
+        self.action_queues = {"arm": FakeQueue(), "gripper": FakeQueue()}
         self.skills_status_buffer = None
         self._local_skills = {}
+        self._stopping_skills = {}
 
     def control_loop(self):
         pass
@@ -78,6 +106,12 @@ def clear_skill_cache():
 
 def start(robot, **data):
     robot.start_named_skill(Action(action_type=ActionType.START_SKILL, data=data), 0.0)
+
+
+def stop(robot, name):
+    robot.stop_named_skill(
+        Action(action_type=ActionType.STOP_SKILL, data={"skill": name}), 0.0
+    )
 
 
 def test_a_named_skill_is_looked_up_and_started():
@@ -145,12 +179,79 @@ def test_stop_skill_asks_the_skill_to_stop_and_forgets_it():
     start(robot, skill="wave")
     skill = robot._local_skills["wave"]
 
-    robot.stop_named_skill(
-        Action(action_type=ActionType.STOP_SKILL, data={"skill": "wave"}), 0.0
-    )
+    stop(robot, "wave")
 
     assert skill.was_asked_to_stop
     assert robot._local_skills == {}
+
+
+def test_stopping_a_skill_does_not_join_it_on_the_control_loop():
+    """Joining here holds the loop, and a CONFLATE link forgets every command
+    the controller sends while it is held — including the move that preempted
+    this skill."""
+    robot = FakeRobot()
+    start(robot, skill="wave", params={"arm": "arm"})
+    skill = robot._local_skills["wave"]
+
+    stop(robot, "wave")
+
+    assert skill.join_calls == 0
+    assert "wave" in robot._stopping_skills
+
+
+def test_reaping_a_stopped_skill_cancels_the_waypoints_it_left():
+    """A chunk outlives its author, so the next skill would have to out-argue it."""
+    robot = FakeRobot()
+    start(robot, skill="wave", params={"arm": "arm"})
+    stop(robot, "wave")
+
+    robot._reap_stopping_skills()
+
+    assert robot._stopping_skills == {}
+    assert [int(a.action_type) for a in robot.action_queues["arm"].actions] == [
+        int(ActionType.CANCEL_TRAJECTORY)
+    ]
+    assert robot.action_queues["gripper"].actions == []
+
+
+def test_a_skill_still_finishing_its_step_is_not_cancelled_yet():
+    """Its last tick can still dispatch a chunk, which a cancel now would miss."""
+    robot = FakeRobot()
+    start(robot, skill="stubborn_wave", params={"arm": "arm"})
+    stop(robot, "stubborn_wave")
+
+    robot._reap_stopping_skills()
+
+    assert "stubborn_wave" in robot._stopping_skills
+    assert robot.action_queues["arm"].actions == []
+
+
+def test_a_skill_that_will_not_exit_is_terminated_and_still_cancelled():
+    robot = FakeRobot()
+    start(robot, skill="stubborn_wave", params={"arm": "arm"})
+    stop(robot, "stubborn_wave")
+    skill = robot._stopping_skills["stubborn_wave"][0]
+
+    robot._reap_stopping_skills(force=True)
+
+    assert skill.was_terminated
+    assert robot._stopping_skills == {}
+    assert [int(a.action_type) for a in robot.action_queues["arm"].actions] == [
+        int(ActionType.CANCEL_TRAJECTORY)
+    ]
+
+
+def test_a_skill_that_is_still_stopping_is_not_restarted():
+    """Two processes commanding the same modules would both own the hardware."""
+    robot = FakeRobot()
+    start(robot, skill="stubborn_wave", params={"arm": "arm"})
+    first = robot._local_skills["stubborn_wave"]
+    stop(robot, "stubborn_wave")
+
+    start(robot, skill="stubborn_wave", params={"arm": "arm"})
+
+    assert robot._local_skills == {}
+    assert robot._stopping_skills["stubborn_wave"][0] is first
 
 
 def test_both_handlers_are_registered_on_every_robot():

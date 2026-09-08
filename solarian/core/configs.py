@@ -30,6 +30,21 @@ class ActionValue(str, Enum):
     REWIND = "rewind"
 
 
+class SafeState(str, Enum):
+    """What a module does when the link to whatever commands it goes quiet.
+
+    Which one is safe is a property of the machine, not of the framework: an arm
+    holding a payload must not drop it, and a light arm is safest limp.
+    """
+    #: Stop where you are: abandon any future waypoint, keep holding position.
+    HOLD = "hold"
+    #: Release torque, so the arm can be moved by hand.
+    RELAX = "relax"
+
+    def __str__(self):
+        return self.value
+
+
 class InterpolatorType(str, Enum):
     """Types of trajectory interpolators for modules."""
     POSE = "pose"       # 6D Cartesian with Slerp for rotation
@@ -144,7 +159,11 @@ class ModuleConfig(BaseModel):
     sensors: dict[str, SensorConfig] = {}
 
     receive_latency: float = 0.0  # latency in seconds for receiving data from sensors
-    
+
+    #: What this module does when the robot's action-link watchdog fires. See
+    #: :class:`SafeState`.
+    link_lost: SafeState = SafeState.HOLD
+
     calibration_file: str | None = None
     # gripper_open_degree: Optional[float] = 30
     
@@ -161,6 +180,30 @@ class ModuleConfig(BaseModel):
     drive_horizon_ema_alpha: float = 0.2
     drive_horizon_multiplier: float = 1.5
 
+class RemoteInputConfig(ModuleConfig):
+    """Config for a teleop device sampled off-process.
+
+    Reuses the device's own yaml, so substituting a remote sampler for a local
+    module needs no second config file — only the hardware fields stop meaning
+    anything, because this process has no bus to reach them with.
+    """
+    #: Publish nothing once the newest sample is older than this. A dropped input
+    #: link must stop the follower where it is, not latch the last pose.
+    stale_after_s: float = 0.25
+
+    @field_validator("calibration_file", mode="before")
+    @classmethod
+    def _calibration_belongs_to_the_sampler(cls, _value):
+        """Drop any calibration file the local module's yaml names.
+
+        The sampler owns calibration for a device it is the only one holding, and
+        sends normalized values; a controller with no bus cannot read a
+        calibration back to compare, so keeping the path would only make
+        ``Controller.connect`` try to calibrate hardware that is not there.
+        """
+        return None
+
+
 class ConnectionConfig(BaseModel):
     ip: str
     action_sender_port: int
@@ -171,6 +214,28 @@ class ConnectionConfig(BaseModel):
     #: Controller and robot estimate an offset so SCHEDULE_WAYPOINT stamps share
     #: the relay server's wall clock without requiring OS NTP/root.
     clock_sync_port: int = 5559
+    #: CurveZMQ (see :mod:`solarian.core.curve`). Unset on all three leaves the
+    #: link plaintext, which is fine on a LAN and not fine for a relay reachable
+    #: from the internet. Generate with ``solarian keygen``.
+    #: The relay's public key. Set on the robot and the controller, so each knows
+    #: which relay it is willing to talk to.
+    curve_server_key: str | None = None
+    #: This peer's own keypair. On the relay, the pair whose public half the
+    #: clients carry as ``curve_server_key``.
+    curve_public_key: str | None = None
+    curve_secret_key: str | None = None
+    #: Seconds of controller silence after which the robot stops its skills and
+    #: puts every module in its ``link_lost`` state. ``None`` disables the
+    #: watchdog, which is defensible on a LAN and is not once the command path
+    #: crosses the internet: without it a dropped link leaves the follower
+    #: driving toward the last waypoint it was given with nobody left to change
+    #: its mind. Lives on the link rather than on the robot so that switching
+    #: connection profile switches the safety behaviour with it.
+    link_timeout_s: float | None = None
+    #: How often an idle controller tells the robot it is still there. Has to
+    #: stay well under ``link_timeout_s``; a third of it is a reasonable rule, so
+    #: one lost heartbeat does not trip the watchdog.
+    heartbeat_s: float = 0.5
 
 # A robot is composed by multiple modules, eg: arms, legs, base, etc.
 class RobotConfig(BaseModel):
@@ -191,6 +256,29 @@ class ControllerConfig(BaseModel):
     system2_api_key: str
     policy_path: str
     device: str
+    #: Front end that drives this controller: ``console`` (default), ``pygame``,
+    #: ``opencv``, ``external`` or ``null``. See :mod:`solarian.core.ui`.
+    ui: str = "console"
+    #: ``host:port`` the ``external`` UI serves its WebSocket on. Loopback by
+    #: default: the intended peer is a bridge beside it, not the internet.
+    ui_bind: str = "127.0.0.1:8700"
+    #: Shared secret an ``external`` UI client must present. Unset accepts any
+    #: connection that can reach ``ui_bind``.
+    ui_token: str | None = None
+    #: Cap on external-UI frames that carry camera images. Dashboard frames are
+    #: not throttled; JPEG is the expensive part.
+    ui_image_fps: int = 15
+    #: Downscale camera frames wider than this before encoding, to bound the
+    #: external UI's bandwidth.
+    ui_image_max_width: int = 640
+    #: Names of declared modules whose device is sampled by the UI instead of by
+    #: this process, replaced at construction by a
+    #: :class:`~solarian.core.remote_input_module.RemoteInputModule`. The way a
+    #: cloud-hosted controller uses a leader arm plugged into the operator's
+    #: laptop, without the project's code changing.
+    remote_input_modules: list[str] = []
+    #: Deprecated, superseded by ``ui``. ``true`` still selects the console UI,
+    #: which is what the old headless loop was; use ``ui: null`` for no UI.
     headless: bool = False
     #: Seconds ahead of ``time.time()`` for keyboard / teleop SCHEDULE_WAYPOINT
     #: stamps. Must exceed Mac→robot action latency or waypoints are dropped.
@@ -229,6 +317,11 @@ class ReplayConfig(ControllerConfig):
 class ServerConfig(BaseModel):
     connection: ConnectionConfig
     img_compression_quality: int
+    #: CURVE public keys allowed to connect, i.e. this deployment's robot and
+    #: controller. Empty means no allowlist: encryption but no authorization, so
+    #: anyone holding the relay's public key gets in. A relay on a public address
+    #: must set this.
+    curve_allowed_client_keys: list[str] = []
     # image_processing: list[str]
     # tracking_model: str | None
     # depth_model: str | None

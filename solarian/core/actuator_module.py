@@ -16,7 +16,7 @@ from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.calibration import MotorCalibration
 from solarian.core.clock_sync import synced_time
-from solarian.core.configs import InterpolatorType, ModuleConfig
+from solarian.core.configs import InterpolatorType, ModuleConfig, SafeState
 from solarian.core.data import PosData
 from solarian.core.module import Module
 from solarian.utils.shared_memory.action_queue import ModuleActionQueue
@@ -490,6 +490,37 @@ class ActuatorModule(Module):
                 t_now,
                 drop_timestamps=self._drop_timestamps(action),
             )
+        return True
+
+    @action_handler(ActionType.HOLD_SAFE)
+    def _handle_hold_safe(self, action: ModuleAction, t_now: float) -> bool:
+        """Enter ``cfg.link_lost`` because nothing is commanding this module.
+
+        ``HOLD`` trims the trajectory to now, so ``control_step`` keeps writing
+        the target the module is already at instead of continuing toward a
+        waypoint whose author is gone. ``RELAX`` cuts torque, and drops the
+        trajectory so re-enabling torque later re-seeds from the measured pose
+        rather than snapping to where the arm was before it went limp.
+        """
+        if self.cfg.link_lost == SafeState.RELAX:
+            self.interp = None
+            self.last_waypoint_time = 0.0
+            self.disable_torque()
+        elif self.interp is not None:
+            self.interp = self.interp.trim(t_now, t_now)
+        return True
+
+    @action_handler(ActionType.CANCEL_TRAJECTORY)
+    def _handle_cancel_trajectory(self, action: ModuleAction, t_now: float) -> bool:
+        """Drop what is still queued and hold where the trajectory is now.
+
+        A chunk outlives its author: seconds of waypoints sit in this
+        interpolator after the skill that scheduled them is gone, and whoever
+        commands the module next has to out-argue them.
+        """
+        if self.interp is not None:
+            self.interp = self.interp.trim(t_now, t_now)
+            self.last_waypoint_time = t_now
         return True
 
     def control_step(self):

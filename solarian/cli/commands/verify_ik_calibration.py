@@ -16,6 +16,7 @@ from solarian.cli import BaseCommand, CommandRegistry
 @CommandRegistry.register("verify-ik-calibration", "robot")
 class VerifyIKCalibrationCommand(BaseCommand):
     help = "Verify a module's calibration matches its IK model joint limits."
+    params = ("module",)
 
     def handle(self, cfg) -> None:
         from solarian.core.ik import alignment

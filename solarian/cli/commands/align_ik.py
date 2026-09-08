@@ -69,6 +69,7 @@ class _MirrorThread(threading.Thread):
 @CommandRegistry.register("calibrate-ik", "robot")
 class CalibrateIKCommand(BaseCommand):
     help = "Guided sim<->real alignment for an IK arm (live mirror + sign + Cartesian checks)."
+    params = ("module",)
 
     def handle(self, cfg) -> None:
         from solarian.conf import settings

@@ -10,7 +10,11 @@ from solarian.core.configs import ModuleConfig
 from solarian.core.event import Event, EventType, event_handler
 from solarian.core.execution import ExecutionMode, ExecutionPlace
 from solarian.core.ai.system1.skill import Skill, SkillStatus
-from solarian.core.controller import Controller
+from solarian.core.controller import (
+    _REMOTE_STOP_RETRY_S,
+    _REMOTE_STOP_TIMEOUT_S,
+    Controller,
+)
 from solarian.core.keyboard_module import KeyboardModule
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 
@@ -428,6 +432,64 @@ def test_stopping_a_remote_skill_is_sent_as_stop_skill():
 
     assert int(action.action_type) == int(ActionType.STOP_SKILL)
     assert action.data["skill"] == "cup_arrange"
+
+
+def stopping_since(ctrl, name, first_offset=0.0, last_offset=0.0):
+    """Backdate a pending stop so the retry and deadline logic can be exercised."""
+    first, last = ctrl._remote_stopping[name]
+    ctrl._remote_stopping[name] = (first - first_offset, last - last_offset)
+
+
+def test_a_remote_skill_stays_preemptable_until_the_robot_confirms():
+    """Asking is not stopping. Drop the record early and the module set goes
+    with it, so nothing can ever preempt the skill again."""
+    ctrl = TeleopCtrl()
+    ctrl.press("c")
+    ctrl._tick_skills()
+
+    ctrl.stop_skill("cup_arrange")
+
+    assert ctrl.running_skills["cup_arrange"].modules == {RIGHT_ARM, RIGHT_GRIPPER}
+
+    ctrl._ingest_skill_status_records(
+        [SimpleNamespace(skill_id=7, status=int(SkillStatus.STOPPED))]
+    )
+
+    assert "cup_arrange" not in ctrl.running_skills
+    assert ctrl._remote_stopping == {}
+
+
+def test_an_unconfirmed_stop_is_asked_for_again():
+    """One STOP_SKILL is not a stop: every hop of the link is CONFLATE, and the
+    move that preempted the skill is sent on the very next tick."""
+    ctrl = TeleopCtrl()
+    ctrl.press("c")
+    ctrl._tick_skills()
+    ctrl.stop_skill("cup_arrange")
+    assert int(ctrl._tick_skills().action_type) == int(ActionType.STOP_SKILL)
+
+    assert ctrl._tick_skills() is None
+    stopping_since(ctrl, "cup_arrange", last_offset=_REMOTE_STOP_RETRY_S)
+    again = ctrl._tick_skills()
+
+    assert int(again.action_type) == int(ActionType.STOP_SKILL)
+    assert again.data["skill"] == "cup_arrange"
+
+
+def test_the_controller_gives_up_asking_after_the_deadline(caplog):
+    """The confirmation travels the same conflating link, so it can be lost too."""
+    ctrl = TeleopCtrl()
+    ctrl.press("c")
+    ctrl._tick_skills()
+    ctrl.stop_skill("cup_arrange")
+    ctrl._tick_skills()
+
+    stopping_since(ctrl, "cup_arrange", first_offset=_REMOTE_STOP_TIMEOUT_S + 1.0)
+    with caplog.at_level("WARNING"):
+        assert ctrl._tick_skills() is None
+
+    assert "never confirmed" in caplog.text
+    assert ctrl.running_skills == {}
 
 
 def test_commanded_modules_come_from_params():

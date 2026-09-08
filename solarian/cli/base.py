@@ -96,6 +96,13 @@ class CommandRegistry:
 
 class BaseCommand(ABC):
     help = ""  # Command help text
+
+    # Ad-hoc CLI parameters this command reads off ``cfg`` that are not keys of
+    # its yaml (``role``, ``module``, ``sweep``, ...). Hydra composes in struct
+    # mode, so ``key=value`` for a key the yaml never declares is rejected;
+    # naming it here seeds it as null so the plain form works. Undeclared names
+    # still fail, which is what catches a mistyped override.
+    params: tuple = ()
     
     def get_config_class(self) -> Optional[Type[Any]]:
         """

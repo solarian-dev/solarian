@@ -16,6 +16,7 @@ from solarian.cli import BaseCommand, CommandRegistry
 @CommandRegistry.register("derive-model-limits", "robot")
 class DeriveModelLimitsCommand(BaseCommand):
     help = "Derive MJCF joint ranges (radians) from the real arm's mechanical limits."
+    params = ("module", "sweep")
 
     def handle(self, cfg) -> None:
         from solarian.core.ik import alignment

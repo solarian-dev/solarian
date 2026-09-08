@@ -57,7 +57,9 @@ def test_sync_with_server_roundtrip():
         result = sync_with_server("127.0.0.1", listen_port, samples=4, timeout_ms=1000)
         assert abs(result.offset_s) < 0.05
         assert result.rtt_s >= 0.0
-        assert abs(synced_time() - time.time() - result.offset_s) < 1e-6
+        # Two separate clock reads, so the tolerance has to cover the time
+        # between them: at 1e-6 this compares against the cost of the syscall.
+        assert abs(synced_time() - time.time() - result.offset_s) < 1e-3
     finally:
         stop.set()
         thread.join(timeout=1.0)

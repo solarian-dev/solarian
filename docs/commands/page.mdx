@@ -38,6 +38,15 @@ Hydra-style overrides on the command line (`key=value`) are forwarded to the und
 solarian run-robot fps=60 connection.ip=192.168.1.20
 ```
 
+Some commands also take parameters that are not YAML keys at all — `role`, `module`, `sweep`, `axis`. Hydra composes in struct mode and would normally reject those, so a command declares them in a `params` tuple and they are seeded before your overrides are applied:
+
+```python
+class CalibrateCameraLatencyCommand(BaseCommand):
+    params = ("role", "monitor_hz", "qr_size", "n_frames", "plot", "allow_unsynced")
+```
+
+You then write them plainly, `role=display`, with no `+` prefix. A name that is neither a YAML key nor a declared parameter is still rejected, which is what catches `frps=60` before it silently does nothing.
+
 ## Project commands
 
 ### `create-project`
@@ -81,18 +90,68 @@ solarian calibrate-module module_name=<attr>
 
 Runs the calibration routine for a single module on the robot. Used for arms with absolute encoders that need a one-time origin set, cameras that need intrinsics, and similar. The exact behavior is delegated to the module's `calibrate()` implementation.
 
-### `calibrate-gripper`
+### `calibrate-arm-latency`
 
 ```bash
-solarian calibrate-gripper
+solarian calibrate-arm-latency [axis=z] [amplitude=0.02] [freq=1.25]
 ```
 
-Interactive calibration for any `GripperModule` on the Robot (or Controller). You pick the gripper (auto-selected when there is only one) and a mode:
+Measures one of the two latencies a UMI skill needs for an `ArmModule`. You pick the arm (auto-selected when there is only one) and a mode:
 
-- **latency** — command a sinusoid across the configured aperture range, record the measured scalar, and recover end-to-end delay by cross-correlation (UMI `calibrate_gripper_latency`). Prints the lag and shows alignment plots. Copy the number into `receive_latency` or a skill's `gripper_action_latency`; the command does not write YAML.
-- **ranges** — step the jaws from closed to open (0.5 units, centimetres when `aperture_open_cm` is set) so you can check a ruler (UMI `calibrate_gripper_ranges`). Prints the configured max; does not write files.
+- **action** — sweep a Cartesian sinusoid on one axis, record the measured pose, and recover the command-to-motion delay by cross-correlation. Prints `arm_action_latency` and shows alignment plots. Refuses to run if the sinusoid's peak velocity would exceed the module's `max_speed`, which would measure the speed limit instead of the pipeline.
+- **obs** — time a few hundred pose reads and report the mean, which is `arm_obs_latency`.
 
-The jaws move. The command talks to the module in-process (same as `calibrate-module`), not through the robot's action queues.
+Action mode records where the arm started, then walks you through placing it by hand: take hold, Enter to release torque, position it, Enter to lock it there, let go, Enter to record. It then verifies the model can travel the full amplitude both ways from that pose and aborts naming the joint in the way, because an out-of-reach sweep comes back clipped and the clip is what gets measured. Afterwards the arm returns to the safe pose you chose and then to where it was when the command started, including when the run aborts partway. See [Latency & Synchronization](/docs/latency) for what each number corrects and why.
+
+### `calibrate-arm-speed`
+
+```bash
+solarian calibrate-arm-speed [poses=3] [distance=0.06]
+```
+
+Measures the Cartesian translation speed the arm actually sustains, which is `max_speed[0]` in the arm's module yaml. Run this **before** `calibrate-arm-latency`, which sizes its sweep against that limit.
+
+You free-drive the arm to each pose in turn, through the same take-hold / release-torque / lock / let-go prompts as `calibrate-arm-latency`. At the first direction it ramps the commanded speed until the measured motion stops keeping up, then checks whether every other pose and axis direction can hold that same speed, lowering it whenever one cannot. Between directions the arm drives back to the pose you chose rather than reversing the offset it just made, so a move that fell short does not shift where the next one begins. What it reports is the slowest sample, since the Jacobian means a single global limit is only safe if it is the minimum over the region the arm works in. Directions without room for the full test distance are skipped rather than measured short. The arm returns to its original pose when the command ends.
+
+The moves deliberately run above the configured limit — that is the only way to see past it — with a ceiling of four times the configured value.
+
+### `calibrate-gripper-speed`
+
+```bash
+solarian calibrate-gripper-speed
+```
+
+The same idea for the jaws, filling `max_speed` in the gripper's module yaml. This one is a genuine hardware constant: one prismatic degree of freedom, no Jacobian, so a single measurement holds everywhere. It strokes between the ends of travel (staying a tenth clear of the hard stops) at rising speed and reports the rate the jaws hold, along with whether the configured value is optimistic, pessimistic, or fair.
+
+### `calibrate-gripper-latency`
+
+```bash
+solarian calibrate-gripper-latency
+```
+
+The same two modes for any `GripperModule` (UMI `calibrate_gripper_latency`): a sinusoid across the configured aperture range for `gripper_action_latency`, or read timing for `gripper_obs_latency`. The two are **not** the same number and correct in opposite directions — see [Latency & Synchronization](/docs/latency).
+
+### `calibrate-gripper-ranges`
+
+```bash
+solarian calibrate-gripper-ranges
+```
+
+Steps the jaws from closed to open (0.5 units, centimetres when `aperture_open_cm` is set) so you can check them against a ruler (UMI `calibrate_gripper_ranges`). Prints the configured max; does not write files.
+
+### `calibrate-camera-latency`
+
+```bash
+# on the machine with a monitor
+solarian calibrate-camera-latency role=display [monitor_hz=60] [qr_size=720]
+
+# on the robot, camera pointed at that monitor
+solarian calibrate-camera-latency role=capture monitor_hz=60 [n_frames=120] [plot=true]
+```
+
+Measures `camera_obs_latency` with UMI's QR-timestamp method: one role fills a screen with a QR code encoding the instant it was drawn, the other films it and subtracts. `monitor_hz` is required on `capture`, where display refresh enters the arithmetic, and optional on `display`, where it only paces the redraw. Both roles sync to the relay clock, so the screen and the camera can be on different machines — which is the better setup, though both can share one machine if the robot has a screen. See [Latency & Synchronization](/docs/latency).
+
+All four `calibrate-*` commands above talk to the module in-process (same as `calibrate-module`), not through the robot's action queues. Run them on the machine the device is wired to, with `run-robot` stopped — the only exception is `calibrate-camera-latency role=display`, which just draws on a screen and belongs on the machine with the monitor. See [Latency & Synchronization](/docs/latency).
 
 ### `setup-module`
 

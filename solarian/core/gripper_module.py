@@ -92,7 +92,29 @@ class GripperModule(ActuatorModule):
         self.write_actuators({name: PosData(value=servo)})
         StatusBoard.set(f"{self.name} servo cmd", round(servo, 1))
 
-    def _aperture_status_suffix(self) -> str:
+    def drive_scalar(self, value: float, speed: float) -> None:
+        """Drive to *value* at *speed* units/s, ignoring ``cfg.max_speed``.
+
+        The scalar counterpart of :meth:`ArmModule.moveL`'s ``speed``. Needed to
+        measure what the hardware can actually sustain: the scheduled path is
+        clamped to the configured limit, so a test driven through it can never
+        command faster than the number it is trying to check.
+        """
+        t_now = time.monotonic()
+        interp = ScalarTrajectoryInterpolator(
+            np.array([t_now]), np.array([self._read_current_scalar()], dtype=np.float64)
+        )
+        self.interp = interp.drive_to_waypoint(
+            value=float(value), time=t_now, curr_time=t_now, max_speed=float(speed)
+        )
+        self.last_waypoint_time = float(self.interp.times[-1])
+
+    def aperture_unit_suffix(self) -> str:
+        """`" (cm)"` when the config names a physical aperture, else `""`.
+
+        Only grippers configured in centimetres can label their scalar; a plain
+        `open_value` gripper is in unnamed action units.
+        """
         if getattr(self.cfg, "aperture_open_cm", None) is not None:
             return " (cm)"
         return ""
@@ -101,7 +123,7 @@ class GripperModule(ActuatorModule):
         self, *, measured: float | None = None, cmd: float | None = None
     ) -> None:
         """Push live aperture (and command) onto the StatusBoard."""
-        suffix = self._aperture_status_suffix()
+        suffix = self.aperture_unit_suffix()
         if measured is not None:
             StatusBoard.set(f"{self.name} aperture{suffix}", round(float(measured), 2))
         if cmd is not None:

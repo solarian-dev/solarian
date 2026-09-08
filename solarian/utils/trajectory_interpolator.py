@@ -21,6 +21,22 @@ import scipy.interpolate as si
 import scipy.spatial.transform as st
 
 
+def _extend(times: np.ndarray, values: np.ndarray, t: float, value) -> tuple:
+    """Add *value* at *t*, replacing the final sample when the times collide.
+
+    A waypoint the module is already at -- or one already due -- yields a
+    duration that rounds to zero at float64 resolution, which would duplicate an
+    instant. Interpolation needs times to be strictly increasing: ``Slerp``
+    rejects a repeat outright, and ``interp1d`` silently turns it into an
+    infinite slope. Replacing the last sample keeps the trajectory a function of
+    time, and holds the pose that was asked for.
+    """
+    value = np.asarray(value, dtype=np.float64)
+    if len(times) and t <= times[-1]:
+        return np.asarray(times), np.concatenate([values[:-1], value[None]])
+    return np.append(times, [t]), np.concatenate([values, value[None]])
+
+
 class TrajectoryInterpolator(ABC):
     """Abstract base class for trajectory interpolators."""
     
@@ -129,9 +145,10 @@ class ScalarTrajectoryInterpolator(TrajectoryInterpolator):
         last_waypoint_time = curr_time + duration
         
         trimmed_interp = self.trim(curr_time, curr_time)
-        times = np.append(trimmed_interp.times, [last_waypoint_time])
-        values = np.append(trimmed_interp.values, [value])
-        
+        times, values = _extend(
+            trimmed_interp.times, trimmed_interp.values, last_waypoint_time, value
+        )
+
         return ScalarTrajectoryInterpolator(times, values)
     
     def schedule_waypoint(self, value, time, curr_time=None,
@@ -181,8 +198,9 @@ class ScalarTrajectoryInterpolator(TrajectoryInterpolator):
         assert duration >= 0
         actual_end_time = end_time + duration
         
-        times = np.append(trimmed_interp.times, [actual_end_time])
-        values = np.append(trimmed_interp.values, [value])
+        times, values = _extend(
+            trimmed_interp.times, trimmed_interp.values, actual_end_time, value
+        )
         
         return ScalarTrajectoryInterpolator(times, values)
 
@@ -273,8 +291,9 @@ class JointTrajectoryInterpolator(TrajectoryInterpolator):
         last_waypoint_time = curr_time + duration
         
         trimmed_interp = self.trim(curr_time, curr_time)
-        times = np.append(trimmed_interp.times, [last_waypoint_time])
-        values = np.vstack([trimmed_interp.values, [value]])
+        times, values = _extend(
+            trimmed_interp.times, trimmed_interp.values, last_waypoint_time, value
+        )
         
         return JointTrajectoryInterpolator(times, values)
     
@@ -323,8 +342,9 @@ class JointTrajectoryInterpolator(TrajectoryInterpolator):
         assert duration >= 0
         actual_end_time = end_time + duration
         
-        times = np.append(trimmed_interp.times, [actual_end_time])
-        values = np.vstack([trimmed_interp.values, [value]])
+        times, values = _extend(
+            trimmed_interp.times, trimmed_interp.values, actual_end_time, value
+        )
         
         return JointTrajectoryInterpolator(times, values)
 
@@ -428,8 +448,9 @@ class PoseTrajectoryInterpolator(TrajectoryInterpolator):
         last_waypoint_time = curr_time + duration
 
         trimmed_interp = self.trim(curr_time, curr_time)
-        times = np.append(trimmed_interp.times, [last_waypoint_time], axis=0)
-        poses = np.append(trimmed_interp.poses, [pose], axis=0)
+        times, poses = _extend(
+            trimmed_interp.times, trimmed_interp.poses, last_waypoint_time, pose
+        )
 
         return PoseTrajectoryInterpolator(times, poses)
 
@@ -486,8 +507,9 @@ class PoseTrajectoryInterpolator(TrajectoryInterpolator):
         assert duration >= 0
         actual_last_waypoint_time = end_time + duration
 
-        times = np.append(trimmed_interp.times, [actual_last_waypoint_time], axis=0)
-        poses = np.append(trimmed_interp.poses, [pose], axis=0)
+        times, poses = _extend(
+            trimmed_interp.times, trimmed_interp.poses, actual_last_waypoint_time, pose
+        )
 
         return PoseTrajectoryInterpolator(times, poses)
 

@@ -16,6 +16,15 @@ class ActionType:
     # Controller-orchestrated skill lifecycle (not forwarded to modules).
     START_SKILL = 4
     STOP_SKILL = 5
+    #: Abandon whatever is being driven and enter the module's configured
+    #: ``link_lost`` state. Sent by the robot's watchdog, never by a controller —
+    #: the point of it is that the controller is the thing that went away.
+    HOLD_SAFE = 6
+    #: Discard the buffered trajectory and hold the current target. Sent when
+    #: the author of those waypoints is gone — a stopped skill leaves seconds
+    #: of chunk behind it. Unlike ``HOLD_SAFE`` it never cuts torque: the link
+    #: is fine, only the author left.
+    CANCEL_TRAJECTORY = 7
     CUSTOM_START = 100
 
     def __init__(self, value: int = 0):

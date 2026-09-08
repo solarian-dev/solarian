@@ -1,13 +1,8 @@
 import os
-import select
-import sys
 import threading
 import time
 import zmq
-import cv2
-import random
 import math
-import string
 import numpy as np
 from abc import ABC
 from dataclasses import dataclass, field
@@ -15,12 +10,14 @@ from typing import Any
 from multiprocessing.managers import SharedMemoryManager
 
 from solarian.utils import busy_wait
+from solarian.core import curve
 from solarian.core import Action
 from solarian.core.action import ActionType
 from solarian.core import Observation
 from solarian.core.configs import ControllerConfig, ActionValue
 from solarian.core.message import Message
 from solarian.core.module import Module
+from solarian.core.remote_input_module import RemoteInputModule
 from solarian.core.clock_sync import (
     sync_with_server,
     get_offset,
@@ -39,6 +36,14 @@ from solarian.core.event import (
 )
 from solarian.core.execution import ExecutionMode, ExecutionPlace
 from solarian.core.keyboard_module import KeyboardModule
+from solarian.core.ui import build_ui
+from solarian.core.ui.base import (
+    ControllerUI,
+    UICommand,
+    UICommandType,
+    UIImage,
+    UISnapshot,
+)
 from solarian.core.ai.system1.skill import Skill, SkillStatus
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
@@ -53,40 +58,12 @@ from solarian.utils.configs import load_config_yaml
 import logging
 logger = logging.getLogger(__name__)
 
-# Monitor geometry used to center cv2 windows. Resolved lazily on first
-# use via ``_get_screen_geometry()`` because ``screeninfo`` on macOS
-# imports ``pyobjc`` (AppKit / Foundation / Cocoa) at module load, which
-# then breaks any subsequent fork() in the parent process (Apple's
-# AppKit fork-safety net; not bypassed by
-# ``OBJC_DISABLE_INITIALIZE_FORK_SAFETY``). Importing this module in a
-# parent that later forks workers (e.g. UMI's eval_real.py on macOS)
-# would therefore poison every camera/visualizer worker. Defaults
-# (0,0,0,0) center against the top-left corner, which the code already
-# tolerated as the "no screeninfo" fallback.
-sw, sh, sx, sy = 0, 0, 0, 0
-_SCREEN_GEOMETRY_RESOLVED = False
-
-
-def _get_screen_geometry():
-    """Populate ``sw, sh, sx, sy`` lazily from ``screeninfo.get_monitors``.
-
-    Safe to call repeatedly; the ``screeninfo`` import (and the Cocoa init
-    it triggers on macOS) happens at most once, and only AFTER the caller
-    has chosen to do so -- typically inside a controller method that runs
-    well after any fork()ed worker processes have been started.
-    """
-    global sw, sh, sx, sy, _SCREEN_GEOMETRY_RESOLVED
-    if _SCREEN_GEOMETRY_RESOLVED:
-        return sw, sh, sx, sy
-    _SCREEN_GEOMETRY_RESOLVED = True
-    try:
-        from screeninfo import get_monitors
-        monitors = get_monitors()
-        m = monitors[0]
-        sw, sh, sx, sy = m.width, m.height, m.x, m.y
-    except Exception:
-        pass
-    return sw, sh, sx, sy
+# Seconds between re-requests of a remote ``STOP_SKILL``, and how long to keep
+# re-requesting before assuming the skill is gone. Long enough that a robot
+# busy finishing an inference is not spammed, short enough that the operator
+# does not wait on it.
+_REMOTE_STOP_RETRY_S = 0.2
+_REMOTE_STOP_TIMEOUT_S = 3.0
 
 
 @dataclass
@@ -148,12 +125,10 @@ class Controller(EventHost, ABC):
     # it wants with the arguments it wants.
     skills: tuple[type[Skill], ...] = ()
 
-    # When True and not running headless, use the single-window pygame GUI
-    # (dashboard + camera grid + on-window key capture) instead of the OpenCV
-    # camera windows plus the global pynput listener. The GUI captures keys via
-    # window focus, so it needs no OS accessibility / input-monitoring
-    # permission. Enabled by default so the GUI is always shown when not
-    # headless; set ``use_gui = False`` on a subclass to explicitly opt out.
+    # Deprecated: which front end runs is deployment configuration, not a
+    # property of the controller class, so it belongs in ``conf/controller.yaml``
+    # as ``ui:``. Still honoured — ``use_gui = False`` selects ``ui=opencv`` —
+    # for subclasses that set it before ``ui`` existed.
     use_gui = True
 
     def __init__(self, cfg: ControllerConfig):
@@ -169,15 +144,17 @@ class Controller(EventHost, ABC):
         except ImportError:
             self.device = 'cpu'
         
-        # Initialize OpenCV windows once
-        self.windows_initialized = []
         self._image_field_keys: list[tuple[str, str]] | None = None
         self._bbox_field_map: dict[tuple[str, str], list[tuple[str, str]]] | None = None
+        #: The front end, built by :meth:`start`. A controller that is only
+        #: connected to (to read sensors, say) never has one.
+        self.ui: ControllerUI | None = None
         
         # action socket
         self.action_socket = self.context.socket(zmq.PUSH)
         self.action_socket.setsockopt(zmq.CONFLATE, 1)
         self.action_socket.setsockopt(zmq.LINGER, 0)
+        curve.apply_client(self.action_socket, self.cfg.connection, "controller actions")
         self.action_socket.connect(f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.action_receiver_port}")
         
         # Image subscription
@@ -185,6 +162,7 @@ class Controller(EventHost, ABC):
         self.state_socket.setsockopt(zmq.CONFLATE, 1)
         self.state_socket.setsockopt(zmq.SUBSCRIBE, b"")
         self.state_socket.setsockopt(zmq.LINGER, 0)
+        curve.apply_client(self.state_socket, self.cfg.connection, "controller state")
         self.state_socket.connect(f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_sender_port}")
 
         # Verify connection
@@ -200,20 +178,42 @@ class Controller(EventHost, ABC):
         self._thread_error = None
         self._obs_latency = LatencyEma()
         self._obs_age_latency = LatencyEma()
+        #: Pre-formatted telemetry rows, mirrored into every UI snapshot so a
+        #: front end that cannot read the status board still gets them.
+        self.telemetry: dict[str, str] = {}
+        #: When the last state message arrived, for the robot-link age row.
+        self._last_state_ns: int | None = None
+        #: When this controller last put anything on the action socket, so the
+        #: heartbeat only fills real silence.
+        self._last_send_ns = time.monotonic_ns()
 
         self.modules = {}
 
         # Create modules from class-level attributes. Walks the MRO so that
         # modules declared on a base controller -- the keyboard, for one --
         # exist on every subclass, matching how Robot collects modules.
+        remote_input = set(self.cfg.remote_input_modules)
         for klass in type(self).__mro__:
             for name, val in klass.__dict__.items():
                 if name in self.modules or not isinstance(val, Module):
                     continue
-                module_class = val.__class__
+                # A device the UI samples keeps its name and loses its driver:
+                # the consumers read it by name, so swapping the implementation
+                # here is the whole of what "the leader arm is on the operator's
+                # laptop" means to the rest of the controller.
+                module_class = (
+                    RemoteInputModule if name in remote_input else val.__class__
+                )
                 module_cfg = self.load_module_config(name, module_class)
                 self.modules[name] = module_class(module_cfg, name)
                 setattr(self, name, self.modules[name])
+                remote_input.discard(name)
+        if remote_input:
+            raise ValueError(
+                f"controller.remote_input_modules names {sorted(remote_input)}, "
+                f"which {type(self).__name__} does not declare; it has "
+                f"{sorted(self.modules)}"
+            )
 
         # Create events dictionary directly instead of using init_keyboard_listener
         self.events = {
@@ -383,14 +383,25 @@ class Controller(EventHost, ABC):
         
         logger.info("Successfully connected to relay server")
 
+    def _publish_telemetry(self, label: str, value) -> None:
+        """Put one telemetry row on the status board and in the UI snapshot.
+
+        Two consumers with different reach: the board is process-wide and always
+        on, the snapshot is per-frame and may cross a link to a browser that
+        cannot see this process's terminal at all.
+        """
+        StatusBoard.set(label, value)
+        self.telemetry[label] = str(value)
+
     @profile
     def get_state(self):
         bytes = self.state_socket.recv(zmq.NOBLOCK)
         msg = Message.deserialize(bytes)
+        self._last_state_ns = time.time_ns()
 
         latency_ms = latency_ms_from_stamp_ns(msg.robot_timestamp)
         if latency_ms is not None:
-            StatusBoard.set(
+            self._publish_telemetry(
                 "Obs latency (ms)",
                 format_latency_status(self._obs_latency, latency_ms),
             )
@@ -401,7 +412,7 @@ class Controller(EventHost, ABC):
 
             age_ms = self._observation_age_ms(observation)
             if age_ms is not None:
-                StatusBoard.set(
+                self._publish_telemetry(
                     "Obs age (ms)",
                     format_latency_status(self._obs_age_latency, age_ms),
                 )
@@ -462,13 +473,39 @@ class Controller(EventHost, ABC):
                 "point": self.clicked_point,
                 "id": self.clicked_id
             }
+        self._send_message(msg)
+
+    def _send_message(self, msg: Message) -> None:
+        """Put *msg* on the action socket and note that the link was just used.
+
+        Every send goes through here so the heartbeat below can tell real
+        silence from the gap between two messages. The robot's socket is
+        CONFLATE: a heartbeat sent on top of a command it has not read yet
+        would replace it.
+        """
         self.action_socket.send(msg.serialize())
+        self._last_send_ns = time.monotonic_ns()
+
+    def _send_heartbeat_if_idle(self) -> None:
+        """Tell the robot the link is alive while there is nothing to send.
+
+        The robot's watchdog cannot tell an idle controller from a dead one, and
+        every other message on this socket is event-driven, so the silence has
+        to be filled from here.
+        """
+        heartbeat_s = self.cfg.connection.heartbeat_s
+        if (time.monotonic_ns() - self._last_send_ns) / 1e9 < heartbeat_s:
+            return
+        msg = Message()
+        msg.controller_timestamp = synced_time_ns()
+        msg.data = {"heartbeat": True}
+        self._send_message(msg)
 
     def send_stop_tracking(self):
         msg = Message()
         msg.controller_timestamp = synced_time_ns()
         msg.data = {"stop_tracking": True}
-        self.action_socket.send(msg.serialize())
+        self._send_message(msg)
 
     def _put_module_observation(self, module_name: str, module_observation) -> None:
         """Push *module_observation* into its ``ObservationBuffer``.
@@ -541,9 +578,10 @@ class Controller(EventHost, ABC):
                 self.cfg.connection.ip,
                 self.cfg.connection.clock_sync_port,
                 context=self.context,
+                connection=self.cfg.connection,
             )
-            StatusBoard.set("Clock offset (ms)", result.offset_s * 1000.0)
-            StatusBoard.set("Clock sync RTT (ms)", result.rtt_s * 1000.0)
+            self._publish_telemetry("Clock offset (ms)", result.offset_s * 1000.0)
+            self._publish_telemetry("Clock sync RTT (ms)", result.rtt_s * 1000.0)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Clock sync failed (%s); using local wall clock (offset=%.1f ms)",
@@ -611,96 +649,6 @@ class Controller(EventHost, ABC):
     #     dataset.add_frame(frame, task)
         
     
-    def _headless_loop(self, episode_time_s):
-        """Main loop for headless mode — no cv2 GUI, reads keypresses from stdin."""
-        import tty
-        import termios
-
-        timestamp = 0
-        start_episode_t = time.perf_counter()
-
-        old_settings = termios.tcgetattr(sys.stdin)
-        try:
-            tty.setcbreak(sys.stdin.fileno())
-            logger.info("Headless mode — press 'q' to quit")
-
-            while timestamp < episode_time_s and self.running:
-                start_loop_t = time.time_ns()
-                timestamp = time.perf_counter() - start_episode_t
-
-                if self.events["exit_early"]:
-                    break
-
-                if select.select([sys.stdin], [], [], 0)[0]:
-                    ch = sys.stdin.read(1).lower()
-                    # Headless cbreak mode has no release event, so every
-                    # character read is treated as a full click (down+up).
-                    self.keyboard.on_press(ch)
-                    self.keyboard.on_release(ch)
-                    if ch == 'q':
-                        break
-
-                dt_s = (time.time_ns() - start_loop_t) / 1e9
-                sleep_s = (1.0 / self.cfg.fps) - dt_s if self.cfg.fps else 0.01
-                if sleep_s > 0:
-                    time.sleep(sleep_s)
-
-                manual_profile("headless loop latency", (time.time_ns() - start_loop_t))
-        finally:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
-
-    def display_loop(self, episode_time_s):
-        timestamp = 0
-        start_episode_t = time.perf_counter()
-        try:
-            while timestamp < episode_time_s and self.running:
-                start_loop_t = time.time_ns()
-
-                result = self.display()
-
-                if result is False:
-                    break
-
-                timestamp = time.perf_counter() - start_episode_t
-                if self.events["exit_early"]:
-                    break
-
-                dt_s = (time.time_ns() - start_loop_t) / 1e9
-                if self.cfg.fps is not None:
-                    wait_ms = max(1, int(((1.0 / self.cfg.fps) - dt_s) * 1000))
-                else:
-                    wait_ms = 1
-                # cv2.waitKey is still needed to pump the cv2 event loop
-                # (without it, imshow windows go unresponsive).  Key events
-                # themselves are delivered via the pynput listener started
-                # in :meth:`start`, so we only use the return value to
-                # notice the 'q' quit shortcut while a cv2 window is focused.
-                key = cv2.waitKey(wait_ms) & 0xFF
-                if key == ord('q'):
-                    break
-
-                manual_profile("display loop latency", (time.time_ns() - start_loop_t))
-        finally:
-            if self.windows_initialized:
-                for name in self.windows_initialized:
-                    try:
-                        cv2.destroyWindow(name)
-                    except:
-                        pass
-                cv2.destroyAllWindows()
-                self.windows_initialized = []
-            
-            
-            
-    
-    # Mouse callback function
-    def mouse_callback(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            logger.info(f"Clicked at (x={x}, y={y})")
-            self.clicked_point = (x, y)
-            # generate random alphanumeric id
-            self.clicked_id = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-    
     def _build_display_schema(self):
         """Build and cache the mapping of image/bbox fields per module."""
         obs_spec = Observation.get_module_obs_spec()
@@ -734,84 +682,21 @@ class Controller(EventHost, ABC):
         self._image_field_keys = image_keys
         self._bbox_field_map = bbox_map
 
+    # -- UI snapshot -------------------------------------------------------
     @profile
-    def display(self):
+    def _collect_display_images(self) -> list[UIImage]:
+        """Every image field in the latest observation, with its boxes.
+
+        One collection for every front end: a window grid, a browser and a JPEG
+        encoder all want the same pixels, and the calculated bounding boxes
+        belong to the frame they were computed from rather than to whoever draws
+        them.
+        """
         if self._image_field_keys is None or self._bbox_field_map is None:
             self._build_display_schema()
         assert self._image_field_keys is not None and self._bbox_field_map is not None
 
-        images = {}
-        image_bboxes = {}
-
-        for module_name, field_name in self._image_field_keys:
-            module_obs = self.last_observation[module_name]
-            if module_obs is None:
-                continue
-            try:
-                field_data = module_obs[field_name]
-            except KeyError:
-                continue
-            if field_data is not None and field_data.value is not None:
-                images[(module_name, field_name)] = field_data.value
-
-        for img_key, bbox_fields in self._bbox_field_map.items():
-            if img_key not in images:
-                continue
-            module_obs = self.last_observation[img_key[0]]
-            if module_obs is None:
-                continue
-            for bbox_module, bbox_field in bbox_fields:
-                try:
-                    field_data = module_obs[bbox_field]
-                except KeyError:
-                    continue
-                if field_data is not None and field_data.value is not None:
-                    image_bboxes.setdefault(img_key, []).append(field_data.value)
-
-        if not self.windows_initialized:
-            # Resolve screen geometry lazily (see module-level
-            # `_get_screen_geometry` for the fork-safety rationale).
-            _sw, _sh, _sx, _sy = _get_screen_geometry()
-            for (module_name, field_name), img in images.items():
-                window_name = f"{module_name}/{field_name}"
-                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-                height, width = img.shape[:2]
-                cv2.resizeWindow(window_name, width, height)
-                cv2.setMouseCallback(window_name, self.mouse_callback)
-                cv2.moveWindow(window_name, _sx + (_sw - width)//2, _sy + (_sh - height)//2)
-                self.windows_initialized.append(window_name)
-
-        BBOX_COLOR = (255, 0, 0)
-
-        for (module_name, field_name), img in images.items():
-            img_key = (module_name, field_name)
-            window_name = f"{module_name}/{field_name}"
-
-            bbox_list = image_bboxes.get(img_key, [])
-            if bbox_list:
-                display_img = img.copy()
-                for bbox in bbox_list:
-                    if all(v == 0 for v in bbox[:4]):
-                        continue
-                    x1, y1, x2, y2 = bbox[:4]
-                    cv2.rectangle(display_img,
-                                (int(x1), int(y1)),
-                                (int(x2), int(y2)),
-                                BBOX_COLOR, 2)
-            else:
-                display_img = img
-
-            cv2.imshow(window_name, np.ascontiguousarray(display_img[:, :, ::-1]))
-
-    # -- single-window GUI (dashboard + cameras + key capture) -------------
-    def _collect_display_images(self) -> list[tuple[str, "np.ndarray"]]:
-        """Return ``(label, rgb_image)`` for every image field in the latest
-        observation, for rendering in the GUI camera grid."""
-        if self._image_field_keys is None:
-            self._build_display_schema()
-        assert self._image_field_keys is not None
-
-        images: list[tuple[str, np.ndarray]] = []
+        images: list[UIImage] = []
         for module_name, field_name in self._image_field_keys:
             try:
                 module_obs = self.last_observation[module_name]
@@ -823,8 +708,27 @@ class Controller(EventHost, ABC):
                 field_data = module_obs[field_name]
             except KeyError:
                 continue
-            if field_data is not None and field_data.value is not None:
-                images.append((f"{module_name}/{field_name}", field_data.value))
+            if field_data is None or field_data.value is None:
+                continue
+
+            bboxes = []
+            for _bbox_module, bbox_field in self._bbox_field_map.get(
+                (module_name, field_name), ()
+            ):
+                try:
+                    bbox_data = module_obs[bbox_field]
+                except KeyError:
+                    continue
+                if bbox_data is not None and bbox_data.value is not None:
+                    bboxes.append(bbox_data.value)
+
+            images.append(
+                UIImage(
+                    label=f"{module_name}/{field_name}",
+                    data=field_data.value,
+                    bboxes=bboxes,
+                )
+            )
         return images
 
     @staticmethod
@@ -923,52 +827,134 @@ class Controller(EventHost, ABC):
         """
         return [("space", "stop all skills")]
 
-    def _gui_loop(self, episode_time_s):
-        """Main loop for GUI mode: render the single-window dashboard/cameras
-        and feed this window's key events into the keyboard module."""
-        from solarian.core.controller_gui import ControllerGUI
+    def ui_snapshot(self) -> UISnapshot:
+        """Everything the front end needs to draw one frame.
 
-        try:
-            gui = ControllerGUI(title="Solarian")
-        except Exception:
-            logger.exception(
-                "Failed to start pygame GUI; falling back to OpenCV display "
-                "and the global pynput keyboard listener."
+        Built here and nowhere else, so a browser on the far side of a socket
+        sees the same numbers as a local window rather than a thinner view of
+        them.
+        """
+        telemetry = dict(self.telemetry)
+        if self._last_state_ns is not None:
+            age_ms = (time.time_ns() - self._last_state_ns) / 1e6
+            telemetry["Robot link age (ms)"] = f"{age_ms:.0f}"
+        running = sorted(self.running_skills)
+        return UISnapshot(
+            t_ns=synced_time_ns(),
+            fps=self.cfg.fps or None,
+            sections=self._gui_dashboard_sections(),
+            images=self._collect_display_images(),
+            key_help=self.gui_key_help(),
+            skills={
+                "available": sorted(self._skill_registry),
+                "running": running,
+            },
+            telemetry=telemetry,
+            status=", ".join(running) if running else "idle",
+        )
+
+    def ui_hello(self) -> dict:
+        """One-shot description of this controller for a UI built without it.
+
+        A front end on the far side of a socket cannot import the project, so
+        what it may start, which keys mean what and what an observation contains
+        all have to arrive as data.
+        """
+        return {
+            "controller": type(self).__name__,
+            "fps": self.cfg.fps,
+            "tps": self.cfg.tps,
+            "key_help": [list(row) for row in self.gui_key_help()],
+            "skills": [
+                {
+                    "name": name,
+                    "execution_place": spec["execution_place"].value,
+                    "execution_mode": spec["execution_mode"].value,
+                    "docstring": spec["docstring"],
+                }
+                for name, spec in sorted(self._skill_registry.items())
+            ],
+            "observation_schema": self._ui_observation_schema(),
+        }
+
+    @staticmethod
+    def _ui_observation_schema() -> dict[str, dict[str, str]]:
+        """``{module: {field: data class}}`` for the declared observation."""
+        schema: dict[str, dict[str, str]] = {}
+        for module_name, module_obs in Observation.get_module_obs_spec().items():
+            module_obs_cls = type(module_obs)
+            fields = {
+                **module_obs_cls.get_sensor_fields_spec(),
+                **module_obs_cls.get_calculated_fields_spec(),
+            }
+            schema[module_name] = {
+                field_name: spec.data_class.__name__
+                for field_name, spec in fields.items()
+            }
+        return schema
+
+    def handle_ui_command(self, command: UICommand) -> bool:
+        """Apply one command from the front end; ``False`` means stop the loop.
+
+        Key commands go through the keyboard module rather than to a handler
+        directly, so every existing ``@event_handler(EventType.KEY_DOWN)`` fires
+        for a browser keypress exactly as it does for a local one, and lands on
+        the control thread either way.
+        """
+        data = command.data
+        match command.type:
+            case UICommandType.KEY_DOWN:
+                self.keyboard.on_press(str(data["key"]).lower())
+            case UICommandType.KEY_UP:
+                self.keyboard.on_release(str(data["key"]).lower())
+            case UICommandType.CLICK:
+                point = data.get("point")
+                self.clicked_point = tuple(point) if point else None
+                self.clicked_id = data.get("id")
+            case UICommandType.START_SKILL:
+                self.start_skill_by_name(
+                    str(data.get("skill") or ""), data.get("params") or {}
+                )
+            case UICommandType.STOP_SKILL:
+                name = str(data.get("skill") or "")
+                if name:
+                    self.stop_skill(name)
+            case UICommandType.STOP_ALL:
+                self.stop_all_skills()
+            case UICommandType.RECORD_START:
+                # ``record`` owns the episode loop; from a UI, "start" only
+                # clears the flags that would end the run at the next boundary.
+                self.events["stop_recording"] = False
+                self.events["exit_early"] = False
+            case UICommandType.RECORD_STOP:
+                self.events["stop_recording"] = True
+                self.events["exit_early"] = True
+            case UICommandType.INPUT_SAMPLE:
+                self._dispatch_input_sample(data)
+            case UICommandType.QUIT:
+                return False
+        return True
+
+    def _dispatch_input_sample(self, data: dict) -> None:
+        """Hand a teleop reading from the UI to the module that stands in for it.
+
+        ``accept_sample`` is polymorphic — only a
+        :class:`~solarian.core.remote_input_module.RemoteInputModule` has one —
+        so this is where a sample sampled in a browser tab becomes an ordinary
+        observation, and where a sample addressed to a locally-wired module is
+        refused rather than silently dropped.
+        """
+        module_name = str(data.get("module") or "")
+        accept_sample = getattr(self.modules.get(module_name), "accept_sample", None)
+        if accept_sample is None:
+            logger.warning(
+                "Input sample for '%s', which is not a remote-input module here; "
+                "this controller has %s",
+                module_name,
+                sorted(self.modules),
             )
-            self._start_keyboard_listener()
-            return self.display_loop(episode_time_s)
-
-        fps = self.cfg.fps or 30
-        timestamp = 0
-        start_episode_t = time.perf_counter()
-        try:
-            while timestamp < episode_time_s and self.running:
-                start_loop_t = time.time_ns()
-
-                # The window owns key events here, so it feeds the keyboard
-                # module directly and no OS-level listener is needed.
-                quit_requested = gui.poll(
-                    on_press=self.keyboard.on_press,
-                    on_release=self.keyboard.on_release,
-                )
-                if quit_requested:
-                    break
-
-                gui.render(
-                    sections=self._gui_dashboard_sections(),
-                    images=self._collect_display_images(),
-                    key_help=self.gui_key_help(),
-                    fps=self.cfg.fps if self.cfg.fps else None,
-                )
-
-                timestamp = time.perf_counter() - start_episode_t
-                if self.events["exit_early"]:
-                    break
-
-                gui.tick(fps)
-                manual_profile("gui loop latency", (time.time_ns() - start_loop_t))
-        finally:
-            gui.close()
+            return
+        accept_sample(data.get("fields") or {})
 
     def control_loop(self, dataset=None, episode_time_s=120, single_task=None):
         try:
@@ -991,6 +977,8 @@ class Controller(EventHost, ABC):
                 if self.last_action is not None:
                     StatusBoard.set("Action", self.last_action)
                     self._send_action(self.last_action)
+                else:
+                    self._send_heartbeat_if_idle()
 
                 # Wait for next frame
                 if self.cfg.fps is not None:
@@ -1109,6 +1097,9 @@ class Controller(EventHost, ABC):
         self._local_skills: dict[str, Skill] = {}
         self._pending_actions: list[Action] = []
         self._remote_running: dict[str, SkillRecord] = {}
+        #: Remote skills asked to stop but not yet confirmed stopped, as
+        #: ``name -> (first_request_t, last_request_t)`` in monotonic seconds.
+        self._remote_stopping: dict[str, tuple[float, float]] = {}
         self._skill_registry: dict[str, dict[str, Any]] = (
             self._collect_controller_skills()
         )
@@ -1262,25 +1253,80 @@ class Controller(EventHost, ABC):
         )
         return name
 
+    def start_skill_by_name(self, name: str, params: dict) -> None:
+        """Start a registered skill by the name a ``START_SKILL`` carries.
+
+        The registry is the one the think process picks from, so a name arriving
+        from a UI, from the skill command queue or from the robot all resolve to
+        the same class.
+        """
+        spec = self._skill_registry.get(name)
+        if spec is None:
+            logger.warning(
+                "Cannot start unknown skill '%s'; known: %s",
+                name,
+                sorted(self._skill_registry),
+            )
+            return
+        try:
+            self.start_skill(spec["cls"](params=params))
+        except Exception:
+            logger.exception("Could not start skill '%s'", name)
+
     def stop_skill(self, name: str) -> None:
         rec = self.running_skills.get(name)
         if rec is None:
             return
         skill = self._local_skills.pop(name, None)
-        self._remote_running.pop(name, None)
         if skill is not None and not skill.execution_place.is_remote:
+            self._remote_running.pop(name, None)
             if skill.execution_mode is ExecutionMode.INLINE:
                 skill.teardown()
             else:
                 skill.request_stop()
-        else:
-            remote_name = (
-                type(skill).registry_name() if skill is not None else rec.name
-            )
+            logger.info("Stopped skill '%s'", name)
+            return
+
+        # A remote skill is stopped by asking, so it is not stopped until the
+        # robot says so. Its record stays in ``_remote_running`` until then:
+        # dropping it here would also drop the module set that makes it
+        # preemptable, and a status row can only restore the record, not the
+        # set — so a lost stop would leave a skill nothing can ever displace.
+        remote_name = type(skill).registry_name() if skill is not None else rec.name
+        now = time.monotonic()
+        self._remote_stopping[remote_name] = (now, now)
+        self._pending_actions.append(
+            Action(action_type=ActionType.STOP_SKILL, data={"skill": remote_name})
+        )
+        logger.info("Stopping remote skill '%s'", remote_name)
+
+    def _retry_remote_stops(self) -> None:
+        """Keep asking the robot to stop a skill until its status says it did.
+
+        Every hop of the action link is ``ZMQ_CONFLATE``, so one ``STOP_SKILL``
+        can be replaced by whatever the next tick sends — which, when the
+        operator preempts a policy with a move, is that move. The
+        confirmation travels the same way and can be lost too, hence the
+        deadline: this gives up rather than asking forever.
+        """
+        now = time.monotonic()
+        for name, (first, last) in list(self._remote_stopping.items()):
+            if now - first > _REMOTE_STOP_TIMEOUT_S:
+                logger.warning(
+                    "Robot never confirmed skill '%s' stopped after %.1f s; "
+                    "giving up and assuming it is gone",
+                    name,
+                    now - first,
+                )
+                self._remote_stopping.pop(name, None)
+                self._remote_running.pop(name, None)
+                continue
+            if now - last < _REMOTE_STOP_RETRY_S:
+                continue
+            self._remote_stopping[name] = (first, now)
             self._pending_actions.append(
-                Action(action_type=ActionType.STOP_SKILL, data={"skill": remote_name})
+                Action(action_type=ActionType.STOP_SKILL, data={"skill": name})
             )
-        logger.info("Stopped skill '%s'", name)
 
     def stop_all_skills(self) -> None:
         for name in list(self.running_skills):
@@ -1324,8 +1370,10 @@ class Controller(EventHost, ABC):
             ):
                 self._remote_running.pop(name, None)
                 self._local_skills.pop(name, None)
+                self._remote_stopping.pop(name, None)
 
     def _tick_skills(self) -> Action | None:
+        self._retry_remote_stops()
         if self._pending_actions:
             return self._pending_actions.pop(0)
 
@@ -1338,20 +1386,9 @@ class Controller(EventHost, ABC):
             if queued is not None:
                 qtype = int(queued.action_type)
                 if qtype == int(ActionType.START_SKILL):
-                    name = queued.data.get("skill")
-                    params = queued.data.get("params", {})
-                    spec = self._skill_registry.get(name)
-                    if spec is None:
-                        logger.warning(
-                            "Cannot start unknown skill '%s'; known: %s",
-                            name,
-                            sorted(self._skill_registry),
-                        )
-                    else:
-                        try:
-                            self.start_skill(spec["cls"](params=params))
-                        except Exception:
-                            logger.exception("Could not start skill '%s'", name)
+                    self.start_skill_by_name(
+                        queued.data.get("skill"), queued.data.get("params", {})
+                    )
                 elif qtype == int(ActionType.STOP_SKILL):
                     name = queued.data.get("skill")
                     if name:
@@ -1458,44 +1495,45 @@ class Controller(EventHost, ABC):
         t = threading.Thread(target=self.control_loop, args=(dataset, episode_time_s + 1, single_task), daemon=True)
         t.start()
 
-        gui_mode = (not self.cfg.headless) and self.use_gui
-
-        # Global OS key events, needed only when nothing else is capturing
-        # them: headless mode reads stdin, and the GUI window captures keys
-        # itself without needing OS accessibility permission.
-        if not self.cfg.headless and not gui_mode:
+        self.ui = build_ui(self)
+        # A front end with no window or terminal of its own cannot see key
+        # events, so the global OS listener is started for it and only for it.
+        if not self.ui.captures_keys:
             self._start_keyboard_listener()
 
         # Hook for subclasses to start additional threads, and to bring up
         # whatever skill the application wants running from the start.
         self.on_start()
 
+        logger.info("Starting UI loop (%s)", type(self.ui).__name__)
+        fps = self.cfg.fps or 30
+        timestamp = 0.0
+        start_episode_t = time.perf_counter()
         try:
-            if self.cfg.headless:
-                logger.info("Starting headless loop (no display)")
-                try:
-                    self._headless_loop(episode_time_s)
-                finally:
-                    self.running = False
-                    t.join(timeout=5.0)
-                    self.events["exit_early"] = False
-            elif gui_mode:
-                logger.info("Starting GUI loop (single-window dashboard)")
-                try:
-                    self._gui_loop(episode_time_s)
-                finally:
-                    self.running = False
-                    t.join(timeout=5.0)
-                    self.events["exit_early"] = False
-            else:
-                logger.info("Starting display loop")
-                try:
-                    self.display_loop(episode_time_s)
-                finally:
-                    self.running = False
-                    t.join(timeout=5.0)
-                    self.events["exit_early"] = False
+            while timestamp < episode_time_s and self.running:
+                start_loop_t = time.time_ns()
+
+                quit_requested = False
+                for command in self.ui.poll():
+                    if not self.handle_ui_command(command):
+                        quit_requested = True
+                        break
+                if quit_requested:
+                    break
+
+                self.ui.render(self.ui_snapshot())
+
+                timestamp = time.perf_counter() - start_episode_t
+                if self.events["exit_early"]:
+                    break
+
+                self.ui.tick(fps)
+                manual_profile("ui loop latency", (time.time_ns() - start_loop_t))
         finally:
+            self.running = False
+            t.join(timeout=5.0)
+            self.events["exit_early"] = False
+            self.ui.close()
             self._stop_keyboard_listener()
 
         if self._thread_error is not None:

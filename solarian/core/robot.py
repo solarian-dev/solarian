@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 from multiprocessing.managers import SharedMemoryManager
 
+from solarian.core import curve
 from solarian.core.configs import RobotConfig
 from solarian.core.clock_sync import (
     sync_with_server,
@@ -210,6 +211,11 @@ class Robot(EventHost, ABC):
         self.connected = False
         self._action_latency = LatencyEma()
         self._obs_compress_latency = LatencyEma()
+        #: Monotonic stamp of the last message from the controller, action or
+        #: heartbeat. ``None`` until one arrives: a robot nothing has commanded
+        #: yet has no link to have lost.
+        self._last_command_ns: int | None = None
+        self._link_lost = False
         set_image_jpeg_quality(getattr(cfg, "img_compression_quality", None))
 
         self._module_map = ModuleMap()
@@ -298,6 +304,10 @@ class Robot(EventHost, ABC):
         #: Robot-side skills currently running, keyed by skill name. Kept so
         #: each tick's events can reach them.
         self._local_skills: dict[str, Any] = {}
+        #: Skills that have been asked to stop but have not exited yet, as
+        #: ``name -> (skill, terminate_deadline)``. Reaped from the control
+        #: loop rather than joined at the point of stopping.
+        self._stopping_skills: dict[str, tuple[Any, float]] = {}
         self._init_events()
 
 
@@ -426,6 +436,12 @@ class Robot(EventHost, ABC):
             bytes = self.action_socket.recv(zmq.NOBLOCK)
             msg = Message.deserialize(bytes)
 
+            # Any message that arrives is evidence the link is up, including a
+            # heartbeat carrying no action. This is the only place that can
+            # tell "the controller has nothing to say" from "the controller is
+            # gone", so it is where the watchdog's clock is reset.
+            self._last_command_ns = time.monotonic_ns()
+
             if "action" not in msg.data:
                 return None
 
@@ -491,6 +507,47 @@ class Robot(EventHost, ABC):
                 name, tb_str = err
                 raise RuntimeError(f"BusServer '{name}' crashed:\n{tb_str}")
 
+    def _check_action_link(self) -> None:
+        """Stop skills and hold safe when the controller has gone quiet.
+
+        On a LAN a lost link is rare and brief. Once the command path crosses
+        the internet it is neither, and the failure mode has to be chosen
+        rather than inherited: with nothing here, the follower keeps driving
+        toward the last waypoint it was given and nobody is left to change its
+        mind. The robot is the only side still running when the link drops, so
+        the decision has to live on this side of it.
+        """
+        timeout_s = self.cfg.connection.link_timeout_s
+        if timeout_s is None or self._last_command_ns is None:
+            return
+
+        silence_s = (time.monotonic_ns() - self._last_command_ns) / 1e9
+        if silence_s <= timeout_s:
+            if self._link_lost:
+                self._link_lost = False
+                logger.info("Action link back after %.1f s", silence_s)
+                StatusBoard.set("Action link", "up")
+            return
+
+        if self._link_lost:
+            return
+        self._link_lost = True
+        logger.error(
+            "No action or heartbeat for %.1f s (link_timeout_s=%s): stopping "
+            "skills and holding modules safe",
+            silence_s,
+            timeout_s,
+        )
+        StatusBoard.set("Action link", f"LOST ({silence_s:.1f}s)")
+        self.stop_all_skills(wait=False)
+        # Modules mostly run in their own processes, where their bus lives, so
+        # the safe state has to be asked for through the action queue like any
+        # other command rather than called here. A camera has nothing to hold
+        # and no handler for it.
+        for name, queue in self.action_queues.items():
+            if int(ActionType.HOLD_SAFE) in self.modules[name].action_handlers:
+                queue.put(ModuleAction(action_type=ActionType.HOLD_SAFE))
+
     def _observation_sender(self):
         """Send observations to the server in a dedicated thread.
 
@@ -524,12 +581,17 @@ class Robot(EventHost, ABC):
             logger.warning(
                 "Discarded %d stale action(s) at control-loop start", drained
             )
+        # A message from a session that is already over is not evidence of a
+        # live link, so it must not arm the watchdog.
+        self._last_command_ns = None
 
         poller = zmq.Poller()
         poller.register(self.action_socket, zmq.POLLIN)
 
         while self.running:
             self._check_module_health()
+            self._check_action_link()
+            self._reap_stopping_skills()
             self.update()
 
             # Same shape as the controller's tick: drain first so handlers run
@@ -633,6 +695,11 @@ class Robot(EventHost, ABC):
         if running is not None and running.is_alive():
             logger.info("Skill '%s' already running (pid=%s)", name, running.pid)
             return True
+        if name in self._stopping_skills:
+            # A second process would command the same modules as the one still
+            # winding down, and both would own the same hardware.
+            logger.info("Skill '%s' is still stopping; not restarting it", name)
+            return True
         try:
             skill = self.start_skill(
                 skill_cls(
@@ -652,23 +719,67 @@ class Robot(EventHost, ABC):
         return True
 
     def stop_skill(self, name: str, timeout: float = 5.0) -> None:
-        """Ask a robot-side skill to stop, then make sure it did."""
+        """Ask a robot-side skill to stop; the reaper finishes the job.
+
+        Joining here would hold the control loop for as long as the skill's
+        last tick takes — a policy skill mid-inference is hundreds of
+        milliseconds — and no action is read meanwhile. On a CONFLATE link
+        that is not a delay but a loss: every command the controller sends
+        during the stall collapses into the last one.
+        """
         skill = self._local_skills.get(name)
         if skill is None:
             return
-        if skill.is_alive():
-            logger.info("Stopping skill '%s' (pid=%s)", name, skill.pid)
-            skill.request_stop()
-            skill.join(timeout=timeout)
-            if skill.is_alive():
-                logger.warning("Skill '%s' did not stop; terminating", name)
-                skill.terminate()
-                skill.join(timeout=2.0)
+        logger.info("Stopping skill '%s' (pid=%s)", name, skill.pid)
+        skill.request_stop()
+        self._stopping_skills[name] = (skill, time.monotonic() + float(timeout))
         self.forget_skill(skill)
 
-    def stop_all_skills(self, timeout: float = 5.0) -> None:
+    def _reap_stopping_skills(self, force: bool = False) -> None:
+        """Retire skills that have finished stopping, and cancel their chunks.
+
+        The waypoints a skill scheduled outlive it, so cancelling them is part
+        of stopping it — otherwise the next skill to command those modules
+        spends seconds fighting a trajectory whose author is gone. Only once
+        the skill is dead: its final tick dispatches one more chunk after the
+        stop is requested.
+        """
+        now = time.monotonic()
+        for name, (skill, deadline) in list(self._stopping_skills.items()):
+            if skill.is_alive():
+                if not (force or now >= deadline):
+                    continue
+                logger.warning("Skill '%s' did not stop; terminating", name)
+                skill.terminate()
+                skill.join(timeout=1.0)
+            self._stopping_skills.pop(name, None)
+            for module_name in skill.commanded_module_names():
+                module = self.modules.get(module_name)
+                if module is None:
+                    continue
+                if int(ActionType.CANCEL_TRAJECTORY) in module.action_handlers:
+                    self.action_queues[module_name].put(
+                        ModuleAction(action_type=ActionType.CANCEL_TRAJECTORY)
+                    )
+            logger.info("Skill '%s' stopped", name)
+
+    def stop_all_skills(self, timeout: float = 5.0, wait: bool = True) -> None:
+        """Stop every robot-side skill, waiting for them out unless told not to.
+
+        Shutdown waits, because the shared memory a skill is still reading is
+        about to be released. The watchdog does not: a skill finishing an
+        inference must not delay the safe hold that follows it, and whatever
+        its last tick dispatched is undone by the reaper's cancel.
+        """
         for name in list(self._local_skills):
             self.stop_skill(name, timeout=timeout)
+        if not wait:
+            return
+        deadline = time.monotonic() + float(timeout)
+        while self._stopping_skills and time.monotonic() < deadline:
+            self._reap_stopping_skills()
+            time.sleep(0.01)
+        self._reap_stopping_skills(force=True)
 
     def connect(self):
         # Align wall-clock stamps with the relay before accepting actions.
@@ -714,6 +825,7 @@ class Robot(EventHost, ABC):
             result = sync_with_server(
                 self.cfg.connection.ip,
                 self.cfg.connection.clock_sync_port,
+                connection=self.cfg.connection,
             )
             StatusBoard.set("Clock offset (ms)", result.offset_s * 1000.0)
             StatusBoard.set("Clock sync RTT (ms)", result.rtt_s * 1000.0)
@@ -732,15 +844,22 @@ class Robot(EventHost, ABC):
 
         self.action_socket = self.context.socket(zmq.PULL)
         self.action_socket.setsockopt(zmq.CONFLATE, 1)
+        curve.apply_client(self.action_socket, self.cfg.connection, "robot actions")
         self.action_socket.connect(
             f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.action_sender_port}"
         )
 
         self.state_socket = self.context.socket(zmq.PUB)
         self.state_socket.setsockopt(zmq.CONFLATE, 1)
+        curve.apply_client(self.state_socket, self.cfg.connection, "robot state")
         self.state_socket.connect(
             f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_receiver_port}"
         )
+        if curve.is_enabled(self.cfg.connection):
+            logger.info(
+                "Robot link is CURVE-encrypted to relay key %s",
+                self.cfg.connection.curve_server_key,
+            )
 
     def initialize(self):
         # if not self.is_connected():
@@ -790,10 +909,10 @@ class Robot(EventHost, ABC):
                 self._start_shared_bus_servers()
 
             for module_name, module in self.modules.items():
-                module._clock_sync_endpoint = (
-                    self.cfg.connection.ip,
-                    int(self.cfg.connection.clock_sync_port),
-                )
+                # The whole connection, not just host and port: with CURVE on,
+                # the clock port refuses a plaintext peer like every other relay
+                # socket, so a forked module needs the keys too.
+                module._clock_sync_connection = self.cfg.connection
                 module.start()
 
             # Safe to become multithreaded now that children have forked.

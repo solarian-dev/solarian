@@ -138,7 +138,12 @@ def _build_command_list() -> str:
         "onshape-export": "Utilities",
         "run-robot": "Robot",
         "calibrate-module": "Robot",
-        "calibrate-gripper": "Robot",
+        "calibrate-arm-latency": "Robot",
+        "calibrate-arm-speed": "Robot",
+        "calibrate-gripper-speed": "Robot",
+        "calibrate-gripper-latency": "Robot",
+        "calibrate-gripper-ranges": "Robot",
+        "calibrate-camera-latency": "Robot",
         "setup-module": "Robot",
         "write-robot-calibration": "Robot",
         "run-controller": "Controller",
@@ -296,7 +301,7 @@ def main() -> None:
     subcommand = args.subcommand
 
     # Commands that don't need Hydra config or project settings
-    no_hydra_commands = ['add-module', 'create-project', 'create-plugin', 'list-cameras', 'detect-device', 'run-policy', 'onshape-export']
+    no_hydra_commands = ['add-module', 'create-project', 'create-plugin', 'list-cameras', 'detect-device', 'run-policy', 'onshape-export', 'keygen']
     no_hydra_commands += list(PLUGIN_NO_HYDRA_COMMANDS)
 
     # Resolve settings.py location (skip for commands that don't need it)
@@ -351,8 +356,17 @@ def main() -> None:
                 if config_file.exists():
                     os.environ["SOLARIAN_CURRENT_CONFIG"] = str(config_file.absolute())
                 
+            # Seed the command's declared ad-hoc params as null so Hydra's
+            # struct mode accepts `role=display` without a `+` prefix. Seeds go
+            # first, so a user override still wins; names the yaml already
+            # declares are left alone.
+            seeds = []
+            if cmd.params:
+                base_cfg = compose(config_name=config_name, overrides=[])
+                seeds = [f"+{name}=null" for name in cmd.params if name not in base_cfg]
+
             # Load the config using hydra
-            hydra_cfg = compose(config_name=config_name, overrides=overrides)
+            hydra_cfg = compose(config_name=config_name, overrides=seeds + overrides)
             
             # Convert to dict for Pydantic parsing, resolving ${deployment.*}
             from solarian.utils.configs import resolve_with_deployment

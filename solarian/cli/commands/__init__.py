@@ -58,9 +58,44 @@ CommandRegistry.register_lazy(
     setup_modules=("robot",),
 )
 CommandRegistry.register_lazy(
-    "calibrate-gripper",
-    module_path=f"{_pkg}.calibrate_gripper",
-    help="Calibrate gripper latency (cross-correlation) or ranges (ruler check).",
+    "calibrate-arm-latency",
+    module_path=f"{_pkg}.calibrate_arm_latency",
+    help="Measure arm action latency (Cartesian sinusoid) or observation latency (read timing).",
+    config_name="robot",
+    setup_modules=("robot",),
+)
+CommandRegistry.register_lazy(
+    "calibrate-gripper-latency",
+    module_path=f"{_pkg}.calibrate_gripper_latency",
+    help="Measure gripper action latency (sinusoid) or observation latency (read timing).",
+    config_name="robot",
+    setup_modules=("robot",),
+)
+CommandRegistry.register_lazy(
+    "calibrate-arm-speed",
+    module_path=f"{_pkg}.calibrate_arm_speed",
+    help="Measure the Cartesian speed the arm sustains across the workspace, for max_speed.",
+    config_name="robot",
+    setup_modules=("robot",),
+)
+CommandRegistry.register_lazy(
+    "calibrate-gripper-speed",
+    module_path=f"{_pkg}.calibrate_gripper_speed",
+    help="Measure the aperture speed the gripper sustains, for max_speed.",
+    config_name="robot",
+    setup_modules=("robot",),
+)
+CommandRegistry.register_lazy(
+    "calibrate-gripper-ranges",
+    module_path=f"{_pkg}.calibrate_gripper_ranges",
+    help="Step the gripper through its aperture range for a ruler check.",
+    config_name="robot",
+    setup_modules=("robot",),
+)
+CommandRegistry.register_lazy(
+    "calibrate-camera-latency",
+    module_path=f"{_pkg}.calibrate_camera_latency",
+    help="Measure camera_obs_latency by filming a timestamp QR code (UMI method).",
     config_name="robot",
     setup_modules=("robot",),
 )
@@ -184,6 +219,13 @@ CommandRegistry.register_lazy(
     module_path=f"{_pkg}.sync_clock",
     help="Sync Solarian wall-clock offset to the relay server (does not change OS time).",
     config_name="server",
+    setup_modules=(),
+)
+CommandRegistry.register_lazy(
+    "keygen",
+    module_path=f"{_pkg}.keygen",
+    help="Generate CurveZMQ keypairs for the relay, the robot and the controller.",
+    config_name=None,
     setup_modules=(),
 )
 CommandRegistry.register_lazy(

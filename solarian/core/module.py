@@ -808,10 +808,16 @@ class Module(ABC):
             self.connect(calibration)
             logger.info(f"Module {self.name} process connected")
 
-        endpoint = getattr(self, "_clock_sync_endpoint", None)
-        if endpoint is not None:
+        # Only a robot-side module gets one; a controller-side module shares the
+        # host process's offset.
+        connection = getattr(self, "_clock_sync_connection", None)
+        if connection is not None:
             try:
-                sync_with_server(endpoint[0], int(endpoint[1]))
+                sync_with_server(
+                    connection.ip,
+                    int(connection.clock_sync_port),
+                    connection=connection,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Module '%s': clock sync failed (%s); using local wall "
