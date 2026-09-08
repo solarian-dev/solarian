@@ -162,7 +162,6 @@ class ModuleConfig(BaseModel):
     drive_horizon_multiplier: float = 1.5
 
 class ConnectionConfig(BaseModel):
-    connection_id: str = "connection_1"
     ip: str
     action_sender_port: int
     action_receiver_port: int
@@ -236,14 +235,6 @@ class ServerConfig(BaseModel):
     # ref_x: int
     # ref_y: int
     
-
-# A project is composed by a robot, a server, a controller and a config
-# In its top level config it also points to the classes that implement the robot, server, controller and config
-class ProjectConfig(BaseModel):
-    name: str
-    controller: ControllerConfig
-    server: ServerConfig
-    robot: RobotConfig
 
 class ConfigBaseModel(BaseModel):
     """Base model with enhanced error handling for configs"""

@@ -83,7 +83,7 @@ Within your project directory, run the following command:
 python manage.py run-server
 ```
 
-You can configure to run the server in a different machine by setting the `ip` parameter in the `conf/connection/localhost.yaml` file.
+You can configure to run the server in a different machine by setting the `ip` parameter in the `conf/deployment/localhost.yaml` file.
 
 ### Running robot
 

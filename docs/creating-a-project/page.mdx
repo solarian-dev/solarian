@@ -22,15 +22,14 @@ The scaffolder produces a project with this layout:
 ```text
 myrobot/
 ├── conf/
-│   ├── config.yaml          # composes defaults
 │   ├── controller.yaml      # `solarian run-controller` config
 │   ├── robot.yaml           # `solarian run-robot` config
 │   ├── server.yaml          # `solarian run-server` config
 │   ├── record.yaml          # `solarian record` config
 │   ├── replay.yaml          # `solarian replay` config
 │   ├── train.yaml           # `solarian train` config
-│   └── connection/
-│       └── localhost.yaml   # ZMQ ports and IPs
+│   └── deployment/
+│       └── localhost.yaml   # relay IP/ports and device paths per host
 ├── myrobot/
 │   ├── __init__.py
 │   ├── settings.py          # ROBOT_CLASS / CONTROLLER_CLASS / SERVER_CLASS
@@ -139,7 +138,7 @@ See [Controllers](/docs/controllers) for the full lifecycle, [Events](/docs/even
 
 ## 5. Run the three nodes
 
-For local development you can run all three nodes on the same machine using the default `conf/connection/localhost.yaml`:
+For local development you can run all three nodes on the same machine using the default `conf/deployment/localhost.yaml`:
 
 <CodeGroup>
 
@@ -157,7 +156,7 @@ solarian run-controller
 
 </CodeGroup>
 
-To split nodes across machines, edit `conf/connection/localhost.yaml` (or create another connection profile in `conf/connection/`) with the right IPs and ports, and pick the profile in `conf/robot.yaml`, `conf/controller.yaml`, and `conf/server.yaml` via `defaults:`.
+To split nodes across machines, add `conf/deployment/lab.yaml` with the relay's IP and each machine's device paths, then launch every node with `--deployment lab`. See [Deployments](/docs/project-configs#deployments).
 
 ## 6. Confirm everything works
 

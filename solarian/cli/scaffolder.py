@@ -38,14 +38,13 @@ PROJECT_FILES: Tuple[FileSpec, ...] = (
     FileSpec(Path("example_module.py.tmpl"), Path("{package_name}/modules/example_module.py")),
     # conf/
     
-    FileSpec(Path("conf/config.yaml.tmpl"), Path("conf/config.yaml")),
     FileSpec(Path("conf/controller.yaml.tmpl"), Path("conf/controller.yaml")),
     FileSpec(Path("conf/record.yaml.tmpl"), Path("conf/record.yaml")),
     FileSpec(Path("conf/replay.yaml.tmpl"), Path("conf/replay.yaml")),
     FileSpec(Path("conf/robot.yaml.tmpl"), Path("conf/robot.yaml")),
     FileSpec(Path("conf/server.yaml.tmpl"), Path("conf/server.yaml")),
     FileSpec(Path("conf/train.yaml.tmpl"), Path("conf/train.yaml")),
-    FileSpec(Path("conf/connection/localhost.yaml.tmpl"), Path("conf/connection/localhost.yaml")),
+    FileSpec(Path("conf/deployment/localhost.yaml.tmpl"), Path("conf/deployment/localhost.yaml")),
 )
 
 
@@ -144,14 +143,13 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print(f"  │   ├── action.py")
     print(f"  │   └── observation.py")
     print(f"  └── conf/")
-    print(f"      ├── config.yaml")
     print(f"      ├── robot.yaml")
     print(f"      ├── controller.yaml")
     print(f"      ├── server.yaml")
     print(f"      ├── record.yaml")
     print(f"      ├── replay.yaml")
     print(f"      ├── train.yaml")
-    print(f"      └── connection/")
+    print(f"      └── deployment/")
     print(f"          └── localhost.yaml")
     print()
     print("Next steps:")

@@ -207,6 +207,9 @@ def main() -> None:
         help="The subcommand to run (see list below).",
     )
     parser.add_argument("--conf", type=str, default="conf", help="The conf directory with yaml config files to use.")
+    parser.add_argument("--deployment", "-d", type=str, default=None,
+                        help="Deployment profile in conf/deployment/ (relay address and device ports). "
+                             "Defaults to $SOLARIAN_DEPLOYMENT, then 'localhost'.")
     parser.add_argument("--settings", type=str, default=None, help="Path to settings.py (auto-discovered if not given).")
     parser.add_argument("--version", "-V", action="version", version=f"%(prog)s {_get_version()}",
                         help="Print the installed solarian version and exit.")
@@ -314,6 +317,11 @@ def main() -> None:
     CONF_PATH =  os.getcwd() + "/" + CONF_PATH
     os.environ["SOLARIAN_CONF_PATH"] = CONF_PATH
 
+    # Exported (not just passed around) so skill child processes inherit the
+    # deployment the run was launched with.
+    if args.deployment:
+        os.environ["SOLARIAN_DEPLOYMENT"] = args.deployment
+
     colorama.init()  # Initialize colorama for colored terminal output
     try:
         cmd = CommandRegistry.get_command(subcommand)
@@ -346,15 +354,16 @@ def main() -> None:
             # Load the config using hydra
             hydra_cfg = compose(config_name=config_name, overrides=overrides)
             
-            # Convert to dict for Pydantic parsing
-            cfg_dict = OmegaConf.to_container(hydra_cfg, resolve=True)
+            # Convert to dict for Pydantic parsing, resolving ${deployment.*}
+            from solarian.utils.configs import resolve_with_deployment
+            cfg_dict = resolve_with_deployment(hydra_cfg)
             
             # Parse using the command's config class which now has built-in validation
             if cmd.get_config_class() is not None:
                 from solarian.utils.configs import parse_with_friendly_errors
                 cfg = parse_with_friendly_errors(cmd.get_config_class(), cfg_dict)
             else:
-                cfg = hydra_cfg
+                cfg = OmegaConf.create(cfg_dict)
                 
             from solarian.setup import setup
             setup_modules = CommandRegistry.get_setup_modules(subcommand)

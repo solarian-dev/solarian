@@ -3,7 +3,9 @@
 # Copied into a project's conf/ directory by `solarian add-module`.
 # Edit the values below to match your hardware setup.
 
-# Serial port / device address the module's bus connects to.
+# Serial port / device address the module's bus connects to. Point it at
+# conf/deployment/<name>.yaml (`port: ${deployment.actuator_port_<module>}`) if
+# it differs between the machines you run this robot on.
 port: /dev/ttyUSB0
 
 # Control loop frequency (Hz).

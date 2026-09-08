@@ -59,9 +59,7 @@ CONTROLLER_CLASS = 'myrobot.controller.MyController'
 Default `conf/controller.yaml`:
 
 ```yaml
-defaults:
-  - connection: localhost
-  - _self_
+connection: ${deployment.connection}
 
 fps: 30
 tps: 1

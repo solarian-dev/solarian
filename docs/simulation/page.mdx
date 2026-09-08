@@ -53,9 +53,7 @@ The resolution order is: `sim` from config/CLI if set, otherwise the class attri
 
 ```yaml
 # conf/robot.yaml
-defaults:
-  - connection: localhost
-  - _self_
+connection: ${deployment.connection}
 fps: 30
 img_compression_quality: 70
 sim: null   # null defers to the robot class's is_sim; override with sim=true/false

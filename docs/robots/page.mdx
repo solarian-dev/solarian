@@ -52,9 +52,7 @@ The CLI reads `ROBOT_CLASS`, imports it, and feeds it the parsed `RobotConfig` f
 Each robot loads `conf/robot.yaml` (the default config name for `solarian run-robot`):
 
 ```yaml
-defaults:
-  - connection: localhost
-  - _self_
+connection: ${deployment.connection}
 
 img_compression_quality: 70
 fps: 30
@@ -70,7 +68,7 @@ The fields map to [`RobotConfig`](https://github.com/solarian-dev/solarian/blob/
     JPEG quality (0–100) for any <code>ImageData</code> field that gets compressed before publishing.
   </Property>
   <Property name="connection" type="ConnectionConfig">
-    ZMQ ports and IPs — composed from <code>conf/connection/&lt;name&gt;.yaml</code>. See <a href="/docs/servers">Server</a>.
+    ZMQ ports and IPs — read from <code>conf/deployment/&lt;name&gt;.yaml</code>. See <a href="/docs/servers">Server</a>.
   </Property>
 </Properties>
 

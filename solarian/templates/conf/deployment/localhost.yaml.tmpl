@@ -1,0 +1,20 @@
+# Everything on this machine: robot, relay server and controller.
+#
+# A deployment holds every value that changes with *where* the processes run --
+# the relay address and the device paths as seen from the host that owns the
+# hardware. The rest of conf/ reads them through ${deployment.*}, so this is the
+# only file you swap when you move the robot to another machine.
+#
+# Copy it to conf/deployment/<name>.yaml and select with `--deployment <name>` or
+# SOLARIAN_DEPLOYMENT=<name>; `localhost` is the default.
+connection:
+    ip: 127.0.0.1
+    action_sender_port: 5555
+    action_receiver_port: 5556
+    state_sender_port: 5557
+    state_receiver_port: 5558
+    clock_sync_port: 5559
+
+# One entry per module that talks to hardware, read from conf/<module>.yaml as
+# `actuator_port: ${deployment.actuator_port_<module>}`.
+actuator_port_example_module: /dev/ttyUSB0

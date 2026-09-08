@@ -358,8 +358,14 @@ class Skill(ABC):
     @classmethod
     def load_config(cls) -> Dict[str, Any]:
         """Resolved skill config: bundled defaults deep-merged with the
-        project-level override (``conf/<config_name>.yaml``), project wins."""
-        return cls._deep_merge(cls.load_default_config(), cls.load_project_config())
+        project-level override (``conf/<config_name>.yaml``), project wins.
+
+        ``${deployment.*}`` references are resolved last, so both files can name
+        host-specific values such as a policy server URL."""
+        from solarian.utils.configs import resolve_with_deployment
+
+        merged = cls._deep_merge(cls.load_default_config(), cls.load_project_config())
+        return resolve_with_deployment(merged)
 
     @classmethod
     def get_policy_server_spec(

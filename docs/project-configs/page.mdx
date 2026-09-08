@@ -14,15 +14,14 @@ A scaffolded project's `conf/` looks like this:
 
 ```text
 conf/
-├── config.yaml             # top-level composition (defaults entries)
 ├── robot.yaml              # used by `solarian run-robot`
 ├── controller.yaml         # used by `solarian run-controller`
 ├── server.yaml             # used by `solarian run-server`
 ├── record.yaml             # used by `solarian record`
 ├── replay.yaml             # used by `solarian replay`
 ├── train.yaml              # used by `solarian train`
-└── connection/
-    └── localhost.yaml      # connection profile composed via defaults
+└── deployment/
+    └── localhost.yaml      # relay address and device ports for one host layout
 ```
 
 Every CLI subcommand declares a `config_name` in [`solarian/cli/commands/__init__.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/cli/commands/__init__.py). When you run the command, Hydra loads the matching `conf/<config_name>.yaml`.
@@ -43,26 +42,24 @@ A config is a Hydra-composed YAML document validated by a Pydantic model. Compos
 For example, `conf/robot.yaml`:
 
 ```yaml
-defaults:
-  - connection: localhost
-  - _self_
+connection: ${deployment.connection}
 
 img_compression_quality: 70
 fps: 30
 ```
 
-`defaults: - connection: localhost` tells Hydra to merge `conf/connection/localhost.yaml` under the `connection:` key. After composition the runtime config looks like:
+`${deployment.connection}` pulls the `connection:` block out of the active [deployment](#deployments). After resolution the runtime config looks like:
 
 ```yaml
 img_compression_quality: 70
 fps: 30
 connection:
-  connection_id: connection_1
   ip: 127.0.0.1
   action_sender_port: 5555
   action_receiver_port: 5556
   state_sender_port: 5557
   state_receiver_port: 5558
+  clock_sync_port: 5559
 ```
 
 The result is validated against [`RobotConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py). If a field is missing or has the wrong type, Solarian prints a friendly error and refuses to start.
@@ -120,30 +117,62 @@ actuators:
     port: ${actuator_port}
 ```
 
-You can also reference values across composed groups (`${connection.ip}`, etc.).
+Every file in `conf/` can also reference `${deployment.*}`, which is how host-specific values stay in one place. See below.
 
-## The `connection/` group
+## Deployments
 
-ZMQ topology lives in `conf/connection/<name>.yaml`. The default scaffold ships with `localhost.yaml`:
+A **deployment** is everything that changes with *where* your processes run: the relay's address and the device paths as seen from the host that owns the hardware. It lives in `conf/deployment/<name>.yaml`, and the scaffold ships with `localhost.yaml`:
 
 ```yaml
-connection_id: connection_1
-ip: 127.0.0.1
-action_sender_port: 5555
-action_receiver_port: 5556
-state_sender_port: 5557
-state_receiver_port: 5558
+connection:
+  ip: 127.0.0.1
+  action_sender_port: 5555
+  action_receiver_port: 5556
+  state_sender_port: 5557
+  state_receiver_port: 5558
+  clock_sync_port: 5559
+
+actuator_port_arm: /dev/ttyUSB0
+camera_port_wrist_camera: '0'
 ```
 
-To split the three nodes across machines, create `conf/connection/lab.yaml` with the relay's IP and switch the `defaults` of `robot.yaml`, `controller.yaml`, and `server.yaml` from `localhost` to `lab`. See [Server](/docs/servers) for the full topology.
+Every other file in `conf/` reads these through `${deployment.*}`, so moving a robot between machines means editing one file rather than duplicating the directory:
+
+```yaml
+# conf/robot.yaml
+connection: ${deployment.connection}
+
+# conf/arm.yaml
+actuator_port: ${deployment.actuator_port_arm}
+
+# conf/wrist_camera.yaml
+camera_port: ${deployment.camera_port_wrist_camera}
+```
+
+This works in all three kinds of config file — command, module and skill — even though only command configs go through Hydra composition.
+
+### Selecting a deployment
+
+Add `conf/deployment/pi.yaml` with the Pi's device paths, then pick it per run or once per machine:
+
+```bash
+solarian run-robot --deployment pi     # or -d pi
+export SOLARIAN_DEPLOYMENT=pi          # e.g. in the Pi's shell profile
+```
+
+The default is `localhost`. A name with no matching file is an error listing the available deployments.
+
+<Note>
+  A deployment describes the whole topology, not a single machine. If the robot runs on a Pi while you teleop from a laptop, one deployment file holds the Pi's paths for the robot's modules *and* the laptop's paths for the controller's modules. See [Server](/docs/servers) for the full topology.
+</Note>
 
 ## Hydra `defaults` composition
 
-Hydra's `defaults` list determines the order in which configs are merged. The convention in scaffolded projects is:
+Hydra's `defaults` list determines the order in which configs are merged. `record.yaml` builds on the controller config this way:
 
 ```yaml
 defaults:
-  - connection: localhost     # merge conf/connection/localhost.yaml under `connection:`
+  - controller                # merge conf/controller.yaml
   - _self_                    # then apply the keys defined inline below
 ```
 
@@ -154,9 +183,11 @@ defaults:
 Anything in the composed config can be overridden on the command line, no quoting required for top-level keys:
 
 ```bash
-solarian run-robot fps=60 connection.ip=192.168.1.20
+solarian run-robot fps=60
 solarian record num_episodes=5 episode_time_s=15
 ```
+
+Deployment values are not part of the composed config, so change the relay address by editing `conf/deployment/<name>.yaml` or pointing at another deployment with `--deployment`.
 
 Overrides also work for `+adding` keys not present in the base config:
 
@@ -172,11 +203,13 @@ The `--conf` flag chooses the config directory and (optionally) the config name 
 
 ```bash
 # Use a different conf directory
-solarian run-robot --conf conf_dev
+solarian run-robot --conf conf_experiment
 
 # Use a different config name (conf/robot_v2.yaml) in the default directory
 solarian run-robot --conf conf/robot_v2
 ```
+
+To run the same configs against different hardware, reach for `--deployment` rather than a second `conf/` directory.
 
 The CLI splits `dir/name` so the second form maps to `conf/robot_v2.yaml`.
 

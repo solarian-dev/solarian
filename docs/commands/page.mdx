@@ -21,6 +21,9 @@ Every `solarian` subcommand accepts these top-level flags before the subcommand 
   <Property name="--conf" type="string">
     Path to the Hydra config directory. Defaults to <code>conf</code>. You can also pass <code>dir/name</code> to override the config name (for example, <code>--conf conf/robot_dev</code>).
   </Property>
+  <Property name="--deployment, -d" type="string">
+    Deployment profile in <code>conf/deployment/</code>, supplying the relay address and device ports for this host layout. Defaults to <code>$SOLARIAN_DEPLOYMENT</code>, then <code>localhost</code>. See <a href="/docs/project-configs#deployments">Deployments</a>.
+  </Property>
   <Property name="--settings" type="string">
     Path to your project's <code>settings.py</code>. Auto-discovered when omitted (looks for <code>{`{package_name}`}/settings.py</code> based on <code>pyproject.toml</code>, then <code>conf/settings.py</code>).
   </Property>

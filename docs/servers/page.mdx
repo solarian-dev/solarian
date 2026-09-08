@@ -85,44 +85,32 @@ All four sockets use `ZMQ_CONFLATE=1`, which keeps only the most recent message 
 Default `conf/server.yaml`:
 
 ```yaml
-defaults:
-  - connection: localhost
-  - _self_
+connection: ${deployment.connection}
 
 img_compression_quality: 70
 ```
 
-The composed `connection` group lives at `conf/connection/localhost.yaml`:
+`conf/robot.yaml` and `conf/controller.yaml` say the same thing, so all three roles read one `connection` block from the active [deployment](/docs/project-configs#deployments) at `conf/deployment/localhost.yaml`:
 
 ```yaml
-connection_id: connection_1
-ip: 127.0.0.1
-action_sender_port: 5555
-action_receiver_port: 5556
-state_sender_port: 5557
-state_receiver_port: 5558
+connection:
+  ip: 127.0.0.1
+  action_sender_port: 5555
+  action_receiver_port: 5556
+  state_sender_port: 5557
+  state_receiver_port: 5558
+  clock_sync_port: 5559
 ```
 
-For a multi-machine setup, create another connection profile (e.g. `conf/connection/lab.yaml`) with the relay machine's IP, and reference it from each role's YAML:
+For a multi-machine setup, add `conf/deployment/lab.yaml` with the relay machine's IP and launch each of the three nodes with it:
 
-```yaml
-# conf/robot.yaml on the robot
-defaults:
-  - connection: lab
-  - _self_
-
-# conf/controller.yaml on the laptop
-defaults:
-  - connection: lab
-  - _self_
-
-# conf/server.yaml on the relay machine
-defaults:
-  - connection: lab
-  - _self_
+```bash
+solarian run-server --deployment lab       # on the relay machine
+solarian run-robot --deployment lab        # on the robot
+solarian run-controller --deployment lab   # on the laptop
 ```
 
-All three nodes need to agree on the same four port numbers and the same relay IP.
+All three nodes need to agree on the same four port numbers and the same relay IP, which is why they share one deployment file rather than each carrying its own copy.
 
 ## Server-side observation processors
 
@@ -169,4 +157,4 @@ The relay binds the four ports and starts the action-relay and state-relay threa
 - [Robots](/docs/robots) — the node connecting to the action-sender and state-receiver ports.
 - [Controllers](/docs/controllers) — the node connecting to the action-receiver and state-sender ports.
 - [Observations](/docs/observations) — including <code>CalculatedField</code> with <code>DataComputer.SERVER</code>.
-- [Project Configs](/docs/project-configs) — how connection profiles are composed via Hydra defaults.
+- [Project Configs](/docs/project-configs) — how deployments supply the connection block to all three roles.

@@ -1,4 +1,4 @@
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from typing import Any
 from solarian.core.configs import ModuleConfig
 from pydantic import ValidationError
@@ -24,9 +24,61 @@ def parse_with_friendly_errors(model_class, data):
         raise ValueError(error_msg) from e
 
 
+DEFAULT_DEPLOYMENT = "localhost"
+
+# Cached because every module and skill config load resolves against it.
+_deployment_cache: dict[tuple[str, str], DictConfig] = {}
+
+
+def load_deployment_config() -> DictConfig:
+    """The active deployment: relay address and device paths for this host layout.
+
+    Read straight from ``{SOLARIAN_CONF_PATH}/deployment/{SOLARIAN_DEPLOYMENT}.yaml``
+    rather than from the Hydra tree, so command configs, module configs, skill
+    configs and child processes (``solarian run-policy``) all see the same values.
+    Empty for projects with no ``deployment/`` directory.
+    """
+    conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
+    name = os.environ.get("SOLARIAN_DEPLOYMENT") or DEFAULT_DEPLOYMENT
+
+    key = (conf_path, name)
+    if key in _deployment_cache:
+        return _deployment_cache[key]
+
+    deployment_dir = os.path.join(conf_path, "deployment")
+    if not os.path.isdir(deployment_dir):
+        conf = OmegaConf.create({})
+    else:
+        yaml_path = os.path.join(deployment_dir, f"{name}.yaml")
+        if not os.path.exists(yaml_path):
+            choices = sorted(
+                f[: -len(".yaml")] for f in os.listdir(deployment_dir) if f.endswith(".yaml")
+            )
+            raise ValueError(
+                f"Unknown deployment '{name}': {yaml_path} does not exist.\n"
+                f"  Available deployments: {', '.join(choices) or '(none)'}\n"
+                f"  Select one with `--deployment <name>` or SOLARIAN_DEPLOYMENT=<name>."
+            )
+        conf = OmegaConf.load(yaml_path)
+
+    _deployment_cache[key] = conf
+    return conf
+
+
+def resolve_with_deployment(cfg: DictConfig | dict) -> dict:
+    """Resolve ``${deployment.*}`` against the deployment selected for this run.
+
+    The injected node is dropped from the result so it never reaches a Pydantic
+    model.
+    """
+    merged = OmegaConf.merge({"deployment": load_deployment_config()}, cfg)
+    data = OmegaConf.to_container(merged, resolve=True)
+    del data["deployment"]
+    return data
+
+
 def load_config_yaml(yaml_path: str, config_class: type) -> Any:
-    conf = OmegaConf.load(yaml_path)
-    data = OmegaConf.to_container(conf, resolve=True)
+    data = resolve_with_deployment(OmegaConf.load(yaml_path))
     return parse_with_friendly_errors(config_class, data)
 
 

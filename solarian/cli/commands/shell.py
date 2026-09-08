@@ -5,7 +5,7 @@ import code
 import sys
 import os
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from hydra import initialize_config_dir, compose
 from hydra.core.global_hydra import GlobalHydra
 
@@ -22,7 +22,7 @@ class ShellCommand(BaseCommand):
 
     def _load_config(self, config_name, config_class):
         """Load a Hydra config and parse it into the given config class."""
-        from solarian.utils.configs import parse_with_friendly_errors
+        from solarian.utils.configs import parse_with_friendly_errors, resolve_with_deployment
 
         conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
 
@@ -31,7 +31,7 @@ class ShellCommand(BaseCommand):
 
         with initialize_config_dir(version_base=None, config_dir=conf_path, job_name="solarian_shell"):
             hydra_cfg = compose(config_name=config_name)
-            cfg_dict = OmegaConf.to_container(hydra_cfg, resolve=True)
+            cfg_dict = resolve_with_deployment(hydra_cfg)
 
         return parse_with_friendly_errors(config_class, cfg_dict)
 
