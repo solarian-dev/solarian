@@ -66,3 +66,30 @@ def test_sync_with_server_roundtrip():
         port.close(linger=0)
         ctx.term()
         reset_offset()
+
+
+def test_sync_with_server_tears_down_context_when_curve_setup_fails(monkeypatch):
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("curve setup failed")
+
+    monkeypatch.setattr("solarian.core.curve.apply_client", _boom)
+    from solarian.core.configs import ConnectionConfig
+
+    connection = ConnectionConfig(
+        ip="127.0.0.1",
+        action_sender_port=1,
+        action_receiver_port=2,
+        state_sender_port=3,
+        state_receiver_port=4,
+    )
+    with pytest.raises(RuntimeError, match="curve setup failed"):
+        sync_with_server(
+            "127.0.0.1",
+            1,
+            samples=1,
+            timeout_ms=100,
+            connection=connection,
+        )
+    # A leaked REQ socket would make this term() hang the same way calibrate-ik did.
+    leftover = zmq.Context()
+    leftover.term()

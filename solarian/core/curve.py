@@ -47,9 +47,20 @@ def generate_keypair() -> tuple[str, str]:
             return public, secret
 
 
+def _curve_key(connection, name: str) -> str | None:
+    """Optional CURVE field from a pydantic model or a Hydra dict.
+
+    ``ConnectionConfig`` always declares these (default None). A deployment yaml
+    that never mentioned CURVE is an OmegaConf dict without the keys, and a
+    direct attribute read would raise rather than look unset.
+    """
+    value = getattr(connection, name, None)
+    return str(value) if value else None
+
+
 def is_enabled(connection) -> bool:
     """Whether this connection config asks for CURVE at all."""
-    return bool(connection.curve_secret_key and connection.curve_public_key)
+    return bool(_curve_key(connection, "curve_secret_key") and _curve_key(connection, "curve_public_key"))
 
 
 def apply_client(socket: zmq.Socket, connection, role: str) -> bool:
@@ -60,23 +71,26 @@ def apply_client(socket: zmq.Socket, connection, role: str) -> bool:
     here, loudly, rather than silently falling back to plaintext against a relay
     that will refuse it anyway.
     """
-    if not is_enabled(connection):
-        if connection.curve_server_key:
+    public = _curve_key(connection, "curve_public_key")
+    secret = _curve_key(connection, "curve_secret_key")
+    server = _curve_key(connection, "curve_server_key")
+    if not (secret and public):
+        if server:
             raise ValueError(
                 f"{role}: connection.curve_server_key is set without this peer's "
                 f"own curve_public_key / curve_secret_key. Run `solarian keygen` "
                 f"and add both."
             )
         return False
-    if not connection.curve_server_key:
+    if not server:
         raise ValueError(
             f"{role}: CURVE keys are set but connection.curve_server_key (the "
             f"relay's public key) is missing, so there is no server to trust."
         )
 
-    socket.curve_publickey = connection.curve_public_key.encode()
-    socket.curve_secretkey = connection.curve_secret_key.encode()
-    socket.curve_serverkey = connection.curve_server_key.encode()
+    socket.curve_publickey = public.encode()
+    socket.curve_secretkey = secret.encode()
+    socket.curve_serverkey = server.encode()
     return True
 
 
@@ -86,10 +100,12 @@ def apply_server(socket: zmq.Socket, connection, role: str) -> bool:
     The relay's own keypair, so ``curve_server_key`` is not read here — that is
     the copy handed to clients.
     """
-    if not is_enabled(connection):
+    public = _curve_key(connection, "curve_public_key")
+    secret = _curve_key(connection, "curve_secret_key")
+    if not (secret and public):
         return False
-    socket.curve_publickey = connection.curve_public_key.encode()
-    socket.curve_secretkey = connection.curve_secret_key.encode()
+    socket.curve_publickey = public.encode()
+    socket.curve_secretkey = secret.encode()
     socket.curve_server = True
     logger.debug("CURVE enabled on %s", role)
     return True

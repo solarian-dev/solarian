@@ -42,6 +42,30 @@ def test_a_plaintext_link_is_left_alone(context):
         socket.close(linger=0)
 
 
+def test_deployment_dict_without_curve_keys_is_plaintext(context):
+    # Hydra's connection overlay is an OmegaConf dict; missing CURVE fields
+    # must not raise (that leaked a ZMQ context and hung calibrate-ik).
+    from omegaconf import OmegaConf
+
+    connection = OmegaConf.create(
+        {
+            "ip": "127.0.0.1",
+            "action_sender_port": 1,
+            "action_receiver_port": 2,
+            "state_sender_port": 3,
+            "state_receiver_port": 4,
+            "clock_sync_port": 5559,
+        }
+    )
+    socket = context.socket(zmq.PUSH)
+    try:
+        assert curve.is_enabled(connection) is False
+        assert curve.apply_client(socket, connection, "clock sync") is False
+        assert curve.apply_server(socket, connection, "test") is False
+    finally:
+        socket.close(linger=0)
+
+
 def test_half_configured_keys_fail_loudly(context):
     relay_public, _ = curve.generate_keypair()
     peer_public, peer_secret = curve.generate_keypair()

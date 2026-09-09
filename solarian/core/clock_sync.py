@@ -184,18 +184,19 @@ def sync_with_server(
 
     own_context = context is None
     ctx = context or zmq.Context()
-    socket = ctx.socket(zmq.REQ)
-    socket.setsockopt(zmq.LINGER, 0)
-    socket.setsockopt(zmq.RCVTIMEO, int(timeout_ms))
-    socket.setsockopt(zmq.SNDTIMEO, int(timeout_ms))
-    if connection is not None:
-        from solarian.core.curve import apply_client
-
-        apply_client(socket, connection, "clock sync")
-    socket.connect(f"tcp://{ip}:{port}")
-
-    collected: list[tuple[float, float, float]] = []
+    socket = None
     try:
+        socket = ctx.socket(zmq.REQ)
+        socket.setsockopt(zmq.LINGER, 0)
+        socket.setsockopt(zmq.RCVTIMEO, int(timeout_ms))
+        socket.setsockopt(zmq.SNDTIMEO, int(timeout_ms))
+        if connection is not None:
+            from solarian.core.curve import apply_client
+
+            apply_client(socket, connection, "clock sync")
+        socket.connect(f"tcp://{ip}:{port}")
+
+        collected: list[tuple[float, float, float]] = []
         for _ in range(max(1, int(samples))):
             t0 = time.time()
             socket.send(msgpack.packb({"t0": t0}, use_bin_type=True))
@@ -207,7 +208,10 @@ def sync_with_server(
             # Small gap so samples are not identical under coarse clocks.
             time.sleep(0.002)
     finally:
-        socket.close(linger=0)
+        # apply_client can raise before the exchange starts; leaving the REQ
+        # socket open makes Context.__del__ block forever in zmq_ctx_term.
+        if socket is not None:
+            socket.close(linger=0)
         if own_context:
             ctx.term()
 
