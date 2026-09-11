@@ -1,0 +1,130 @@
+export const metadata = {
+  title: 'Calibration',
+  description:
+    'Record physical joint limits, shift the encoder so travel is a normal interval, and map those ranges and directions onto the sim model.',
+}
+
+# Calibration
+
+We record each joint’s physical limits, shift the encoder so that travel is a normal interval (`center_offset`), and map those ranges and directions onto the sim model. {{ className: 'lead' }}
+
+Do this on first hardware bring-up, after replacing a servo, or when travel changed.
+
+## Before you start
+
+- Assign servo IDs and the serial port in `conf/<module>.yaml` first — `solarian setup-module` if they are not already set. Servo model and continuous-vs-limited live on the Module class, not in yaml.
+- **Stop `run-robot`.** The bus can only be open once; every calibrate command talks to the device in-process, the same way `solarian calibrate` does.
+- Run on the machine the device is wired to (the Pi under a `pi` deployment; your laptop under `localhost`).
+
+```yaml
+# conf/right_arm.yaml
+actuators:
+  shoulder_pan:
+    id: 1
+    port: ${actuator_port}
+    # written by solarian calibrate:
+    # real_range_min / real_range_max / center_offset / drive_mode
+```
+
+<Note>
+  The command is interactive. <code>solarian calibrate</code> lists every module on your <code>Robot</code> and <code>Controller</code> and asks which to calibrate.
+</Note>
+
+## Calibrate an arm (SO-106)
+
+Example: the SO-106 project, module `right_arm`.
+
+```bash
+solarian calibrate   # pick right_arm
+```
+
+The console uses the same step titles as this page. Answer ENTER / Y / N in the **sim window** when it is open (the terminal also works).
+
+### Step 1: Joint limits
+
+Move every hard-stop joint through its full travel. Continuous joints (`wrist_roll` on SO-106) are printed and skipped — they have no hard stop.
+
+The status board shows **MIN / POS / MAX**. `POS` is the raw encoder. If travel crosses `4095→0`, the tool writes `center_offset` so the saved range is a normal interval (no remount). A single wrap-looking glitch is ignored.
+
+![Step 1: Joint limits status board](/images/calibration/step1-limits.png)
+
+### Step 2: Home position
+
+The sim opens parked at **model q=0** — not a live copy of the real arm (mapping is not done yet). Match that pose by hand. It is mid-travel for hard-stop joints and the zero we store for continuous wrists. Leave a little room so any joint can still move a few degrees either way.
+
+![Step 2: Home position — sim at model zero](/images/calibration/step2-home.png)
+
+Press ENTER in the sim window when the real arm matches.
+
+### Step 3: Sim mapping
+
+The sim now follows the real arm. For each joint a red arrow marks the hinge axis. Move that joint. If the sim goes the other way, answer **N** and we flip `drive_mode`.
+
+![Step 3: Sim mapping — highlighted joint](/images/calibration/step3-mapping.png)
+
+This is the only direction question. There is no “which encoder end is min.”
+
+### Output
+
+Values are written to `conf/right_arm.yaml` and to the servos (or applied in software on buses with no homing register).
+
+![Output: saved calibration fields](/images/calibration/output.png)
+
+| Field | Meaning |
+| --- | --- |
+| `real_range_*` | Present-frame travel window (after any wrap shift) |
+| `center_offset` | Encoder-zero shift (`0` = no shift). Feetech/Dynamixel write the `Homing_Offset` register |
+| `drive_mode` | Sign vs the model (`0` or `1`) |
+| `home` | Normalized pose you matched. Not `move.yaml` `poses.home` |
+
+```yaml
+# conf/right_arm.yaml — after solarian calibrate
+actuators:
+  shoulder_pan:
+    id: 1
+    port: ${actuator_port}
+    real_range_min: 452
+    real_range_max: 3255
+    center_offset: 0
+    drive_mode: 0
+home:
+  shoulder_pan: 2.4
+  # ...
+```
+
+After save, the sim stays open and follows the real arm. On-screen **nrm** is the real normalized pose; **rad** is the sim joint angle. Move the arm, then press ENTER when you are done.
+
+Check spans later:
+
+```bash
+solarian verify-calibration
+```
+
+## Calibrate a gripper
+
+Same **Step 1** (one actuator). Then one physical low-command pose (typically fully closed) — no sim mapping. Measure aperture with a ruler and set `aperture_closed_cm` / `aperture_open_cm`; check with `solarian calibrate-gripper-ranges`.
+
+## Using the module
+
+`Robot.connect()` loads the yaml fields and writes them onto the servos. If a hard-stop actuator is missing `real_range_*` it runs **Step 1** only (no IK viewer). Re-push without sweeping: `solarian write-robot-calibration`.
+
+Do not re-run `solarian calibrate` unless you replaced a servo whose travel changed.
+
+## Model authors
+
+The MuJoCo `jnt_range` must equal the real hard-stop angles. Continuous joints stay 0-centered in the model (e.g. `±π`). `solarian derive-model-limits` prints MJCF-ready ranges. `solarian verify-calibration` compares spans, then opens the live mirror.
+
+## Calibrate Latencies
+
+A UMI skill needs observation and action delays measured on **this** hardware. Stop `run-robot`. Full scheme: [Latency & Synchronization](/docs/latency).
+
+1. `solarian calibrate-arm-speed` / `calibrate-gripper-speed` — write `max_speed` first.
+2. `solarian calibrate-arm-latency` / `calibrate-gripper-latency` — mode 1 action, mode 2 obs.
+3. `solarian calibrate-camera-latency` — display role on the monitor machine, capture on the robot.
+
+## See also
+
+- [Modules](/docs/modules) — module yaml and class-level actuator declarations.
+- [Latency & Synchronization](/docs/latency) — the UMI compensation scheme.
+- [Inverse Kinematics](/docs/ik) — `CartesianIKActuator`s and `ik_backend`.
+- [Commands](/docs/commands) — the full CLI reference.

@@ -1,21 +1,19 @@
 """Pure helpers for generic joint (servo) calibration.
 
-Used by :meth:`Module.calibrate` so hard-stop joints only need a range sweep:
-``drive_mode`` comes from a low-command-end pose. The recorded min/max *are*
-the limits — there is no artificial cap on how large a fraction of a turn the
-travel may be.
+Used by :meth:`Module.calibrate` so hard-stop joints only need a range sweep.
+The recorded min/max *are* the limits — there is no artificial cap on how
+large a fraction of a turn the travel may be.
 
-Homing offset stays **0** (raw encoder = Present). Recentering to mid-encoder
-is unnecessary for limited-travel joints and is what forced awkward horn
-remounts when travel sat near 0/CPR. Vendor-specific register limits remain on
-the actuator bus when a bus *does* choose to apply a non-zero offset.
+A contiguous arc that sits next to 0/CPR keeps ``center_offset=0`` (raw =
+Present). An arc that *crosses* the encoder seam is unwrapped: ``center_offset``
+shifts Present so the travel is a linear ``range_min``/``range_max``. Vendor
+caps (e.g. Feetech Homing_Offset ±2047) are applied by the caller.
 
-Glitch / wrap handling during the sweep:
+Glitch handling during the sweep:
 * Reject a sample whose shortest path from the previous reading is a sudden
   teleport (larger than ``max_step_fraction`` of CPR).
-* Reject a sample whose shortest path *crosses* the encoder wrap (0/CPR).
-  Those need a horn remount so mechanical travel is contiguous in raw space;
-  linear ``range_min``/``range_max`` cannot represent a wrap-straddling arc.
+* A single wrap-looking sample is ignored at result time (glitch). Several
+  samples on the far side of the seam commit the unwrap.
 """
 
 from __future__ import annotations
@@ -26,23 +24,32 @@ from dataclasses import dataclass
 # Larger jumps are dropped as encoder glitches / teleports.
 MAX_STEP_FRACTION_OF_CPR = 0.10
 
+# Samples accepted on the far side of a wrap before the unwrap is committed.
+# One isolated 4095→0 read stays a glitch.
+MIN_WRAP_CONFIRM_SAMPLES = 3
+
 # Back-compat alias — span caps are no longer enforced. Kept so older imports
 # / tests that reference the name keep resolving.
 MAX_SPAN_FRACTION_OF_CPR = 1.0
 
 
 class CalibrationSafetyError(ValueError):
-    """Raised when a recorded range / derived homing would be unsafe to write."""
+    """Raised when a recorded range / derived offset would be unsafe to write."""
 
 
 @dataclass(frozen=True)
 class DerivedHoming:
-    """Calibration window in Present frame (with ``homing_offset`` applied)."""
+    """Calibration window in Present frame (with ``center_offset`` applied)."""
 
-    homing_offset: int
+    center_offset: int
     range_min: int
     range_max: int
     mid_raw: int
+
+    @property
+    def homing_offset(self) -> int:
+        """Alias for :attr:`center_offset` (MotorCalibration field name)."""
+        return self.center_offset
 
 
 def circular_distance(a: int, b: int, cpr: int) -> int:
@@ -58,61 +65,93 @@ def shortest_path_crosses_wrap(a: int, b: int, cpr: int) -> bool:
     fwd = (b - a) % cpr
     bak = (a - b) % cpr
     if fwd <= bak:
-        # Forward along increasing encoder counts (mod CPR).
         return b < a
-    # Backward along decreasing counts.
     return b > a
+
+
+def _unwrapped_delta(last: int, pos: int, cpr: int) -> int:
+    """Signed shortest-path step from ``last`` to ``pos`` on the encoder circle."""
+    fwd = (int(pos) - int(last)) % cpr
+    bak = (int(last) - int(pos)) % cpr
+    return fwd if fwd <= bak else -bak
 
 
 @dataclass
 class EncoderRangeTracker:
-    """Online min/max tracker that ignores glitches and wrap-crossing steps.
+    """Online tracker that unwraps a wrapping sweep and ignores teleports.
 
-    The operator's sweep defines the limits: any contiguous travel is accepted,
-    no matter how large a fraction of a turn it is. Samples that teleport or
-    whose shortest path crosses the encoder wrap are skipped (and counted in
-    ``rejected`` / ``wrap_rejected``) so a single bad read cannot expand the
-    window across the whole circle.
+    Linear travel (including sitting next to 0/CPR without crossing) is stored
+    as raw min/max. Small wrap-crossing steps update an unwrapped interval;
+    :meth:`derived` uses that interval only after
+    :data:`MIN_WRAP_CONFIRM_SAMPLES` land on the far side of the seam.
     """
 
     cpr: int
     max_step_fraction: float = MAX_STEP_FRACTION_OF_CPR
-    # Deprecated kw-only accept for older callers; ignored.
     max_span_fraction: float = MAX_SPAN_FRACTION_OF_CPR
     raw_min: int | None = None
     raw_max: int | None = None
     accepted: int = 0
     rejected: int = 0
     wrap_rejected: int = 0
+    wrap_crossings: int = 0
+    samples_since_wrap: int = 0
     last: int | None = None
+    last_unwrapped: int | None = None
+    u_lo: int | None = None
+    u_hi: int | None = None
+
+    @property
+    def wrap_committed(self) -> bool:
+        return (
+            self.wrap_crossings >= 1
+            and self.samples_since_wrap >= MIN_WRAP_CONFIRM_SAMPLES
+        )
 
     def update(self, pos: int) -> bool:
         pos = int(pos)
         if self.raw_min is None:
             self.raw_min = self.raw_max = pos
             self.last = pos
+            self.last_unwrapped = pos
+            self.u_lo = self.u_hi = pos
             self.accepted = 1
             return True
 
-        assert self.last is not None
+        assert self.last is not None and self.last_unwrapped is not None
+        assert self.u_lo is not None and self.u_hi is not None
         step = circular_distance(self.last, pos, self.cpr)
         max_step = self.max_step_fraction * self.cpr
         if step > max_step:
             self.rejected += 1
             return False
 
-        if shortest_path_crosses_wrap(self.last, pos, self.cpr):
-            self.rejected += 1
-            self.wrap_rejected += 1
-            return False
+        delta = _unwrapped_delta(self.last, pos, self.cpr)
+        new_unwrapped = self.last_unwrapped + delta
+        crosses = shortest_path_crosses_wrap(self.last, pos, self.cpr)
 
-        self.raw_min = min(self.raw_min, pos)
-        self.raw_max = max(self.raw_max, pos)
         self.last = pos
+        self.last_unwrapped = new_unwrapped
+        self.u_lo = min(self.u_lo, new_unwrapped)
+        self.u_hi = max(self.u_hi, new_unwrapped)
         self.accepted += 1
+
+        if crosses:
+            self.wrap_crossings += 1
+            self.samples_since_wrap = 1
+            return True
+
+        # After any wrap, freeze linear min/max so an unconfirmed glitch
+        # cannot stretch the range across the circle.
+        if self.wrap_crossings == 0:
+            self.raw_min = min(self.raw_min, pos)
+            self.raw_max = max(self.raw_max, pos)
+        else:
+            self.samples_since_wrap += 1
         return True
 
     def result(self) -> tuple[int, int]:
+        """Linear raw min/max from non-wrap samples (unconfirmed wraps ignored)."""
         if self.raw_min is None or self.raw_max is None:
             raise CalibrationSafetyError("No encoder samples recorded.")
         validate_contiguous_raw_range(
@@ -122,6 +161,18 @@ class EncoderRangeTracker:
             self.cpr,
         )
         return self.raw_min, self.raw_max
+
+    def derived(self, name: str, max_offset_abs: int | None = None) -> DerivedHoming:
+        """Present-frame calibration, unwrapping if the sweep crossed the seam."""
+        if self.raw_min is None or self.u_lo is None or self.u_hi is None:
+            raise CalibrationSafetyError("No encoder samples recorded.")
+        if self.wrap_committed:
+            return calibration_from_circular_arc(
+                name, self.u_lo, self.u_hi, self.cpr, max_offset_abs=max_offset_abs
+            )
+        if self.wrap_crossings:
+            self.wrap_rejected += self.wrap_crossings
+        return calibration_from_raw_range(name, self.raw_min, self.raw_max, self.cpr)
 
 
 def half_turn_count(cpr: int) -> int:
@@ -164,24 +215,86 @@ def calibration_from_raw_range(
     *,
     max_span_fraction: float | None = None,
 ) -> DerivedHoming:
-    """Build calibration for a contiguous raw sweep with ``homing_offset=0``.
-
-    Limited-travel joints keep the raw encoder as Present so travel may sit
-    anywhere in the turn (including near 0 or CPR) without remounting.
-    """
+    """Build calibration for a contiguous raw sweep with ``center_offset=0``."""
     validate_contiguous_raw_range(
         name, raw_min, raw_max, cpr, max_span_fraction=max_span_fraction
     )
     mid_raw = int(round((raw_min + raw_max) / 2.0))
     return DerivedHoming(
-        homing_offset=0,
+        center_offset=0,
         range_min=int(raw_min),
         range_max=int(raw_max),
         mid_raw=mid_raw,
     )
 
 
-# Back-compat alias used by older call sites / tests.
+def calibration_from_circular_arc(
+    name: str,
+    u_lo: int,
+    u_hi: int,
+    cpr: int,
+    *,
+    max_offset_abs: int | None = None,
+) -> DerivedHoming:
+    """Map an unwrapped hard-stop arc onto a linear Present window.
+
+    ``u_lo``/``u_hi`` are unwrapped encoder ticks (may lie outside ``[0, cpr)``).
+    ``center_offset`` is chosen so ``Present = (raw - offset) mod cpr`` is a
+    contiguous interval inside ``[0, cpr-1]``. When ``max_offset_abs`` is set
+    (hardware register cap) the offset is taken from the valid ∩ allowed
+    interval; empty intersection means remount.
+    """
+    span = int(u_hi) - int(u_lo)
+    if span <= 0:
+        raise CalibrationSafetyError(
+            f"{name}: empty unwrapped arc {u_lo}..{u_hi}."
+        )
+    if span >= cpr:
+        raise CalibrationSafetyError(
+            f"{name}: unwrapped span {span} covers a full turn; "
+            "hard-stop joints cannot be continuous. Declare is_continuous=True "
+            "or remount the horn."
+        )
+    if u_lo >= 0 and u_hi <= cpr - 1:
+        return calibration_from_raw_range(name, u_lo, u_hi, cpr)
+
+    # Present = unwrapped - offset sits in [0, cpr-1] iff
+    # offset ∈ [u_hi - (cpr-1), u_lo].
+    lo_off = int(u_hi) - (cpr - 1)
+    hi_off = int(u_lo)
+    if max_offset_abs is not None:
+        lo_off = max(lo_off, -int(max_offset_abs))
+        hi_off = min(hi_off, int(max_offset_abs))
+    if lo_off > hi_off:
+        raise CalibrationSafetyError(
+            f"{name}: wrap cannot be cleared with |center_offset| <= "
+            f"{max_offset_abs}; remount the horn so travel does not straddle "
+            f"0/{cpr - 1}."
+        )
+    # Smallest-magnitude valid offset (0 if it is in range).
+    if lo_off <= 0 <= hi_off:
+        offset = 0
+    elif hi_off < 0:
+        offset = hi_off
+    else:
+        offset = lo_off
+
+    present_lo = int(u_lo) - offset
+    present_hi = int(u_hi) - offset
+    if present_lo < 0 or present_hi > cpr - 1 or present_hi <= present_lo:
+        raise CalibrationSafetyError(
+            f"{name}: Present window {present_lo}..{present_hi} after "
+            f"center_offset={offset} is not a linear encoder range."
+        )
+    mid = int(round((present_lo + present_hi) / 2.0))
+    return DerivedHoming(
+        center_offset=int(offset),
+        range_min=present_lo,
+        range_max=present_hi,
+        mid_raw=mid,
+    )
+
+
 def derive_homing_from_raw_range(
     name: str,
     raw_min: int,
@@ -191,12 +304,8 @@ def derive_homing_from_raw_range(
     max_span_fraction: float | None = None,
     max_homing_abs: int | None = None,
 ) -> DerivedHoming:
-    """Deprecated name for :func:`calibration_from_raw_range` (offset always 0).
-
-    ``max_homing_abs`` / ``max_span_fraction`` are ignored; kept so callers that
-    still pass them keep working.
-    """
-    del max_homing_abs  # no longer used when homing_offset stays 0
+    """Deprecated name for :func:`calibration_from_raw_range` (offset always 0)."""
+    del max_homing_abs
     return calibration_from_raw_range(
         name, raw_min, raw_max, cpr, max_span_fraction=max_span_fraction
     )

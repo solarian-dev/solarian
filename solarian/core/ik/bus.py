@@ -122,8 +122,18 @@ class IKActuatorBus(ActuatorBus):
         fn = getattr(self.inner_bus, "counts_per_revolution", None)
         return fn(name) if callable(fn) else None
 
+    def center_offset_in_hardware(self, name: str):
+        fn = getattr(self.inner_bus, "center_offset_in_hardware", None)
+        return bool(fn(name)) if callable(fn) else False
+
+    def max_center_offset_abs(self, name: str):
+        fn = getattr(self.inner_bus, "max_center_offset_abs", None)
+        return fn(name) if callable(fn) else None
+
     def max_homing_offset_abs(self, name: str):
-        fn = getattr(self.inner_bus, "max_homing_offset_abs", None)
+        fn = getattr(self.inner_bus, "max_center_offset_abs", None) or getattr(
+            self.inner_bus, "max_homing_offset_abs", None
+        )
         return fn(name) if callable(fn) else None
 
     def raw_to_radians(self, name: str, raw: float):

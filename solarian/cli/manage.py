@@ -69,7 +69,7 @@ COMMAND_ENTRY_POINT_GROUP = "solarian.commands"
 
 #: Plugin commands that operate directly on hardware and therefore must run
 #: without Hydra config or project ``settings.py`` discovery.
-PLUGIN_NO_HYDRA_COMMANDS = {"feetech-set-id"}
+PLUGIN_NO_HYDRA_COMMANDS = {"feetech-set-id", "feetech-inspect"}
 
 
 def _get_version() -> str:
@@ -137,7 +137,7 @@ def _build_command_list() -> str:
         "add-module": "Project",
         "onshape-export": "Utilities",
         "run-robot": "Robot",
-        "calibrate-module": "Robot",
+        "calibrate": "Robot",
         "calibrate-arm-latency": "Robot",
         "calibrate-arm-speed": "Robot",
         "calibrate-gripper-speed": "Robot",
@@ -146,6 +146,8 @@ def _build_command_list() -> str:
         "calibrate-camera-latency": "Robot",
         "setup-module": "Robot",
         "write-robot-calibration": "Robot",
+        "verify-calibration": "Robot",
+        "derive-model-limits": "Robot",
         "run-controller": "Controller",
         "calibrate-controller": "Controller",
         "calibrate-umi-camera": "Controller",
@@ -160,6 +162,7 @@ def _build_command_list() -> str:
         "list-cameras": "Utilities",
         "shell": "Utilities",
         "feetech-set-id": "Robot",
+        "feetech-inspect": "Robot",
     }
 
     for name in all_names:
@@ -246,7 +249,7 @@ def main() -> None:
                                help="File with ONSHAPE_ACCESS_KEY/ONSHAPE_SECRET_KEY (default: onshape_keys.txt).")
         oe_parser.add_argument("--update-yaml", default=None, metavar="PATH",
                                help="After export, sync MJCF joint ranges into this module conf "
-                                    "(sim.range_min/max) and config.json joint_properties.limits.")
+                                    "(sim_range_min/max) and config.json joint_properties.limits.")
         oe_args = oe_parser.parse_args(remaining)
         os.environ["SOLARIAN_ONSHAPE_EXPORT_DIR"] = oe_args.assembly_dir
         if oe_args.clean_only:

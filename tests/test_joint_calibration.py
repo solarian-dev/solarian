@@ -5,6 +5,7 @@ import pytest
 from solarian.core.joint_calibration import (
     CalibrationSafetyError,
     EncoderRangeTracker,
+    calibration_from_circular_arc,
     calibration_from_raw_range,
     circular_distance,
     derive_homing_from_raw_range,
@@ -72,13 +73,12 @@ class TestEncoderRangeTracker:
         t = EncoderRangeTracker(cpr=CPR)
         for p in (3900, 3850, 3800, 3750):
             assert t.update(p)
-        # Spurious read at 0 — shortest path crosses the wrap; reject it.
-        assert t.update(0) is False
-        assert t.rejected == 1
-        assert t.wrap_rejected == 1
-        lo, hi = t.result()
-        assert lo == 3750
-        assert hi == 3900
+        assert t.update(0) is True
+        d = t.derived("j")
+        assert d.center_offset == 0
+        assert d.range_min == 3750
+        assert d.range_max == 3900
+        assert t.wrap_rejected >= 1
 
     def test_ignores_far_teleport(self):
         t = EncoderRangeTracker(cpr=CPR)
@@ -106,16 +106,65 @@ class TestEncoderRangeTracker:
         assert got_lo == lo
         assert got_hi == hi
 
-    def test_rejects_wrap_crossing_step(self):
+    def test_single_wrap_sample_does_not_unwrap(self):
         t = EncoderRangeTracker(cpr=CPR)
         for p in range(4000, 4090, 10):
             assert t.update(p)
-        # Crossing 0/CPR in the sweep is rejected (needs remount for contiguous range).
-        assert t.update(20) is False
+        assert t.update(20) is True
+        d = t.derived("j")
+        assert d.center_offset == 0
+        assert d.range_min == 4000
+        assert d.range_max == 4080
         assert t.wrap_rejected >= 1
-        lo, hi = t.result()
-        assert lo == 4000
-        assert hi == 4080
+
+    def test_wrapping_sweep_sets_center_offset(self):
+        t = EncoderRangeTracker(cpr=CPR)
+        path = [3900, 3950, 4000, 4050, 10, 50, 100, 150, 200]
+        for p in path:
+            assert t.update(p), f"rejected {p}"
+        d = t.derived("j", max_offset_abs=2047)
+        assert d.center_offset != 0
+        assert 0 <= d.range_min < d.range_max <= CPR - 1
+        assert (d.range_max - d.range_min) < CPR
+        for raw in path:
+            present = (raw - d.center_offset) % CPR
+            assert d.range_min <= present <= d.range_max, (
+                f"raw {raw} → present {present} outside {d.range_min}..{d.range_max}"
+            )
+
+    def test_glitch_at_zero_does_not_unwrap(self):
+        t = EncoderRangeTracker(cpr=CPR)
+        for p in (3900, 3850, 3800, 3750):
+            assert t.update(p)
+        assert t.update(0) is True
+        d = t.derived("j")
+        assert d.center_offset == 0
+        assert d.range_min == 3750
+        assert d.range_max == 3900
+
+
+class TestCalibrationFromCircularArc:
+    def test_already_linear_keeps_offset_zero(self):
+        d = calibration_from_circular_arc("j", 1000, 2000, CPR)
+        assert d.center_offset == 0
+        assert d.range_min == 1000
+        assert d.range_max == 2000
+
+    def test_wrapping_arc_fits_in_present(self):
+        d = calibration_from_circular_arc("j", 3900, 3900 + 400, CPR, max_offset_abs=2047)
+        assert d.center_offset != 0
+        assert 0 <= d.range_min < d.range_max <= CPR - 1
+        assert d.range_max - d.range_min == 400
+
+    def test_full_turn_raises(self):
+        with pytest.raises(CalibrationSafetyError, match="full turn"):
+            calibration_from_circular_arc("j", 0, CPR, CPR)
+
+    def test_clamp_cannot_clear_seam_raises(self):
+        with pytest.raises(CalibrationSafetyError, match="remount"):
+            calibration_from_circular_arc(
+                "j", 3000, 3000 + 2000, CPR, max_offset_abs=10
+            )
 
 
 class TestDriveMode:

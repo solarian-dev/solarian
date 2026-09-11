@@ -781,7 +781,7 @@ class Robot(EventHost, ABC):
             time.sleep(0.01)
         self._reap_stopping_skills(force=True)
 
-    def connect(self):
+    def connect(self, skip_calibrate: bool = False):
         # Align wall-clock stamps with the relay before accepting actions.
         self.sync_clock()
 
@@ -793,13 +793,13 @@ class Robot(EventHost, ABC):
         for module_name, module in self.modules.items():
             module.load_calibration()
 
-            if module.cfg.calibration_file is None:
+            if not module.needs_motor_calibration():
                 logger.info(f"No calibration required for module {module_name}")
                 continue
 
             module.connect()
 
-            if module.calibration is None:
+            if module.calibration is None and not skip_calibrate:
                 module.calibrate()
 
             if not module.is_calibrated():

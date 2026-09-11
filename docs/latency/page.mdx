@@ -158,7 +158,7 @@ The values shipped in `cup_arrange.yaml` came from UMI's `example/eval_robots_co
 
 ### Where to run these
 
-Every one of these commands opens the hardware itself, in-process, the way `calibrate-module` does. So each runs **on the machine the device is physically wired to** — under the `pi` deployment that is the Raspberry Pi for the arm, the gripper and the camera; under `localhost`, where everything is on one machine, it is that machine.
+Every one of these commands opens the hardware itself, in-process, the way `solarian calibrate` does. So each runs **on the machine the device is physically wired to** — under the `pi` deployment that is the Raspberry Pi for the arm, the gripper and the camera; under `localhost`, where everything is on one machine, it is that machine. The operator path that includes this step — after the limit sweep and IK alignment — is [Calibration](/docs/modules/calibration#calibrate-latencies).
 
 Two consequences:
 
@@ -313,6 +313,7 @@ Any occurrence of that line during a policy run means waypoints are arriving aft
 
 ## See also
 
+- [Calibration](/docs/modules/calibration#calibrate-latencies) — the bring-up home for this step (limit sweep, IK, then these measurements)
 - [Commands](/docs/commands) — the `calibrate-*-latency` commands in full
 - [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — how a timestamped waypoint becomes motion
 - [Observations](/docs/observations) — the schema the timestamps travel in

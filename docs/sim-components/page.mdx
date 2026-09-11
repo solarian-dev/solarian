@@ -1,12 +1,12 @@
 export const metadata = {
   title: 'Sim Servos & Cameras',
   description:
-    'In simulation your ordinary servos and cameras are used unchanged \u2014 there are no SimServo or SimCamera classes. A sim: block on each component\u2019s YAML maps it to a MuJoCo joint/actuator or a rendered MuJoCo camera; the framework infers the rest from the component type.',
+    'In simulation your ordinary servos and cameras are used unchanged \u2014 there are no SimServo or SimCamera classes. sim_joint / sim_range_* on each actuator YAML maps it to a MuJoCo joint; cameras still use a sim: block. The framework infers the rest from the component type.',
 }
 
 # Sim Servos & Cameras
 
-There are **no** `SimServo` or `SimCamera` classes. In simulation your ordinary [Components](/docs/core) — the same `FeetechServo`, `OpenCVCamera`, etc. used on hardware — are driven by the MuJoCo world instead of a bus. All they need is a `sim:` block in their module YAML. {{ className: 'lead' }}
+There are **no** `SimServo` or `SimCamera` classes. In simulation your ordinary [Components](/docs/core) — the same `FeetechServo`, `OpenCVCamera`, etc. used on hardware — are driven by the MuJoCo world instead of a bus. Servos need `sim_joint` / `sim_range_*` in their module YAML; cameras still use a `sim:` block. {{ className: 'lead' }}
 
 When a robot runs with [`is_sim`](/docs/sim-robots), each module's port bus is transparently replaced by a `BusClient` proxy to the shared [`MujocoWorldServer`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/mujoco_world.py). The component's own `bus_class` (Feetech, OpenCV, …) is simply never used — so nothing about the component class has to change.
 
@@ -22,39 +22,31 @@ Each component is keyed as `"{module}/{component}"` in the world, so identically
 
 ## Simulated servos
 
-Declare the servo exactly as you would for hardware and add a `sim:` block. The block is parsed into [`SimActuatorConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py) and lives on the base `ActuatorConfig`, so it works for any servo type:
+Declare the servo exactly as you would for hardware and add flat `sim_*` fields on [`ActuatorConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py). The MuJoCo actuator name defaults to the same string as `sim_joint`:
 
 ```yaml
 # conf/arm.yaml
 actuators:
   shoulder_pan:
     id: 1                # hardware fields — ignored in sim
-    model: sts3215
     port: ${actuator_port}
-    type: feetech
-    mode: range_m100_100
-    sim:
-      joint: "arm/shoulder_pan"       # MJCF joint name (after the attach prefix)
-      actuator: "arm/shoulder_pan"    # MJCF position actuator name
-      range_min: -1.91986             # radians mapped to the low end of `mode`
-      range_max: 1.91986              # radians mapped to the high end of `mode`
-      drive_mode: 0                   # 1 to invert direction
+    sim_joint: "arm/shoulder_pan"   # MJCF joint (after the attach prefix)
+    sim_range_min: -1.91986         # radians mapped to the low end of `mode`
+    sim_range_max: 1.91986          # radians mapped to the high end of `mode`
+    sim_drive_mode: 0               # 1 to invert direction
 ```
 
 <Properties>
-  <Property name="joint" type="str | None">
-    MJCF joint the servo reads its position from.
+  <Property name="sim_joint" type="str | None">
+    MJCF joint the servo reads and writes. The MuJoCo actuator name is the same string. Virtual joints (no MJCF counterpart) omit this field.
   </Property>
-  <Property name="actuator" type="str | None">
-    MJCF position actuator the servo writes its target to.
-  </Property>
-  <Property name="range_min" type="float">
+  <Property name="sim_range_min" type="float">
     Radians mapped to the low end of the servo's normalized command space.
   </Property>
-  <Property name="range_max" type="float">
+  <Property name="sim_range_max" type="float">
     Radians mapped to the high end.
   </Property>
-  <Property name="drive_mode" type="int">
+  <Property name="sim_drive_mode" type="int">
     Set to <code>1</code> to invert direction (mirrors a flipped hardware servo).
   </Property>
 </Properties>
@@ -62,18 +54,17 @@ actuators:
 The world server maps the servo's normalized command space (e.g. `mode: range_m100_100` → `[-100, 100]`) onto `[range_min, range_max]` radians on write, and back on read. A `write` sets the MuJoCo actuator `ctrl` target and a `read` returns the present joint position — so the physics loop tracks targets just like a real servo running its own control loop.
 
 <Note>
-  Keep <code>range_min</code>/<code>range_max</code> equal to the joint's actual MJCF limits (<code>jnt_range</code>). A mismatch silently skews every normalized ↔ radian conversion. The <a href="/docs/sim-robots">so106</a> tests assert the YAML ranges match the model.
+  Keep <code>sim_range_min</code>/<code>sim_range_max</code> equal to the joint's actual MJCF limits (<code>jnt_range</code>). A mismatch silently skews every normalized ↔ radian conversion. The <a href="/docs/sim-robots">so106</a> tests assert the YAML ranges match the model.
 </Note>
 
 ### Virtual servos
 
-Omit `joint`/`actuator` to make a servo **virtual**: it holds the last commanded value and echoes it back on read, without touching physics. This is useful when your Observation/Action schema has a joint that the chosen MJCF model doesn't physically simulate:
+Omit `sim_joint` to make a servo **virtual**: it holds the last commanded value and echoes it back on read, without touching physics. This is useful when your Observation/Action schema has a joint that the chosen MJCF model doesn't physically simulate:
 
 ```yaml
-    sim:
-      # no joint/actuator → virtual: echoes the commanded value
-      range_min: -1.57
-      range_max: 1.57
+    # no sim_joint → virtual: echoes the commanded value
+    sim_range_min: -1.57
+    sim_range_max: 1.57
 ```
 
 ## Simulated cameras

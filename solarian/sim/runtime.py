@@ -60,20 +60,15 @@ def _conn_key(module_name: str, port: str) -> str:
 
 def _joint_spec(component) -> Dict[str, Any]:
     cfg = component.cfg
-    sim = getattr(cfg, "sim", None)
-    if sim is None:
-        raise ValueError(
-            f"Simulated actuator '{cfg.__class__.__name__}' is missing a `sim:` "
-            f"block in its module yaml (joint/actuator + radian range)."
-        )
+    joint = getattr(cfg, "sim_joint", None)
     return {
         "kind": "joint",
-        "joint": sim.joint,
-        "actuator": sim.actuator,
+        "joint": joint,
+        "actuator": joint,
         "mode": cfg.mode,
-        "range_min": float(sim.range_min),
-        "range_max": float(sim.range_max),
-        "drive_mode": int(sim.drive_mode),
+        "range_min": float(cfg.sim_range_min),
+        "range_max": float(cfg.sim_range_max),
+        "drive_mode": int(getattr(cfg, "sim_drive_mode", 0) or 0),
     }
 
 

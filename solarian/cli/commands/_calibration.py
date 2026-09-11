@@ -2,7 +2,7 @@
 
 Each of those commands picks one module off the project's Robot/Controller
 class, drives it in-process (no module subprocess, no observation schema, like
-``calibrate-module``) and reports a delay. The discovery, the fixed-rate control
+``solarian calibrate``) and reports a delay. The discovery, the fixed-rate control
 loop and the cross-correlation plot are identical across arm and gripper, so
 they live here.
 """

@@ -387,6 +387,7 @@ class StatusBoard:
             self._console = Console()
             self._ui_started = False
             self._ui_thread: threading.Thread | None = None
+            self.table_title = "Status"
             self._initialized = True
 
             remove_fallback_handlers()
@@ -398,7 +399,7 @@ class StatusBoard:
         thread = getattr(self, "_ui_thread", None)
         if thread is not None and thread.is_alive():
             return
-        # Allow a second start after stop() (e.g. calibrate-module sweep,
+        # Allow a second start after stop() (e.g. solarian calibrate sweep,
         # then later run-robot). Reset the events the previous loop flipped.
         self._stop_event = threading.Event()
         self._stopped_event = threading.Event()
@@ -525,7 +526,7 @@ class StatusBoard:
             traceback.print_exc()
 
     def render(self):
-        t = Table(title="Status", expand=True, show_edge=False)
+        t = Table(title=getattr(self, "table_title", "Status"), expand=True, show_edge=False)
         t.add_column("State"); t.add_column("Value")
         t.add_row("Local time", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
         for k, v in self.data.items():

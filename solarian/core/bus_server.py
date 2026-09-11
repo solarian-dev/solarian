@@ -184,8 +184,8 @@ class BusClient(ComponentBus):
     def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         return self._call("read", data_type, component_names, normalize=normalize)
 
-    def write(self, values: Dict[str, Data], normalize: bool = True):
-        return self._call("write", values, normalize=normalize)
+    def write(self, values: Dict[str, Data], normalize: bool = True, snap: bool = False):
+        return self._call("write", values, normalize=normalize, snap=snap)
 
     def configure(self, params: dict[str, int], component_names: list[str]):
         return self._call("configure", params, component_names)
@@ -226,5 +226,14 @@ class BusClient(ComponentBus):
     def counts_per_revolution(self, name: str):
         return self._call("counts_per_revolution", name)
 
+    def center_offset_in_hardware(self, name: str):
+        return self._call("center_offset_in_hardware", name)
+
+    def max_center_offset_abs(self, name: str):
+        return self._call("max_center_offset_abs", name)
+
     def max_homing_offset_abs(self, name: str):
-        return self._call("max_homing_offset_abs", name)
+        return self._call("max_center_offset_abs", name)
+
+    def highlight_joint(self, name: str | None):
+        return self._call("highlight_joint", name)

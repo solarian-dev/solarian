@@ -58,42 +58,36 @@ class ActuatorModule(Module):
         )
 
     def _hardware_actuators_by_port(self) -> dict[str, list[str]]:
-        """Port → hardware actuator names (excludes virtual IK Cartesian axes)."""
-        from solarian.core.ik.actuator import CartesianIKActuator
-
+        """Port → hardware actuator names (excludes virtual pose axes)."""
         out: dict[str, list[str]] = {}
         for port, names in self.actuators_by_port.items():
             hw = [
                 n for n in names
-                if not isinstance(self.actuators[n], CartesianIKActuator)
+                if getattr(self.actuators[n], "uses_motor_calibration", True)
             ]
             if hw:
                 out[port] = hw
         return out
 
     def calibrate(self) -> None:
-        """Calibrate hard-stop joints from a range sweep only.
+        """Calibrate hard-stop joints from a range sweep.
 
-        Flow:
-        1. Reset homing offset to 0 and record raw min/max while the operator
-           sweeps each joint's full travel (no middle-pose prompt). Glitch
-           samples that would expand the span across the encoder wrap are
-           ignored so travel near 0/CPR does not require remounting.
-        2. Keep ``homing_offset=0``; refuse non-contiguous / over-wide spans.
-        3. Ask the operator to move each joint to its **low command** end to set
-           ``drive_mode``.
+        Records travel, unwraps a wrapping arc via ``center_offset``, and seeds
+        ``drive_mode``. IK modules skip the direction prompt (the live-mirror
+        sign check decides). Non-IK modules ask one physical low-command pose.
+        Continuous joints are skipped; their zero is set in ``solarian calibrate``
+        home.
         """
         from solarian.utils.general import enter_pressed
         from solarian.core.joint_calibration import (
             CalibrationSafetyError,
             DerivedHoming,
             EncoderRangeTracker,
-            calibration_from_raw_range,
             drive_mode_from_low_end_pose,
             low_command_label,
         )
 
-        if self.cfg.calibration_file is None:
+        if not self.needs_motor_calibration():
             logger.error(f"No calibration required for module {self.name}")
             return
 
@@ -102,8 +96,10 @@ class ActuatorModule(Module):
             logger.error(f"No hardware actuators to calibrate on module {self.name}")
             return
 
-        # Continuous (no hard-stop) joints are zeroed in ``calibrate-ik``, not here.
-        continuous = set(getattr(type(self), "ik_continuous_joints", []) or [])
+        has_ik = getattr(type(self), "ik_backend", None) is not None
+        continuous = {
+            n for n, act in self.actuators.items() if getattr(act, "is_continuous", False)
+        }
         if continuous:
             hw_by_port = {
                 port: [n for n in names if n not in continuous]
@@ -111,22 +107,20 @@ class ActuatorModule(Module):
             }
             hw_by_port = {p: ns for p, ns in hw_by_port.items() if ns}
             print(
-                f"Skipping continuous joints (no hard stop; zero them in "
-                f"calibrate-ik): {sorted(continuous)}"
+                f"Continuous joints (no hard stop — skip the limit sweep; "
+                f"their zero is set at the home step): {sorted(continuous)}"
             )
             if not hw_by_port:
-                logger.error(
-                    f"No hard-stop actuators left to calibrate on module {self.name}"
-                )
+                print("No hard-stop joints to sweep.")
                 return
 
-        print(f"\nRunning calibration of {self}")
+        print(f"\n=== Step 1: Joint limits ===")
         print(
-            "Homing offset stays 0 (raw encoder). Move each joint through its\n"
-            "FULL mechanical travel while recording, then press ENTER.\n"
-            "The sweep defines the limits (no span cap). Travel must stay on\n"
-            "one side of the encoder wrap (POS must not jump 4095→0). If a\n"
-            "joint crosses the wrap, remount that horn, then re-run."
+            "POS is the raw encoder. Move each hard-stop joint through its FULL\n"
+            "mechanical travel, then press ENTER. If travel crosses 4095→0 we\n"
+            "write center_offset so the saved range is a normal interval — no remount.\n"
+            "center_offset is an encoder-zero shift (not a named home pose).\n"
+            "real_range_* is that window in Present ticks after the shift."
         )
 
         self.start_calibration_mode()
@@ -137,6 +131,7 @@ class ActuatorModule(Module):
             bus.reset_calibration(actuator_names)
 
         trackers: dict[str, EncoderRangeTracker] = {}
+        bus_by_name: dict[str, ActuatorBus] = {}
         for port, actuator_names in hw_by_port.items():
             bus = self.module_bus.component_bus_by_port[port]
             for name in actuator_names:
@@ -148,15 +143,14 @@ class ActuatorModule(Module):
                     self.end_calibration_mode()
                     return
                 trackers[name] = EncoderRangeTracker(cpr=int(cpr))
+                bus_by_name[name] = bus
 
         print(
-            "\nRecording positions. Move every joint through its entire range of "
-            "motion, then press ENTER to stop..."
+            "\nRecording. Move every hard-stop joint through its entire travel, "
+            "then press ENTER..."
         )
-        # Standalone calibrate-module never starts the robot UI; without this
-        # the MIN/POS/MAX writes go nowhere. Stop before the drive-mode prompts
-        # (Live would eat ``input()``) and before any later module fork.
-        StatusBoard.start_ui()
+        board = StatusBoard.start_ui()
+        board.table_title = "Step 1: Joint limits"
         try:
             while not enter_pressed():
                 status_min, status_pos, status_max = {}, {}, {}
@@ -182,29 +176,29 @@ class ActuatorModule(Module):
         try:
             for name, tracker in trackers.items():
                 if tracker.rejected:
-                    wrap_note = (
-                        f" ({tracker.wrap_rejected} crossed encoder wrap)"
-                        if tracker.wrap_rejected
-                        else ""
-                    )
                     print(
-                        f"  {name}: ignored {tracker.rejected} glitch/wrap sample(s)"
-                        f"{wrap_note}"
+                        f"  {name}: ignored {tracker.rejected} teleport sample(s)"
                     )
-                raw_lo, raw_hi = tracker.result()
-                derived[name] = calibration_from_raw_range(
-                    name, raw_lo, raw_hi, tracker.cpr
-                )
+                bus = bus_by_name[name]
+                cap = bus.max_center_offset_abs(name)
+                derived[name] = tracker.derived(name, max_offset_abs=cap)
                 d = derived[name]
-                print(
-                    f"  {name}: raw/Present range {d.range_min} .. {d.range_max} "
-                    f"(span {d.range_max - d.range_min}, homing_offset=0)"
-                )
-                if tracker.wrap_rejected:
+                if tracker.wrap_committed:
                     print(
-                        f"  warning: {name} saw wrap-crossing samples during the "
-                        f"sweep — if MIN/MAX look incomplete, remount the horn "
-                        f"so travel does not cross 0/{tracker.cpr - 1}."
+                        f"  {name}: crossed the encoder seam; center_offset={d.center_offset} "
+                        f"moves it into the unused gap. Present range "
+                        f"{d.range_min} .. {d.range_max} (span {d.range_max - d.range_min})."
+                    )
+                else:
+                    if tracker.wrap_rejected:
+                        print(
+                            f"  {name}: ignored {tracker.wrap_rejected} wrap-looking "
+                            f"glitch(es); travel treated as contiguous."
+                        )
+                    print(
+                        f"  {name}: Present range {d.range_min} .. {d.range_max} "
+                        f"(span {d.range_max - d.range_min}, center_offset=0; "
+                        f"raw encoder = Present)."
                     )
         except CalibrationSafetyError as exc:
             print(f"\nCalibration aborted (safety): {exc}")
@@ -212,33 +206,10 @@ class ActuatorModule(Module):
             self.end_calibration_mode()
             return
 
-        print("\n=== Drive mode (command direction) ===")
         drive_modes: dict[str, int] = {}
-        for port, actuator_names in hw_by_port.items():
-            bus = self.module_bus.component_bus_by_port[port]
-            for name in actuator_names:
-                mode = self.actuators[name].cfg.mode
-                label = low_command_label(mode)
-                input(
-                    f"Move '{name}' to the pose that should map to command {label}, "
-                    "then press ENTER..."
-                )
-                reading = bus.read(PosData, [name], normalize=False)
-                pose = float(reading[name])
-                d = derived[name]
-                dm = drive_mode_from_low_end_pose(pose, d.range_min, d.range_max)
-                drive_modes[name] = dm
-                end = "min" if dm == 0 else "max"
-                print(
-                    f"  {name}: pose={pose:.0f} near encoder {end} → drive_mode={dm}"
-                )
-                sim = getattr(self.actuators[name].cfg, "sim", None)
-                sim_dm = getattr(sim, "drive_mode", None) if sim is not None else None
-                if sim_dm is not None and int(sim_dm) != dm:
-                    print(
-                        f"  warning: sim.drive_mode={sim_dm} disagrees with operator "
-                        f"result ({dm}); keeping operator result."
-                    )
+        for name in derived:
+            cfg = self.actuators[name].cfg
+            drive_modes[name] = int(getattr(cfg, "sim_drive_mode", 0) or 0)
 
         preserved = {
             name: entry
@@ -253,7 +224,7 @@ class ActuatorModule(Module):
                 port_calibration[name] = MotorCalibration(
                     id=self.actuators[name].cfg.id,
                     drive_mode=drive_modes[name],
-                    homing_offset=d.homing_offset,
+                    homing_offset=d.center_offset,
                     range_min=d.range_min,
                     range_max=d.range_max,
                 )
@@ -262,9 +233,44 @@ class ActuatorModule(Module):
             )
             self.calibration.update(port_calibration)
 
+        if not has_ik:
+            print(
+                "\n=== Direction (one physical pose) ===\n"
+                "drive_mode is the sign between encoder and command. Move the\n"
+                "joint to the pose that should be the low command (e.g. fully\n"
+                "closed), not 'whichever encoder end is smaller'."
+            )
+            for port, actuator_names in hw_by_port.items():
+                bus = self.module_bus.component_bus_by_port[port]
+                for name in actuator_names:
+                    label = low_command_label(self.actuators[name].cfg.mode)
+                    input(
+                        f"Move '{name}' to the physical low-command pose ({label}), "
+                        "then press ENTER..."
+                    )
+                    reading = bus.read(PosData, [name], normalize=False)
+                    raw = float(reading[name])
+                    present = bus._present_ticks(name, raw)
+                    d = derived[name]
+                    dm = drive_mode_from_low_end_pose(present, d.range_min, d.range_max)
+                    drive_modes[name] = dm
+                    self.calibration[name].drive_mode = dm
+                    print(f"  {name}: drive_mode={dm}")
+            for port, actuator_names in hw_by_port.items():
+                subset = {n: self.calibration[n] for n in actuator_names}
+                self.module_bus.component_bus_by_port[port].write_calibration(subset)
+        else:
+            print(
+                "\nDirection (drive_mode) is decided in the live-mirror step — "
+                "whether the sim joint moves the same way as the real one."
+            )
+
         self._save_calibration(self.calibration)
-        logger.info(f"Calibration saved to {self.cfg.calibration_file}")
         self.write_calibration()
+        if has_ik:
+            print("Saved joint-limit ranges. Next: home position.")
+        else:
+            print_calibration_output(self)
         logger.info("Calibration written to actuators")
         self.end_calibration_mode()
 
@@ -551,3 +557,27 @@ class ActuatorModule(Module):
         if self.observation_buffer is None or not self.is_connected:
             return
         self.observation_buffer.put(self.read_sensors(PosData))
+
+
+def print_calibration_output(module) -> None:
+    """Print the saved yaml fields in operator language (matches the docs recipe)."""
+    print("\n=== Output ===")
+    path = module._module_yaml_path()
+    print(f"Saved to {path or '(in memory — no module yaml)'}")
+    calib = module.calibration or {}
+    for name in sorted(calib):
+        entry = calib[name]
+        print(
+            f"  {name}: real_range {entry.range_min} .. {entry.range_max}  "
+            f"center_offset={entry.homing_offset}  drive_mode={entry.drive_mode}"
+        )
+    home = getattr(module.cfg, "home", None) or {}
+    if home:
+        printed = ", ".join(f"{n}={home[n]:.1f}" for n in home)
+        print(f"  home: {printed}")
+    print(
+        "  real_range_* = Present travel window (after any wrap shift)\n"
+        "  center_offset = encoder-zero shift (0 = no shift)\n"
+        "  drive_mode = sign vs the model\n"
+        "  home = normalized pose you matched (not move.yaml poses.home)"
+    )

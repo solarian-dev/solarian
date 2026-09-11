@@ -1,6 +1,6 @@
 """Shared helpers for the IK sim<->real alignment commands.
 
-Keeps ``verify-ik-calibration``, ``derive-model-limits`` and ``calibrate-ik``
+Keeps ``verify-calibration``, ``derive-model-limits`` and ``calibrate``
 DRY: discover the project's IK module(s), build the kinematics backend (for the
 model joint limits), and resolve encoder counts-per-revolution offline via the
 servo bus's optional angular hook.
@@ -134,6 +134,6 @@ def counts_per_rev_resolver(module) -> Optional[dict[str, float]]:
 
 
 def load_calibration_dict(module) -> dict[str, Any]:
-    """Load the module's calibration JSON ({joint: MotorCalibration}) or empty."""
+    """Load MotorCalibration from the module yaml (legacy JSON fallback)."""
     module.load_calibration()
     return module.calibration or {}

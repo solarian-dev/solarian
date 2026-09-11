@@ -25,7 +25,7 @@ Joint limits always flow **CAD → MJCF → config.json**: Onshape mate limits w
 over any stale ``joint_properties.*.limits`` during the pull, and the cleaned
 MJCF ranges are written back into ``config.json``. With
 ``--update-yaml conf/<module>.yaml``, those same ranges are also written into
-the module conf's ``sim.range_min`` / ``range_max``.
+the module conf's ``sim_range_min`` / ``sim_range_max``.
 
 Examples:
     solarian onshape-export assets/so106_description
@@ -138,13 +138,13 @@ class OnshapeExportCommand(BaseCommand):
         )
         if update_yaml:
             print(
-                "  3. `sim.range_min`/`range_max` were synced too; verify attach "
-                "prefixes / joint names."
+                "  3. `sim_range_min`/`sim_range_max` were synced too; verify "
+                "attach prefixes / joint names."
             )
         else:
             print(
-                "  3. Fill in the `sim:` block of the module's conf yaml "
-                "(joint/actuator + radian range), or re-run with "
-                "`--update-yaml conf/<module>.yaml` to sync ranges from the MJCF."
+                "  3. Fill in `sim_joint` / `sim_range_*` on the module conf, "
+                "or re-run with `--update-yaml conf/<module>.yaml` to sync "
+                "ranges from the MJCF."
             )
         print("  See the 'Onshape -> Sim Models' docs page.\n")

@@ -36,36 +36,22 @@ frequency: 90
 actuators:
     shoulder_pan:
         id: 1
-        model: sts3250
         mode: range_m100_100
-        sim:
-            joint: "right/shoulder_pan"
-            actuator: "right/shoulder_pan"
-            range_min: -1.0  # old value
-            range_max: 1.0
+        sim_joint: "right/shoulder_pan"
+        sim_range_min: -1.0  # old value
+        sim_range_max: 1.0
     shoulder_lift:
         id: 2
-        model: sts3250
         mode: range_m100_100
-        sim:
-            joint: "right/shoulder_lift"
-            actuator: "right/shoulder_lift"
-            range_min: 0.0
-            range_max: 0.5
+        sim_joint: "right/shoulder_lift"
+        sim_range_min: 0.0
+        sim_range_max: 0.5
     orphan_joint:
         id: 3
-        model: sts3250
         mode: range_m100_100
-        sim:
-            joint: "right/orphan_joint"
-            actuator: "right/orphan_joint"
-            range_min: -0.1
-            range_max: 0.1
-    # Cartesian — no sim block; must stay untouched
-    x:
-        id: 0
-        model: ik_cartesian
-        mode: raw
+        sim_joint: "right/orphan_joint"
+        sim_range_min: -0.1
+        sim_range_max: 0.1
 """
 
 SAMPLE_CONFIG = {
@@ -119,37 +105,34 @@ def test_sync_module_yaml_preserves_comments_and_updates_ranges(
     text = yaml_path.read_text(encoding="utf-8")
 
     assert "# module conf — keep this comment" in text
-    assert "range_min: -1.0  # old value" not in text
-    assert "range_min: -2.10999" in text
+    assert "sim_range_min: -1.0  # old value" not in text
+    assert "sim_range_min: -2.10999" in text
     assert "# old value" in text
-    assert "range_max: 2.10999" in text
-    assert "range_min: -1.8099" in text
-    assert "range_max: 1.9949" in text
+    assert "sim_range_max: 2.10999" in text
+    assert "sim_range_min: -1.8099" in text
+    assert "sim_range_max: 1.9949" in text
     # Unmatched sim actuator left alone
     assert "orphan_joint:" in text
-    assert "range_min: -0.1" in text
-    # Cartesian untouched
-    assert "model: ik_cartesian" in text
-    assert "joint: \"right/shoulder_pan\"" in text
+    assert "sim_range_min: -0.1" in text
+    assert 'sim_joint: "right/shoulder_pan"' in text
 
 
 def test_sync_module_yaml_matches_by_actuator_key(tmp_path: Path) -> None:
-    """When sim.joint is absent, the actuator key itself is the joint name."""
+    """When sim_joint is absent, the actuator key itself is the joint name."""
     yaml_text = """\
 actuators:
     shoulder_pan:
         id: 1
-        sim:
-            range_min: 0
-            range_max: 1
+        sim_range_min: 0
+        sim_range_max: 1
 """
     path = tmp_path / "arm.yaml"
     path.write_text(yaml_text, encoding="utf-8")
     updated = sync_module_yaml(str(path), {"shoulder_pan": (-2.5, 2.5)})
     assert updated == ["shoulder_pan"]
     text = path.read_text(encoding="utf-8")
-    assert "range_min: -2.5" in text
-    assert "range_max: 2.5" in text
+    assert "sim_range_min: -2.5" in text
+    assert "sim_range_max: 2.5" in text
 
 
 def test_sync_module_yaml_skips_actuators_without_sim(tmp_path: Path) -> None:
@@ -157,8 +140,7 @@ def test_sync_module_yaml_skips_actuators_without_sim(tmp_path: Path) -> None:
 actuators:
     shoulder_pan:
         id: 1
-        range_min: 0
-        range_max: 1
+        port: /dev/ttyUSB0
 """
     path = tmp_path / "arm.yaml"
     path.write_text(yaml_text, encoding="utf-8")

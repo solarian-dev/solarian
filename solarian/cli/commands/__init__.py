@@ -51,11 +51,11 @@ CommandRegistry.register_lazy(
     setup_modules=("robot", "observation", "action"),
 )
 CommandRegistry.register_lazy(
-    "calibrate-module",
-    module_path=f"{_pkg}.calibrate_module",
-    help="Calibrate module device.",
+    "calibrate",
+    module_path=f"{_pkg}.calibrate",
+    help="Calibrate a module (hard-stop sweep, then IK alignment for arms).",
     config_name="robot",
-    setup_modules=("robot",),
+    setup_modules=("robot", "observation", "action"),
 )
 CommandRegistry.register_lazy(
     "calibrate-arm-latency",
@@ -114,20 +114,11 @@ CommandRegistry.register_lazy(
     setup_modules=("robot",),
 )
 CommandRegistry.register_lazy(
-    "calibrate-ik",
-    module_path=f"{_pkg}.align_ik",
-    help="Guided sim<->real alignment for an IK arm (live mirror + sign + Cartesian checks).",
+    "verify-calibration",
+    module_path=f"{_pkg}.verify_calibration",
+    help="Verify calibration spans against the IK model, then live-mirror the arm.",
     config_name="robot",
-    # Instantiates the full Robot (for the scene + live mirror), which validates
-    # the Observation schema, so the observation/action modules must be imported.
     setup_modules=("robot", "observation", "action"),
-)
-CommandRegistry.register_lazy(
-    "verify-ik-calibration",
-    module_path=f"{_pkg}.verify_ik_calibration",
-    help="Verify a module's calibration matches its IK model joint limits.",
-    config_name="robot",
-    setup_modules=("robot",),
 )
 CommandRegistry.register_lazy(
     "derive-model-limits",

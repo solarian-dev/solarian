@@ -55,22 +55,6 @@ class InterpolatorType(str, Enum):
         return self.value
 
 
-class SimActuatorConfig(BaseModel):
-    """Simulation mapping for an actuator.
-
-    Added to the *same* module yaml as the real hardware fields; it is ignored
-    when the module runs on real hardware and only consumed when the robot runs
-    with ``is_sim = True``. It says which MuJoCo joint/actuator the servo drives
-    and the radian range the normalized command space maps onto. Leave
-    ``joint``/``actuator`` unset for a virtual joint (one with no MuJoCo
-    counterpart) that just echoes the commanded value.
-    """
-    joint: str | None = None
-    actuator: str | None = None
-    range_min: float = -3.141592653589793
-    range_max: float = 3.141592653589793
-    drive_mode: int = 0
-
 class FisheyeDistortionConfig(BaseModel):
     """Calibrated OpenCV fisheye distortion for a simulated camera.
 
@@ -133,12 +117,49 @@ class CameraConfig(SensorConfig):
     optical_remap: str | None = None
 
 class ActuatorConfig(ComponentConfig):
-    model: str
-    # TODO validate mode string value
-    mode: str
-    #: Optional simulation mapping; used only when the robot runs with is_sim.
-    sim: SimActuatorConfig | None = None
-    
+    """Per-actuator yaml: deployment + measured values.
+
+    Structural facts (class, servo model, continuous vs limited) live on the
+    Module class declaration. ``type:`` in yaml is ignored (bus comes from
+    ``bus_class``). A leftover nested ``sim:`` block is flattened on load.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    port: str | None = None
+    model: str | None = None
+    mode: str | None = None
+    sim_joint: str | None = None
+    sim_range_min: float = -3.141592653589793
+    sim_range_max: float = 3.141592653589793
+    sim_drive_mode: int = 0
+    real_range_min: int | None = None
+    real_range_max: int | None = None
+    center_offset: int | None = None
+    drive_mode: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _flatten_legacy_sim(cls, data):
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        data.pop("type", None)
+        if "center_offset" not in data and "homing_offset" in data:
+            data["center_offset"] = data["homing_offset"]
+        data.pop("homing_offset", None)
+        sim = data.pop("sim", None)
+        if isinstance(sim, dict):
+            if data.get("sim_joint") is None and sim.get("joint") is not None:
+                data["sim_joint"] = sim["joint"]
+            if "sim_range_min" not in data and "range_min" in sim:
+                data["sim_range_min"] = sim["range_min"]
+            if "sim_range_max" not in data and "range_max" in sim:
+                data["sim_range_max"] = sim["range_max"]
+            if "sim_drive_mode" not in data and "drive_mode" in sim:
+                data["sim_drive_mode"] = sim["drive_mode"]
+        return data
+
 
 class ServoConfig(ActuatorConfig, SensorConfig):
     pass
@@ -164,8 +185,14 @@ class ModuleConfig(BaseModel):
     #: :class:`SafeState`.
     link_lost: SafeState = SafeState.HOLD
 
+    #: Operator-chosen home (normalized joint values), written by ``solarian calibrate``.
+    #: Skill poses like ``move.yaml`` ``home`` are a separate vocabulary.
+    home: dict[str, float] = {}
+
+    #: Deprecated sidecar JSON. Motor calibration now lives on each actuator
+    #: (``real_range_*`` / ``center_offset`` / ``drive_mode``). Still read as a
+    #: fallback when those fields are empty.
     calibration_file: str | None = None
-    # gripper_open_degree: Optional[float] = 30
     
     # # Interpolator settings
     interpolator_type: InterpolatorType = InterpolatorType.JOINT

@@ -1,17 +1,4 @@
-"""``calibrate-ik`` -- guided sim<->real alignment for an IK arm.
-
-Runs the real arm and a live MuJoCo view side by side and walks a non-expert
-through making Cartesian IK track correctly:
-
-1. Live mirror -- move the real arm by hand; the sim must track it 1:1.
-2. Sign check -- per joint, confirm the sim moves the SAME way as the real joint;
-   flip ``drive_mode`` (and save) when it does not.
-3. Cartesian check (optional) -- command pure +X/+Y/+Z moves and confirm the tool
-   translates the right way by the right amount.
-
-The easy limit sweep itself stays in ``solarian calibrate-module``; this command
-assumes a calibration exists and fixes the sim<->real correspondence on top of it.
-"""
+"""IK alignment steps used by ``solarian calibrate`` (home at model q=0, then sign)."""
 
 from __future__ import annotations
 
@@ -19,9 +6,7 @@ import logging
 import threading
 import time
 
-from solarian.cli import BaseCommand, CommandRegistry
-
-logger = logging.getLogger("calibrate_ik")
+logger = logging.getLogger("calibrate")
 
 
 class _MirrorThread(threading.Thread):
@@ -56,7 +41,9 @@ class _MirrorThread(threading.Thread):
         while not self._stop_evt.is_set():
             if not self._paused.is_set():
                 try:
-                    self.mirror.show(self.module_name, joints_present(self.module, self.joints))
+                    real = joints_present(self.module, self.joints)
+                    self.mirror.show(self.module_name, real)
+                    self.mirror.update_hud(self.module_name, self.joints, real)
                 except Exception as exc:  # noqa: BLE001
                     now = time.monotonic()
                     if str(exc) != last_err or now - last_log > 5.0:
@@ -66,75 +53,102 @@ class _MirrorThread(threading.Thread):
             time.sleep(self.period)
 
 
-@CommandRegistry.register("calibrate-ik", "robot")
-class CalibrateIKCommand(BaseCommand):
-    help = "Guided sim<->real alignment for an IK arm (live mirror + sign + Cartesian checks)."
-    params = ("module",)
+class IKAlignmentSteps:
+    """Home at model q=0, then live sign check. Robot stays connected."""
 
-    def handle(self, cfg) -> None:
-        from solarian.conf import settings
-        from solarian.utils import get_class
+    def run(self, robot, module, name) -> None:
+        joints, continuous, ik_bus, model_limits = self._joint_context(module)
+        missing = [n for n in joints if n not in (module.calibration or {})]
+        if missing:
+            print(
+                f"\nNote: {missing} have no range yet (typical for continuous "
+                f"joints). They will not track in the sim until the home step "
+                f"sets their zero."
+            )
+
+        mirror = self._open_viewer(robot, module)
+        mirror_thread = None
+        try:
+            if mirror.available:
+                mirror.show_model_zero(name, joints)
+                mirror.update_hud(name, joints, {})
+            self._step_home(module, joints, continuous, ik_bus, model_limits, mirror)
+            if mirror.available:
+                mirror_thread = _MirrorThread(mirror, module, name, joints)
+                mirror_thread.start()
+            self._step_sign(module, name, joints, continuous, mirror, mirror_thread)
+            self._finish(module, name, mirror_thread)
+            if mirror.available:
+                self._step_play(mirror, continuous)
+        finally:
+            self._stop_mirror(mirror, mirror_thread)
+
+    def run_mirror_only(self, robot, module, name) -> None:
+        """Live sim↔real view so the operator can confirm tracking after verify."""
+        joints, continuous, _, _ = self._joint_context(module)
+        mirror = self._open_viewer(robot, module)
+        mirror_thread = None
+        if mirror.available:
+            mirror_thread = _MirrorThread(mirror, module, name, joints)
+            mirror_thread.start()
+        try:
+            extra = f" Continuous joints: {sorted(continuous)}." if continuous else ""
+            self._ask(
+                mirror,
+                "Move the real arm by hand. The sim should follow it 1:1. "
+                "On-screen nrm is the real normalized pose; rad is the sim joint angle."
+                f"{extra} Press ENTER when you are done.",
+            )
+        finally:
+            self._stop_mirror(mirror, mirror_thread)
+
+    @staticmethod
+    def _joint_context(module):
         from solarian.core.ik.actuator import CartesianIKActuator
-        from solarian.sim.mirror import SimMirror
-        from solarian.cli.commands import _ik_common as ik
 
-        module_name = getattr(cfg, "module", None) if cfg is not None else None
-        name, _module_class = ik.select_ik_module(module_name)
-
-        # Real robot (force hardware even if the class defaults to sim).
-        RobotClass = get_class(settings.ROBOT_CLASS)
-        robot = RobotClass(cfg)
-        robot.is_sim = False
-        print("\nConnecting to the real robot (hardware)...")
-        robot.connect()
-
-        module = robot.modules[name]
         joints = [
             n for n in module.actuators
             if not isinstance(module.actuators[n], CartesianIKActuator)
         ]
-        continuous = set(getattr(type(module), "ik_continuous_joints", []) or [])
-        missing = [n for n in joints if n not in (module.calibration or {})]
-        if missing:
-            print(
-                f"\nNote: {missing} have no calibration yet (typical for continuous "
-                f"joints skipped by calibrate-module). They will not track in the\n"
-                f"sim until Step 2 sets their zero. The other joints should follow now."
-            )
+        continuous = {
+            n for n, act in module.actuators.items()
+            if getattr(act, "is_continuous", False)
+        }
+        _, ik_bus = IKAlignmentSteps._find_ik_bus(module)
+        model_limits = dict(getattr(ik_bus, "_limits", {}) or {}) if ik_bus is not None else {}
+        return joints, continuous, ik_bus, model_limits
 
-        print("\nStarting the live MuJoCo view (this may take a few seconds)...")
+    @staticmethod
+    def _open_viewer(robot, module):
+        from solarian.sim.mirror import SimMirror
+
+        print("\nStarting the sim view (this may take a few seconds)...")
         mirror = SimMirror(robot)
         mirror.start()
         if not mirror.available:
             print(
-                "Live sim view is unavailable (no display or MuJoCo). You can still run\n"
-                "the sign check by watching the real arm, but the visual mirror is off.\n"
+                "Live sim view is unavailable (no display or MuJoCo). "
+                "Answer the prompts in this terminal.\n"
             )
+        IKAlignmentSteps._disable_torque(module)
+        return mirror
 
-        cart_port, ik_bus = self._find_ik_bus(module)
-        model_limits = dict(getattr(ik_bus, "_limits", {}) or {}) if ik_bus is not None else {}
+    @staticmethod
+    def _stop_mirror(mirror, mirror_thread):
+        if mirror_thread is not None:
+            mirror_thread.stop()
+            mirror_thread.join(timeout=2)
+        mirror.close()
 
-        mirror_thread = None
-        try:
-            self._disable_torque(module)
-            if mirror.available:
-                mirror_thread = _MirrorThread(mirror, module, name, joints)
-                mirror_thread.start()
-
-            self._step_mirror(joints, continuous)
-            self._step_continuous(module, continuous, ik_bus, model_limits, mirror_thread)
-            self._step_sign(module, name, joints, continuous, mirror_thread)
-            self._maybe_step_cartesian(module, name, mirror_thread, cart_port, ik_bus)
-            self._finish(module, name)
-        finally:
-            if mirror_thread is not None:
-                mirror_thread.stop()
-                mirror_thread.join(timeout=2)
-            mirror.close()
-            try:
-                robot.disconnect()
-            except Exception:  # noqa: BLE001
-                pass
+    @staticmethod
+    def _ask(mirror, text, *, yes_no: bool = False) -> str:
+        if mirror is not None:
+            return mirror.ask(text, yes_no=yes_no)
+        print(f"\n{text}")
+        if yes_no:
+            return input("[y/n]: ").strip().lower()
+        input("Press ENTER...")
+        return ""
 
     # -- steps -------------------------------------------------------------
     @staticmethod
@@ -144,18 +158,6 @@ class CalibrateIKCommand(BaseCommand):
             print("\nTorque is OFF -- you can move the arm freely by hand.")
         except Exception as exc:  # noqa: BLE001
             print(f"(could not disable torque automatically: {exc})")
-
-    @staticmethod
-    def _step_mirror(joints, continuous):
-        print("\n=== Step 1/4: Live mirror ===")
-        print(
-            "Move the real arm around by hand. The on-screen sim arm should follow it\n"
-            "1:1 -- same joints, same directions. If a joint moves the WRONG way in the\n"
-            "sim, note it: we fix that next."
-        )
-        if continuous:
-            print(f"(continuous joints without a hard stop: {sorted(continuous)})")
-        input("\nPress ENTER when you are ready to continue to the sign check...")
 
     @staticmethod
     def _find_ik_bus(module):
@@ -176,19 +178,16 @@ class CalibrateIKCommand(BaseCommand):
         Used for continuous joints that have no hard stops to sweep; does not
         disturb the sign (``drive_mode``).
 
-        A continuous joint's zero can sit anywhere on the encoder circle, so the
-        model span centred on it may spill outside the servo's valid
-        ``[0, cpr-1]`` window. If it does, we re-home the joint so the zero pose
-        reads mid-encoder -- recentring the whole range inside the window. This
-        matters because the bus clamps the saved range to ``[0, 4095]`` on write:
-        an unclamped negative ``range_min`` would otherwise be truncated,
-        shifting the mapped zero (the "sim is rotated ~45 deg from my chosen
-        zero" symptom) and risking wrapped goal writes at the extremes.
+        Always re-homes this pose to mid-encoder and persists that
+        ``center_offset``. Skipping the re-home when the (already-homed) present
+        already fits writes ``center_offset=0`` over the servo's existing
+        EEPROM value; Present then jumps and home is no longer model 0 — the
+        sim looks constantly rotated even though verify-calibration's span
+        table passes.
         """
-        import math
-
         from solarian.core.calibration import MotorCalibration
         from solarian.core.data import PosData
+        from solarian.core.ik.alignment import continuous_range_window
 
         calib = module.calibration or {}
         entry = calib.get(joint)
@@ -201,7 +200,7 @@ class CalibrateIKCommand(BaseCommand):
             print(f"  {joint}: missing model-limit/encoder-resolution; skipping.")
             return False
         if entry is None:
-            # First-time continuous joint (skipped by calibrate-module sweep).
+            # First-time continuous joint (skipped by the hard-stop sweep).
             act = module.actuators.get(joint)
             if act is None:
                 print(f"  {joint}: not an actuator on this module; skipping.")
@@ -218,8 +217,11 @@ class CalibrateIKCommand(BaseCommand):
             module.calibration[joint] = entry
             print(f"  {joint}: created calibration entry (continuous joint).")
         lo, hi = lim
-        span_ticks = (hi - lo) / (2.0 * math.pi) * cpr
-        frac = (0.0 - lo) / (hi - lo) if hi != lo else 0.5
+        if abs((0.0 - lo) / (hi - lo) - 0.5) > 0.05:
+            print(
+                f"  {joint}: model range [{lo:.3f}, {hi:.3f}] is not 0-centered; "
+                f"home sits on a limit. Use ±(span/2) in the MJCF."
+            )
 
         def _read_center():
             out = ik_bus.read(PosData, [joint], normalize=False)
@@ -227,98 +229,111 @@ class CalibrateIKCommand(BaseCommand):
             return float(raw["value"] if isinstance(raw, dict) else raw)
 
         try:
+            offsets = ik_bus.set_half_turn_homings([joint])
+            entry.homing_offset = int(offsets[joint])
             center = _read_center()
         except Exception as exc:  # noqa: BLE001
-            print(f"  {joint}: could not read position ({exc}); skipping.")
+            print(f"  {joint}: could not re-home ({exc}); skipping.")
             return False
 
-        range_min = center - span_ticks * frac
-        range_max = center + span_ticks * (1.0 - frac)
-
-        # Recentre out-of-window ranges by re-homing this pose to mid-encoder.
-        if range_min < 0 or range_max > (cpr - 1):
-            try:
-                offsets = ik_bus.set_half_turn_homings([joint])
-                entry.homing_offset = int(offsets[joint])
-                center = _read_center()
-                range_min = center - span_ticks * frac
-                range_max = center + span_ticks * (1.0 - frac)
-                print(f"  {joint}: re-homed this pose to mid-encoder to keep its range in bounds.")
-            except Exception as exc:  # noqa: BLE001
-                print(f"  {joint}: could not re-home ({exc}); saving best-effort range.")
-
-        entry.range_min = int(round(range_min))
-        entry.range_max = int(round(range_max))
+        win = continuous_range_window(center, lo, hi, cpr)
+        entry.range_min = win.range_min
+        entry.range_max = win.range_max
         print(
             f"  {joint}: range_min={entry.range_min}, range_max={entry.range_max} "
-            f"(span {hi - lo:.3f} rad ~= {span_ticks:.0f} ticks, center={center:.0f})."
+            f"(span {hi - lo:.3f} rad, center={center:.0f}, "
+            f"center_offset={entry.homing_offset})."
         )
         return True
 
-    def _step_continuous(self, module, continuous, ik_bus, model_limits, mirror_thread=None):
-        """Set zero + range for hard-stop-less joints from one easy reference.
-
-        Jointed (hard-stop) joints need no zero calibration: their two swept
-        range endpoints map straight onto the model's ``lo``/``hi``, so the
-        midpoint IS the model zero automatically -- nothing to pose. A continuous
-        joint (e.g. ``wrist_roll``) has no hard stops to anchor on, so we set its
-        range from the model span centred on one operator-chosen zero, using a
-        natural, easy-to-reproduce pose (not a mimic of the sim).
-        """
-        if not continuous:
-            return
-        if ik_bus is None:
-            print("\n(skipping continuous-joint zero: IK bus unavailable)")
-            return
-        print("\n=== Step 2/4: Continuous-joint zero ===")
-        print(
-            "Joints with hard stops need no zero step -- their swept range already\n"
-            "fixes it. These joints have NO hard stop, so pick a natural zero for each:"
+    def _step_home(self, module, joints, continuous, ik_bus, model_limits, mirror):
+        """Freedrive the whole arm to the on-screen model-zero pose."""
+        print("\n=== Step 2: Home position ===")
+        extra = (
+            f" Continuous joints get their range from this pose: {sorted(continuous)}."
+            if continuous
+            else ""
         )
-        changed = False
-        paused = False
-        try:
+        self._ask(
+            mirror,
+            "Step 2: Home position. Match the pose on screen (every sim joint at 0). "
+            "That is mid-travel for hard-stop joints and the zero we store for "
+            "continuous wrists. Leave a little room so any joint can still move a "
+            "few degrees either way. Drag to orbit if the arm is off-screen; R resets."
+            f"{extra} Press ENTER when the arm matches.",
+        )
+
+        if continuous and ik_bus is None:
+            print("(skipping continuous-joint zero: IK bus unavailable)")
+        elif continuous:
+            changed = False
             for joint in sorted(continuous):
-                input(
-                    f"\nRotate '{joint}' to the orientation you want as its ZERO "
-                    f"(e.g. gripper level/neutral),\nthen press ENTER..."
-                )
-                # Pause the live mirror before touching the bus: anchoring may
-                # re-home the joint (which resets then rewrites its calibration),
-                # and concurrent reads on the half-duplex serial line can corrupt
-                # those writes. Stay paused through _save so the mirror never
-                # renders the transient reset calibration.
-                if mirror_thread is not None and not paused:
-                    mirror_thread.pause()
-                    paused = True
                 if self._anchor_joint(module, joint, ik_bus, model_limits):
                     changed = True
             if changed:
                 self._save(module)
-                print("Saved continuous-joint zero.")
-        finally:
-            if paused:
-                mirror_thread.resume()
+                print("Saved continuous-joint ranges from home.")
+        home = self._read_normalized_joints(module, joints)
+        if home:
+            for joint in sorted(continuous):
+                value = home.get(joint)
+                if value is not None and abs(value) > 5:
+                    print(
+                        f"  warning: {joint} home is {value:.1f}, expected ~0. "
+                        f"The sim will look rotated; re-run this home step."
+                    )
+            try:
+                module._save_home(home)
+                printed = ", ".join(f"{n}={home[n]:.1f}" for n in joints if n in home)
+                print(f"Saved home: {printed}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"(warning: could not persist home: {exc})")
 
-    def _step_sign(self, module, module_name, joints, continuous, mirror_thread):
-        print("\n=== Step 3/4: Joint direction (sign) check ===")
-        print(
-            "For each joint, move it by hand and watch the sim. If the sim joint moves\n"
-            "the OPPOSITE way, we flip its direction and save."
-        )
+    @staticmethod
+    def _read_normalized_joints(module, joints) -> dict[str, float]:
+        from solarian.core.data import PosData
+
+        try:
+            readings = module.read_sensors(PosData, list(joints), normalize=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"(warning: could not read home pose: {exc})")
+            return {}
+        home: dict[str, float] = {}
+        for name in joints:
+            entry = readings.get(name)
+            if entry is None:
+                continue
+            raw = entry["value"] if isinstance(entry, dict) else entry
+            home[name] = float(raw)
+        return home
+
+    def _step_sign(self, module, module_name, joints, continuous, mirror, mirror_thread=None):
+        print("\n=== Step 3: Sim mapping ===")
+        print("Answer Y/N in the sim window for each joint. The joint axis is a red arrow.")
         changed = False
-        for joint in joints:
-            note = " (continuous: no hard stop, sign still matters)" if joint in continuous else ""
-            input(f"\nJoint '{joint}'{note}: move it now, watch the sim, then press ENTER...")
-            ans = input(f"Did the sim '{joint}' move the SAME direction as the real one? [y/n]: ").strip().lower()
-            if ans.startswith("n"):
-                if self._flip_drive_mode(module, joint):
-                    changed = True
-                    print(f"  Flipped '{joint}' direction. It should now track correctly.")
-                else:
-                    print(f"  Could not flip '{joint}' (no calibration entry).")
+        try:
+            for joint in joints:
+                note = " (continuous)" if joint in continuous else ""
+                if mirror is not None:
+                    mirror.highlight(module_name, joint)
+                ans = self._ask(
+                    mirror,
+                    f"Step 3: Sim mapping. Joint '{joint}'{note} is marked with a red arrow. "
+                    "Move it and watch the sim. Does the sim move the SAME "
+                    "direction as the real joint?",
+                    yes_no=True,
+                )
+                if ans.startswith("n"):
+                    if self._flip_drive_mode(module, joint):
+                        changed = True
+                        print(f"  Flipped '{joint}' direction. It should now track correctly.")
+                    else:
+                        print(f"  Could not flip '{joint}' (no calibration entry).")
+        finally:
+            if mirror is not None:
+                mirror.highlight(module_name, None)
         if changed:
-            self._save(module)
+            self._save(module, mirror_thread)
             print("\nSaved updated joint directions.")
         else:
             print("\nNo direction changes needed.")
@@ -332,72 +347,45 @@ class CalibrateIKCommand(BaseCommand):
         entry.drive_mode = 0 if int(getattr(entry, "drive_mode", 0)) else 1
         return True
 
-    def _maybe_step_cartesian(self, module, module_name, mirror_thread, cart_port, ik_bus):
-        print("\n=== Step 4/4: Cartesian axis check (optional) ===")
-        if cart_port is None or ik_bus is None:
-            print("No Cartesian actuators / IK bus on this module; skipping.")
-            return
-        ans = input(
-            "This ENABLES TORQUE and commands small +X/+Y/+Z tool moves. Keep the\n"
-            "workspace clear and a hand near the e-stop. Run it now? [y/N]: "
-        ).strip().lower()
-        if not ans.startswith("y"):
-            print("Skipped the Cartesian check.")
-            return
+    def _finish(self, module, module_name, mirror_thread=None):
+        from solarian.core.actuator_module import print_calibration_output
 
-        from solarian.core.data import PosData
-        from solarian.core.ik.verify import HumanVerifier, run_cartesian_check
-
-        if mirror_thread is not None:
-            mirror_thread.pause()
-        try:
-            self._arm(module)
-
-            def read_pose():
-                vals = ik_bus.read(PosData, ["x", "y", "z"])
-                return {a: float(vals[a]) for a in ("x", "y", "z")}
-
-            def command_pose(pose):
-                ik_bus.write({a: PosData(value=float(pose[a])) for a in ("x", "y", "z")})
-
-            report = run_cartesian_check(read_pose, command_pose, HumanVerifier(), delta=0.05)
-            print("\n" + report.format_summary())
-            for hint in report.hints():
-                print("  hint: " + hint)
-        except Exception as exc:  # noqa: BLE001
-            print(f"Cartesian check could not run ({exc}); skipping.")
-        finally:
-            try:
-                module.disable_torque()
-            except Exception:  # noqa: BLE001
-                pass
-            if mirror_thread is not None:
-                mirror_thread.resume()
-
-    @staticmethod
-    def _arm(module):
-        # Bring the arm to operating torque using the module's own safety hooks
-        # when present (so106 defines initialize/enter_safe_hold/on_arm).
-        for hook in ("initialize", "enter_safe_hold", "on_arm"):
-            fn = getattr(module, hook, None)
-            if callable(fn):
-                try:
-                    fn()
-                except Exception:  # noqa: BLE001
-                    pass
-
-    def _finish(self, module, module_name):
-        self._save(module)
+        self._save(module, mirror_thread)
+        print_calibration_output(module)
         print(
-            f"\nDone. Calibration for '{module_name}' saved. Run\n"
-            f"  solarian verify-ik-calibration\n"
-            f"to confirm the model limits match, then drive the arm with `solarian run-robot`.\n"
+            f"\nSaved '{module_name}'. The live mirror stays open so you can "
+            "check the mapping. Run `solarian verify-calibration` later for "
+            "the span table.\n"
+        )
+
+    def _step_play(self, mirror, continuous):
+        extra = f" Continuous joints: {sorted(continuous)}." if continuous else ""
+        self._ask(
+            mirror,
+            "Live mirror is on. Move the arm and check the numbers "
+            "(nrm = real normalized, rad = sim joint angle)."
+            f"{extra} Press ENTER when done.",
         )
 
     @staticmethod
-    def _save(module):
+    def _pause_mirror(mirror_thread):
+        if mirror_thread is None:
+            return
+        mirror_thread.pause()
+        time.sleep(max(mirror_thread.period * 2, 0.05))
+
+    @staticmethod
+    def _resume_mirror(mirror_thread):
+        if mirror_thread is not None:
+            mirror_thread.resume()
+
+    def _save(self, module, mirror_thread=None):
+        self._pause_mirror(mirror_thread)
         try:
-            module._save_calibration(module.calibration)
-            module.write_calibration()
-        except Exception as exc:  # noqa: BLE001
-            print(f"(warning: could not persist calibration: {exc})")
+            try:
+                module._save_calibration(module.calibration)
+                module.write_calibration()
+            except Exception as exc:  # noqa: BLE001
+                print(f"(warning: could not persist calibration: {exc})")
+        finally:
+            self._resume_mirror(mirror_thread)

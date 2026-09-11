@@ -24,7 +24,7 @@ The physical or logical channel a host computer uses to talk to one or more hard
 
 ### Calibration
 
-The process of mapping raw hardware values (encoder ticks, ADC counts) to physically meaningful units (radians, meters). Solarian stores calibration in JSON files referenced by `ModuleConfig.calibration_file` and provides `solarian calibrate-module` / `write-robot-calibration` to manage them.
+The process of mapping raw hardware values (encoder ticks, ADC counts) to physically meaningful units (radians, meters). Solarian stores motor calibration on each actuator in the module yaml (`real_range_min` / `real_range_max` / `center_offset` / `drive_mode`) and provides `solarian calibrate` / `write-robot-calibration` to manage them. `center_offset` is the encoder-zero shift (Present = raw − offset); the Feetech/Dynamixel register is still named `Homing_Offset`. See [Calibration](/docs/modules/calibration).
 
 ### Cartesian space
 
@@ -198,7 +198,7 @@ Anything connected to the runtime — an arm, a gripper, a camera, a keyboard. P
 
 ### `ModuleConfig`
 
-Pydantic model for `conf/<module_name>.yaml` (`frequency`, `actuators`, `sensors`, `calibration_file`, `interpolator_type`, …). Modules can extend it via `config_class`.
+Pydantic model for `conf/<module_name>.yaml` (`frequency`, `actuators`, `sensors`, `interpolator_type`, …). Modules can extend it via `config_class`.
 
 ### Observation
 

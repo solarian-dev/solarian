@@ -33,7 +33,7 @@ solarian onshape-export <assembly_dir> --update-yaml conf/right_arm.yaml
     File with <code>ONSHAPE_ACCESS_KEY</code>/<code>ONSHAPE_SECRET_KEY</code> lines, loaded into the environment if the keys aren't already set. When omitted, the command tries <code>onshape_keys.txt</code> then <code>.env</code> in the current directory.
   </Property>
   <Property name="--update-yaml" type="path">
-    After export, also sync joint ranges from the cleaned MJCF into this module conf (<code>{'actuators.*.sim.range_min'}</code>/<code>{'range_max'}</code>). Matches actuators by key name or by the bare name of <code>sim.joint</code> (attach prefixes like <code>right/</code> are stripped). Actuators without a <code>sim:</code> block are left alone. <code>config.json</code> <code>{'joint_properties.*.limits'}</code> are always rewritten from the CAD mate limits, with or without this flag.
+    After export, also sync joint ranges from the cleaned MJCF into this module conf (<code>sim_range_min</code>/<code>sim_range_max</code>). Matches actuators by key name or by the bare name of <code>sim_joint</code> (attach prefixes like <code>right/</code> are stripped). Actuators without <code>sim_joint</code> / <code>sim_range_min</code> are left alone. <code>config.json</code> <code>{'joint_properties.*.limits'}</code> are always rewritten from the CAD mate limits, with or without this flag.
   </Property>
 </Properties>
 
@@ -205,24 +205,20 @@ class So106Robot(Robot):
     )
 ```
 
-2. **Map each servo to the model** — a [`sim:` block](/docs/sim-components) per actuator in the module's `conf/<module>.yaml`, naming the MJCF `joint`/`actuator` (with the attach `prefix`) and the radian range that the servo's normalized command space maps onto:
+2. **Map each servo to the model** — `sim_joint` / `sim_range_*` per actuator in the module's `conf/<module>.yaml`, naming the MJCF joint (with the attach `prefix`) and the radian range that the servo's normalized command space maps onto:
 
 ```yaml
 # conf/right_arm.yaml
 actuators:
   shoulder_pan:
     id: 1
-    model: sts3250
-    mode: range_m100_100
-    sim:
-      joint: "right/shoulder_pan"
-      actuator: "right/shoulder_pan"
-      range_min: -1.91986    # = MJCF joint range (keep in sync via --update-yaml)
-      range_max: 1.91986
+    sim_joint: "right/shoulder_pan"
+    sim_range_min: -1.91986    # = MJCF joint range (keep in sync via --update-yaml)
+    sim_range_max: 1.91986
 ```
 
 <Note>
-  Keep <code>range_min</code>/<code>range_max</code> equal to the MJCF joint <code>range</code> (and to <code>joint_properties.limits</code>). Export always refreshes <code>config.json</code> from the CAD mate limits; pass <code>--update-yaml conf/&lt;module&gt;.yaml</code> to sync the module yaml too — a mismatch silently skews every normalized ↔ radian conversion.
+  Keep <code>sim_range_min</code>/<code>sim_range_max</code> equal to the MJCF joint <code>range</code> (and to <code>joint_properties.limits</code>). Export always refreshes <code>config.json</code> from the CAD mate limits; pass <code>--update-yaml conf/&lt;module&gt;.yaml</code> to sync the module yaml too — a mismatch silently skews every normalized ↔ radian conversion.
 </Note>
 
 ## Worked example: adding a gripper
@@ -247,7 +243,7 @@ The SO-106 gripper is a separate assembly with a single **prismatic** jaw mate. 
 }
 ```
 
-Export it, attach it to the arm's wrist body, and give its servo a `sim:` block:
+Export it, attach it to the arm's wrist body, and give its servo `sim_joint` / `sim_range_*`:
 
 ```bash
 solarian onshape-export assets/umi_slim_gripper_description
@@ -274,13 +270,9 @@ solarian onshape-export assets/umi_slim_gripper_description
 actuators:
   gripper:
     id: 7
-    model: sts3215
-    mode: range_m100_100
-    sim:
-      joint: "right_gripper/jaw"
-      actuator: "right_gripper/jaw"
-      range_min: 0.0
-      range_max: 0.037
+    sim_joint: "right_gripper/jaw"
+    sim_range_min: 0.0
+    sim_range_max: 0.037
 ```
 
 ## Shipping the model inside a plugin
@@ -367,5 +359,5 @@ unzip -l dist/*.whl | grep assets   # expect umi_slim.xml + meshes/*.stl, and no
 - [Simulation](/docs/simulation) — the `is_sim` switch.
 - [Scenes](/docs/scenes) — `ModuleAttachment`, `parent_body`, `prefix`.
 - [Plug-ins](/docs/plugins) — packaging a module (and its model) as a reusable plugin.
-- [Sim Servos & Cameras](/docs/sim-components) — the `sim:` block schema.
+- [Sim Servos & Cameras](/docs/sim-components) — `sim_joint` / `sim_range_*` on servos.
 - [IK](/docs/ik) — the end-effector `site` referenced by `ee_site`.

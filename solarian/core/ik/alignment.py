@@ -104,6 +104,74 @@ def composed_rad(
     return ((norm + 100.0) / 200.0) * (model_hi - model_lo) + model_lo
 
 
+# -- continuous joints: one home pose -> encoder window -----------------------
+@dataclass(frozen=True)
+class ContinuousRangeWindow:
+    """Encoder ``range_min``/``range_max`` that maps a home reading to model 0.
+
+    ``needs_rehome`` means the window does not fit in ``[0, cpr-1]`` at the
+    current present reading. Re-home so that pose reads mid-encoder, then
+    compute again. A model range that puts 0 at an endpoint (e.g. ``[-2π, 0]``)
+    can never fit a full-turn window; the fallback is the full encoder so
+    travel stays bidirectional.
+    """
+
+    range_min: int
+    range_max: int
+    needs_rehome: bool
+
+
+def _window_if_span_kept(lo_t: float, hi_t: float, max_tick: float) -> Optional[tuple[int, int]]:
+    """Clamp to ``[0, max_tick]`` only when that keeps nearly the intended span.
+
+    A full-turn span is ``cpr`` ticks but the valid encoder is ``[0, cpr-1]``;
+    clipping that one extra tick is fine. Clipping half a turn is not — that
+    is how a ``[-2π, 0]`` model used to save ``0..2047`` and fail verify at 0.50x.
+    """
+    intended = hi_t - lo_t
+    if intended <= 0:
+        return None
+    clo = max(lo_t, 0.0)
+    chi = min(hi_t, max_tick)
+    if chi <= clo or (chi - clo) / intended < 0.98:
+        return None
+    return int(round(clo)), int(round(chi))
+
+
+def continuous_range_window(
+    present: float,
+    model_lo: float,
+    model_hi: float,
+    cpr: float,
+) -> ContinuousRangeWindow:
+    """Linear encoder window for a continuous joint whose present pose is model 0."""
+    span_rad = float(model_hi) - float(model_lo)
+    if span_rad <= 0 or cpr <= 0:
+        raise ValueError("model range and counts_per_rev must be positive")
+    span_ticks = span_rad / TAU * float(cpr)
+    frac = (0.0 - float(model_lo)) / span_rad
+    max_tick = float(cpr) - 1.0
+
+    fitted = _window_if_span_kept(
+        present - span_ticks * frac,
+        present + span_ticks * (1.0 - frac),
+        max_tick,
+    )
+    if fitted is not None:
+        return ContinuousRangeWindow(fitted[0], fitted[1], False)
+
+    mid = float(cpr) / 2.0
+    mid_fitted = _window_if_span_kept(
+        mid - span_ticks * frac,
+        mid + span_ticks * (1.0 - frac),
+        max_tick,
+    )
+    if mid_fitted is not None:
+        return ContinuousRangeWindow(mid_fitted[0], mid_fitted[1], True)
+
+    return ContinuousRangeWindow(0, int(max_tick), True)
+
+
 # -- verify: does the calibration span match the model's joint range? ---------
 @dataclass
 class JointLimitReport:

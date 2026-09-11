@@ -27,12 +27,12 @@ from solarian.core.module import Module
 from solarian_feetech.actuator import FeetechServo
 
 class ArmModule(Module):
-    shoulder_pan = FeetechServo()
-    shoulder_lift = FeetechServo()
-    elbow_flex = FeetechServo()
-    wrist_flex = FeetechServo()
-    wrist_roll = FeetechServo()
-    gripper = FeetechServo()
+    shoulder_pan = FeetechServo(model="sts3215")
+    shoulder_lift = FeetechServo(model="sts3215")
+    elbow_flex = FeetechServo(model="sts3215")
+    wrist_flex = FeetechServo(model="sts3215")
+    wrist_roll = FeetechServo(model="sts3215", is_continuous=True)
+    gripper = FeetechServo(model="sts3215")
 ```
 
 Then attach the module to your `Robot`:
@@ -56,20 +56,18 @@ Each module gets its own YAML config under `conf/<module_attribute_name>.yaml`. 
 
 ```yaml
 # conf/arm.yaml
-calibration_file: .cache/calibration/my_arm.json
 actuator_port: /dev/ttyUSB0
 frequency: 200
 actuators:
   shoulder_pan:
     id: 1
-    model: sts3215
     port: ${actuator_port}
-    mode: position
+    sim_joint: "arm/shoulder_pan"
+    sim_range_min: -1.92
+    sim_range_max: 1.92
   shoulder_lift:
     id: 2
-    model: sts3215
     port: ${actuator_port}
-    mode: position
   # ...
 ```
 
@@ -92,8 +90,11 @@ actuators:
   <Property name="sensors" type="dict[str, SensorConfig]">
     Per-sensor configuration keyed by the class attribute name.
   </Property>
-  <Property name="calibration_file" type="str | None">
-    Path to a calibration JSON file produced by <code>solarian calibrate-module</code>.
+  <Property name="actuators.*.real_range_*" type="int | None">
+    Measured Present-frame ends of travel, written by <code>solarian calibrate</code>. See <a href="/docs/modules/calibration">Calibration</a>.
+  </Property>
+  <Property name="actuators.*.center_offset" type="int | None">
+    Encoder-zero shift so Present travel is a linear window. Legacy yaml <code>homing_offset</code> is still read. See <a href="/docs/modules/calibration">Calibration</a>.
   </Property>
   <Property name="interpolator_type" type="InterpolatorType">
     One of <code>joint</code>, <code>scalar</code>, or <code>pose</code>. Selects the trajectory interpolator used by the default <code>SCHEDULE_WAYPOINT</code> handler. See <a href="/docs/modules/scheduling-waypoints">Scheduling Waypoints</a>.
@@ -320,6 +321,7 @@ If your module has actuators on more than one port (for example, two daisy-chain
 
 ## See also
 
+- [Calibration](/docs/modules/calibration) — limit sweep, IK alignment, and latency measurements to bring a module up.
 - [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose and scalar `SCHEDULE_WAYPOINT` on `Module`.
 - [Robots](/docs/robots) — how modules are attached to a robot and dispatched.
 - [Observations](/docs/observations) — the schema your module publishes into.

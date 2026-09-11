@@ -8,7 +8,7 @@ export const metadata = {
 
 Running a robot in simulation is a **switch, not a rewrite**. Take your existing [`Robot`](/docs/robots), set `is_sim = True`, give it a `scene`, and the framework runs every [Module](/docs/modules) inside a shared MuJoCo world instead of on hardware — same [Observation](/docs/observations)/[Action](/docs/actions) schemas, same transport, same control loop. {{ className: 'lead' }}
 
-There are **no** `SimRobot`, `SimModule`, or `SimServo` classes. Your real modules, servos, and cameras run unchanged; the only extra input the sim needs is a `scene` describing the environment and how each module's MuJoCo model attaches, plus a small `sim:` block on each component's YAML.
+There are **no** `SimRobot`, `SimModule`, or `SimServo` classes. Your real modules, servos, and cameras run unchanged; the only extra input the sim needs is a `scene` describing the environment and how each module's MuJoCo model attaches, plus `sim_joint` / `sim_range_*` on each servo (cameras still use a `sim:` block).
 
 <Note>
   MuJoCo and the other simulation dependencies live in the `[sim]` extra (`mujoco`, `mink`). They are imported lazily inside the sim code paths, so `import solarian` never requires them — only running a robot with `is_sim = True` does. Install with <code>pip install "solarian[sim]"</code>.
@@ -71,27 +71,22 @@ sim: null   # null defers to the robot class's is_sim; override with sim=true/fa
   </Property>
 </Properties>
 
-## Same YAML, one `sim:` block
+## Same YAML, `sim_joint` / `sim_range_*`
 
-Real and simulated robots read the **same** `conf/<module>.yaml` files. The hardware fields (`id`, `model`, `port`, `type`) are ignored in sim; a `sim:` block on each actuator/sensor supplies the MuJoCo mapping and is ignored on hardware:
+Real and simulated robots read the **same** `conf/<module>.yaml` files. Deployment fields (`id`, `port`) are ignored in sim; `sim_joint` / `sim_range_*` on each actuator supply the MuJoCo mapping and are ignored on hardware:
 
 ```yaml
 # conf/arm.yaml
 actuators:
   shoulder_pan:
     id: 1
-    model: sts3215
     port: ${actuator_port}
-    type: feetech
-    mode: range_m100_100
-    sim:
-      joint: "arm/shoulder_pan"       # MJCF joint name (after the attach prefix)
-      actuator: "arm/shoulder_pan"    # MJCF actuator name
-      range_min: -1.91986             # radians mapped to -100
-      range_max: 1.91986              # radians mapped to +100
+    sim_joint: "arm/shoulder_pan"   # MJCF joint name (after the attach prefix)
+    sim_range_min: -1.91986         # radians mapped to -100
+    sim_range_max: 1.91986          # radians mapped to +100
 ```
 
-See [Sim Servos & Cameras](/docs/sim-components) for the full `sim:` schema, virtual joints, and simulated cameras.
+See [Sim Servos & Cameras](/docs/sim-components) for the full servo mapping, virtual joints, and simulated cameras.
 
 ## How it works
 
@@ -122,6 +117,6 @@ solarian run-controller             # unchanged controller (keyboard, leader arm
 
 - [Sim Robots](/docs/sim-robots) — the `is_sim`/`scene` switch and attaching modules.
 - [Scenes](/docs/scenes) — building the MuJoCo world from module MJCF.
-- [Sim Servos & Cameras](/docs/sim-components) — the `sim:` block on components.
+- [Sim Servos & Cameras](/docs/sim-components) — `sim_joint` / `sim_range_*` on servos and the `sim:` block on cameras.
 - [IK](/docs/ik) — Cartesian control that works in real and sim alike.
 - [Robots](/docs/robots) / [Modules](/docs/modules) — the classes you reuse unchanged.

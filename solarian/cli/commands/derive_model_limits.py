@@ -2,7 +2,7 @@
 
 The IK sim<->real contract is: the MuJoCo model's ``jnt_range`` for each joint
 equals the real arm's mechanical hard-stop angles. This command reads the real
-range (from the existing calibration JSON, or a fresh guided limit sweep),
+range (from the module yaml, or a fresh guided limit sweep),
 converts encoder counts to radians via the servo bus resolution, and prints the
 ``range`` values to paste into the model -- so the model matches the real arm by
 construction.
@@ -35,7 +35,7 @@ class DeriveModelLimitsCommand(BaseCommand):
             calibration = ik.load_calibration_dict(module)
             if not calibration:
                 raise SystemExit(
-                    f"No calibration for '{name}'. Either run `solarian calibrate-module` "
+                    f"No calibration for '{name}'. Either run `solarian calibrate` "
                     f"first, or re-run this with `sweep=true` to record ranges now."
                 )
 
@@ -57,7 +57,7 @@ class DeriveModelLimitsCommand(BaseCommand):
         print(
             "\nPaste these into the arm's MJCF <joint range=...> attributes and keep the "
             "sim `range_min/range_max` in the module yaml in sync. Then run "
-            "`solarian verify-ik-calibration` to confirm.\n"
+            "`solarian verify-calibration` to confirm.\n"
         )
 
     @staticmethod

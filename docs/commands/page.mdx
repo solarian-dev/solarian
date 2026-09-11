@@ -82,13 +82,13 @@ solarian run-robot
 
 Loads `conf/robot.yaml`, instantiates your `Robot` subclass, spawns one process per `Module`, and starts the action receiver / observation publisher. See [Robots](/docs/robots).
 
-### `calibrate-module`
+### `calibrate`
 
 ```bash
-solarian calibrate-module module_name=<attr>
+solarian calibrate
 ```
 
-Runs the calibration routine for a single module on the robot. Used for arms with absolute encoders that need a one-time origin set, cameras that need intrinsics, and similar. The exact behavior is delegated to the module's `calibrate()` implementation.
+Interactive bring-up for one module. Four steps on an IK arm: **Step 1: Joint limits**, **Step 2: Home position** (match the static model-q=0 sim), **Step 3: Sim mapping** (highlighted joint, Y/N), **Output**. The live mirror then stays open with on-screen nrm / rad numbers so you can check the mapping. Answer ENTER / Y / N in the sim window. Grippers stop after Step 1 plus one physical closed pose. See [Calibration](/docs/modules/calibration).
 
 ### `calibrate-arm-latency`
 
@@ -151,7 +151,7 @@ solarian calibrate-camera-latency role=capture monitor_hz=60 [n_frames=120] [plo
 
 Measures `camera_obs_latency` with UMI's QR-timestamp method: one role fills a screen with a QR code encoding the instant it was drawn, the other films it and subtracts. `monitor_hz` is required on `capture`, where display refresh enters the arithmetic, and optional on `display`, where it only paces the redraw. Both roles sync to the relay clock, so the screen and the camera can be on different machines — which is the better setup, though both can share one machine if the robot has a screen. See [Latency & Synchronization](/docs/latency).
 
-All four `calibrate-*` commands above talk to the module in-process (same as `calibrate-module`), not through the robot's action queues. Run them on the machine the device is wired to, with `run-robot` stopped — the only exception is `calibrate-camera-latency role=display`, which just draws on a screen and belongs on the machine with the monitor. See [Latency & Synchronization](/docs/latency).
+All four `calibrate-*` commands above talk to the module in-process (same as `solarian calibrate`), not through the robot's action queues. Run them on the machine the device is wired to, with `run-robot` stopped — the only exception is `calibrate-camera-latency role=display`, which just draws on a screen and belongs on the machine with the monitor. See [Latency & Synchronization](/docs/latency).
 
 ### `setup-module`
 
@@ -167,23 +167,15 @@ Interactive helper for setting up a hardware module — assigning servo IDs, pic
 solarian write-robot-calibration
 ```
 
-Writes the calibration values listed in your YAML into the actuators / sensors themselves (e.g. servo offsets stored on the device EEPROM).
+Writes the calibration values listed in your YAML into the actuators / sensors themselves (e.g. servo offsets stored on the device EEPROM). Re-pushes an existing [calibration](/docs/modules/calibration) file without re-sweeping.
 
-### `calibrate-ik`
-
-```bash
-solarian calibrate-ik module=<attr>
-```
-
-Guided sim↔real alignment for an IK arm: a live MuJoCo view is shown alongside the real robot while you move it, a per-joint sign check flips any reversed `drive_mode`, and an optional Cartesian check commands small +X/+Y/+Z tool moves to confirm direction and scale. See [IK Calibration & Alignment](/docs/ik/alignment).
-
-### `verify-ik-calibration`
+### `verify-calibration`
 
 ```bash
-solarian verify-ik-calibration module=<attr>
+solarian verify-calibration module=<attr>
 ```
 
-Compares each joint's calibrated span (in radians) to the IK model's `jnt_range` and prints a per-joint PASS/FAIL table. Runs offline from the calibration JSON; the root-cause check for "Cartesian moves track in sim but skew on the real robot".
+Compares each joint's calibrated span (in radians) to the IK model's `jnt_range` and prints a per-joint PASS/FAIL table. On an arm it then opens the live sim mirror so you can move the real arm and confirm the sim tracks. See [Calibration](/docs/modules/calibration).
 
 ### `derive-model-limits`
 
@@ -191,7 +183,7 @@ Compares each joint's calibrated span (in radians) to the IK model's `jnt_range`
 solarian derive-model-limits module=<attr> [sweep=true]
 ```
 
-Prints MJCF-ready joint `range="lo hi"` values (radians) derived from the real arm's mechanical limits — from the existing calibration, or a guided live sweep with `sweep=true`. For model authors keeping `jnt_range` equal to the real hard-stops.
+Prints MJCF-ready joint `range="lo hi"` values (radians) derived from the real arm's mechanical limits — from the existing calibration, or a guided live sweep with `sweep=true`. For model authors keeping `jnt_range` equal to the real hard-stops. See [Calibration](/docs/modules/calibration).
 
 ## Controller commands
 
@@ -297,7 +289,7 @@ Detects and lists every camera available to the system (V4L2 on Linux, AVFoundat
 solarian onshape-export <assembly_dir> [--clean-only] [--keys-file PATH] [--update-yaml PATH]
 ```
 
-Exports an Onshape CAD assembly into an attachable MuJoCo (MJCF) model for [simulation](/docs/simulation). `<assembly_dir>` holds a `config.json` describing the assembly and a `solarian` block controlling the export. With `--update-yaml conf/<module>.yaml`, joint ranges from the cleaned MJCF are synced into that module conf's `sim.range_min`/`range_max` and into `config.json` `joint_properties.*.limits`. See [Onshape → Sim Models](/docs/onshape-models) for the full workflow. Part of the `[sim]` extra.
+Exports an Onshape CAD assembly into an attachable MuJoCo (MJCF) model for [simulation](/docs/simulation). `<assembly_dir>` holds a `config.json` describing the assembly and a `solarian` block controlling the export. With `--update-yaml conf/<module>.yaml`, joint ranges from the cleaned MJCF are synced into that module conf's `sim_range_min`/`sim_range_max` and into `config.json` `joint_properties.*.limits`. See [Onshape → Sim Models](/docs/onshape-models) for the full workflow. Part of the `[sim]` extra.
 
 ### `shell`
 

@@ -87,7 +87,7 @@ Robot(cfg)              # __init__ — discovers modules, builds shared memory
                         # start observation sender thread, then control_loop
 ```
 
-- **`connect()`** opens hardware buses (USB, serial, sockets, cameras) and runs each module's `connect()`. Calibration is loaded here.
+- **`connect()`** opens hardware buses (USB, serial, sockets, cameras) and runs each module's `connect()`. [Calibration](/docs/modules/calibration) is loaded here — and the interactive sweep starts if the file is missing.
 - **`initialize()`** runs each module's `initialize()` hook. Use this for one-time setup like setting torque, operating mode, or homing.
 - **`start()`** disconnects in the parent process (so each module process can re-open the bus on its own), spawns one OS process per `Module`, starts shared bus servers for any port shared by multiple modules, and finally enters `control_loop()`.
 
@@ -139,6 +139,7 @@ If two modules share a hardware port (for example, a serial bus with multiple Dy
 ## See also
 
 - [Modules](/docs/modules) — how to declare per-module behavior.
+- [Calibration](/docs/modules/calibration) — limit sweep, IK alignment, and latency measurements before first `run-robot`.
 - [Server](/docs/servers) — the relay node sitting between robots and controllers.
 - [Controllers](/docs/controllers) — how to send actions and consume observations.
 - [Project Configs](/docs/project-configs) — the conventions that bind YAML files to module attributes.

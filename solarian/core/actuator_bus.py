@@ -107,13 +107,59 @@ class ActuatorBus(ComponentBus):
         """
         return None
 
-    def max_homing_offset_abs(self, name: str) -> int | None:
-        """Max ``|homing_offset|`` the hardware accepts for actuator ``name``.
+    def center_offset_in_hardware(self, name: str) -> bool:
+        """True when this bus applies ``center_offset`` on the servo (Present is already shifted).
 
-        Vendor-specific (e.g. Feetech Homing_Offset sign-magnitude width).
-        Default ``None`` means core calibration will not enforce a magnitude cap.
+        Default ``False``: :meth:`_normalize` / :meth:`_unnormalize` apply
+        ``(raw - offset) mod CPR`` in software.
         """
+        del name
+        return False
+
+    def max_center_offset_abs(self, name: str) -> int | None:
+        """Max ``|center_offset|`` for actuator ``name``.
+
+        Hardware buses return the register cap (e.g. Feetech ±2047). Software
+        buses return ``CPR-1`` so a wrap can always be cleared. ``None`` means
+        no known cap.
+        """
+        hw = self.max_homing_offset_abs(name)
+        if hw is not None:
+            return hw
+        if not self.center_offset_in_hardware(name):
+            cpr = self.counts_per_revolution(name)
+            if cpr:
+                return int(cpr) - 1
         return None
+
+    def max_homing_offset_abs(self, name: str) -> int | None:
+        """Hardware register cap, if any. Prefer :meth:`max_center_offset_abs`."""
+        del name
+        return None
+
+    def _present_ticks(self, name: str, raw: float) -> float:
+        """Map a raw encoder reading into Present (range) ticks."""
+        if self.center_offset_in_hardware(name):
+            return raw
+        offset = int(self.calibration[name].homing_offset or 0) if self.calibration else 0
+        if not offset:
+            return raw
+        cpr = self.counts_per_revolution(name)
+        if cpr:
+            return (float(raw) - offset) % cpr
+        return float(raw) - offset
+
+    def _raw_from_present(self, name: str, present: float) -> float:
+        """Inverse of :meth:`_present_ticks`."""
+        if self.center_offset_in_hardware(name):
+            return present
+        offset = int(self.calibration[name].homing_offset or 0) if self.calibration else 0
+        if not offset:
+            return present
+        cpr = self.counts_per_revolution(name)
+        if cpr:
+            return (float(present) + offset) % cpr
+        return float(present) + offset
 
     def raw_to_radians(self, name: str, raw: float) -> float | None:
         """Convert a raw encoder value to radians, or ``None`` if unknown.
@@ -144,7 +190,8 @@ class ActuatorBus(ComponentBus):
             if cfg is None:
                 raise ValueError(f"Component {name} has no configuration")
 
-            bounded_val = min(max_, max(min_, val))
+            present = self._present_ticks(name, val)
+            bounded_val = min(max_, max(min_, present))
             if cfg.mode == MotorNormMode.RANGE_M100_100.value:
                 norm = (((bounded_val - min_) / (max_ - min_)) * 200) - 100
                 normalized_values[name] = -norm if drive_mode else norm
@@ -182,11 +229,13 @@ class ActuatorBus(ComponentBus):
             if cfg.mode == MotorNormMode.RANGE_M100_100.value:
                 val = -val if drive_mode else val
                 bounded_val = min(100.0, max(-100.0, val))
-                unnormalized_values[name] = ((bounded_val + 100) / 200) * (max_ - min_) + min_
+                present = ((bounded_val + 100) / 200) * (max_ - min_) + min_
+                unnormalized_values[name] = self._raw_from_present(name, present)
             elif cfg.mode == MotorNormMode.RANGE_0_100.value:
                 val = 100 - val if drive_mode else val
                 bounded_val = min(100.0, max(0.0, val))
-                unnormalized_values[name] = (bounded_val / 100) * (max_ - min_) + min_
+                present = (bounded_val / 100) * (max_ - min_) + min_
+                unnormalized_values[name] = self._raw_from_present(name, present)
             # elif cfg.mode is MotorNormMode.DEGREES:
             #     mid = (min_ + max_) / 2
             #     max_res = self.model_resolution_table[self._id_to_model(id_)] - 1

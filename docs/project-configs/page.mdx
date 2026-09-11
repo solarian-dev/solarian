@@ -79,22 +79,15 @@ Each file is parsed against the module's `config_class` (default `ModuleConfig`)
 
 ```yaml
 # conf/arm.yaml
-calibration_file: .cache/calibration/ur5_follower_arm.json
 actuator_port: 10.0.0.92
 frequency: 120
 actuators:
   shoulder_pan:
     id: 0
-    model: ur5
     port: ${actuator_port}
-    type: ur5_joint
-    mode: range_m100_100
   shoulder_lift:
     id: 1
-    model: ur5
     port: ${actuator_port}
-    type: ur5_joint
-    mode: range_m100_100
   # ...
 ```
 

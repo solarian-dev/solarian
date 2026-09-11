@@ -4,7 +4,6 @@ import sys
 import time
 import inspect
 import threading
-from dataclasses import dataclass, asdict
 from abc import ABC, abstractmethod
 import numpy as np
 from typing import Dict, List, Tuple, Any, Callable, Union
@@ -12,7 +11,7 @@ from multiprocessing import get_start_method
 from solarian.core.calibration import MotorCalibration
 
 from solarian.core.joint import Joint
-from solarian.core.actuator import Actuator
+from solarian.core.actuator import Actuator, merge_actuator_config
 from solarian.core.sensor import Sensor
 from solarian.core.servo import Servo
 from solarian.core.data import Data, DataComputer, TimestampData
@@ -211,23 +210,40 @@ class Module(ABC):
             for name, value in cls.__dict__.items():
                 if isinstance(value, (Actuator, Sensor)):
                     class_attrs[name] = value
+
+        from solarian.core.ik.actuator import CartesianIKActuator
+
+        hardware_port = None
+        for name, value in class_attrs.items():
+            if not isinstance(value, Actuator) or isinstance(value, CartesianIKActuator):
+                continue
+            yaml_cfg = self.cfg.actuators.get(name)
+            if yaml_cfg is not None and yaml_cfg.port:
+                hardware_port = yaml_cfg.port
+                break
+
         for name, value in class_attrs.items():
             if isinstance(value, Actuator):
-                # create actuator
-                actuator_class = value.__class__
-                self.actuators[name] = actuator_class(self.cfg.actuators[name])
+                yaml_cfg = self.cfg.actuators.get(name)
+                merged = merge_actuator_config(value, name, yaml_cfg, hardware_port)
+                self.cfg.actuators[name] = merged
+                self.actuators[name] = value.__class__(
+                    merged,
+                    model=value._declared_model,
+                    is_continuous=value.is_continuous,
+                    mode=value._declared_mode,
+                    id=value._declared_id,
+                )
                 setattr(self, name, self.actuators[name])
-                
-                # group actuators by port
-                if self.cfg.actuators[name].port not in self.actuators_by_port:
-                    self.actuators_by_port[self.cfg.actuators[name].port] = []
-                self.actuators_by_port[self.cfg.actuators[name].port].append(name)
-                
-                # if component is a servo, it is also a sensor
+
+                port = merged.port
+                if port not in self.actuators_by_port:
+                    self.actuators_by_port[port] = []
+                self.actuators_by_port[port].append(name)
+
                 if isinstance(value, Sensor):
                     self.sensors[name] = self.actuators[name]
             elif isinstance(value, Sensor):
-                # create sensor
                 sensor_class = value.__class__
                 self.sensors[name] = sensor_class(self.cfg.sensors[name])
                 setattr(self, name, self.sensors[name])
@@ -348,17 +364,26 @@ class Module(ABC):
             component_names = list(self.actuators.keys())
         self.module_bus.disable_torque(component_names)
 
+    def needs_motor_calibration(self) -> bool:
+        """True when this module has hardware servos that use MotorCalibration."""
+        return any(
+            getattr(act, "uses_motor_calibration", True)
+            for act in self.actuators.values()
+        )
+
+    def _module_yaml_path(self) -> str | None:
+        conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
+        path = os.path.join(conf_path, f"{self.name}.yaml")
+        return path if os.path.isfile(path) else None
+
     def is_calibrated(self) -> bool:
         if self.calibration is None:
             return False
         return self.calibration == self.read_calibration()
 
     def read_calibration(self) -> dict[str, MotorCalibration]:
-        if self.cfg.calibration_file is None:
-            logger.error(f"No calibration required for module {self.name}")
+        if not self.needs_motor_calibration():
             return {}
-
-        """Read calibration parameters from the actuators."""
 
         data = self.module_bus.read_calibration()
         calibration = {}
@@ -372,8 +397,7 @@ class Module(ABC):
         return calibration
 
     def write_calibration(self) -> None:
-        if self.cfg.calibration_file is None:
-            logger.error(f"No calibration required for module {self.name}")
+        if not self.needs_motor_calibration():
             return
 
         logger.info(f"\nWriting calibration of: {self.name}")
@@ -383,48 +407,113 @@ class Module(ABC):
         self.load_calibration()
 
         if self.calibration is None:
-            # raise ValueError(f"No calibration found for module {self.name}")
             logger.error(f"No calibration found for module {self.name}")
-            
+            self.end_calibration_mode()
+            return
 
         for port, actuators in self.actuators_by_port.items():
             port_calibration = {}
             for actuator_name in actuators:
-                # Skip virtual actuators (e.g. ik_cartesian) that have no
-                # hardware calibration entry.
                 if actuator_name not in self.calibration:
                     continue
                 port_calibration[actuator_name] = self.calibration[actuator_name]
-            self.module_bus.component_bus_by_port[port].write_calibration(port_calibration)
+            if port_calibration:
+                self.module_bus.component_bus_by_port[port].write_calibration(
+                    port_calibration
+                )
         logger.info(f"Calibration written to: {self.name}")
         self.end_calibration_mode()
-    
+
+    def _apply_calibration_to_cfg(self, calibration: dict) -> None:
+        for name, motor_calib in calibration.items():
+            act = self.actuators.get(name)
+            if act is None or act.cfg is None:
+                continue
+            act.cfg.real_range_min = int(motor_calib.range_min)
+            act.cfg.real_range_max = int(motor_calib.range_max)
+            act.cfg.center_offset = int(motor_calib.homing_offset)
+            act.cfg.drive_mode = int(motor_calib.drive_mode)
+            self.cfg.actuators[name] = act.cfg
+
     def _save_calibration(self, calibration: dict):
-        if self.cfg.calibration_file is None:
-            logger.error(f"No calibration required for module {self.name}")
+        self.calibration = calibration
+        self._apply_calibration_to_cfg(calibration)
+        yaml_path = self._module_yaml_path()
+        if yaml_path is None:
+            logger.info(f"Calibration kept in memory for module {self.name} (no yaml)")
             return
-        
-        if not os.path.exists(os.path.dirname(self.cfg.calibration_file)):
-            os.makedirs(os.path.dirname(self.cfg.calibration_file))
-        with open(self.cfg.calibration_file, "w") as f:
-            data = {actuator_name: asdict(motor_calib) for actuator_name, motor_calib in calibration.items()}
-            json.dump(data, f, indent=4)
-            logger.info(f"Calibration saved for module {self.name}")
+        from solarian.core.module_yaml import patch_actuator_fields
+
+        updates = {
+            name: {
+                "real_range_min": int(mc.range_min),
+                "real_range_max": int(mc.range_max),
+                "center_offset": int(mc.homing_offset),
+                "drive_mode": int(mc.drive_mode),
+            }
+            for name, mc in calibration.items()
+        }
+        patch_actuator_fields(yaml_path, updates)
+        logger.info(f"Calibration saved to {yaml_path}")
+
+    def _save_home(self, home: dict[str, float]) -> None:
+        self.cfg.home = {name: float(value) for name, value in home.items()}
+        yaml_path = self._module_yaml_path()
+        if yaml_path is None:
+            logger.info(f"Home kept in memory for module {self.name} (no yaml)")
+            return
+        from solarian.core.module_yaml import patch_top_level_mapping
+
+        patch_top_level_mapping(yaml_path, "home", self.cfg.home)
+        logger.info(f"Home saved to {yaml_path}")
+
+    def _load_legacy_calibration_json(self) -> dict[str, MotorCalibration]:
+        path = self.cfg.calibration_file
+        if not path or not os.path.exists(path):
+            return {}
+        with open(path, "r") as f:
+            data = json.load(f)
+        return {
+            actuator_name: MotorCalibration(**entry)
+            for actuator_name, entry in data.items()
+        }
 
     def load_calibration(self):
-        if self.cfg.calibration_file is None:
-            logger.error(f"No calibration required for module {self.name}")
+        if not self.needs_motor_calibration():
             self.calibration = {}
             return
-        
-        if not os.path.exists(self.cfg.calibration_file):
-            logger.error(f"Calibration file not found for module {self.name}")
+
+        calib: dict[str, MotorCalibration] = {}
+        for name, act in self.actuators.items():
+            if not getattr(act, "uses_motor_calibration", True) or act.cfg is None:
+                continue
+            cfg = act.cfg
+            if cfg.real_range_min is None or cfg.real_range_max is None:
+                continue
+            calib[name] = MotorCalibration(
+                id=int(cfg.id),
+                drive_mode=int(cfg.drive_mode or 0),
+                homing_offset=int(cfg.center_offset or 0),
+                range_min=int(cfg.real_range_min),
+                range_max=int(cfg.real_range_max),
+            )
+
+        hard_stop = [
+            name
+            for name, act in self.actuators.items()
+            if getattr(act, "uses_motor_calibration", True)
+            and act.cfg is not None
+            and not act.is_continuous
+        ]
+        if any(name not in calib for name in hard_stop):
+            for name, motor_calib in self._load_legacy_calibration_json().items():
+                calib.setdefault(name, motor_calib)
+        if any(name not in calib for name in hard_stop):
             self.calibration = None
             return
-
-        with open(self.cfg.calibration_file, "r") as f:
-            data = json.load(f)
-            self.calibration = {actuator_name: MotorCalibration(**calibration) for actuator_name, calibration in data.items()}
+        self.calibration = calib if calib else None
+        if self.calibration:
+            self._apply_calibration_to_cfg(self.calibration)
             logger.info(f"Calibration loaded for module {self.name}")
         
     def calibrate(self) -> None:
@@ -466,13 +555,16 @@ class Module(ABC):
         for actuator_name, actuator in self.actuators.items():
             if actuator.needs_setup() and not actuator in components:
                 idx += 1
-                print(f"{idx}. {actuator_name} ({actuator.cfg.type} - {actuator.cfg.model})")
+                print(
+                    f"{idx}. {actuator_name} "
+                    f"({actuator.__class__.__name__} - {actuator.cfg.model})"
+                )
                 components.append(actuator)
         
         for sensor_name, sensor in self.sensors.items():
             if sensor.needs_setup() and not sensor in components:
                 idx += 1
-                print(f"{idx}. {sensor_name} ({sensor.cfg.type} - {sensor.cfg.model})")
+                print(f"{idx}. {sensor_name} ({sensor.__class__.__name__})")
                 components.append(sensor)
         
         # Ask user to select a component

@@ -89,14 +89,9 @@ interpolator_type: pose
 max_speed: [0.25, 0.6]   # m/s, rad/s (UMI-like)
 
 actuators:
-  shoulder_pan: { id: 1, model: sts3250, type: feetech, mode: range_m100_100, ... }
+  shoulder_pan: { id: 1, port: ${actuator_port}, sim_joint: "right/shoulder_pan", ... }
   # ... remaining joints ...
-  x:  { id: 0, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
-  y:  { id: 1, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
-  z:  { id: 2, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
-  rx: { id: 3, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
-  ry: { id: 4, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
-  rz: { id: 5, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }
+  # cartesian x..rz are omitted — id comes from the attribute name, mode is raw
 ```
 
 `frequency` is the upsample / IK rate. Controllers stay at ~30 fps and only carry sparse setpoints.
@@ -128,22 +123,22 @@ Skills should **not** own a second arm `PoseTrajectoryInterpolator` (that double
 
 ### Robot + scene
 
-Wire the module on the [`Robot`](/docs/robots), expose pose fields on [`Action`](/docs/actions) / [`Observation`](/docs/observations), and attach the MJCF in a [`Scene`](/docs/scenes) (sim). Real and sim share the same module yaml; only the `sim:` blocks differ.
+Wire the module on the [`Robot`](/docs/robots), expose pose fields on [`Action`](/docs/actions) / [`Observation`](/docs/observations), and attach the MJCF in a [`Scene`](/docs/scenes) (sim). Real and sim share the same module yaml; only `sim_joint` / `sim_range_*` differ.
 
 ## Checklist for a new arm
 
 - [ ] MJCF with correct joint names and end-effector site/body
 - [ ] Module: joint servos + six `CartesianIKActuator`s + `MinkIK`
-- [ ] Yaml: `interpolator_type: pose`, `max_speed`, `frequency`, Cartesian actuator ids
+- [ ] Yaml: `interpolator_type: pose`, `max_speed`, `frequency`; cartesian x..rz omitted from yaml
 - [ ] Action / observation schemas include `x..rz`
 - [ ] Controllers / skills use `SCHEDULE_WAYPOINT` with wall-clock timestamps
-- [ ] [IK Calibration & Alignment](/docs/ik/alignment) so real hardware tracks Cartesian moves
+- [ ] [Calibration](/docs/modules/calibration) so real hardware tracks Cartesian moves
 
 ## See also
 
 - [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose + scalar `SCHEDULE_WAYPOINT` contract
 - [Inverse Kinematics](/docs/ik) — Cartesian actuators, `MinkIK`, `IKActuatorBus`
-- [IK Calibration & Alignment](/docs/ik/alignment) — make real Cartesian moves track
+- [Calibration](/docs/modules/calibration) — make real Cartesian moves track
 - [Modules](/docs/modules) — process loop, action handlers
 - [Actions](/docs/actions) / [Action Types](/docs/action-types) — `SCHEDULE_WAYPOINT`
 - [Sim Robots](/docs/sim-robots) — same IK path in MuJoCo

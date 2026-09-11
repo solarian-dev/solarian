@@ -72,6 +72,7 @@ HELP_LINES = [
     "1 2 3 4 5        front/back/left/right/top",
     "R  (or 0)        reset view",
     "H  /  ?          toggle this help",
+    "ENTER / Y N      answer an on-screen prompt",
     "ESC              close viewer",
 ]
 
@@ -86,6 +87,7 @@ class SimViewer(Process):
         height: int = 720,
         title: str = "Solarian Sim",
         log_queue=None,
+        prompt_conn: Connection | None = None,
     ):
         super().__init__(daemon=True)
         self._conn = conn
@@ -93,6 +95,7 @@ class SimViewer(Process):
         self._h = int(height)
         self._title = title
         self._log_queue = log_queue
+        self._prompt_conn = prompt_conn
 
     # -- RPC to the world server ---------------------------------------
     def _rpc(self, method: str, *args):
@@ -141,6 +144,8 @@ class SimViewer(Process):
             "x": 0,
             "y": 0,
             "show_help": False,
+            "prompt": None,
+            "hud": None,
         }
 
         buttons = _build_buttons(cv2)
@@ -215,12 +220,18 @@ class SimViewer(Process):
 
                 # RGB -> BGR, then draw the (BGR) overlay on top.
                 display = np.ascontiguousarray(frame[:, :, ::-1])
+                _poll_prompt(self._prompt_conn, state)
                 _draw_overlay(cv2, display, buttons, state)
                 cv2.imshow(self._title, display)
 
                 code = cv2.waitKeyEx(1)
-                if code != -1 and _handle_key(code, state, apply_action):
-                    break
+                if code != -1:
+                    reply = prompt_reply(code, state.get("prompt"))
+                    if reply is not None and self._prompt_conn is not None:
+                        self._prompt_conn.send(reply)
+                        state["prompt"] = None
+                    elif _handle_key(code, state, apply_action):
+                        break
                 try:
                     if cv2.getWindowProperty(self._title, cv2.WND_PROP_VISIBLE) < 1:
                         break  # window closed
@@ -240,6 +251,48 @@ class SimViewer(Process):
                 self._conn.close()
             except Exception:  # noqa: BLE001
                 pass
+            if self._prompt_conn is not None:
+                try:
+                    self._prompt_conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+
+def prompt_reply(code: int, prompt: dict | None) -> str | None:
+    """Map a key to a prompt answer, or ``None`` if this key is not an answer."""
+    if not prompt:
+        return None
+    kind = prompt.get("kind")
+    if code in (10, 13, 32):  # LF / CR / space
+        return "" if kind == "enter" else None
+    key = code & 0xFF
+    if kind == "yesno":
+        if key in (ord("y"), ord("Y")):
+            return "y"
+        if key in (ord("n"), ord("N")):
+            return "n"
+    return None
+
+
+def _poll_prompt(conn: Connection | None, state: dict) -> None:
+    if conn is None:
+        return
+    while conn.poll():
+        try:
+            msg = conn.recv()
+        except (EOFError, OSError):
+            return
+        if not (isinstance(msg, tuple) and len(msg) == 2):
+            continue
+        kind, payload = msg
+        if kind == "ask":
+            data = payload if isinstance(payload, dict) else {}
+            state["prompt"] = {
+                "text": str(data.get("text") or ""),
+                "kind": data.get("kind") or "enter",
+            }
+        elif kind == "hud":
+            state["hud"] = payload if isinstance(payload, dict) else None
 
 
 def _handle_key(code: int, state: dict, apply_action) -> bool:
@@ -337,8 +390,95 @@ def _draw_overlay(cv2, img: np.ndarray, buttons: list, state: dict) -> None:
     hint = "H = help"
     cv2.putText(img, hint, (10, img.shape[0] - 12), font, 0.45, (230, 230, 230), 1, cv2.LINE_AA)
 
+    if state.get("hud"):
+        _draw_hud(cv2, img, state["hud"])
+
+    if state.get("prompt"):
+        _draw_prompt(cv2, img, state["prompt"])
+
     if state["show_help"]:
         _draw_help(cv2, img)
+
+
+def format_joint_hud_lines(hud: dict) -> list[str]:
+    """Fixed-width live table: real normalized vs sim radians."""
+    joints = list(hud.get("joints") or [])
+    real = hud.get("real") or {}
+    sim = hud.get("sim") or {}
+    active = hud.get("active")
+    lines = ["joint            nrm      rad"]
+    for name in joints:
+        mark = "*" if name == active else " "
+        rn = real.get(name)
+        sn = sim.get(name)
+        rtxt = f"{rn:7.1f}" if rn is not None else "      --"
+        stxt = f"{sn:8.3f}" if sn is not None else "       --"
+        lines.append(f"{mark}{name:<14}{rtxt}{stxt}")
+    return lines
+
+
+def _draw_hud(cv2, img: np.ndarray, hud: dict) -> None:
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    lines = format_joint_hud_lines(hud)
+    if not lines:
+        return
+    line_h = 20
+    box_w = 320
+    box_h = line_h * len(lines) + 16
+    x0, y0 = 8, 42
+    overlay = img.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + box_w, y0 + box_h), (20, 20, 20), -1)
+    cv2.addWeighted(overlay, 0.7, img, 0.3, 0, img)
+    cv2.rectangle(img, (x0, y0), (x0 + box_w, y0 + box_h), (210, 210, 210), 1)
+    y = y0 + 18
+    for i, line in enumerate(lines):
+        if i == 0:
+            color = (120, 220, 255)
+        elif line.startswith("*"):
+            color = (80, 180, 255)
+        else:
+            color = (235, 235, 235)
+        cv2.putText(img, line, (x0 + 10, y), font, 0.42, color, 1, cv2.LINE_AA)
+        y += line_h
+
+
+def _draw_prompt(cv2, img: np.ndarray, prompt: dict) -> None:
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    kind = prompt.get("kind") or "enter"
+    hint = "ENTER or SPACE to continue" if kind == "enter" else "Y = yes     N = no"
+    max_chars = max(28, (img.shape[1] - 40) // 9)
+    lines = _wrap_prompt(str(prompt.get("text") or ""), max_chars) + ["", hint]
+    line_h = 22
+    box_h = line_h * len(lines) + 20
+    box_w = img.shape[1] - 16
+    x0, y0 = 8, img.shape[0] - box_h - 28
+    overlay = img.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + box_w, y0 + box_h), (20, 40, 50), -1)
+    cv2.addWeighted(overlay, 0.75, img, 0.25, 0, img)
+    cv2.rectangle(img, (x0, y0), (x0 + box_w, y0 + box_h), (80, 210, 255), 1)
+    y = y0 + 24
+    for i, line in enumerate(lines):
+        color = (80, 210, 255) if i == len(lines) - 1 else (245, 245, 245)
+        cv2.putText(img, line, (x0 + 14, y), font, 0.5, color, 1, cv2.LINE_AA)
+        y += line_h
+
+
+def _wrap_prompt(text: str, max_chars: int) -> list[str]:
+    lines: list[str] = []
+    for para in text.split("\n"):
+        words = para.split()
+        if not words:
+            lines.append("")
+            continue
+        cur = words[0]
+        for word in words[1:]:
+            if len(cur) + 1 + len(word) <= max_chars:
+                cur = f"{cur} {word}"
+            else:
+                lines.append(cur)
+                cur = word
+        lines.append(cur)
+    return lines
 
 
 def _draw_help(cv2, img: np.ndarray) -> None:

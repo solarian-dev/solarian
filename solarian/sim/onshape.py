@@ -608,188 +608,19 @@ def read_joint_ranges(mjcf_path: str) -> dict[str, tuple[float, float]]:
 
 
 def _discover_yaml_actuator_joints(lines: list[str]) -> dict[str, str]:
-    """Map actuator key → bare MJCF joint name for actuators with a ``sim:`` block.
+    """Map actuator key → bare MJCF joint name for actuators with sim ranges."""
+    from solarian.core.module_yaml import discover_actuator_sim_joints
 
-    Default joint name is the actuator key; an explicit ``sim.joint`` (bare name
-    after the last ``/``) overrides it. Actuators without ``sim:`` are omitted.
-    """
-    actuators_indent: Optional[int] = None
-    actuator_key_indent: Optional[int] = None
-    current_actuator: Optional[str] = None
-    current_has_sim = False
-    current_joint: Optional[str] = None
-    in_sim = False
-    sim_indent: Optional[int] = None
-    mapping: dict[str, str] = {}
-
-    def _commit() -> None:
-        nonlocal current_actuator, current_has_sim, current_joint
-        if current_actuator is not None and current_has_sim:
-            mapping[current_actuator] = current_joint or current_actuator
-        current_actuator = None
-        current_has_sim = False
-        current_joint = None
-
-    for raw in lines:
-        body, _ = _split_newline(raw)
-        if not body.strip() or body.lstrip().startswith("#"):
-            continue
-        indent = len(body) - len(body.lstrip(" "))
-
-        if actuators_indent is None:
-            if re.match(r"^\s*actuators\s*:", body):
-                actuators_indent = indent
-            continue
-
-        if indent <= actuators_indent:
-            _commit()
-            break
-
-        if actuator_key_indent is None:
-            m = _ACTUATOR_KEY_RE.match(body)
-            if m and len(m.group(1)) > actuators_indent:
-                actuator_key_indent = len(m.group(1))
-
-        if actuator_key_indent is not None and indent == actuator_key_indent:
-            m = _ACTUATOR_KEY_RE.match(body)
-            if m:
-                _commit()
-                current_actuator = m.group(2)
-                in_sim = False
-                sim_indent = None
-                continue
-
-        if current_actuator is None or actuator_key_indent is None:
-            continue
-
-        if re.match(r"^\s*sim\s*:", body) and indent > actuator_key_indent:
-            in_sim = True
-            sim_indent = indent
-            current_has_sim = True
-            continue
-
-        if in_sim and sim_indent is not None:
-            if indent <= sim_indent:
-                in_sim = False
-                sim_indent = None
-            else:
-                jm = _SIM_JOINT_RE.match(body)
-                if jm:
-                    current_joint = _bare_joint_name(jm.group(2))
-
-    _commit()
-    return mapping
+    return discover_actuator_sim_joints(lines)
 
 
 def sync_module_yaml(
     yaml_path: str, ranges: dict[str, tuple[float, float]]
 ) -> list[str]:
-    """Surgically update ``sim.range_min`` / ``range_max`` in a module yaml.
+    """Surgically update ``sim_range_min`` / ``sim_range_max`` in a module yaml."""
+    from solarian.core.module_yaml import sync_sim_ranges
 
-    Preserves comments and unrelated structure. Matches actuators by key name or
-    by the bare name of ``sim.joint`` (attach prefixes allowed). Actuators with
-    no ``sim:`` block are left alone. Returns the list of updated actuator keys.
-    """
-    path = os.path.abspath(yaml_path)
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"Module yaml not found: {path}")
-
-    with open(path, "r", encoding="utf-8") as f:
-        lines = f.read().splitlines(keepends=True)
-
-    actuator_joints = _discover_yaml_actuator_joints(lines)
-    update_for: dict[str, tuple[float, float]] = {
-        actuator: ranges[joint]
-        for actuator, joint in actuator_joints.items()
-        if joint in ranges
-    }
-
-    actuators_indent: Optional[int] = None
-    actuator_key_indent: Optional[int] = None
-    current_actuator: Optional[str] = None
-    in_sim = False
-    sim_indent: Optional[int] = None
-    updated: list[str] = []
-    touched: set[str] = set()
-    out: list[str] = []
-
-    for raw in lines:
-        body, newline = _split_newline(raw)
-        stripped = body.lstrip(" ")
-        indent = len(body) - len(stripped) if stripped else len(body)
-
-        if actuators_indent is None:
-            if re.match(r"^\s*actuators\s*:", body):
-                actuators_indent = indent
-            out.append(raw)
-            continue
-
-        if indent <= actuators_indent and stripped and not stripped.startswith("#"):
-            actuators_indent = None
-            current_actuator = None
-            in_sim = False
-            out.append(raw)
-            continue
-
-        if actuator_key_indent is None:
-            m = _ACTUATOR_KEY_RE.match(body)
-            if m and actuators_indent is not None and len(m.group(1)) > actuators_indent:
-                actuator_key_indent = len(m.group(1))
-
-        if (
-            actuator_key_indent is not None
-            and indent == actuator_key_indent
-            and stripped
-            and not stripped.startswith("#")
-        ):
-            m = _ACTUATOR_KEY_RE.match(body)
-            if m:
-                current_actuator = m.group(2)
-                in_sim = False
-                sim_indent = None
-            out.append(raw)
-            continue
-
-        if current_actuator is not None and re.match(r"^\s*sim\s*:", body):
-            if actuator_key_indent is None or indent > actuator_key_indent:
-                in_sim = True
-                sim_indent = indent
-                out.append(raw)
-                continue
-
-        if in_sim and sim_indent is not None:
-            if stripped and not stripped.startswith("#") and indent <= sim_indent:
-                in_sim = False
-                sim_indent = None
-            elif current_actuator in update_for:
-                lo, hi = update_for[current_actuator]
-                trailing = ""
-                comment_idx = body.find(" #")
-                if comment_idx >= 0:
-                    trailing = body[comment_idx:]
-
-                if _RANGE_MIN_RE.match(body):
-                    out.append(
-                        f"{body[:indent]}range_min: {_format_limit(lo)}{trailing}{newline}"
-                    )
-                    if current_actuator not in touched:
-                        touched.add(current_actuator)
-                        updated.append(current_actuator)
-                    continue
-                if _RANGE_MAX_RE.match(body):
-                    out.append(
-                        f"{body[:indent]}range_max: {_format_limit(hi)}{trailing}{newline}"
-                    )
-                    if current_actuator not in touched:
-                        touched.add(current_actuator)
-                        updated.append(current_actuator)
-                    continue
-
-        out.append(raw)
-
-    with open(path, "w", encoding="utf-8") as f:
-        f.writelines(out)
-    return updated
+    return sync_sim_ranges(yaml_path, ranges)
 
 
 def sync_joint_properties(
@@ -835,7 +666,7 @@ def sync_limits_from_mjcf(
 
     ``config.json`` ``joint_properties.*.limits`` are always rewritten from the
     MJCF so they mirror the Onshape mate limits that produced the export.
-    When ``yaml_path`` is set, ``sim.range_min`` / ``range_max`` are updated too.
+    When ``yaml_path`` is set, ``sim_range_min`` / ``sim_range_max`` are updated too.
 
     Returns ``{"yaml": [...], "config": [...], "unmatched_mjcf": [...],
     "unmatched_yaml": [...]}`` for the caller to print a summary.
@@ -934,7 +765,7 @@ def export(
     ``solarian.prefer_config_limits`` is set), and after cleaning the MJCF ranges
     are always written back into ``config.json``. With ``update_yaml`` set to a
     module conf path (e.g. ``conf/right_arm.yaml``), those same ranges are also
-    written into that yaml's ``sim.range_min`` / ``range_max``.
+    written into that yaml's ``sim_range_min`` / ``sim_range_max``.
     """
     config = _load_config(assembly_dir)
     spec = SolarianExportSpec.from_config(config)

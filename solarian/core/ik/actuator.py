@@ -20,15 +20,22 @@ from solarian.core.servo import Servo
 from solarian.core.data import PosData
 from solarian.core.ik.bus import IKActuatorBus
 
+#: Pose-axis index from the class attribute name when yaml omits ``id``.
+CARTESIAN_AXIS_IDS = {"x": 0, "y": 1, "z": 2, "rx": 3, "ry": 4, "rz": 5}
+
 
 class CartesianIKActuator(Servo):
     """End-effector pose component (metres for x/y/z, radians for rx/ry/rz).
 
-    Values are raw metric units (``mode: raw`` in the actuator config); they are
-    not normalized like joint servos.
+    Values are raw metric units; they are not normalized like joint servos.
+    Declare on the module with no yaml entry — ``id`` comes from the
+    attribute name (x..rz), ``mode`` is ``raw``, and they share the hardware
+    servos' port.
     """
 
     #: Placeholder only -- the real bus is the module's IKActuatorBus.
     bus_class = IKActuatorBus
+    default_mode = "raw"
+    uses_motor_calibration = False
 
     pos = PosData()

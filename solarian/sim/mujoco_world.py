@@ -62,6 +62,38 @@ def _normalize(value: float, mode: str, range_min: float, range_max: float, driv
     return value
 
 
+def hinge_world_frame(xanchor, xaxis, joint_id: int, dofadr: int, njnt: int | None = None):
+    """World hinge origin/axis for one joint.
+
+    MuJoCo 3 stores ``xanchor`` / ``xaxis`` per joint (``njnt``). Older builds
+    used one row per dof (``nv``). ``dofadr`` is only valid for the latter —
+    using it on an ``njnt`` array points at the wrong mate and goes out of
+    range once the scene has extra dofs (free cube, gripper slides).
+    """
+    n = int(np.asarray(xanchor).shape[0])
+    jid, dof = int(joint_id), int(dofadr)
+    if njnt is not None and n == int(njnt) and 0 <= jid < n:
+        idx = jid
+    elif 0 <= dof < n:
+        idx = dof
+    elif 0 <= jid < n:
+        idx = jid
+    else:
+        return None
+    return np.asarray(xanchor[idx], dtype=float), np.asarray(xaxis[idx], dtype=float)
+
+
+def hinge_arrow_ends(origin, axis, length: float = 0.10):
+    """World-frame segment along the joint axis, centered on the hinge."""
+    origin = np.asarray(origin, dtype=float)
+    axis = np.asarray(axis, dtype=float)
+    norm = float(np.linalg.norm(axis))
+    if norm < 1e-9:
+        return origin.copy(), origin.copy()
+    half = axis / norm * (length * 0.5)
+    return origin - half, origin + half
+
+
 class MujocoWorldServer(Process):
     """Process that owns the composed MuJoCo scene and serves module I/O."""
 
@@ -110,6 +142,7 @@ class MujocoWorldServer(Process):
         self._virtual: dict[str, float] = {}
         self._render_failed = False
         self._overview_failed = False
+        self._highlight_key: str | None = None
 
     # ------------------------------------------------------------------
     def get_error(self) -> tuple[str, str] | None:
@@ -229,9 +262,11 @@ class MujocoWorldServer(Process):
                     )
         return out
 
-    def write(self, module: str, values: Dict[str, Any], normalize: bool = True):
+    def write(self, module: str, values: Dict[str, Any], normalize: bool = True, snap: bool = False):
         from solarian.core.data import PosData
+        import mujoco
 
+        snapped = False
         with self._lock:
             for name, data in values.items():
                 full = f"{module}/{name}"
@@ -252,6 +287,11 @@ class MujocoWorldServer(Process):
                     else value
                 )
                 self.data.ctrl[spec["actuator_id"]] = target
+                if snap and spec.get("qposadr") is not None:
+                    self.data.qpos[spec["qposadr"]] = target
+                    snapped = True
+            if snapped:
+                mujoco.mj_forward(self.model, self.data)
         return None
 
     def _render(self, spec) -> np.ndarray:
@@ -362,11 +402,16 @@ class MujocoWorldServer(Process):
                 camera.lookat = np.asarray(lookat, dtype=float)
             with self._lock:
                 renderer.update_scene(self.data, camera=camera)
-                if self._scene.show_frames:
-                    self._draw_frames(renderer.scene)
-                if self._scene.show_cameras:
-                    self._draw_camera_frustums(renderer.scene)
-            return renderer.render()
+                try:
+                    if self._scene.show_frames:
+                        self._draw_frames(renderer.scene)
+                    if self._scene.show_cameras:
+                        self._draw_camera_frustums(renderer.scene)
+                    self._draw_highlight_markers(renderer.scene)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Overview overlay failed (%s); drawing the mesh only.", exc)
+                frame = renderer.render()
+            return frame
         except Exception as exc:  # noqa: BLE001 - degrade gracefully when GL is unavailable
             if not self._overview_failed:
                 logger.warning("Overview rendering unavailable (%s); viewer will blank.", exc)
@@ -388,6 +433,69 @@ class MujocoWorldServer(Process):
     #: Cyan wireframe / yellow look-arrow so frustums stand out from the triads.
     _CAM_FRUSTUM_RGBA = (0.1, 0.9, 0.9, 1.0)
     _CAM_ARROW_RGBA = (1.0, 0.9, 0.1, 1.0)
+
+    def highlight_joint(self, module: str, name: str | None) -> None:
+        """Select a hinge to mark with a red axis arrow, or clear when ``name`` is empty."""
+        if not name:
+            self._highlight_key = None
+            return
+        self._highlight_key = f"{module}/{name}"
+
+    def _highlight_spec(self):
+        if not self._highlight_key:
+            return None
+        return self._component_specs.get(self._highlight_key)
+
+    _HIGHLIGHT_ARROW_LEN = 0.10
+    _HIGHLIGHT_ARROW_WIDTH = 0.010
+    _HIGHLIGHT_SPHERE_R = 0.014
+    _HIGHLIGHT_RGBA = (0.95, 0.12, 0.08, 1.0)
+
+    def _draw_highlight_markers(self, scene) -> None:
+        import mujoco
+
+        spec = self._highlight_spec()
+        if spec is None or spec.get("joint_id") is None:
+            return
+        frame = hinge_world_frame(
+            self.data.xanchor,
+            self.data.xaxis,
+            int(spec["joint_id"]),
+            int(spec["dofadr"]) if spec.get("dofadr") is not None else -1,
+            njnt=int(self.model.njnt),
+        )
+        if frame is None:
+            return
+        origin, axis = frame
+        start, tip = hinge_arrow_ends(origin, axis, self._HIGHLIGHT_ARROW_LEN)
+        rgba = np.asarray(self._HIGHLIGHT_RGBA, dtype=np.float32)
+        if scene.ngeom >= scene.maxgeom:
+            return
+        geom = scene.geoms[scene.ngeom]
+        mujoco.mjv_initGeom(
+            geom,
+            mujoco.mjtGeom.mjGEOM_SPHERE,
+            np.array([self._HIGHLIGHT_SPHERE_R, 0.0, 0.0], dtype=float),
+            origin,
+            np.eye(3).ravel(),
+            rgba,
+        )
+        scene.ngeom += 1
+        if scene.ngeom >= scene.maxgeom:
+            return
+        geom = scene.geoms[scene.ngeom]
+        mujoco.mjv_initGeom(
+            geom,
+            mujoco.mjtGeom.mjGEOM_ARROW,
+            np.zeros(3),
+            np.zeros(3),
+            np.zeros(9),
+            rgba,
+        )
+        mujoco.mjv_connector(
+            geom, mujoco.mjtGeom.mjGEOM_ARROW, self._HIGHLIGHT_ARROW_WIDTH, start, tip
+        )
+        scene.ngeom += 1
 
     def _draw_frames(self, scene) -> None:
         """Append world + end-effector axis triads to the render scene."""
@@ -578,6 +686,13 @@ class MujocoWorldServer(Process):
         self._lock = threading.Lock()
         self._stop = threading.Event()
 
+        # GLFW often has no display on a Pi / SSH session; EGL still offscreens.
+        import os
+        import sys
+
+        if sys.platform.startswith("linux") and "MUJOCO_GL" not in os.environ:
+            os.environ["MUJOCO_GL"] = "egl"
+
         try:
             self._build()
             logger.info(
@@ -608,6 +723,7 @@ class MujocoWorldServer(Process):
                 "record_ranges_of_motion": self.record_ranges_of_motion,
                 "overview_defaults": self.overview_defaults,
                 "render_overview": self.render_overview,
+                "highlight_joint": self.highlight_joint,
             }
 
             # Serve module RPC on the main thread. The caller module for each

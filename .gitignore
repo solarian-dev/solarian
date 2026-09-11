@@ -26,8 +26,7 @@ projects/lekiwi
 projects/so106
 
 plugins
-# plugins/solarian-feetech
-# plugins/solarian-dynamixel
+
 
 # Ignore WIP
 example

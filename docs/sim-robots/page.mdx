@@ -138,18 +138,16 @@ ModuleAttachment(
 
 ### The prefix connects the MJCF to your YAML
 
-`prefix` namespaces the attached model, so a joint named `shoulder_pan` in `arm.xml` becomes `arm/shoulder_pan` in the composed world. Each servo's `sim:` block in the module YAML must reference the **prefixed** names:
+`prefix` namespaces the attached model, so a joint named `shoulder_pan` in `arm.xml` becomes `arm/shoulder_pan` in the composed world. Each servo's `sim_joint` in the module YAML must reference the **prefixed** name:
 
 ```yaml
 # conf/arm.yaml
 actuators:
   shoulder_pan:
     # ... hardware fields ...
-    sim:
-      joint: "arm/shoulder_pan"       # matches prefix="arm/"
-      actuator: "arm/shoulder_pan"
-      range_min: -1.91986
-      range_max: 1.91986
+    sim_joint: "arm/shoulder_pan"   # matches prefix="arm/"
+    sim_range_min: -1.91986
+    sim_range_max: 1.91986
 ```
 
 ### Bimanual (and multi-module) setups
@@ -183,6 +181,6 @@ class Bimanual(Robot):
 
 - [Simulation](/docs/simulation) — the big picture and how to run.
 - [Scenes](/docs/scenes) — `SceneConfig`, the world MJCF, and scene composition.
-- [Sim Servos & Cameras](/docs/sim-components) — the `sim:` block that maps components to MuJoCo.
+- [Sim Servos & Cameras](/docs/sim-components) — `sim_joint` / `sim_range_*` that map servos to MuJoCo.
 - [IK](/docs/ik) — Cartesian control and end-effector frames in the viewer.
 - [Robots](/docs/robots) — the base class and hardware lifecycle.

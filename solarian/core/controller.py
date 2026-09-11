@@ -547,7 +547,7 @@ class Controller(EventHost, ABC):
         self.sync_clock()
 
         for module_name, module in self.modules.items():
-            if module.cfg.calibration_file is None:
+            if not module.needs_motor_calibration():
                 # Input devices and other calibration-free modules.
                 continue
 
