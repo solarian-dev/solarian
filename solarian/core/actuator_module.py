@@ -116,11 +116,7 @@ class ActuatorModule(Module):
 
         print(f"\n=== Step 1: Joint limits ===")
         print(
-            "POS is the raw encoder. Move each hard-stop joint through its FULL\n"
-            "mechanical travel, then press ENTER. If travel crosses 4095→0 we\n"
-            "write center_offset so the saved range is a normal interval — no remount.\n"
-            "center_offset is an encoder-zero shift (not a named home pose).\n"
-            "real_range_* is that window in Present ticks after the shift."
+            "Move each hard-stop joint through its FULL mechanical travel, then press ENTER.\n"
         )
 
         self.start_calibration_mode()
@@ -145,10 +141,7 @@ class ActuatorModule(Module):
                 trackers[name] = EncoderRangeTracker(cpr=int(cpr))
                 bus_by_name[name] = bus
 
-        print(
-            "\nRecording. Move every hard-stop joint through its entire travel, "
-            "then press ENTER..."
-        )
+        
         board = StatusBoard.start_ui()
         board.table_title = "Step 1: Joint limits"
         try:

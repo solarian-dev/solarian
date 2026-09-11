@@ -446,7 +446,7 @@ class MujocoWorldServer(Process):
             return None
         return self._component_specs.get(self._highlight_key)
 
-    _HIGHLIGHT_ARROW_LEN = 0.10
+    _HIGHLIGHT_ARROW_LEN = 0.20
     _HIGHLIGHT_ARROW_WIDTH = 0.010
     _HIGHLIGHT_SPHERE_R = 0.014
     _HIGHLIGHT_RGBA = (0.95, 0.12, 0.08, 1.0)

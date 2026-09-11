@@ -521,7 +521,7 @@ class Module(ABC):
         pass
 
     def start_calibration_mode(self):
-        print(f"Starting calibration mode for {self.name}")
+        print(f"Starting calibration mode for {self.name}\n")
         for port, actuator_names in self.actuators_by_port.items():
             self.module_bus.component_bus_by_port[port].start_calibration_mode()
 
