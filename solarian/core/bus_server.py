@@ -185,7 +185,10 @@ class BusClient(ComponentBus):
         return self._call("read", data_type, component_names, normalize=normalize)
 
     def write(self, values: Dict[str, Data], normalize: bool = True, snap: bool = False):
-        return self._call("write", values, normalize=normalize, snap=snap)
+        # snap teleports MuJoCo qpos; hardware buses have no such kwarg.
+        if snap:
+            return self._call("write", values, normalize=normalize, snap=True)
+        return self._call("write", values, normalize=normalize)
 
     def configure(self, params: dict[str, int], component_names: list[str]):
         return self._call("configure", params, component_names)

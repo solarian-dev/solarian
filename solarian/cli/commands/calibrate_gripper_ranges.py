@@ -51,7 +51,7 @@ class CalibrateGripperRangesCommand(BaseCommand):
         ):
             lo, hi = module.scalar_limits()
             suffix = module.aperture_unit_suffix()
-            m = lo
+            m = 0
             while m <= hi + 1e-9:
                 print(f"{m}{suffix}")
                 _drive_to(module, m)

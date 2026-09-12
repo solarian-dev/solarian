@@ -14,13 +14,13 @@ Example::
         ik_backend = MinkIK(
             mjcf="so_arm101_mj_description",
             joints={"shoulder_pan": "1", "shoulder_lift": "2", ...},
-            frame="gripper",
+            frame="tcp",
         )
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from solarian.core.ik.base import DifferentialIKBackend
 
@@ -33,12 +33,16 @@ class MinkIK:
         mjcf: Robot description name (``robot_descriptions``) or path to an MJCF.
         joints: Ordered mapping of joint-space actuator name -> MuJoCo joint
             name. The order defines the joint vector used by the solver.
-        frame: Name of the end-effector frame (site/body/geom) in the model.
+        frame: Name of the TCP frame (site/body/geom) in the (possibly
+            composed) model.
         frame_type: Kind of ``frame`` ("site", "body" or "geom").
         position_cost / orientation_cost: Frame-task tracking weights.
         posture_cost: Regularization pulling toward the rest posture (helps a
             5-DOF arm resolve a 6D target gracefully).
         lm_damping / damping / solver: QP damping and solver knobs.
+        attachments: Optional ``ModuleAttachment`` list composed onto ``mjcf``
+            as the world before the backend loads. Use this when the TCP site
+            lives on a tool model mated to the arm (e.g. gripper ``tcp``).
     """
 
     mjcf: str
@@ -51,10 +55,21 @@ class MinkIK:
     lm_damping: float = 1.0
     solver: str = "daqp"
     damping: float = 1e-12
+    attachments: list = field(default_factory=list)
 
     def build(self) -> DifferentialIKBackend:
         # Imported lazily so `import solarian` never pulls in mink/mujoco.
         from solarian.core.ik.mink_backend import MinkBackend
+
+        model = None
+        if self.attachments:
+            from solarian.sim.configs import SceneConfig
+            from solarian.sim.scene import compose_scene
+
+            model = compose_scene(SceneConfig(
+                world_mjcf=self.mjcf,
+                attachments=list(self.attachments),
+            ))
 
         return MinkBackend(
             mjcf=self.mjcf,
@@ -68,4 +83,5 @@ class MinkIK:
             lm_damping=self.lm_damping,
             solver=self.solver,
             damping=self.damping,
+            model=model,
         )

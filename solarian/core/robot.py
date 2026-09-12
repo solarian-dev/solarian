@@ -802,15 +802,12 @@ class Robot(EventHost, ABC):
             if module.calibration is None and not skip_calibrate:
                 module.calibrate()
 
+            calibration = module.require_calibration()
             if not module.is_calibrated():
                 module.write_calibration()
 
-            calibration = module.get_calibration()
-            if calibration:
-                module.disconnect()
-                module.connect(calibration)
-            else:
-                module.disconnect()
+            module.disconnect()
+            module.connect(calibration)
 
             logger.info(f"Calibration loaded for module {module_name}")
 

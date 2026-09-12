@@ -25,7 +25,7 @@ from solarian.sim.runtime import (
     SIM_LAUNCH_TIMEOUT,
     _conn_key,
     collect_component_specs,
-    collect_ee_frames,
+    collect_tcp_frames,
     view_enabled,
 )
 
@@ -91,7 +91,7 @@ class SimMirror:
             component_specs=specs,
             server_conns=server_conns,
             conn_modules=conn_modules,
-            ee_frames=collect_ee_frames(self.robot),
+            tcp_frames=collect_tcp_frames(self.robot),
         )
         self._world.start()
         # Drop the parent's copies of the server ends (child owns them now).

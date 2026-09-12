@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Onshape → Sim Models',
   description:
-    'Turn an Onshape CAD assembly into an attachable MuJoCo (MJCF) model with one command: solarian onshape-export. A config.json drives which mates become joints, how the tree is rooted, mass/inertia inference, and an optional end-effector site — the same pipeline used to build the SO-106 arm and its gripper.',
+    'Turn an Onshape CAD assembly into an attachable MuJoCo (MJCF) model with one command: solarian onshape-export. A config.json drives which mates become joints, how the tree is rooted, and mass/inertia inference — the same pipeline used to build the SO-106 arm and its gripper.',
 }
 
 # Onshape → Sim Models
@@ -27,7 +27,7 @@ solarian onshape-export <assembly_dir> --update-yaml conf/right_arm.yaml
 
 <Properties>
   <Property name="--clean-only" type="flag">
-    Skip the Onshape API call and re-run only the <a href="#stage-2-clean">clean stage</a> on the previously-exported raw MJCF. Fast iteration on cleaning options (density, EE site, self-collision) without re-hitting the network.
+    Skip the Onshape API call and re-run only the <a href="#stage-2-clean">clean stage</a> on the previously-exported raw MJCF. Fast iteration on cleaning options (density, self-collision) without re-hitting the network.
   </Property>
   <Property name="--keys-file" type="path">
     File with <code>ONSHAPE_ACCESS_KEY</code>/<code>ONSHAPE_SECRET_KEY</code> lines, loaded into the environment if the keys aren't already set. When omitted, the command tries <code>onshape_keys.txt</code> then <code>.env</code> in the current directory.
@@ -81,21 +81,12 @@ The file is the ordinary [onshape-to-robot config](https://onshape-to-robot.read
         "base_dof": "shoulder_pan",
         "output_xml": "../so106.xml",
         "meshdir": "so106_description/meshes",
-        "density": 1400,
-        "ee_site": { "name": "gripper", "body": "so100_6dof_wrist_roll_to_gripper", "axis": "z" }
+        "density": 1400
     }
 }
 ```
 
-Or, when the tip is on a separate gripper not in the arm CAD, put a Frame on the flange in Onshape and offset from it in `config.json` (survives re-exports):
-
-```json
-"ee_site": {
-    "name": "gripper",
-    "site": "flange",
-    "offset": [0.0, 0.0, 0.08]
-}
-```
+A tool TCP is a named Frame in Onshape on the **gripper** assembly (call it `tcp`). onshape-to-robot exports it as a `<site>`; IK tracks that site after the gripper is attached. Do not invent a synthetic site in `config.json`.
 
 <Note>
   You can point at the assembly with a single <code>"url"</code> field (the Onshape tab URL) instead of <code>document_id</code>/<code>workspace_id</code>/<code>element_id</code> — onshape-to-robot parses the IDs out of it.
@@ -137,14 +128,6 @@ Parsed into [`SolarianExportSpec`](https://github.com/solarian-dev/solarian/blob
   <Property name="self_collision" type="bool">
     Let the mechanism's own links collide with each other. Default <code>false</code>: full-link collision meshes overlap by design at every joint and MuJoCo does not auto-exclude parent/child contacts, so self-collision produces permanent interpenetrations that fight the actuators.
   </Property>
-  <Property name="ee_site" type="object | None">
-    Optional end-effector <code>&lt;site&gt;</code>. Two mutually exclusive placement modes:
-    <ul>
-      <li><strong>Body + axis</strong> — <code>body</code> is a flange body; <code>axis</code> (<code>x</code>/<code>y</code>/<code>z</code>, optionally signed like <code>-z</code>) places the site at that body's far collision face.</li>
-      <li><strong>Site + offset</strong> — <code>site</code> is an existing CAD Frame exported as a <code>&lt;site&gt;</code>; <code>offset</code> is <code>[x, y, z]</code> in that site's local frame. Use this when the tip is on a separate gripper not in the arm assembly: put a Frame on the flange in Onshape, measure the tip offset, and keep it in <code>config.json</code> so it survives re-exports.</li>
-    </ul>
-    In both cases <code>name</code> is what an <a href="/docs/ik">IK backend</a> references (e.g. <code>MinkIK(frame="gripper")</code>).
-  </Property>
   <Property name="prefer_config_limits" type="bool">
     When <code>false</code> (default), ignore stale <code>joint_properties.*.limits</code> during the Onshape pull so mate limits from the assembly win, then rewrite those limits in <code>config.json</code> from the cleaned MJCF. Set <code>true</code> only to keep config.json as an intentional override of CAD.
   </Property>
@@ -168,7 +151,6 @@ solarian onshape-export <dir>
    │     ├── drop the base <freejoint>            (attach)
    │     ├── strip inertials + infer mass/inertia (density)
    │     ├── set meshdir, non-self-colliding geoms
-   │     ├── add the end-effector <site>          (ee_site)
    │     └── write output_xml
    │
    └── Sync limits: MJCF → config.json (+ module yaml with --update-yaml)
@@ -360,4 +342,4 @@ unzip -l dist/*.whl | grep assets   # expect umi_slim.xml + meshes/*.stl, and no
 - [Scenes](/docs/scenes) — `ModuleAttachment`, `parent_body`, `prefix`.
 - [Plug-ins](/docs/plugins) — packaging a module (and its model) as a reusable plugin.
 - [Sim Servos & Cameras](/docs/sim-components) — `sim_joint` / `sim_range_*` on servos.
-- [IK](/docs/ik) — the end-effector `site` referenced by `ee_site`.
+- [IK](/docs/ik) — track the gripper's CAD `tcp` site (`MinkIK(frame="…/tcp")`).

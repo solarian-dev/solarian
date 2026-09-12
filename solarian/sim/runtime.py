@@ -131,17 +131,18 @@ def collect_component_specs(robot) -> Dict[str, Dict[str, Any]]:
     return specs
 
 
-def collect_ee_frames(robot) -> list[tuple[str, str]]:
-    """Derive end-effector frames to visualize from each attached module's IK spec.
+def collect_tcp_frames(robot) -> list[tuple[str, str]]:
+    """Derive TCP frames to visualize from each attached module's IK spec.
 
     For every scene attachment whose module declares an ``ik_backend`` with a
-    ``frame`` (e.g. ``MinkIK(frame="gripper")``), the composed frame name is
-    ``prefix + frame`` (the attach prefix namespaces the sub-model). The world
-    server draws an axis triad at each. Empty if frames are disabled.
+    ``frame`` (e.g. ``MinkIK(frame="tcp")``), the composed site name is
+    ``prefix + frame``. If ``frame`` already contains ``/`` it is treated as
+    a fully composed name (a tool TCP living on another attachment).
+    Empty if frames are disabled.
     """
     if not getattr(robot.scene, "show_frames", True):
         return []
-    ee_frames: list[tuple[str, str]] = []
+    tcp_frames: list[tuple[str, str]] = []
     for att in robot.scene.attachments:
         module = robot.modules.get(att.module)
         if module is None:
@@ -151,8 +152,9 @@ def collect_ee_frames(robot) -> list[tuple[str, str]]:
         if not frame:
             continue
         frame_type = getattr(spec, "frame_type", "site")
-        ee_frames.append((f"{att.prefix}{frame}", frame_type))
-    return ee_frames
+        composed = frame if "/" in frame else f"{att.prefix}{frame}"
+        tcp_frames.append((composed, frame_type))
+    return tcp_frames
 
 
 def sim_connect(robot) -> None:
@@ -194,7 +196,7 @@ def sim_connect(robot) -> None:
         component_specs=specs,
         server_conns=server_conns,
         conn_modules=conn_modules,
-        ee_frames=collect_ee_frames(robot),
+        tcp_frames=collect_tcp_frames(robot),
     )
     robot._world_server.start()
     # The child now holds its own duplicated ends of every pipe. Drop the

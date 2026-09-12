@@ -37,7 +37,7 @@ class MinkBackend(DifferentialIKBackend):
             :meth:`integrate`.
         joint_model_names: The MuJoCo joint names corresponding, in the same
             order, to ``joint_actuator_names``.
-        frame_name: End-effector frame (site/body/geom) in the model.
+        frame_name: TCP frame (site/body/geom) in the model.
         frame_type: ``"site"`` (default), ``"body"`` or ``"geom"``.
         position_cost / orientation_cost: Frame-task weights. For an arm with
             fewer than 6 DOF, keep ``position_cost`` above ``orientation_cost`` so
@@ -48,6 +48,8 @@ class MinkBackend(DifferentialIKBackend):
             singularities / for over-constrained tasks).
         solver: QP solver name understood by ``qpsolvers`` (``"daqp"`` default).
         damping: Tikhonov damping passed to ``mink.solve_ik``.
+        model: Optional pre-composed ``MjModel``. When set, ``mjcf`` is only
+            used in error messages (the backend does not reload it).
     """
 
     def __init__(
@@ -63,6 +65,7 @@ class MinkBackend(DifferentialIKBackend):
         lm_damping: float = 1.0,
         solver: str = "daqp",
         damping: float = 1e-12,
+        model=None,
     ):
         import mujoco
         import mink
@@ -80,7 +83,9 @@ class MinkBackend(DifferentialIKBackend):
         self.solver = solver
         self.damping = damping
 
-        self.model = mujoco.MjModel.from_xml_path(resolve_mjcf(mjcf))
+        self.model = model if model is not None else mujoco.MjModel.from_xml_path(
+            resolve_mjcf(mjcf)
+        )
 
         # Resolve qpos / dof addresses and radian limits of the controlled joints.
         qpos_ids: list[int] = []

@@ -108,8 +108,8 @@ class SceneConfig(BaseModel):
     #: Optional override of gravity.
     gravity: list[float] | None = None
     #: Draw coordinate-frame triads in the overview viewer: the world frame at
-    #: the origin and the end-effector frame of every arm that declares an IK
-    #: backend. Set ``False`` to hide them.
+    #: the origin and the TCP frame of every arm that declares an IK backend.
+    #: Set ``False`` to hide them.
     show_frames: bool = True
     #: Draw a wireframe frustum for every mounted camera in the overview viewer
     #: so its position and viewing direction are visible. Set ``False`` to hide.

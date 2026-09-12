@@ -279,6 +279,16 @@ class Module(ABC):
                 calibration[port] = {}
             calibration[port][actuator_name] = self.calibration[actuator_name]
         return calibration
+
+    def require_calibration(self) -> dict:
+        """Port-grouped calibration, or raise if this module has none."""
+        calibration = self.get_calibration()
+        if calibration:
+            return calibration
+        raise RuntimeError(
+            f"No calibration for module '{self.name}'. "
+            f"Complete the sweep when prompted, or run `solarian calibrate`."
+        )
             
     # def sensors(self) -> tuple[str, Sensor]:
     #     """Get all sensors in the module."""
