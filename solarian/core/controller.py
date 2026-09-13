@@ -205,7 +205,10 @@ class Controller(EventHost, ABC):
                     RemoteInputModule if name in remote_input else val.__class__
                 )
                 module_cfg = self.load_module_config(name, module_class)
-                self.modules[name] = module_class(module_cfg, name)
+                if module_class is val.__class__:
+                    self.modules[name] = val.bind(module_cfg, name)
+                else:
+                    self.modules[name] = module_class(module_cfg, name)
                 setattr(self, name, self.modules[name])
                 remote_input.discard(name)
         if remote_input:
@@ -317,7 +320,7 @@ class Controller(EventHost, ABC):
             # Schema-only: instantiate for its side-effect of mutating
             # class-level data descriptors.  The instance itself is
             # discarded.
-            module_class(module_cfg, name)
+            attr.bind(module_cfg, name)
 
     def _create_observation_buffers(self) -> None:
         """Create a shared-memory ``ObservationBuffer`` for every module

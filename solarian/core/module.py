@@ -265,8 +265,10 @@ class Module(ABC):
             self._module_obs_cls = None
             self._robot_processors = {}
 
+    def bind(self, cfg, name):
+        """Rebuild this class-level placeholder against the module YAML."""
+        return type(self)(cfg, name)
 
-        
     def get_calibration(self) -> dict | None:
         "returns calibrations grouped by port"
         if self.calibration is None:
@@ -776,11 +778,10 @@ class Module(ABC):
         pass
 
     def _drop_timestamps(self, action: ModuleAction) -> bool:
-        # ``None`` is not "false" here: it means the action expressed no
-        # preference, so the module's own config decides.
-        if action.drop_timestamps is not None:
-            return bool(action.drop_timestamps)
-        return bool(getattr(self.cfg, "drive_waypoints", False))
+        # Missing / ``None`` honors the stamped time (``schedule_waypoint``).
+        if action.drop_timestamps is None:
+            return False
+        return bool(action.drop_timestamps)
 
     def _is_drive_waypoint(self, action) -> bool:
         return int(action.action_type) == int(

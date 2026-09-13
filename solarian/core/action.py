@@ -162,8 +162,8 @@ class ModuleAction:
     transparently delegate to it.
 
     ``drop_timestamps`` is an optional flag for ``SCHEDULE_WAYPOINT``: ``True``
-    ignores client timestamps (teleop drive), ``False`` honors them (policy
-    chunks). ``None`` falls back to the module's ``drive_waypoints`` config.
+    ignores client timestamps (teleop drive), ``False`` or ``None`` honors them
+    (policy chunks, keyboard jog).
     """
 
     _active_subclass = None
@@ -181,7 +181,7 @@ class ModuleAction:
     # -- Init --------------------------------------------------------------
 
     #: Sentinel used on the wire / shared-memory queue when the sender did
-    #: not set ``drop_timestamps`` (module falls back to ``cfg.drive_waypoints``).
+    #: not set ``drop_timestamps`` (module honors the stamped time).
     _DROP_TIMESTAMPS_UNSET = -1
 
     @staticmethod

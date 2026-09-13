@@ -14,39 +14,40 @@ from typing import Any, Optional
 from solarian.utils import get_class
 
 
-def _collect_modules_from_class(cls) -> dict[str, type]:
-    """Return ``{attr_name: ModuleSubclass}`` for every Module descriptor on ``cls``."""
+def _collect_modules_from_class(cls) -> dict[str, object]:
+    """Return ``{attr_name: placeholder}`` for every Module descriptor on ``cls``."""
     from solarian.core.module import Module
 
-    modules: dict[str, type] = {}
+    modules: dict[str, object] = {}
     for name in cls.__dict__:
         val = getattr(cls, name, None)
         if isinstance(val, Module):
-            modules[name] = val.__class__
+            modules[name] = val
     return modules
 
 
-def collect_ik_modules() -> dict[str, type]:
+def collect_ik_modules() -> dict[str, object]:
     """Find project modules that declare an IK backend (``ik_backend`` set).
 
     Looks on the project's ``ROBOT_CLASS`` (and ``CONTROLLER_CLASS``) declared in
     settings. Keyed by the module's attribute name (which is also its yaml name).
+    Values are the class-level placeholders so constructor IK overrides survive.
     """
     from solarian.conf import settings
 
-    found: dict[str, type] = {}
+    found: dict[str, object] = {}
     for class_attr in ("ROBOT_CLASS", "CONTROLLER_CLASS"):
         class_path = getattr(settings, class_attr, None)
         if not class_path:
             continue
         parent_cls = get_class(class_path)
-        for name, module_cls in _collect_modules_from_class(parent_cls).items():
-            if getattr(module_cls, "ik_backend", None) is not None:
-                found[name] = module_cls
+        for name, template in _collect_modules_from_class(parent_cls).items():
+            if getattr(template, "ik_backend", None) is not None:
+                found[name] = template
     return found
 
 
-def select_ik_module(module_name: Optional[str] = None) -> tuple[str, type]:
+def select_ik_module(module_name: Optional[str] = None) -> tuple[str, object]:
     """Resolve which IK module to operate on (explicit, single, or prompt)."""
     modules = collect_ik_modules()
     if not modules:
@@ -64,8 +65,8 @@ def select_ik_module(module_name: Optional[str] = None) -> tuple[str, type]:
 
     entries = list(modules.items())
     print("\n=== Available IK modules ===")
-    for idx, (name, cls) in enumerate(entries, 1):
-        print(f"{idx}. {name} ({cls.__name__})")
+    for idx, (name, template) in enumerate(entries, 1):
+        print(f"{idx}. {name} ({type(template).__name__})")
     while True:
         raw = input(f"Select module (1-{len(entries)}): ").strip()
         if raw.isdigit() and 1 <= int(raw) <= len(entries):
@@ -73,23 +74,23 @@ def select_ik_module(module_name: Optional[str] = None) -> tuple[str, type]:
         print("Invalid selection.")
 
 
-def load_module(module_name: str, module_class: type):
+def load_module(module_name: str, template):
     """Instantiate a module from its ``conf/<name>.yaml`` (not connected)."""
     from solarian.utils.configs import load_config_yaml
 
     conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
     yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
-    module_cfg = load_config_yaml(yaml_path, module_class.config_class)
-    return module_class(module_cfg, module_name)
+    module_cfg = load_config_yaml(yaml_path, type(template).config_class)
+    return template.bind(module_cfg, module_name)
 
 
-def build_backend(module_class: type):
+def build_backend(module):
     """Build the module's differential IK backend (needs the ``[sim]`` extra).
 
     Exposes ``joint_actuator_names`` and ``joint_limits`` (the model ``jnt_range``)
     without touching hardware.
     """
-    spec = module_class.ik_backend
+    spec = getattr(module, "ik_backend", None)
     if hasattr(spec, "build"):
         return spec.build()
     if callable(spec):

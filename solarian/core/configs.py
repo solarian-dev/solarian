@@ -119,9 +119,10 @@ class CameraConfig(SensorConfig):
 class ActuatorConfig(ComponentConfig):
     """Per-actuator yaml: deployment + measured values.
 
-    Structural facts (class, servo model, continuous vs limited) live on the
-    Module class declaration. ``type:`` in yaml is ignored (bus comes from
-    ``bus_class``). A leftover nested ``sim:`` block is flattened on load.
+    The actuator class, default servo model, and continuous-vs-limited live on
+    the Module declaration. Yaml ``model:`` / ``mode:`` override those defaults
+    when set. ``type:`` in yaml is ignored (bus comes from ``bus_class``). A
+    leftover nested ``sim:`` block is flattened on load.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -197,11 +198,8 @@ class ModuleConfig(BaseModel):
     # # Interpolator settings
     interpolator_type: InterpolatorType = InterpolatorType.JOINT
     max_speed: float | list[float] = 1.0  # max speed for interpolation (single or per-joint)
-    #: If True, SCHEDULE_WAYPOINT ignores client timestamps and uses adaptive
-    #: ``drive_to_waypoint`` from the robot clock (best for WiFi teleop). If
-    #: False, keep UMI-style timestamped ``schedule_waypoint`` (policy chunks).
-    drive_waypoints: bool = False
-    #: Adaptive drive horizon bounds (seconds). Only used when drive_waypoints.
+    #: Adaptive drive horizon bounds (seconds). Used when an action sets
+    #: ``drop_timestamps=True`` (``servoL`` / ``drive_to_waypoint``).
     drive_horizon_min_s: float = 1.0 / 30.0
     drive_horizon_max_s: float = 0.12
     drive_horizon_ema_alpha: float = 0.2

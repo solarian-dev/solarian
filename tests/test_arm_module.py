@@ -54,7 +54,6 @@ def _arm():
     arm._joint_interp = None
     arm.last_waypoint_time = 0.0
     arm.cfg = SimpleNamespace(
-        drive_waypoints=False,
         interpolator_type="pose",
     )
     captured = {}
@@ -186,12 +185,11 @@ def test_a_chunk_outlives_the_drive_waypoints_drained_with_it():
     assert arm._coalesce_actions(drained) == [chunk[0], chunk[1], stale[1], chunk[2]]
 
 
-def test_the_config_decides_when_the_waypoint_does_not():
-    """``drop_timestamps=None`` defers to ``drive_waypoints``, coalescing too."""
+def test_a_missing_drop_timestamps_honours_the_stamp():
+    """``drop_timestamps=None`` is not a drive waypoint, so a burst is kept."""
     arm, _ = _arm()
-    arm.cfg.drive_waypoints = True
     burst = [_Action(POSE, drop_timestamps=None) for _ in range(4)]
-    assert arm._coalesce_actions(burst) == [burst[-1]]
+    assert arm._coalesce_actions(burst) == burst
 
 
 def test_module_action_params_roundtrip():
@@ -211,7 +209,7 @@ def test_module_action_params_roundtrip():
     assert restored.params["speed"] == pytest.approx(0.5)
 
 
-def _bare_arm(drive_waypoints: bool) -> ArmModule:
+def _bare_arm() -> ArmModule:
     """An ArmModule with just enough state for the pose interpolator path."""
     module = ArmModule.__new__(ArmModule)
     module.name = "test_arm"
@@ -219,7 +217,6 @@ def _bare_arm(drive_waypoints: bool) -> ArmModule:
     module.cfg = SimpleNamespace(
         interpolator_type=InterpolatorType.POSE,
         max_speed=[0.25, 0.6],
-        drive_waypoints=drive_waypoints,
     )
     module.interp = None
     module.last_waypoint_time = 0.0
@@ -319,10 +316,9 @@ def test_hold_measured_pose_writes_back_what_it_read():
     assert written["q"].tolist() == [0.1, -0.2, 0.3]
 
 
-def test_schedule_pose_honours_its_timestamp_under_drive_waypoints():
-    """`drive_waypoints: true` is a teleop setting; a calibration sweep must
-    still land where it asked, not on the adaptive drive horizon (<= 120 ms)."""
-    module = _bare_arm(drive_waypoints=True)
+def test_schedule_pose_honours_its_timestamp():
+    """A calibration sweep lands where it asked, not on the adaptive drive horizon."""
+    module = _bare_arm()
     lead = 0.5
 
     t_before = time.monotonic()
@@ -331,3 +327,20 @@ def test_schedule_pose_honours_its_timestamp_under_drive_waypoints():
 
     assert module.last_waypoint_time - t_before == pytest.approx(lead, abs=0.05)
     assert module.last_waypoint_time > t_after
+
+
+def test_ik_tcp_survives_bind():
+    from solarian.core.configs import ModuleConfig
+    from solarian.core.ik import FrameOffset, MinkIK
+
+    offset = FrameOffset(pos=(0.0, 0.0, 0.2), quat=(1.0, 0.0, 0.0, 0.0))
+
+    class _Arm(ArmModule):
+        ik_backend = MinkIK(mjcf="unused.xml", joints={"j": "j"}, frame="flange")
+
+    placeholder = _Arm(ik_tcp=offset)
+    assert placeholder.ik_backend.tcp_offset == offset
+    bound = placeholder.bind(ModuleConfig(frequency=10), "right_arm")
+    assert bound.ik_tcp == offset
+    assert bound.ik_backend.tcp_offset == offset
+    assert bound.ik_backend.frame == "flange"

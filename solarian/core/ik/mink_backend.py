@@ -19,10 +19,18 @@ from typing import Sequence
 import numpy as np
 
 from solarian.core.ik.base import DifferentialIKBackend
+from solarian.core.pose import quat_to_rotvec
 
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _se3_from_offset(mink, offset):
+    rotation = mink.SO3.exp(quat_to_rotvec(offset.quat))
+    return mink.SE3.from_rotation_and_translation(
+        rotation, np.asarray(offset.pos, dtype=float)
+    )
 
 
 class MinkBackend(DifferentialIKBackend):
@@ -50,6 +58,8 @@ class MinkBackend(DifferentialIKBackend):
         damping: Tikhonov damping passed to ``mink.solve_ik``.
         model: Optional pre-composed ``MjModel``. When set, ``mjcf`` is only
             used in error messages (the backend does not reload it).
+        tcp_offset: Optional rigid tool pose in ``frame_name``. FK/IK track
+            ``frame ∘ offset`` instead of the bare site.
     """
 
     def __init__(
@@ -66,6 +76,7 @@ class MinkBackend(DifferentialIKBackend):
         solver: str = "daqp",
         damping: float = 1e-12,
         model=None,
+        tcp_offset=None,
     ):
         import mujoco
         import mink
@@ -82,6 +93,7 @@ class MinkBackend(DifferentialIKBackend):
         self.frame_type = frame_type
         self.solver = solver
         self.damping = damping
+        self._tcp_se3 = _se3_from_offset(mink, tcp_offset) if tcp_offset is not None else None
 
         self.model = model if model is not None else mujoco.MjModel.from_xml_path(
             resolve_mjcf(mjcf)
@@ -130,6 +142,8 @@ class MinkBackend(DifferentialIKBackend):
         transform = self.configuration.get_transform_frame_to_world(
             self.frame_name, self.frame_type
         )
+        if self._tcp_se3 is not None:
+            transform = transform @ self._tcp_se3
         translation = np.asarray(transform.translation(), dtype=float)
         rotvec = np.asarray(transform.rotation().log(), dtype=float)
         return np.concatenate([translation, rotvec])
@@ -140,6 +154,8 @@ class MinkBackend(DifferentialIKBackend):
         target = np.asarray(target_pose, dtype=float)
         rotation = mink.SO3.exp(target[3:6])
         transform = mink.SE3.from_rotation_and_translation(rotation, target[:3])
+        if self._tcp_se3 is not None:
+            transform = transform @ self._tcp_se3.inverse()
         self.frame_task.set_target(transform)
         return mink.solve_ik(
             self.configuration, self.tasks, dt, self.solver, self.damping

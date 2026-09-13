@@ -249,7 +249,7 @@ class Robot(EventHost, ABC):
                 module_class = val.__class__
                 module_cfg = self.load_module_config(name, module_class)
                 module_configs[name] = (module_class, module_cfg)
-                self._module_map[name] = module_class(module_cfg, name)
+                self._module_map[name] = val.bind(module_cfg, name)
                 setattr(self, name, self._module_map[name])
 
         # Phase 2: Build example observations/actions (now with correct shapes).

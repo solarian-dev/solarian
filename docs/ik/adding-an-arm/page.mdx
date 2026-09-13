@@ -78,7 +78,7 @@ class ArmModule(Module):
     )
 ```
 
-When the TCP is a CAD Frame on the gripper, compose that model into `MinkIK.attachments` and set `frame` to the prefixed site (`So106ArmModule` does this for UMI-slim). Named poses a skill can drive live in `conf/move.yaml`.
+When the TCP is a CAD Frame on the gripper, pass that tool's flange-relative pose into the arm (`So106ArmModule(ik_tcp=UmiSlimFeetechModule.tcp_from_flange)`). MinkIK tracks the arm `flange` and applies the offset. Named poses a skill can drive live in `conf/move.yaml`.
 
 ### Arm yaml
 

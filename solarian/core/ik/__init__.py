@@ -7,6 +7,7 @@ Provides:
   on top of a module's joint bus.
 * :class:`CartesianIKActuator` -- the actuator type an arm declares for each
   end-effector pose component.
+* :class:`FrameOffset` -- rigid tool pose (pos + quat) in a parent frame.
 * :class:`MinkIK` -- a declarative spec for the built-in mink/MuJoCo backend.
 * :class:`MinkBackend` -- the mink/MuJoCo backend itself (imports ``mink``/
   ``mujoco`` lazily; requires the ``[sim]`` extra).
@@ -19,7 +20,7 @@ backend automatically when connecting.
 from solarian.core.ik.base import DifferentialIKBackend
 from solarian.core.ik.actuator import CartesianIKActuator
 from solarian.core.ik.bus import IKActuatorBus
-from solarian.core.ik.spec import MinkIK
+from solarian.core.ik.spec import FrameOffset, MinkIK
 
 
 def __getattr__(name):
@@ -35,6 +36,7 @@ __all__ = [
     "DifferentialIKBackend",
     "IKActuatorBus",
     "CartesianIKActuator",
+    "FrameOffset",
     "MinkIK",
     "MinkBackend",
 ]

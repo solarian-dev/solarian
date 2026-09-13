@@ -51,12 +51,29 @@ class ArmModule(ActuatorModule):
     # Joint speed limit (rad/s) for an exclusive move that names no ``speed``.
     default_joint_speed: float = _DEFAULT_JOINT_SPEED
 
-    def __init__(self, cfg=None, name=None, observation_buffer=None, action_queue=None):
+    def __init__(
+        self,
+        cfg=None,
+        name=None,
+        observation_buffer=None,
+        action_queue=None,
+        *,
+        ik_tcp=None,
+    ):
+        self.ik_tcp = ik_tcp
+        spec = type(self).ik_backend
+        if spec is not None and ik_tcp is not None:
+            from dataclasses import replace
+
+            self.ik_backend = replace(spec, tcp_offset=ik_tcp)
         super().__init__(cfg, name, observation_buffer, action_queue)
         # Set even for a schema-only instance (``cfg is None``), so readers
         # need no guard.
         self._cached_ik_backend = None
         self._joint_interp: JointTrajectoryInterpolator | None = None
+
+    def bind(self, cfg, name):
+        return type(self)(cfg, name, ik_tcp=self.ik_tcp)
 
     # ========= inverse kinematics ============
     def wrap_port_bus(self, port, inner_bus, joint_components, cartesian_components):
@@ -81,7 +98,7 @@ class ArmModule(ActuatorModule):
         if self._cached_ik_backend is not None:
             return self._cached_ik_backend
 
-        spec = type(self).ik_backend
+        spec = getattr(self, "ik_backend", None)
         if spec is None:
             raise NotImplementedError(
                 f"Module '{self.name}' declares Cartesian IK actuators but no "
@@ -106,7 +123,7 @@ class ArmModule(ActuatorModule):
         return backend
 
     def _ik_joint_names(self) -> list[str]:
-        spec = type(self).ik_backend
+        spec = getattr(self, "ik_backend", None)
         joints = getattr(spec, "joints", None) if spec is not None else None
         if isinstance(joints, dict) and joints:
             return list(joints.keys())
@@ -205,11 +222,7 @@ class ArmModule(ActuatorModule):
         return self._read_current_pose()
 
     def schedule_pose(self, pose, target_time_wall: float) -> None:
-        """Queue a timestamped Cartesian waypoint (never drops client timestamps).
-
-        ``drop_timestamps=False`` so teleop ``drive_waypoints: true`` cannot
-        collapse a calibration sinusoid into adaptive "drive now".
-        """
+        """Queue a timestamped Cartesian waypoint (never drops client timestamps)."""
         self._cancel_joint_motion()
         self._schedule_pose_waypoint(
             np.asarray(pose, dtype=np.float64),

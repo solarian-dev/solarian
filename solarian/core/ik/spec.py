@@ -25,6 +25,14 @@ from dataclasses import dataclass, field
 from solarian.core.ik.base import DifferentialIKBackend
 
 
+@dataclass(frozen=True)
+class FrameOffset:
+    """Rigid pose of a child frame in its parent (metres, ``[w, x, y, z]``)."""
+
+    pos: tuple[float, float, float]
+    quat: tuple[float, float, float, float]
+
+
 @dataclass
 class MinkIK:
     """Parameters for a mink (MuJoCo) differential IK backend.
@@ -34,15 +42,19 @@ class MinkIK:
         joints: Ordered mapping of joint-space actuator name -> MuJoCo joint
             name. The order defines the joint vector used by the solver.
         frame: Name of the TCP frame (site/body/geom) in the (possibly
-            composed) model.
+            composed) model. A gripper TCP is usually the arm ``flange`` plus
+            ``tcp_offset``, not a site on a composed tool MJCF.
         frame_type: Kind of ``frame`` ("site", "body" or "geom").
         position_cost / orientation_cost: Frame-task tracking weights.
         posture_cost: Regularization pulling toward the rest posture (helps a
             5-DOF arm resolve a 6D target gracefully).
         lm_damping / damping / solver: QP damping and solver knobs.
+        tcp_offset: Optional rigid tool pose in ``frame``. FK/IK then track
+            ``frame ∘ tcp_offset`` (the gripper publishes this as
+            ``tcp_from_flange``).
         attachments: Optional ``ModuleAttachment`` list composed onto ``mjcf``
-            as the world before the backend loads. Use this when the TCP site
-            lives on a tool model mated to the arm (e.g. gripper ``tcp``).
+            as the world before the backend loads. Prefer ``tcp_offset`` when
+            the tool TCP is a fixed pose in the flange.
     """
 
     mjcf: str
@@ -55,6 +67,7 @@ class MinkIK:
     lm_damping: float = 1.0
     solver: str = "daqp"
     damping: float = 1e-12
+    tcp_offset: FrameOffset | None = None
     attachments: list = field(default_factory=list)
 
     def build(self) -> DifferentialIKBackend:
@@ -84,4 +97,5 @@ class MinkIK:
             solver=self.solver,
             damping=self.damping,
             model=model,
+            tcp_offset=self.tcp_offset,
         )

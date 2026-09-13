@@ -230,7 +230,7 @@ It then checks that the model can still travel the full amplitude both ways from
 
 Do not lower `freq` further than you have to. Cross-correlating a narrowband signal gives a broad peak that the finite recording window pulls toward zero lag, and the resulting bias grows as the frequency drops — around 18 ms at 0.5 Hz over a 10 s sweep, against 2 ms at 1.25 Hz. Reduce `amplitude` first.
 
-Both commands drive the module through `schedule_pose` / `schedule_scalar`, which pass `drop_timestamps=False`. That matters when the module yaml sets `drive_waypoints: true` for teleop: the normal path would collapse the timestamped sinusoid into "drive to the latest target now", which destroys the very timing being measured.
+Both commands drive the module through `schedule_pose` / `schedule_scalar`, which pass `drop_timestamps=False` so the sinusoid is interpolated at its stamped times rather than collapsed into "drive to the latest target now".
 
 ### `arm_obs_latency` and `gripper_obs_latency`
 

@@ -147,7 +147,7 @@ def collect_tcp_frames(robot) -> list[tuple[str, str]]:
         module = robot.modules.get(att.module)
         if module is None:
             continue
-        spec = getattr(type(module), "ik_backend", None)
+        spec = getattr(module, "ik_backend", None)
         frame = getattr(spec, "frame", None)
         if not frame:
             continue

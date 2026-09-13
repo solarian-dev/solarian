@@ -64,11 +64,7 @@ class GripperModule(ActuatorModule):
         return self._read_current_scalar()
 
     def schedule_scalar(self, value: float, target_time_wall: float) -> None:
-        """Queue a timestamped scalar waypoint (never drops client timestamps).
-
-        ``drop_timestamps=False`` so teleop ``drive_waypoints: true`` cannot
-        collapse a calibration sinusoid into adaptive "drive now".
-        """
+        """Queue a timestamped scalar waypoint (never drops client timestamps)."""
         self._schedule_scalar_waypoint(
             float(value),
             float(target_time_wall),
