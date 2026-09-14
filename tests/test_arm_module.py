@@ -331,3 +331,86 @@ def test_ik_tcp_survives_bind():
     assert bound.ik_tcp == offset
     assert bound.ik_backend.tcp_offset == offset
     assert bound.ik_backend.frame == "flange"
+
+
+def _movej_arm(q_now: np.ndarray | None = None) -> ArmModule:
+    """Arm with a real joint interpolator so exclusive-move cleanup can be tested."""
+    module = ArmModule.__new__(ArmModule)
+    module.name = "right_arm"
+    module.default_joint_speed = 1.05
+    module.interp = None
+    module._joint_interp = None
+    module.last_waypoint_time = 0.0
+    start = (
+        np.zeros(6, dtype=np.float64)
+        if q_now is None
+        else np.asarray(q_now, dtype=np.float64)
+    )
+    module._read_joints_rad = lambda: start.copy()
+    module._clear_pose_interpolator = lambda: None
+    return module
+
+
+def test_cancel_does_not_freeze_an_exclusive_move_j():
+    """Reaping a policy after MOVE_J must not stop the go-to the new skill sent."""
+    module = _movej_arm()
+    target = np.array([0.0, -1.4, 1.2, 0.4, 0.0, 0.0])
+    module.moveJ(target, speed=1.05, t_now=0.0)
+    end_t = float(module._joint_interp.times[-1])
+    assert end_t > 1.0
+
+    module._handle_cancel_trajectory(
+        ModuleAction(action_type=ActionType.CANCEL_TRAJECTORY), t_now=0.2
+    )
+
+    np.testing.assert_allclose(module._joint_interp(end_t), target)
+
+
+def test_a_late_schedule_l_does_not_preempt_an_exclusive_move_j():
+    """The dying policy's last chunk arrives after MOVE_J on the same queue."""
+    module = _movej_arm()
+    target = np.array([0.0, -1.4, 1.2, 0.4, 0.0, 0.0])
+    module.moveJ(target, speed=1.05, t_now=0.0)
+    scheduled = []
+    module._cancel_joint_motion = lambda: scheduled.append("cancelled")
+    module._schedule_pose_waypoint = lambda *a, **k: scheduled.append("scheduled")
+
+    module.scheduleL(np.zeros(6), time.time() + 0.5, t_now=0.1)
+
+    assert scheduled == []
+    np.testing.assert_allclose(module._joint_interp(module._joint_interp.times[-1]), target)
+
+
+def test_schedule_l_takes_over_after_exclusive_move_arrives():
+    """A finished go-home must not block the next policy's SCHEDULE_L."""
+    module = _movej_arm()
+    target = np.array([0.0, -1.4, 1.2, 0.4, 0.0, 0.0])
+    module.moveJ(target, speed=1.05, t_now=0.0)
+    end_t = float(module._joint_interp.times[-1])
+    scheduled = []
+    module._cancel_joint_motion = lambda: scheduled.append("cancelled")
+    module._schedule_pose_waypoint = lambda *a, **k: scheduled.append("scheduled")
+
+    module.scheduleL(np.zeros(6), time.time() + 0.5, t_now=end_t + 0.01)
+
+    assert scheduled == ["cancelled", "scheduled"]
+    assert module._exclusive_move is False
+
+
+def test_servo_l_does_preempt_an_exclusive_move_j():
+    """Teleop is a new author and must be able to take the arm back."""
+    module = _movej_arm()
+    module.moveJ(np.array([0.0, -1.4, 1.2, 0.4, 0.0, 0.0]), speed=1.05, t_now=0.0)
+    cancelled = []
+    module._cancel_joint_motion = lambda: cancelled.append(True)
+    module._ensure_pose_interpolator = lambda t_now=None: None
+    module.interp = SimpleNamespace(
+        drive_to_waypoint=lambda **kw: SimpleNamespace(times=np.array([kw["time"]]))
+    )
+    module._pose_speed_kwargs = lambda: {}
+    module._min_servo_duration = lambda duration: duration
+
+    module.servoL(np.zeros(6), duration=0.1, t_now=1.0)
+
+    assert cancelled == [True]
+    assert module._exclusive_move is False

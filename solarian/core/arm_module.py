@@ -51,6 +51,11 @@ class ArmModule(ActuatorModule):
     # Joint speed limit (rad/s) for an exclusive move that names no ``speed``.
     default_joint_speed: float = _DEFAULT_JOINT_SPEED
 
+    # Class defaults so ``__new__`` test fixtures can call scheduleL without
+    # running ``__init__``. Instance writes in moveJ / servoL override them.
+    _exclusive_move = False
+    _logged_exclusive_block = False
+
     def __init__(
         self,
         cfg=None,
@@ -71,6 +76,10 @@ class ArmModule(ActuatorModule):
         # need no guard.
         self._cached_ik_backend = None
         self._joint_interp: JointTrajectoryInterpolator | None = None
+        # Exclusive while the go-to interpolator still has future time. Leftover
+        # SCHEDULE from a reaped policy must not abort it; a finished go-to
+        # must not block the next policy.
+        self._exclusive_move = False
 
     def bind(self, cfg, name):
         return type(self)(cfg, name, ik_tcp=self.ik_tcp)
@@ -221,9 +230,30 @@ class ArmModule(ActuatorModule):
         """Live measured EE pose (metres + rotvec), same frame as :meth:`scheduleL`."""
         return self._read_current_pose()
 
+    def _release_finished_exclusive_move(self, t_now: float) -> None:
+        if not self._exclusive_move:
+            return
+        interp = self._joint_interp if self._joint_interp is not None else self.interp
+        if interp is None or float(interp.times[-1]) <= t_now:
+            self._exclusive_move = False
+
+    def _ignore_schedule_during_exclusive(self, kind: str) -> None:
+        if self._logged_exclusive_block:
+            return
+        self._logged_exclusive_block = True
+        logger.warning(
+            "Module '%s': ignoring %s while exclusive move is in progress",
+            self.name,
+            kind,
+        )
+
     def scheduleL(self, pose, target_time_wall: float, t_now: float | None = None) -> None:
         """Queue a timestamped Cartesian waypoint."""
         t = float(t_now if t_now is not None else time.monotonic())
+        self._release_finished_exclusive_move(t)
+        if self._exclusive_move:
+            self._ignore_schedule_during_exclusive("SCHEDULE_L")
+            return
         self._cancel_joint_motion()
         self._schedule_pose_waypoint(
             np.asarray(pose, dtype=np.float64),
@@ -234,6 +264,10 @@ class ArmModule(ActuatorModule):
     def scheduleJ(self, q, target_time_wall: float, t_now: float | None = None) -> None:
         """Queue a timestamped joint waypoint (radians)."""
         t = float(t_now if t_now is not None else time.monotonic())
+        self._release_finished_exclusive_move(t)
+        if self._exclusive_move:
+            self._ignore_schedule_during_exclusive("SCHEDULE_J")
+            return
         self._schedule_joint_waypoint(
             np.asarray(q, dtype=np.float64),
             float(target_time_wall),
@@ -423,6 +457,8 @@ class ArmModule(ActuatorModule):
         """
         del acceleration  # software interpolator has no trapezoid
         t = float(t_now if t_now is not None else time.monotonic())
+        self._exclusive_move = True
+        self._logged_exclusive_block = False
         self._clear_pose_interpolator()
         q_target = np.asarray(q, dtype=np.float64).reshape(-1)
         q_now = self._read_joints_rad()
@@ -447,6 +483,8 @@ class ArmModule(ActuatorModule):
         """
         del acceleration
         t = float(t_now if t_now is not None else time.monotonic())
+        self._exclusive_move = True
+        self._logged_exclusive_block = False
         self._cancel_joint_motion()
         self._ensure_pose_interpolator(t)
         assert self.interp is not None
@@ -465,6 +503,7 @@ class ArmModule(ActuatorModule):
     def servoJ(self, q, duration: float = 0.1, t_now: float | None = None) -> None:
         """Streaming joint target (radians) over ``duration`` seconds."""
         t = float(t_now if t_now is not None else time.monotonic())
+        self._exclusive_move = False
         self._clear_pose_interpolator()
         q_target = np.asarray(q, dtype=np.float64).reshape(-1)
         if self._joint_interp is None:
@@ -480,6 +519,7 @@ class ArmModule(ActuatorModule):
     def servoL(self, pose, duration: float = 0.1, t_now: float | None = None) -> None:
         """Streaming Cartesian target over ``duration`` seconds (teleop path)."""
         t = float(t_now if t_now is not None else time.monotonic())
+        self._exclusive_move = False
         self._cancel_joint_motion()
         self._ensure_pose_interpolator(t)
         assert self.interp is not None
@@ -509,6 +549,7 @@ class ArmModule(ActuatorModule):
         ``servoL`` / ``moveL`` cancel joint motion via ``_cancel_joint_motion``.
         """
         t = time.monotonic()
+        self._release_finished_exclusive_move(t)
         if self._joint_interp is not None:
             self._write_joints_rad(self._joint_interp(t))
             return
@@ -529,7 +570,15 @@ class ArmModule(ActuatorModule):
 
     @action_handler(ActionType.CANCEL_TRAJECTORY)
     def _handle_cancel_trajectory(self, action: ModuleAction, t_now: float) -> bool:
-        """Also drop the joint trajectory ``control_step`` prefers."""
+        """Hold leftover scheduled chunks; do not abort an exclusive go-to.
+
+        The reaper fires this after a robot-side skill dies, so a policy's
+        last ``SCHEDULE_*`` chunk is not left running. The controller has
+        often already sent ``MOVE_J`` / ``MOVE_L`` by then — that exclusive
+        interpolator is the new author and must keep driving to its target.
+        """
+        if self._exclusive_move:
+            return True
         if self._joint_interp is not None:
             self._joint_interp = self._joint_interp.trim(t_now, t_now)
         return super()._handle_cancel_trajectory(action, t_now)
