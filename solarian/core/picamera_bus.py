@@ -8,7 +8,7 @@ from enum import Enum
 import numpy as np
 
 from solarian.core.sensor_bus import SensorBus
-from solarian.core.configs import CameraConfig
+from solarian.core.configs import PiCameraSensorConfig
 from solarian.core.data import Data, ImageData
 
 if TYPE_CHECKING:
@@ -74,7 +74,7 @@ class PiCameraBus(SensorBus):
     def is_connected(self) -> bool:
         return self.picam2 is not None
 
-    def _cfg(self) -> CameraConfig:
+    def _cfg(self) -> PiCameraSensorConfig:
         return next(iter(self.components.values())).cfg  # type: ignore[return-value]
 
     def _camera_num(self) -> int:
@@ -111,6 +111,18 @@ class PiCameraBus(SensorBus):
         self.picam2 = Picamera2(camera_num=camera_num)
         main = {"format": "RGB888", "size": (int(cfg.width), int(cfg.height))}
         controls = {"FrameRate": float(cfg.fps)}
+        if cfg.exposure_value is not None:
+            controls["ExposureValue"] = float(cfg.exposure_value)
+        if cfg.brightness is not None:
+            controls["Brightness"] = float(cfg.brightness)
+        if cfg.contrast is not None:
+            controls["Contrast"] = float(cfg.contrast)
+        if cfg.shutter is not None:
+            controls["ExposureTime"] = int(cfg.shutter)
+        if cfg.gain is not None:
+            controls["AnalogueGain"] = float(cfg.gain)
+        if cfg.shutter is not None and cfg.gain is not None:
+            controls["AeEnable"] = False
         try:
             config = self.picam2.create_video_configuration(
                 main=main,

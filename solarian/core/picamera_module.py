@@ -9,7 +9,7 @@ venv with ``--system-site-packages`` so the system package is importable.
 """
 
 from solarian.core.module import Module
-from solarian.core.configs import ModuleConfig
+from solarian.core.configs import ModuleConfig, PiCameraSensorConfig
 from solarian.core.picamera import PiCamera
 
 
@@ -18,6 +18,7 @@ class PiCameraConfig(ModuleConfig):
     # libcamera / picamera2 first start (configure + AE settle + first
     # 1080p capture) routinely exceeds the generic 3s module timeout.
     launch_timeout: float = 15.0
+    sensors: dict[str, PiCameraSensorConfig] = {}
 
 
 class PiCameraModule(Module):

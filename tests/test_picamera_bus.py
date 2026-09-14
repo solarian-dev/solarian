@@ -11,6 +11,7 @@ import pytest
 
 from solarian.core.data import ImageData, PosData
 from solarian.core.picamera_bus import PiCameraBus
+from solarian.core.picamera_module import PiCameraConfig
 
 
 def _cfg(**overrides):
@@ -26,6 +27,11 @@ def _cfg(**overrides):
         resize_width=None,
         resize_height=None,
         optical_remap=None,
+        exposure_value=None,
+        brightness=None,
+        contrast=None,
+        shutter=None,
+        gain=None,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -208,3 +214,65 @@ def test_port_must_be_csi_index(fake_picamera2):
     )
     with pytest.raises(ValueError, match="CSI camera index"):
         bus.connect()
+
+
+def test_default_controls_are_only_framerate(fake_picamera2):
+    bus = _bus()
+    bus.connect()
+    assert fake_picamera2.instances[0].config["controls"] == {"FrameRate": 30.0}
+
+
+def test_isp_controls_map_to_libcamera(fake_picamera2):
+    bus = PiCameraBus(
+        port="0",
+        components={
+            "camera": SimpleNamespace(
+                cfg=_cfg(
+                    exposure_value=-1.0,
+                    brightness=-0.1,
+                    contrast=1.3,
+                    shutter=8000,
+                    gain=1.5,
+                )
+            )
+        },
+    )
+    bus.ae_settle_s = 0.0
+    bus.connect()
+    assert fake_picamera2.instances[0].config["controls"] == {
+        "FrameRate": 30.0,
+        "ExposureValue": -1.0,
+        "Brightness": -0.1,
+        "Contrast": 1.3,
+        "ExposureTime": 8000,
+        "AnalogueGain": 1.5,
+        "AeEnable": False,
+    }
+
+
+def test_pi_camera_config_keeps_isp_fields():
+    cfg = PiCameraConfig(
+        frequency=100,
+        sensors={
+            "camera": {
+                "port": "0",
+                "fps": 30,
+                "width": 8,
+                "height": 6,
+                "rotation": 0,
+                "channels": 3,
+                "color_mode": "rgb",
+                "video_format": "MJPG",
+                "resize_width": None,
+                "resize_height": None,
+                "exposure_value": -1.0,
+                "brightness": -0.1,
+            }
+        },
+    )
+    cam = cfg.sensors["camera"]
+    assert cam.exposure_value == -1.0
+    assert cam.brightness == -0.1
+    assert cam.contrast is None
+    assert cam.shutter is None
+    assert cam.gain is None
