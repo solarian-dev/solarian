@@ -218,17 +218,26 @@ class ArmModule(ActuatorModule):
         return pose
 
     def read_pose(self) -> np.ndarray:
-        """Live measured EE pose (metres + rotvec), same frame as :meth:`schedule_pose`."""
+        """Live measured EE pose (metres + rotvec), same frame as :meth:`scheduleL`."""
         return self._read_current_pose()
 
-    def schedule_pose(self, pose, target_time_wall: float) -> None:
-        """Queue a timestamped Cartesian waypoint (never drops client timestamps)."""
+    def scheduleL(self, pose, target_time_wall: float, t_now: float | None = None) -> None:
+        """Queue a timestamped Cartesian waypoint."""
+        t = float(t_now if t_now is not None else time.monotonic())
         self._cancel_joint_motion()
         self._schedule_pose_waypoint(
             np.asarray(pose, dtype=np.float64),
             float(target_time_wall),
-            time.monotonic(),
-            drop_timestamps=False,
+            t,
+        )
+
+    def scheduleJ(self, q, target_time_wall: float, t_now: float | None = None) -> None:
+        """Queue a timestamped joint waypoint (radians)."""
+        t = float(t_now if t_now is not None else time.monotonic())
+        self._schedule_joint_waypoint(
+            np.asarray(q, dtype=np.float64),
+            float(target_time_wall),
+            t,
         )
 
     def hold_measured_pose(self) -> None:
@@ -329,7 +338,6 @@ class ArmModule(ActuatorModule):
         q: np.ndarray,
         target_time_wall: float,
         t_now: float,
-        drop_timestamps: bool = False,
     ) -> None:
         self._clear_pose_interpolator()
         q = np.asarray(q, dtype=np.float64).reshape(-1)
@@ -338,13 +346,6 @@ class ArmModule(ActuatorModule):
             self._joint_interp = JointTrajectoryInterpolator(
                 times=np.array([t_now]), values=q_now[None, :]
             )
-        if drop_timestamps:
-            duration = self._min_servo_duration(self._adaptive_drive_horizon(t_now))
-            self._joint_interp = self._joint_interp.drive_to_waypoint(
-                q, time=t_now + duration, curr_time=t_now, max_joint_speed=np.inf
-            )
-            self.last_waypoint_time = t_now + duration
-            return
         target_time = time.monotonic() - synced_time() + float(target_time_wall)
         target_time = self._resolve_waypoint_time(target_time, t_now)
         self._joint_interp = self._joint_interp.schedule_waypoint(
@@ -385,22 +386,10 @@ class ArmModule(ActuatorModule):
         pose: np.ndarray,
         target_time_wall: float,
         t_now: float,
-        drop_timestamps: bool = False,
     ) -> None:
         self._ensure_pose_interpolator(t_now)
         assert self.interp is not None
         pose = np.asarray(pose, dtype=np.float64)
-        if drop_timestamps:
-            target_time = t_now + self._adaptive_drive_horizon(t_now)
-            self.interp = self.interp.drive_to_waypoint(
-                pose=pose,
-                time=target_time,
-                curr_time=t_now,
-                **self._pose_speed_kwargs(),
-            )
-            self.last_waypoint_time = target_time
-            return
-
         target_time = time.monotonic() - synced_time() + float(target_time_wall)
         target_time = self._resolve_waypoint_time(target_time, t_now)
         self.interp = self.interp.schedule_waypoint(
@@ -423,10 +412,6 @@ class ArmModule(ActuatorModule):
 
     def _cancel_joint_motion(self) -> None:
         self._joint_interp = None
-
-    def _min_servo_duration(self, duration: float) -> float:
-        period = 1.0 / max(float(self.frequency), 1.0)
-        return max(float(duration), period)
 
     # ========= UR-style motion API (SI units) ============
     def moveJ(self, q, speed: float = _DEFAULT_JOINT_SPEED, acceleration: float = 1.4, t_now: float | None = None) -> None:
@@ -451,12 +436,15 @@ class ArmModule(ActuatorModule):
     def moveL(
         self,
         pose,
-        speed: float = 0.25,
+        speed: float | None = None,
         acceleration: float = 1.2,
         t_now: float | None = None,
         rot_speed: float | None = None,
     ) -> None:
-        """Exclusive linear Cartesian move to ``pose`` (metres + rotvec)."""
+        """Exclusive linear Cartesian move to ``pose`` (metres + rotvec).
+
+        ``speed`` / ``rot_speed`` override ``cfg.max_speed`` when given.
+        """
         del acceleration
         t = float(t_now if t_now is not None else time.monotonic())
         self._cancel_joint_motion()
@@ -468,7 +456,7 @@ class ArmModule(ActuatorModule):
             time=t,
             curr_time=t,
             **self._pose_speed_kwargs(
-                max_pos_speed=float(speed),
+                max_pos_speed=float(speed) if speed is not None else None,
                 max_rot_speed=float(rot_speed) if rot_speed is not None else None,
             ),
         )
@@ -517,7 +505,7 @@ class ArmModule(ActuatorModule):
         After ``moveJ`` / ``servoJ`` reach the last waypoint the joint
         interpolator is *kept* and continues to write that target. Dropping it
         would re-seed Cartesian hold from the measured (possibly gravity-sagged)
-        pose and overwrite the joint goal. Cartesian ``SCHEDULE_WAYPOINT`` /
+        pose and overwrite the joint goal. Cartesian ``SCHEDULE_L`` /
         ``servoL`` / ``moveL`` cancel joint motion via ``_cancel_joint_motion``.
         """
         t = time.monotonic()
@@ -546,99 +534,106 @@ class ArmModule(ActuatorModule):
             self._joint_interp = self._joint_interp.trim(t_now, t_now)
         return super()._handle_cancel_trajectory(action, t_now)
 
-    @action_handler(ActionType.SCHEDULE_WAYPOINT)
-    def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
-        """Stream a waypoint, or run an exclusive speed-limited move.
-
-        Whoever supplies the timing owns the path. With ``params.speed`` (see
-        :meth:`_is_exclusive_move`) the module drives the target at a speed
-        limit (``moveJ`` / ``moveL``), taking as long as it takes. Otherwise
-        the caller owns timing — ``drop_timestamps`` servos over the adaptive
-        drive horizon, and a plain waypoint blends into the trajectory at its
-        own timestamp.
-        """
-        params = action.params
-        if self._is_exclusive_move(params):
-            return self._move_exclusive(action, t_now, params)
-
-        pose_extracted = self._extract_pose_waypoint(action)
-        if pose_extracted is not None:
-            pose, target_time_wall = pose_extracted
-            if self._drop_timestamps(action):
-                self.servoL(
-                    pose, duration=self._adaptive_drive_horizon(t_now), t_now=t_now
-                )
-            else:
-                self._cancel_joint_motion()
-                self._schedule_pose_waypoint(
-                    pose, target_time_wall, t_now, drop_timestamps=False
-                )
-            return True
-
-        joint_extracted = self._extract_joint_waypoint(action)
-        if joint_extracted is not None:
-            q, target_time_wall = joint_extracted
-            if self._drop_timestamps(action):
-                self.servoJ(
-                    q, duration=self._adaptive_drive_horizon(t_now), t_now=t_now
-                )
-            else:
-                self._schedule_joint_waypoint(
-                    q, target_time_wall, t_now, drop_timestamps=False
-                )
-            return True
-
+    def _warn_missing_pose(self, kind: str) -> None:
         logger.warning(
-            "Module '%s': SCHEDULE_WAYPOINT has neither complete pose fields %s "
-            "nor complete joint fields %s; ignoring.",
+            "Module '%s': %s missing pose fields %s; ignoring.",
             self.name,
+            kind,
             self._cartesian_pose_names(),
+        )
+
+    def _warn_missing_joints(self, kind: str) -> None:
+        logger.warning(
+            "Module '%s': %s missing joint fields %s; ignoring.",
+            self.name,
+            kind,
             self._ik_joint_names(),
+        )
+
+    @action_handler(ActionType.MOVE_L)
+    def _handle_move_l(self, action: ModuleAction, t_now: float) -> bool:
+        extracted = self._extract_pose_waypoint(action)
+        if extracted is None:
+            self._warn_missing_pose("MOVE_L")
+            return True
+        pose, _ = extracted
+        if str(action.params.get("frame") or "world") == "ee":
+            try:
+                current = self._read_current_pose()
+            except Exception:  # noqa: BLE001
+                current = np.zeros(6, dtype=np.float64)
+            pose = compose_ee_delta(current, pose)
+        speed = action.params.get("speed")
+        rot_speed = action.params.get("rot_speed")
+        self.moveL(
+            pose,
+            speed=float(speed) if speed is not None else None,
+            rot_speed=float(rot_speed) if rot_speed is not None else None,
+            t_now=t_now,
         )
         return True
 
-    def _move_exclusive(
-        self, action: ModuleAction, t_now: float, params: dict
-    ) -> bool:
-        """Speed-limited go-to: a Cartesian pose or a joint configuration."""
-        frame = str(params.get("frame") or "world")
-        speed = params.get("speed")
-        rot_speed = params.get("rot_speed")
-
-        pose_extracted = self._extract_pose_waypoint(action)
-        if pose_extracted is not None:
-            pose, _ = pose_extracted
-            if frame == "ee":
-                try:
-                    current = self._read_current_pose()
-                except Exception:  # noqa: BLE001
-                    current = np.zeros(6, dtype=np.float64)
-                pose = compose_ee_delta(current, pose)
-            self.moveL(
-                pose,
-                speed=float(speed) if speed is not None else 0.25,
-                rot_speed=float(rot_speed) if rot_speed is not None else None,
-                t_now=t_now,
-            )
+    @action_handler(ActionType.MOVE_J)
+    def _handle_move_j(self, action: ModuleAction, t_now: float) -> bool:
+        extracted = self._extract_joint_waypoint(action)
+        if extracted is None:
+            self._warn_missing_joints("MOVE_J")
             return True
-
-        joint_extracted = self._extract_joint_waypoint(action)
-        if joint_extracted is not None:
-            q, _ = joint_extracted
-            self.moveJ(
-                q,
-                speed=(
-                    float(speed)
-                    if speed is not None
-                    else float(self.default_joint_speed)
-                ),
-                t_now=t_now,
-            )
-            return True
-
-        logger.warning(
-            "Module '%s': exclusive move has neither complete Cartesian fields "
-            "nor complete joint fields; ignoring.",
-            self.name,
+        q, _ = extracted
+        speed = action.params.get("speed")
+        self.moveJ(
+            q,
+            speed=(
+                float(speed)
+                if speed is not None
+                else float(self.default_joint_speed)
+            ),
+            t_now=t_now,
         )
+        return True
+
+    @action_handler(ActionType.SERVO_L)
+    def _handle_servo_l(self, action: ModuleAction, t_now: float) -> bool:
+        extracted = self._extract_pose_waypoint(action)
+        if extracted is None:
+            self._warn_missing_pose("SERVO_L")
+            return True
+        self.servoL(
+            extracted[0],
+            duration=self._adaptive_drive_horizon(t_now),
+            t_now=t_now,
+        )
+        return True
+
+    @action_handler(ActionType.SERVO_J)
+    def _handle_servo_j(self, action: ModuleAction, t_now: float) -> bool:
+        extracted = self._extract_joint_waypoint(action)
+        if extracted is None:
+            self._warn_missing_joints("SERVO_J")
+            return True
+        self.servoJ(
+            extracted[0],
+            duration=self._adaptive_drive_horizon(t_now),
+            t_now=t_now,
+        )
+        return True
+
+    @action_handler(ActionType.SCHEDULE_L)
+    def _handle_schedule_l(self, action: ModuleAction, t_now: float) -> bool:
+        extracted = self._extract_pose_waypoint(action)
+        if extracted is None:
+            self._warn_missing_pose("SCHEDULE_L")
+            return True
+        pose, target_time_wall = extracted
+        self.scheduleL(pose, target_time_wall, t_now=t_now)
+        return True
+
+    @action_handler(ActionType.SCHEDULE_J)
+    def _handle_schedule_j(self, action: ModuleAction, t_now: float) -> bool:
+        extracted = self._extract_joint_waypoint(action)
+        if extracted is None:
+            self._warn_missing_joints("SCHEDULE_J")
+            return True
+        q, target_time_wall = extracted
+        self.scheduleJ(q, target_time_wall, t_now=t_now)
         return True

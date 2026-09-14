@@ -92,7 +92,7 @@ A controller-driven mode where a human directly drives the robot — via keyboar
 
 ### Trajectory / Waypoint
 
-A trajectory is a time-parameterized path through configuration space; a waypoint is a single point on that path. Solarian's modules support waypoint scheduling via `ActionType.SCHEDULE_WAYPOINT` and a built-in `TrajectoryInterpolator` (pose or scalar). See [Scheduling Waypoints](/docs/modules/scheduling-waypoints).
+A trajectory is a time-parameterized path through configuration space; a waypoint is a single point on that path. Solarian's modules support waypoint scheduling via `ActionType.SCHEDULE_L` / `SCHEDULE_J` and a built-in `TrajectoryInterpolator` (pose or scalar). See [Scheduling Waypoints](/docs/modules/scheduling-waypoints).
 
 ### Vision-Language Model (VLM)
 
@@ -114,7 +114,7 @@ A queue per module, implemented as `ModuleActionQueue`. On the [Robot](/docs/rob
 
 ### Action type
 
-An integer tag on every [Action](/docs/actions) that controls how it's dispatched. Built-ins are `STOP`, `MODULE_ACTION`, `SCHEDULE_WAYPOINT`, `RESTART_PUT`, plus `START_SKILL` and `STOP_SKILL`, which serve both the think process → controller channel and the controller → robot one. Custom types live at `>= ActionType.CUSTOM_START`. See [Action Types](/docs/action-types).
+An integer tag on every [Action](/docs/actions) that controls how it's dispatched. Built-ins are `STOP`, `MODULE_ACTION`, `MOVE_*`, `SERVO_*`, `SCHEDULE_*`, `RESTART_PUT`, plus `START_SKILL` and `STOP_SKILL`, which serve both the think process → controller channel and the controller → robot one. Custom types live at `>= ActionType.CUSTOM_START`. See [Action Types](/docs/action-types).
 
 ### `ActuatorBus`
 

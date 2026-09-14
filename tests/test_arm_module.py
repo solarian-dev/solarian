@@ -20,16 +20,9 @@ class _Field:
 
 
 class _Action:
-    def __init__(
-        self,
-        data,
-        params=None,
-        drop_timestamps=True,
-        action_type=ActionType.SCHEDULE_WAYPOINT,
-    ):
+    def __init__(self, data, params=None, action_type=ActionType.SERVO_L):
         self._data = data
         self.params = params or {}
-        self.drop_timestamps = drop_timestamps
         self.action_type = action_type
 
     def values(self):
@@ -66,8 +59,14 @@ def _arm():
     arm.moveJ = lambda q, speed=1.05, t_now=None, **kw: captured.update(
         move="J", q=np.asarray(q), speed=speed, t_now=t_now
     )
-    arm.moveL = lambda pose, speed=0.25, t_now=None, rot_speed=None, **kw: captured.update(
+    arm.moveL = lambda pose, speed=None, t_now=None, rot_speed=None, **kw: captured.update(
         move="L", pose=np.asarray(pose), speed=speed, rot_speed=rot_speed, t_now=t_now
+    )
+    arm.scheduleL = lambda pose, target_time_wall, t_now=None: captured.update(
+        schedule="L", pose=np.asarray(pose), wall=target_time_wall, t_now=t_now
+    )
+    arm.scheduleJ = lambda q, target_time_wall, t_now=None: captured.update(
+        schedule="J", q=np.asarray(q), wall=target_time_wall, t_now=t_now
     )
     arm._adaptive_drive_horizon = lambda t_now: 0.1
     arm._norm_to_rad = lambda name, value: float(value)
@@ -85,58 +84,61 @@ JOINTS = {
 }
 
 
-def test_schedule_waypoint_pose_calls_servo_l():
+def test_servo_l_calls_servo_l():
     arm, captured = _arm()
-    arm._handle_schedule_waypoint(_Action(POSE), t_now=1.0)
+    arm._handle_servo_l(_Action(POSE, action_type=ActionType.SERVO_L), t_now=1.0)
     assert captured["servo"] == "L"
     np.testing.assert_allclose(captured["pose"], [0, 1, 2, 3, 4, 5])
 
 
-def test_schedule_waypoint_joints_calls_servo_j():
+def test_servo_j_calls_servo_j():
     arm, captured = _arm()
-    arm._handle_schedule_waypoint(_Action(JOINTS), t_now=1.0)
+    arm._handle_servo_j(_Action(JOINTS, action_type=ActionType.SERVO_J), t_now=1.0)
     assert captured["servo"] == "J"
     np.testing.assert_allclose(captured["q"], [1, 2, 3, 4, 5, 6])
 
 
-def test_schedule_waypoint_prefers_pose_when_both_present():
+def test_schedule_l_calls_schedule_l():
     arm, captured = _arm()
-    both = dict(POSE)
-    both.update(JOINTS)
-    arm._handle_schedule_waypoint(_Action(both), t_now=1.0)
-    assert captured["servo"] == "L"
+    arm._handle_schedule_l(_Action(POSE, action_type=ActionType.SCHEDULE_L), t_now=1.0)
+    assert captured["schedule"] == "L"
+    assert captured["wall"] == pytest.approx(10.0)
+
+
+def test_schedule_j_calls_schedule_j():
+    arm, captured = _arm()
+    arm._handle_schedule_j(_Action(JOINTS, action_type=ActionType.SCHEDULE_J), t_now=1.0)
+    assert captured["schedule"] == "J"
+    np.testing.assert_allclose(captured["q"], [1, 2, 3, 4, 5, 6])
 
 
 def test_the_module_answers_to_no_pose_name():
     """A pose name is a skill's vocabulary; the module only takes values."""
     arm, captured = _arm()
-    arm._handle_schedule_waypoint(_Action({}, params={"named": "home"}), t_now=2.0)
+    arm._handle_move_l(_Action({}, params={"named": "home"}), t_now=2.0)
     assert captured == {}
 
 
-def test_an_exclusive_move_with_no_speed_uses_the_module_default():
+def test_move_j_with_no_speed_uses_the_module_default():
     arm, captured = _arm()
-    arm._handle_schedule_waypoint(_Action(JOINTS, params={"speed": None}), t_now=2.0)
+    arm._handle_move_j(_Action(JOINTS, action_type=ActionType.MOVE_J), t_now=2.0)
     assert captured["speed"] == pytest.approx(arm.default_joint_speed)
-
-
-def test_speed_params_joints_call_move_j():
-    arm, captured = _arm()
-    arm._handle_schedule_waypoint(_Action(JOINTS, params={"speed": None}), t_now=2.0)
     assert captured["move"] == "J"
     np.testing.assert_allclose(captured["q"], [1, 2, 3, 4, 5, 6])
 
 
-def test_speed_params_pose_world_call_move_l():
+def test_move_l_world_calls_move_l():
     arm, captured = _arm()
-    arm._handle_schedule_waypoint(
-        _Action(POSE, params={"frame": "world", "speed": None}), t_now=2.0
+    arm._handle_move_l(
+        _Action(POSE, params={"frame": "world"}, action_type=ActionType.MOVE_L),
+        t_now=2.0,
     )
     assert captured["move"] == "L"
     np.testing.assert_allclose(captured["pose"], [0, 1, 2, 3, 4, 5])
+    assert captured["speed"] is None
 
 
-def test_speed_params_pose_ee_composes_then_move_l():
+def test_move_l_ee_composes_then_move_l():
     arm, captured = _arm()
     current = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     arm._read_current_pose = lambda: current
@@ -148,53 +150,39 @@ def test_speed_params_pose_ee_composes_then_move_l():
         "ry": _Field(0.0),
         "rz": _Field(0.0),
     }
-    arm._handle_schedule_waypoint(
-        _Action(delta, params={"frame": "ee", "speed": None}), t_now=2.0
+    arm._handle_move_l(
+        _Action(delta, params={"frame": "ee"}, action_type=ActionType.MOVE_L),
+        t_now=2.0,
     )
     assert captured["move"] == "L"
     expected = compose_ee_delta(current, np.array([0.1, 0, 0, 0, 0, 0]))
     np.testing.assert_allclose(captured["pose"], expected)
 
 
-def test_bare_params_still_stream():
-    """``frame`` alone is not a timing hand-off; it stays on the servo path."""
-    arm, captured = _arm()
-    arm._handle_schedule_waypoint(_Action(POSE, params={"frame": "world"}), t_now=1.0)
-    assert captured["servo"] == "L"
-    assert "move" not in captured
-
-
 def test_a_policy_chunk_survives_the_drain():
     """Timestamped waypoints each name their own moment, so all are kept."""
     arm, _ = _arm()
-    chunk = [_Action(POSE, drop_timestamps=False) for _ in range(8)]
+    chunk = [_Action(POSE, action_type=ActionType.SCHEDULE_L) for _ in range(8)]
     assert arm._coalesce_actions(chunk) == chunk
 
 
 def test_a_burst_of_drive_waypoints_collapses_to_the_last():
     arm, _ = _arm()
-    burst = [_Action(POSE, drop_timestamps=True) for _ in range(8)]
+    burst = [_Action(POSE, action_type=ActionType.SERVO_L) for _ in range(8)]
     assert arm._coalesce_actions(burst) == [burst[-1]]
 
 
 def test_a_chunk_outlives_the_drive_waypoints_drained_with_it():
     arm, _ = _arm()
-    chunk = [_Action(POSE, drop_timestamps=False) for _ in range(3)]
-    stale = [_Action(POSE, drop_timestamps=True) for _ in range(2)]
+    chunk = [_Action(POSE, action_type=ActionType.SCHEDULE_L) for _ in range(3)]
+    stale = [_Action(POSE, action_type=ActionType.SERVO_L) for _ in range(2)]
     drained = [stale[0], chunk[0], chunk[1], stale[1], chunk[2]]
     assert arm._coalesce_actions(drained) == [chunk[0], chunk[1], stale[1], chunk[2]]
 
 
-def test_a_missing_drop_timestamps_honours_the_stamp():
-    """``drop_timestamps=None`` is not a drive waypoint, so a burst is kept."""
-    arm, _ = _arm()
-    burst = [_Action(POSE, drop_timestamps=None) for _ in range(4)]
-    assert arm._coalesce_actions(burst) == burst
-
-
 def test_module_action_params_roundtrip():
     action = ModuleAction(
-        action_type=ActionType.SCHEDULE_WAYPOINT,
+        action_type=ActionType.MOVE_L,
         data={},
         params={"frame": "ee", "speed": 0.5},
     )
@@ -202,11 +190,11 @@ def test_module_action_params_roundtrip():
     restored = ModuleAction(
         action_type=dumped["action_type"],
         data=dumped["data"],
-        drop_timestamps=dumped["drop_timestamps"],
         params=dumped["params"],
     )
     assert restored.params["frame"] == "ee"
     assert restored.params["speed"] == pytest.approx(0.5)
+    assert "drop_timestamps" not in dumped
 
 
 def _bare_arm() -> ArmModule:
@@ -231,21 +219,20 @@ def test_read_pose_delegates_to_current():
     assert module.read_pose().tolist() == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
 
 
-def test_schedule_pose_never_drops_timestamps():
+def test_schedule_l_never_drops_timestamps():
     module = ArmModule.__new__(ArmModule)
     captured: dict = {}
 
     module._cancel_joint_motion = lambda: captured.setdefault("cancelled", True)
     module._schedule_pose_waypoint = (
-        lambda pose, target_time_wall, t_now, drop_timestamps=False: captured.update(
-            pose=pose, wall=target_time_wall, drop=drop_timestamps
+        lambda pose, target_time_wall, t_now: captured.update(
+            pose=pose, wall=target_time_wall
         )
     )
 
-    module.schedule_pose([0.1, 0.2, 0.3, 0.0, 0.0, 0.0], 123.0)
+    module.scheduleL([0.1, 0.2, 0.3, 0.0, 0.0, 0.0], 123.0)
     assert captured["cancelled"] is True
     assert captured["wall"] == 123.0
-    assert captured["drop"] is False
 
 
 class _StubBackend:
@@ -316,13 +303,13 @@ def test_hold_measured_pose_writes_back_what_it_read():
     assert written["q"].tolist() == [0.1, -0.2, 0.3]
 
 
-def test_schedule_pose_honours_its_timestamp():
+def test_schedule_l_honours_its_timestamp():
     """A calibration sweep lands where it asked, not on the adaptive drive horizon."""
     module = _bare_arm()
     lead = 0.5
 
     t_before = time.monotonic()
-    module.schedule_pose(np.array([0.01, 0.0, 0.0, 0.0, 0.0, 0.0]), time.time() + lead)
+    module.scheduleL(np.array([0.01, 0.0, 0.0, 0.0, 0.0, 0.0]), time.time() + lead)
     t_after = time.monotonic()
 
     assert module.last_waypoint_time - t_before == pytest.approx(lead, abs=0.05)

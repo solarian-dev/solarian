@@ -1,4 +1,4 @@
-"""Reusable gripper module: a scalar interpolator driven by ``SCHEDULE_WAYPOINT``.
+"""Reusable gripper module: a scalar interpolator driven by ``MOVE_J`` / ``SERVO_J`` / ``SCHEDULE_J``.
 
 Concrete grippers declare a single actuator (``scalar_actuator``) and optionally
 override :meth:`_scalar_to_actuator` when the action space differs from the
@@ -6,6 +6,10 @@ servo command space (e.g. aperture cm → normalized ``[-100, 100]``).
 
 :attr:`open_value`, or ``cfg.aperture_open_cm`` when that config field is
 present, is the open end of travel that bounds every commanded aperture.
+
+``moveJ`` / ``servoJ`` / ``scheduleJ`` are the same names as on
+:class:`~solarian.core.arm_module.ArmModule`; here they drive the scalar
+interpolator.
 """
 
 from __future__ import annotations
@@ -60,17 +64,18 @@ class GripperModule(ActuatorModule):
         return 0.0, self._open_scalar()
 
     def read_scalar(self) -> float:
-        """Live measured scalar (same units as :meth:`schedule_scalar`)."""
+        """Live measured scalar (same units as :meth:`scheduleJ`)."""
         return self._read_current_scalar()
 
-    def schedule_scalar(self, value: float, target_time_wall: float) -> None:
-        """Queue a timestamped scalar waypoint (never drops client timestamps)."""
-        self._schedule_scalar_waypoint(
-            float(value),
-            float(target_time_wall),
-            time.monotonic(),
-            drop_timestamps=False,
-        )
+    def _scalar_value(self, q) -> float:
+        return float(np.asarray(q, dtype=np.float64).reshape(-1)[0])
+
+    def scheduleJ(
+        self, q, target_time_wall: float, t_now: float | None = None
+    ) -> None:
+        """Queue a timestamped scalar waypoint."""
+        t = float(t_now if t_now is not None else time.monotonic())
+        self._schedule_scalar_waypoint(self._scalar_value(q), float(target_time_wall), t)
 
     def _default_speed(self) -> float:
         if self.default_speed is not None:
@@ -88,22 +93,52 @@ class GripperModule(ActuatorModule):
         self.write_actuators({name: PosData(value=servo)})
         StatusBoard.set(f"{self.name} servo cmd", round(servo, 1))
 
-    def drive_scalar(self, value: float, speed: float) -> None:
-        """Drive to *value* at *speed* units/s, ignoring ``cfg.max_speed``.
-
-        The scalar counterpart of :meth:`ArmModule.moveL`'s ``speed``. Needed to
-        measure what the hardware can actually sustain: the scheduled path is
-        clamped to the configured limit, so a test driven through it can never
-        command faster than the number it is trying to check.
-        """
-        t_now = time.monotonic()
+    def moveJ(
+        self, q, speed: float | None = None, t_now: float | None = None
+    ) -> None:
+        """Speed-limited go-to *q* (interpolator units)."""
+        value = self._scalar_value(q)
+        t = float(t_now if t_now is not None else time.monotonic())
+        try:
+            current = self._read_current_scalar()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Module '%s': moveJ could not read current scalar (%s); "
+                "seeding interpolator.",
+                self.name,
+                exc,
+            )
+            self._ensure_scalar_interpolator(t)
+            current = (
+                float(self.interp(t)) if self.interp is not None else float(value)
+            )
         interp = ScalarTrajectoryInterpolator(
-            np.array([t_now]), np.array([self._read_current_scalar()], dtype=np.float64)
+            np.array([t]), np.array([current], dtype=np.float64)
         )
         self.interp = interp.drive_to_waypoint(
-            value=float(value), time=t_now, curr_time=t_now, max_speed=float(speed)
+            value=value,
+            time=t,
+            curr_time=t,
+            max_speed=float(speed) if speed is not None else self._default_speed(),
         )
         self.last_waypoint_time = float(self.interp.times[-1])
+
+    def servoJ(
+        self, q, duration: float = 0.1, t_now: float | None = None
+    ) -> None:
+        """Streaming scalar target over ``duration`` seconds."""
+        value = self._scalar_value(q)
+        t = float(t_now if t_now is not None else time.monotonic())
+        self._ensure_scalar_interpolator(t)
+        assert self.interp is not None
+        duration = self._min_servo_duration(duration)
+        self.interp = self.interp.drive_to_waypoint(
+            value=value,
+            time=t + duration,
+            curr_time=t,
+            **self._get_max_speed_kwargs(),
+        )
+        self.last_waypoint_time = t + duration
 
     def aperture_unit_suffix(self) -> str:
         """`" (cm)"` when the config names a physical aperture, else `""`.
@@ -168,76 +203,35 @@ class GripperModule(ActuatorModule):
             self._write_scalar(cmd)
         self._publish_aperture_status(cmd=cmd)
 
-    @action_handler(ActionType.SCHEDULE_WAYPOINT)
-    def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
-        """Stream a scalar waypoint, or run an exclusive speed-limited move.
-
-        Whoever supplies the timing owns the path. With ``params.speed`` (see
-        :meth:`_is_exclusive_move`) the module drives the scalar at a speed
-        limit, taking as long as it takes. Otherwise the caller owns timing —
-        ``drop_timestamps`` drives over the adaptive horizon, and a plain
-        waypoint blends in at its own timestamp.
-        """
-        params = action.params
-        if self._is_exclusive_move(params):
-            return self._move_exclusive(action, t_now, params)
-
+    @action_handler(ActionType.MOVE_J)
+    def _handle_move_j(self, action: ModuleAction, t_now: float) -> bool:
         extracted = self._extract_scalar_waypoint(action)
         if extracted is None:
             return True
-        value, target_time_wall = extracted
-        self._schedule_scalar_waypoint(
-            value,
-            target_time_wall,
-            t_now,
-            drop_timestamps=self._drop_timestamps(action),
+        speed = action.params.get("speed")
+        self.moveJ(
+            extracted[0],
+            speed=float(speed) if speed is not None else None,
+            t_now=t_now,
         )
         return True
 
-    def _move_exclusive(
-        self, action: ModuleAction, t_now: float, params: dict
-    ) -> bool:
-        """Speed-limited go-to the action's scalar field.
-
-        Same pattern as ``ArmModule.moveJ``: seed from the live scalar and drive
-        at a speed limit, so the duration comes from the distance rather than
-        the short teleop drive horizon.
-        """
+    @action_handler(ActionType.SERVO_J)
+    def _handle_servo_j(self, action: ModuleAction, t_now: float) -> bool:
         extracted = self._extract_scalar_waypoint(action)
         if extracted is None:
             return True
-        target = extracted[0]
+        self.servoJ(
+            extracted[0],
+            duration=self._adaptive_drive_horizon(t_now),
+            t_now=t_now,
+        )
+        return True
 
-        try:
-            current = self._read_current_scalar()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Module '%s': exclusive move could not read current scalar (%s); "
-                "seeding interpolator.",
-                self.name,
-                exc,
-            )
-            self._ensure_scalar_interpolator(t_now)
-            current = (
-                float(self.interp(t_now)) if self.interp is not None else float(target)
-            )
-
-        speed = params.get("speed")
-        interp = ScalarTrajectoryInterpolator(
-            np.array([t_now]), np.array([current], dtype=np.float64)
-        )
-        self.interp = interp.drive_to_waypoint(
-            value=float(target),
-            time=t_now,
-            curr_time=t_now,
-            max_speed=float(speed) if speed is not None else self._default_speed(),
-        )
-        self.last_waypoint_time = float(self.interp.times[-1])
-        logger.info(
-            "Module '%s': exclusive move %.3f → %.3f in %.2fs",
-            self.name,
-            current,
-            target,
-            self.last_waypoint_time - t_now,
-        )
+    @action_handler(ActionType.SCHEDULE_J)
+    def _handle_schedule_j(self, action: ModuleAction, t_now: float) -> bool:
+        extracted = self._extract_scalar_waypoint(action)
+        if extracted is None:
+            return True
+        self.scheduleJ(extracted[0], extracted[1], t_now=t_now)
         return True

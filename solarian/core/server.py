@@ -61,7 +61,7 @@ class RelayServer:
         curve.apply_server(self.client_state_sender, cfg.connection, "state sender")
         self.client_state_sender.bind(f"tcp://*:{self.cfg.connection.state_sender_port}")  # Clients subscribe here
 
-        # Application clock authority for controller/robot SCHEDULE_WAYPOINT stamps.
+        # Application clock authority for controller/robot SCHEDULE_* stamps.
         self.clock_sync_socket = self.context.socket(zmq.REP)
         self.clock_sync_socket.setsockopt(zmq.LINGER, 0)
         curve.apply_server(self.clock_sync_socket, cfg.connection, "clock sync")

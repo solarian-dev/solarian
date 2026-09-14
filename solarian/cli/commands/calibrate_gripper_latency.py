@@ -37,13 +37,13 @@ def _run_action_latency(module: GripperModule) -> None:
     value = np.sin(sample_t * _DURATION_S / 1.5) * 0.5 + 0.5
     width = lo + value * (hi - lo)
 
-    module.schedule_scalar(width[0], time.time() + 0.3)
+    module.scheduleJ(width[0], time.time() + 0.3)
     run_control_loop(module, 1.0)
 
     # Match UMI: settle, then stamp the sinusoid 1 s into the future.
     timestamps = time.time() + sample_t + 1.0
     for i in range(k):
-        module.schedule_scalar(width[i], timestamps[i])
+        module.scheduleJ(width[i], timestamps[i])
 
     actual_t, actual_x = run_control_loop(
         module, _DURATION_S + 1.0, record=module.read_scalar

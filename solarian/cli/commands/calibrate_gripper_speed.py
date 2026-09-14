@@ -41,7 +41,7 @@ def _configured_speed(module: GripperModule) -> float:
 def _drive(module: GripperModule, target: float, speed: float):
     """One full move at *speed*, returning ``(start, t, x)``."""
     start = module.read_scalar()
-    module.drive_scalar(target, speed)
+    module.moveJ(target, speed=speed)
     # The plan is built at the commanded speed even when the jaws cannot manage
     # it, so stopping at the planned end would cut the move short.
     duration = module.last_waypoint_time - time.monotonic() + SETTLE_S

@@ -22,7 +22,7 @@ _RANGE_STEP = 0.5
 
 
 def _drive_to(module: GripperModule, value: float, settle_s: float = 0.2) -> None:
-    module.schedule_scalar(value, time.time() + 0.3)
+    module.scheduleJ(value, time.time() + 0.3)
     deadline = float(module.last_waypoint_time)
     freq = max(float(module.frequency), 1.0)
     dt = 1.0 / freq

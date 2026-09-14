@@ -291,7 +291,7 @@ class ActuatorModule(Module):
         extra = f" ({suppressed} more suppressed)" if suppressed else ""
         action = "clamping" if clamped else "discarding"
         logger.warning(
-            "Module '%s': %s late SCHEDULE_WAYPOINT (%.1f ms late)%s",
+            "Module '%s': %s late SCHEDULE_J (%.1f ms late)%s",
             self.name,
             action,
             late_ms,
@@ -324,14 +324,9 @@ class ActuatorModule(Module):
         )
         return horizon
 
-    def _is_exclusive_move(self, params: dict) -> bool:
-        """True when the module owns the timing of a ``SCHEDULE_WAYPOINT``.
-
-        A ``speed`` key (even ``None``, meaning "use the module default") is a
-        velocity limit rather than a deadline, so it makes the module drive the
-        target to completion instead of blending it into a streamed trajectory.
-        """
-        return "speed" in params
+    def _min_servo_duration(self, duration: float) -> float:
+        period = 1.0 / max(float(self.frequency), 1.0)
+        return max(float(duration), period)
 
     def _create_interpolator(
         self, times: np.ndarray, values: np.ndarray
@@ -423,7 +418,7 @@ class ActuatorModule(Module):
                 field = next(iter(fields.values()))
                 return float(field.value), float(field.timestamp)
             logger.warning(
-                "Module '%s': SCHEDULE_WAYPOINT missing scalar field %r; ignoring.",
+                "Module '%s': SCHEDULE_J missing scalar field %r; ignoring.",
                 self.name,
                 name,
             )
@@ -436,21 +431,9 @@ class ActuatorModule(Module):
         value: float,
         target_time_wall: float,
         t_now: float,
-        drop_timestamps: bool = False,
     ) -> None:
         self._ensure_scalar_interpolator(t_now)
         assert self.interp is not None
-        if drop_timestamps:
-            target_time = t_now + self._adaptive_drive_horizon(t_now)
-            self.interp = self.interp.drive_to_waypoint(
-                value=float(value),
-                time=target_time,
-                curr_time=t_now,
-                **self._get_max_speed_kwargs(),
-            )
-            self.last_waypoint_time = target_time
-            return
-
         target_time = time.monotonic() - synced_time() + float(target_time_wall)
         target_time = self._resolve_waypoint_time(target_time, t_now)
         self.interp = self.interp.schedule_waypoint(
@@ -467,29 +450,6 @@ class ActuatorModule(Module):
         if not name:
             return
         self.write_actuators({name: PosData(value=self._scalar_to_actuator(value))})
-
-    # ========= waypoint scheduling ============
-    @action_handler(ActionType.SCHEDULE_WAYPOINT)
-    def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
-        """Schedule a timestamped waypoint into the module interpolator.
-
-        Handles ``interpolator_type: scalar`` (a single actuator, e.g. a
-        gripper); other interpolator types ignore the waypoint. Cartesian and
-        joint scheduling live on :class:`ArmModule`, which owns the pose
-        interpolator and overrides this.
-        """
-        if self._is_scalar_interpolator():
-            extracted = self._extract_scalar_waypoint(action)
-            if extracted is None:
-                return True
-            value, target_time_wall = extracted
-            self._schedule_scalar_waypoint(
-                value,
-                target_time_wall,
-                t_now,
-                drop_timestamps=self._drop_timestamps(action),
-            )
-        return True
 
     @action_handler(ActionType.HOLD_SAFE)
     def _handle_hold_safe(self, action: ModuleAction, t_now: float) -> bool:

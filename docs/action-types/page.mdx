@@ -18,10 +18,15 @@ Defined in [`solarian/core/action.py`](https://github.com/solarian-dev/solarian/
 class ActionType:
     STOP             = 0
     MODULE_ACTION    = 1
-    SCHEDULE_WAYPOINT = 2
     RESTART_PUT      = 3
     START_SKILL      = 4
     STOP_SKILL       = 5
+    SCHEDULE_L       = 8
+    SCHEDULE_J       = 9
+    MOVE_L           = 10
+    MOVE_J           = 11
+    SERVO_L          = 12
+    SERVO_J          = 13
     CUSTOM_START     = 100
 ```
 
@@ -31,9 +36,6 @@ class ActionType:
   </Property>
   <Property name="MODULE_ACTION" type="int = 1">
     The most common type. The action carries one or more <code>ModuleAction</code> sub-actions in <code>action.data</code>; the robot pushes each one onto the corresponding module's <code>action_queue</code>.
-  </Property>
-  <Property name="SCHEDULE_WAYPOINT" type="int = 2">
-    Tells a module to move a target value. Core <code>Module</code> implements this with a <code>TrajectoryInterpolator</code> (pose or scalar) selected by yaml <code>{'interpolator_type'}</code>. Covers both streaming and exclusive go-to moves — see <a href="#waypoint-params">Waypoint params</a> and <a href="/docs/modules/scheduling-waypoints">Scheduling Waypoints</a>.
   </Property>
   <Property name="RESTART_PUT" type="int = 3">
     Resets a module's internal <code>put</code> timing — used when the controller resynchronizes the rate.
@@ -49,53 +51,57 @@ class ActionType:
   </Property>
 </Properties>
 
-## Waypoint params {{ id: 'waypoint-params' }}
+## Motion actions {{ id: 'waypoint-params' }}
 
-`SCHEDULE_WAYPOINT` covers both streaming teleop and one-shot go-to moves. Which one you get depends on **who supplies the timing**, expressed through the optional `params` dict on a `ModuleAction`:
+Six types name the module primitive they call. **L** is Cartesian (pose interpolator, arms only). **J** is configuration space: joints on an arm, a scalar on a gripper.
 
 <Properties>
+  <Property name="SCHEDULE_L / SCHEDULE_J" type="int = 8 / 9">
+    Timestamped waypoint. The caller owns arrival time; the interpolator blends the point in. Policy chunks use this.
+  </Property>
+  <Property name="MOVE_L / MOVE_J" type="int = 10 / 11">
+    Speed-limited go-to (<code>moveL</code> / <code>moveJ</code>). Duration is distance / <code>max_speed</code>. Optional <code>params.speed</code> overrides the module limit; it is not a mode switch.
+  </Property>
+  <Property name="SERVO_L / SERVO_J" type="int = 12 / 13">
+    Streaming target (<code>servoL</code> / <code>servoJ</code>) over the module's adaptive drive horizon. Leader follow uses <code>SERVO_J</code>.
+  </Property>
   <Property name="speed" type="float | None">
-    A velocity limit rather than a deadline: <code>moveJ</code> in rad/s, <code>moveL</code> in m/s, gripper in interpolator units/s. <code>None</code> means "use the module default". Merely including the key hands timing to the module.
+    Optional override on <code>MOVE_*</code>: <code>moveJ</code> in rad/s (or gripper units/s), <code>moveL</code> in m/s. <code>None</code> or omitted uses the module default / <code>cfg.max_speed</code>.
   </Property>
   <Property name="rot_speed" type="float">
-    Rotational limit for <code>moveL</code>, in rad/s.
+    Rotational limit for <code>MOVE_L</code>, in rad/s.
   </Property>
   <Property name="frame" type="str = 'world'">
-    <code>{'"ee"'}</code> composes the Cartesian payload as a delta in the current end-effector frame before moving.
+    On <code>MOVE_L</code>, <code>{'"ee"'}</code> composes the Cartesian payload as a delta in the current end-effector frame before moving.
   </Property>
 </Properties>
-
-With `speed` present the module drives the target to completion at its speed limit (`moveJ` / `moveL`), taking as long as the distance requires. Without it the caller owns the timing: `drop_timestamps` servos over the module's adaptive drive horizon, and a plain waypoint blends into the trajectory at its own `timestamp`.
 
 A [skill](/docs/skills) builds this envelope itself, keyed by module **name**. Modules interpret actions; they do not manufacture them for someone else, which is what lets the same skill run on the controller or on the robot — a name crosses a link, a `Module` object cannot.
 
 ```python
-# Streaming: the caller's timestamps drive the trajectory.
+# Streaming follow: module owns a short horizon.
 Action(
     action_type=ActionType.MODULE_ACTION,
     data={
         "right_arm": {
-            "action_type": ActionType.SCHEDULE_WAYPOINT,
-            "data": pose_fields,
-            "drop_timestamps": True,
+            "action_type": ActionType.SERVO_J,
+            "data": joint_fields,
         },
-        # One action can address several modules; the host splits it per module.
         "right_gripper": {
-            "action_type": ActionType.SCHEDULE_WAYPOINT,
+            "action_type": ActionType.SERVO_J,
             "data": grip_fields,
-            "drop_timestamps": True,
         },
     },
 )
 
-# Exclusive: including `speed` hands timing to the module.
+# Exclusive go-to: duration from max_speed.
 Action(
     action_type=ActionType.MODULE_ACTION,
     data={
         "right_arm": {
-            "action_type": ActionType.SCHEDULE_WAYPOINT,
+            "action_type": ActionType.MOVE_J,
             "data": joint_fields,
-            "params": {"frame": "world", "speed": None},
+            "params": {"frame": "world"},
         }
     },
 )
@@ -194,7 +200,7 @@ The robot will look up the handler with the matching `action_type`, ignoring whe
 ## See also
 
 - [Actions](/docs/actions) — the wrapper schema that carries an action type.
-- [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose and scalar `SCHEDULE_WAYPOINT` on `Module`.
+- [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose and scalar `SCHEDULE_*` on arm and gripper modules.
 - [Modules](/docs/modules) — module-level <code>@action_handler</code>s.
 - [Robots](/docs/robots) — robot-level <code>@action_handler</code>s.
 - [Skills](/docs/skills) — skills emit actions, including custom-type ones, into the controller's queue.

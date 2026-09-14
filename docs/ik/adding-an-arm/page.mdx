@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Adding a New Arm',
   description:
-    'Contract for bringing up a Cartesian MinkIK arm in Solarian: declare joint servos, six CartesianIKActuators, a MinkIK backend, and pose interpolation in yaml. Controllers schedule sparse SCHEDULE_WAYPOINT poses; the module upsamples and solves IK. Walkthrough with the SO-106 example.',
+    'Contract for bringing up a Cartesian MinkIK arm in Solarian: declare joint servos, six CartesianIKActuators, a MinkIK backend, and pose interpolation in yaml. Controllers schedule sparse SCHEDULE_L poses; the module upsamples and solves IK. Walkthrough with the SO-106 example.',
 }
 
 # Adding a New Arm
@@ -10,7 +10,7 @@ Solarian mirrors the UMI / UR5 control pattern for any MinkIK arm: controllers a
 
 ```text
 Controller / skill  (~10–30 Hz)
-        │  SCHEDULE_WAYPOINT  x,y,z,rx,ry,rz + wall-clock timestamp
+        │  SCHEDULE_L  x,y,z,rx,ry,rz + wall-clock timestamp
         ▼
 Arm Module  (frequency: 90, interpolator_type: pose)
         │  PoseTrajectoryInterpolator sample @ module rate
@@ -32,7 +32,7 @@ A new arm reuses the core path when it provides:
 2. **Six `CartesianIKActuator`s** — `x`, `y`, `z`, `rx`, `ry`, `rz` with `cfg.id` 0..5 and `mode: raw`.
 3. **`ik_backend = MinkIK(...)`** — MJCF, joint-actuator → MuJoCo joint map, TCP frame.
 4. **Yaml** — `interpolator_type: pose`, `max_speed: [max_pos_m_s, max_rot_rad_s]`, and a module `frequency` higher than the controller (e.g. 90 Hz).
-5. **Callers** — emit `ActionType.SCHEDULE_WAYPOINT` with pose fields and wall-clock `timestamp` (one control period ahead for teleop; policy chunks use absolute target times minus action latency).
+5. **Callers** — emit `ActionType.SCHEDULE_L` with pose fields and wall-clock `timestamp` for policy chunks (absolute target times minus action latency). Teleop uses `MOVE_L`; leader follow uses `SERVO_J`.
 
 No per-arm interpolator code. Optional extras: servo gains in `initialize()`, and `default_joint_speed` if 1.05 rad/s is the wrong `moveJ` limit for this arm.
 
@@ -108,7 +108,7 @@ data = {
     axis: {"value": float(pose[i]), "timestamp": target_time}
     for i, axis in enumerate(("x", "y", "z", "rx", "ry", "rz"))
 }
-arm_action = {"action_type": ActionType.SCHEDULE_WAYPOINT, "data": data}
+arm_action = {"action_type": ActionType.SCHEDULE_L, "data": data}
 return Action(
     action_type=ActionType.MODULE_ACTION,
     data={"right_arm": arm_action},
@@ -119,7 +119,7 @@ The module converts wall time → monotonic, inserts the waypoint with speed lim
 
 ### Policy / skill path
 
-Skills should **not** own a second arm `PoseTrajectoryInterpolator` (that double-smooths). Forward each predicted pose with its absolute `target_time` (minus [`arm_action_latency`](/docs/latency)) as `SCHEDULE_WAYPOINT` on the arm module — same as UMI `exec_actions` → `schedule_waypoint` on the RTDE controller.
+Skills should **not** own a second arm `PoseTrajectoryInterpolator` (that double-smooths). Forward each predicted pose with its absolute `target_time` (minus [`arm_action_latency`](/docs/latency)) as `SCHEDULE_L` on the arm module — same as UMI `exec_actions` → `schedule_waypoint` on the RTDE controller.
 
 ### Robot + scene
 
@@ -131,14 +131,14 @@ Wire the module on the [`Robot`](/docs/robots), expose pose fields on [`Action`]
 - [ ] Module: joint servos + six `CartesianIKActuator`s + `MinkIK`
 - [ ] Yaml: `interpolator_type: pose`, `max_speed`, `frequency`; cartesian x..rz omitted from yaml
 - [ ] Action / observation schemas include `x..rz`
-- [ ] Controllers / skills use `SCHEDULE_WAYPOINT` with wall-clock timestamps
+- [ ] Controllers / skills use `SCHEDULE_L` with wall-clock timestamps
 - [ ] [Calibration](/docs/modules/calibration) so real hardware tracks Cartesian moves
 
 ## See also
 
-- [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose + scalar `SCHEDULE_WAYPOINT` contract
+- [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose + scalar `SCHEDULE_L` contract
 - [Inverse Kinematics](/docs/ik) — Cartesian actuators, `MinkIK`, `IKActuatorBus`
 - [Calibration](/docs/modules/calibration) — make real Cartesian moves track
 - [Modules](/docs/modules) — process loop, action handlers
-- [Actions](/docs/actions) / [Action Types](/docs/action-types) — `SCHEDULE_WAYPOINT`
+- [Actions](/docs/actions) / [Action Types](/docs/action-types) — `SCHEDULE_L`
 - [Sim Robots](/docs/sim-robots) — same IK path in MuJoCo

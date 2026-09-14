@@ -33,9 +33,8 @@ class PickSkill(Skill):
             action_type=ActionType.MODULE_ACTION,
             data={
                 self.params["arm"]: {
-                    "action_type": ActionType.SCHEDULE_WAYPOINT,
+                    "action_type": ActionType.MOVE_L,
                     "data": self.target_position,
-                    "params": {"speed": None},
                 }
             },
         )
@@ -94,14 +93,12 @@ def control_step(self, dt):
         action_type=ActionType.MODULE_ACTION,
         data={
             self.params["arm"]: {
-                "action_type": ActionType.SCHEDULE_WAYPOINT,
+                "action_type": ActionType.SERVO_L,
                 "data": pose_fields,
-                "drop_timestamps": True,
             },
             self.params["gripper"]: {
-                "action_type": ActionType.SCHEDULE_WAYPOINT,
+                "action_type": ActionType.SERVO_J,
                 "data": grip_fields,
-                "drop_timestamps": True,
             },
         },
     )

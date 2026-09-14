@@ -97,7 +97,7 @@ actuators:
     Encoder-zero shift so Present travel is a linear window. Legacy yaml <code>homing_offset</code> is still read. See <a href="/docs/modules/calibration">Calibration</a>.
   </Property>
   <Property name="interpolator_type" type="InterpolatorType">
-    One of <code>joint</code>, <code>scalar</code>, or <code>pose</code>. Selects the trajectory interpolator used by the default <code>SCHEDULE_WAYPOINT</code> handler. See <a href="/docs/modules/scheduling-waypoints">Scheduling Waypoints</a>.
+    One of <code>joint</code>, <code>scalar</code>, or <code>pose</code>. Selects the trajectory interpolator used by the default <code>SCHEDULE_L / SCHEDULE_J</code> handler. See <a href="/docs/modules/scheduling-waypoints">Scheduling Waypoints</a>.
   </Property>
   <Property name="execution" type="ExecutionMode | None">
     Overrides the class's <code>execution_mode</code> for this deployment. See <a href="#execution-modes">Execution Modes</a>.
@@ -163,7 +163,7 @@ class ArmModule(Module):
 
 `control_step` is **abstract**: every module says explicitly what it does per tick, even if the answer is nothing. Modules that only stream sensor data — cameras, for instance — override it with an empty body rather than inheriting a silent no-op.
 
-Actuator modules already implement it. `ActuatorModule.control_step` samples the active trajectory interpolator and writes the result, which is what makes `SCHEDULE_WAYPOINT` work; `ArmModule` and `GripperModule` inherit that. Override it only if you need something else.
+Actuator modules already implement it. `ActuatorModule.control_step` samples the active trajectory interpolator and writes the result, which is what makes `SCHEDULE_L / SCHEDULE_J` work; `ArmModule` and `GripperModule` inherit that. Override it only if you need something else.
 
 ## Action handlers
 
@@ -176,7 +176,7 @@ class ArmModule(Module):
     shoulder_pan = FeetechServo()
     # ...
 
-    @action_handler(ActionType.SCHEDULE_WAYPOINT)
+    @action_handler(ActionType.MOVE_J)
     def _on_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
         self.next_position = [field.value for field in action.values()]
         return True   # return False to stop the module
@@ -191,13 +191,13 @@ A handler must return a `bool`:
 
 If an action arrives with no registered handler, the module logs a warning and ignores it.
 
-See [Action Types](/docs/action-types) for the standard types (`STOP`, `MODULE_ACTION`, `SCHEDULE_WAYPOINT`, `RESTART_PUT`) and how to declare your own. For the built-in pose/scalar waypoint path — streaming and exclusive speed-limited moves alike — see [Scheduling Waypoints](/docs/modules/scheduling-waypoints).
+See [Action Types](/docs/action-types) for the standard types (`STOP`, `MODULE_ACTION`, `SCHEDULE_L / SCHEDULE_J`, `RESTART_PUT`) and how to declare your own. For the built-in pose/scalar waypoint path — streaming and exclusive speed-limited moves alike — see [Scheduling Waypoints](/docs/modules/scheduling-waypoints).
 
 ## Who builds the actions
 
 A module interprets actions; it does not build them for anyone else. That asymmetry is deliberate: the caller is usually a [skill](/docs/skills), which addresses modules by **name** so the same skill can run on the controller or on the robot. A name crosses a link, a `Module` object cannot, so giving modules builder methods would have quietly tied every skill to running in the same process as its hardware.
 
-A skill therefore constructs the [`SCHEDULE_WAYPOINT` envelope](/docs/action-types#waypoint-params) itself, and one `Action` may key several modules at once.
+A skill therefore constructs the [`SCHEDULE_L / SCHEDULE_J` envelope](/docs/action-types#waypoint-params) itself, and one `Action` may key several modules at once.
 
 ### Named poses
 
@@ -322,7 +322,7 @@ If your module has actuators on more than one port (for example, two daisy-chain
 ## See also
 
 - [Calibration](/docs/modules/calibration) — limit sweep, IK alignment, and latency measurements to bring a module up.
-- [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose and scalar `SCHEDULE_WAYPOINT` on `Module`.
+- [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose and scalar `SCHEDULE_L / SCHEDULE_J` on `Module`.
 - [Robots](/docs/robots) — how modules are attached to a robot and dispatched.
 - [Observations](/docs/observations) — the schema your module publishes into.
 - [Events](/docs/events) — the discrete happenings your module emits.

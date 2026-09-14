@@ -32,7 +32,7 @@ class ${class_prefix}Module(Module):
             self.write_actuators(self.next_position)
             self.next_position = None
 
-    @action_handler(ActionType.SCHEDULE_WAYPOINT)
-    def _handle_schedule_waypoint(self, action: ModuleAction, t_now: float) -> bool:
+    @action_handler(ActionType.MOVE_J)
+    def _handle_move_j(self, action: ModuleAction, t_now: float) -> bool:
         self.next_position = action.values()
         return True

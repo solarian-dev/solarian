@@ -52,7 +52,7 @@ def action_cls():
 
 def _waypoint(action_cls, value):
     return action_cls(
-        action_type=ActionType.SCHEDULE_WAYPOINT,
+        action_type=ActionType.SCHEDULE_J,
         data={"joint": {"value": value, "timestamp": 0.0}},
     )
 
@@ -166,8 +166,7 @@ def test_a_string_param_crosses_rather_than_raising(action_cls):
 
         restored = queue.get().params
         assert restored["frame"] == "world"
-        # ``None`` means "use the module default" and is not the same as absent:
-        # the key's presence is what makes the module own the timing.
+        # ``None`` means "use the module default" and is not the same as absent.
         assert restored["speed"] is None
         assert "speed" in restored
 

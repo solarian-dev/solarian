@@ -11,7 +11,7 @@ class ActionType:
     
     STOP = 0
     MODULE_ACTION = 1
-    SCHEDULE_WAYPOINT = 2
+    #: Vacated: was ``SCHEDULE_WAYPOINT``. Old wire values fail closed.
     RESTART_PUT = 3
     # Controller-orchestrated skill lifecycle (not forwarded to modules).
     START_SKILL = 4
@@ -25,6 +25,19 @@ class ActionType:
     #: of chunk behind it. Unlike ``HOLD_SAFE`` it never cuts torque: the link
     #: is fine, only the author left.
     CANCEL_TRAJECTORY = 7
+    #: Timestamped Cartesian waypoint (pose interpolator).
+    SCHEDULE_L = 8
+    #: Timestamped configuration-space waypoint (joints on an arm, scalar
+    #: on a gripper).
+    SCHEDULE_J = 9
+    #: Speed-limited Cartesian go-to (``moveL``).
+    MOVE_L = 10
+    #: Speed-limited configuration-space go-to (``moveJ``).
+    MOVE_J = 11
+    #: Streaming Cartesian target (``servoL``).
+    SERVO_L = 12
+    #: Streaming configuration-space target (``servoJ``).
+    SERVO_J = 13
     CUSTOM_START = 100
 
     def __init__(self, value: int = 0):
@@ -69,8 +82,8 @@ def action_handler(action_type: int):
     
     Usage:
         class MyModule(Module):
-            @action_handler(BaseAction.SCHEDULE_WAYPOINT)
-            def handle_schedule_waypoint(self, action: "Action") -> bool:
+            @action_handler(BaseAction.MOVE_L)
+            def handle_move_l(self, action: "Action") -> bool:
                 # Handle the action
                 return True  # Return False to stop the module
     
@@ -161,9 +174,10 @@ class ModuleAction:
     ``ModuleAction.zeros()`` or ``ModuleAction.compress()`` on the base class
     transparently delegate to it.
 
-    ``drop_timestamps`` is an optional flag for ``SCHEDULE_WAYPOINT``: ``True``
-    ignores client timestamps (teleop drive), ``False`` or ``None`` honors them
-    (policy chunks, keyboard jog).
+    ``params`` is the module's control vocabulary (frame, optional speed
+    override), not a mode switch. Timing is the action type: ``SCHEDULE_*``
+    honors field timestamps, ``MOVE_*`` takes as long as ``max_speed``,
+    ``SERVO_*`` uses the adaptive drive horizon.
     """
 
     _active_subclass = None
@@ -180,34 +194,13 @@ class ModuleAction:
 
     # -- Init --------------------------------------------------------------
 
-    #: Sentinel used on the wire / shared-memory queue when the sender did
-    #: not set ``drop_timestamps`` (module honors the stamped time).
-    _DROP_TIMESTAMPS_UNSET = -1
-
-    @staticmethod
-    def _coerce_drop_timestamps(value) -> bool | None:
-        """Normalize a ``drop_timestamps`` flag from bool / int / missing."""
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return value
-        try:
-            iv = int(value)
-        except (TypeError, ValueError):
-            return None
-        if iv < 0:
-            return None
-        return bool(iv)
-
     def __init__(
         self,
         action_type: "int | ActionType" = ActionType.STOP,
         data: dict = {},
-        drop_timestamps: bool | None = None,
         params: dict | None = None,
     ):
         self.action_type = action_type
-        self.drop_timestamps = self._coerce_drop_timestamps(drop_timestamps)
         self.params = dict(params or {})
         data = data if data is not None else {}
         self._fields = {}
@@ -287,15 +280,9 @@ class ModuleAction:
 
     def to_dict(self):
         data = {name: field.to_dict() for name, field in self._fields.items()}
-        drop = (
-            self._DROP_TIMESTAMPS_UNSET
-            if self.drop_timestamps is None
-            else (1 if self.drop_timestamps else 0)
-        )
         return {
             'data': data,
             'action_type': int(self.action_type),
-            'drop_timestamps': drop,
             'params': dict(self.params),
         }
 
@@ -381,7 +368,7 @@ class Action:
                             f"Invalid action value for '{key}' in {actual_cls.__name__}. "
                             f"Value must be a dictionary with keys 'data' and 'action_type'."
                         )
-                    extra = keys - {'data', 'action_type', 'drop_timestamps', 'params'}
+                    extra = keys - {'data', 'action_type', 'params'}
                     if extra:
                         raise ValueError(
                             f"Invalid action value for '{key}' in {actual_cls.__name__}. "
@@ -391,7 +378,6 @@ class Action:
                     self._module_actions[key] = module_actions_spec[key].__class__(
                         data=data[key]["data"],
                         action_type=data[key]['action_type'],
-                        drop_timestamps=data[key].get('drop_timestamps'),
                         params=data[key].get('params'),
                     )
         

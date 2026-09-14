@@ -47,7 +47,7 @@ def waypoint(module_name, value):
         action_type=ActionType.MODULE_ACTION,
         data={
             module_name: {
-                "action_type": int(ActionType.SCHEDULE_WAYPOINT),
+                "action_type": int(ActionType.SCHEDULE_L),
                 "data": {"x": {"value": value, "timestamp": 0.0}},
             }
         },

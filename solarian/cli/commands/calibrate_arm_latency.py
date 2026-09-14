@@ -127,14 +127,14 @@ def _run_action_latency(
     poses = np.tile(home, (k, 1))
     poses[:, axis] += offsets
 
-    module.schedule_pose(poses[0], time.time() + 0.3)
+    module.scheduleL(poses[0], time.time() + 0.3)
     run_control_loop(module, 1.0)
 
     # Match UMI's gripper sweep: settle, then stamp the sinusoid 1 s ahead so
     # every waypoint is scheduled before its target time.
     timestamps = time.time() + sample_t + 1.0
     for i in range(k):
-        module.schedule_pose(poses[i], timestamps[i])
+        module.scheduleL(poses[i], timestamps[i])
 
     actual_t, actual_x = run_control_loop(
         module,

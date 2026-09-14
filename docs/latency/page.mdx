@@ -77,7 +77,7 @@ flowchart TD
     infer --> chunk["action_timestamps =<br/>obs_timestamps[-1] + k * dt_execution"]
     subgraph act [Action path]
         chunk --> comp["exec_actions<br/>target_time -= arm/gripper_action_latency"]
-        comp --> sched["ArmModule._schedule_pose_waypoint<br/>GripperModule._schedule_scalar_waypoint"]
+        comp --> sched["ArmModule.scheduleL<br/>GripperModule.scheduleJ"]
     end
 ```
 
@@ -134,7 +134,7 @@ The arm and gripper get **different** target times for the same predicted step, 
 Finally, each waypoint reaches its module and is handed to a `TrajectoryInterpolator` (see [Scheduling Waypoints](/docs/modules/scheduling-waypoints)). A waypoint whose time has already passed does not blend in; [`_resolve_waypoint_time`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/actuator_module.py) clamps it to the very next control period and logs it:
 
 ```text
-Module 'right_arm': clamping late SCHEDULE_WAYPOINT (183.4 ms late)
+Module 'right_arm': clamping late SCHEDULE_L (183.4 ms late)
 ```
 
 Those log lines are the symptom to watch for. A clamped waypoint is a step of the trajectory compressed into one control period — the smooth descent the policy planned becomes a jerk.
@@ -230,7 +230,7 @@ It then checks that the model can still travel the full amplitude both ways from
 
 Do not lower `freq` further than you have to. Cross-correlating a narrowband signal gives a broad peak that the finite recording window pulls toward zero lag, and the resulting bias grows as the frequency drops — around 18 ms at 0.5 Hz over a 10 s sweep, against 2 ms at 1.25 Hz. Reduce `amplitude` first.
 
-Both commands drive the module through `schedule_pose` / `schedule_scalar`, which pass `drop_timestamps=False` so the sinusoid is interpolated at its stamped times rather than collapsed into "drive to the latest target now".
+Both commands drive the module through `scheduleL` / `scheduleJ`, which honor the stamped times rather than collapsing into "drive to the latest target now".
 
 ### `arm_obs_latency` and `gripper_obs_latency`
 
@@ -306,7 +306,7 @@ With correct latencies that count should be the full chunk, or very close. If it
 And the arm module should stop logging clamped waypoints:
 
 ```text
-Module 'right_arm': clamping late SCHEDULE_WAYPOINT (183.4 ms late)
+Module 'right_arm': clamping late SCHEDULE_L (183.4 ms late)
 ```
 
 Any occurrence of that line during a policy run means waypoints are arriving after their deadline, and the trajectory the robot executes is not the one the policy planned.

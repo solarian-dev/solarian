@@ -120,7 +120,7 @@ Cartesian **reads** run forward kinematics on the current joint positions. Joint
 
 ## Smooth Cartesian motion (pose interpolation)
 
-Sparse controller / policy waypoints feel jerky if you latch them directly onto the IK bus. With `interpolator_type: pose` on the module yaml, [`Module`](/docs/modules) runs a [`PoseTrajectoryInterpolator`](https://github.com/solarian-dev/solarian/blob/main/solarian/utils/trajectory_interpolator.py) (linear position + Slerp rotation, with `max_speed` limits) — the same pattern UMI uses before UR `servoL`. Controllers send `SCHEDULE_WAYPOINT` with wall-clock timestamps; the module upsamples at `frequency` and writes `x..rz` each tick. See [Scheduling Waypoints](/docs/modules/scheduling-waypoints) for the pose + scalar contract, and [Adding a New Arm](/docs/ik/adding-an-arm) for an SO-106 walkthrough.
+Sparse controller / policy waypoints feel jerky if you latch them directly onto the IK bus. With `interpolator_type: pose` on the module yaml, [`Module`](/docs/modules) runs a [`PoseTrajectoryInterpolator`](https://github.com/solarian-dev/solarian/blob/main/solarian/utils/trajectory_interpolator.py) (linear position + Slerp rotation, with `max_speed` limits) — the same pattern UMI uses before UR `servoL`. Controllers send `SCHEDULE_L` with wall-clock timestamps; the module upsamples at `frequency` and writes `x..rz` each tick. See [Scheduling Waypoints](/docs/modules/scheduling-waypoints) for the pose + scalar contract, and [Adding a New Arm](/docs/ik/adding-an-arm) for an SO-106 walkthrough.
 
 ## Extending: a custom backend
 

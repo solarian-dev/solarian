@@ -27,21 +27,19 @@ def test_aperture_unit_suffix_when_open_cm_set():
     assert module.aperture_unit_suffix() == ""
 
 
-def test_schedule_scalar_never_drops_timestamps():
+def test_schedule_j_never_drops_timestamps():
     module = GripperModule.__new__(GripperModule)
     captured: dict = {}
 
-    def fake(value, target_time_wall, t_now, drop_timestamps=False):
+    def fake(value, target_time_wall, t_now):
         captured["value"] = value
         captured["wall"] = target_time_wall
-        captured["drop"] = drop_timestamps
         captured["t_now"] = t_now
 
     module._schedule_scalar_waypoint = fake  # type: ignore[method-assign]
-    module.schedule_scalar(4.2, 123.0)
+    module.scheduleJ(4.2, 123.0)
     assert captured["value"] == 4.2
     assert captured["wall"] == 123.0
-    assert captured["drop"] is False
 
 
 def test_read_scalar_delegates_to_current():

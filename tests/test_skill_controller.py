@@ -52,8 +52,8 @@ class HoldSkill(Skill):
             action_type=ActionType.MODULE_ACTION,
             data={
                 next(iter(self.commanded_module_names())): {
-                    "action_type": int(ActionType.SCHEDULE_WAYPOINT),
-                    "data": {"x": {"value": 1.0, "timestamp": 0.0}},
+                    "action_type": int(ActionType.SERVO_L),
+                    "data": {"x": {"value": 1.0}},
                 }
             },
         )
@@ -80,11 +80,10 @@ class OneShotSkill(Skill):
                 action_type=ActionType.MODULE_ACTION,
                 data={
                     name: {
-                        "action_type": int(ActionType.SCHEDULE_WAYPOINT),
+                        "action_type": int(ActionType.MOVE_L),
                         "data": {
                             "x": {
                                 "value": self.params.get("value", 1.0),
-                                "timestamp": 0.0,
                             }
                         },
                         "params": {"speed": None},
@@ -343,8 +342,8 @@ class OffLoopSkill(Skill):
             action_type=ActionType.MODULE_ACTION,
             data={
                 self.params["gripper"]: {
-                    "action_type": int(ActionType.SCHEDULE_WAYPOINT),
-                    "data": {"x": {"value": 9.0, "timestamp": 0.0}},
+                    "action_type": int(ActionType.SERVO_J),
+                    "data": {"x": {"value": 9.0}},
                 }
             },
         )
@@ -403,7 +402,7 @@ def test_the_key_handler_builds_the_skill_it_starts():
     action = ctrl._tick_skills()
 
     arm = action.to_dict()["data"]["right_arm"]
-    assert arm["action_type"] == int(ActionType.SCHEDULE_WAYPOINT)
+    assert arm["action_type"] == int(ActionType.MOVE_L)
     assert arm["params"]["speed"] is None
 
 
@@ -628,7 +627,7 @@ class ChunkSkill(Skill):
                 action_type=ActionType.MODULE_ACTION,
                 data={
                     module: {
-                        "action_type": int(ActionType.SCHEDULE_WAYPOINT),
+                        "action_type": int(ActionType.SCHEDULE_L),
                         "data": {"x": {"value": v, "timestamp": 0.0}},
                     }
                 },

@@ -1,7 +1,7 @@
 """Application-level clock sync against the Solarian relay server.
 
 OS clocks on controller / robot / server often disagree by tens or hundreds of
-milliseconds. SCHEDULE_WAYPOINT stamps are wall-clock values; the robot converts
+milliseconds. ``SCHEDULE_*`` stamps are wall-clock values; the robot converts
 them to monotonic time with ``monotonic - wall + target_wall``. If the machines
 disagree on wall time, waypoints land in the past and are silently dropped.
 

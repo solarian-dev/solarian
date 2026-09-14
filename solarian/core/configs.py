@@ -198,8 +198,8 @@ class ModuleConfig(BaseModel):
     # # Interpolator settings
     interpolator_type: InterpolatorType = InterpolatorType.JOINT
     max_speed: float | list[float] = 1.0  # max speed for interpolation (single or per-joint)
-    #: Adaptive drive horizon bounds (seconds). Used when an action sets
-    #: ``drop_timestamps=True`` (``servoL`` / ``drive_to_waypoint``).
+    #: Adaptive drive horizon bounds (seconds). Used by ``SERVO_*``
+    #: (``servoL`` / ``servoJ`` / ``drive_to_waypoint``).
     drive_horizon_min_s: float = 1.0 / 30.0
     drive_horizon_max_s: float = 0.12
     drive_horizon_ema_alpha: float = 0.2
@@ -236,7 +236,7 @@ class ConnectionConfig(BaseModel):
     state_sender_port: int
     state_receiver_port: int
     #: ZMQ REP port for application-level clock sync (Cristian / NTP-style).
-    #: Controller and robot estimate an offset so SCHEDULE_WAYPOINT stamps share
+    #: Controller and robot estimate an offset so ``SCHEDULE_*`` stamps share
     #: the relay server's wall clock without requiring OS NTP/root.
     clock_sync_port: int = 5559
     #: CurveZMQ (see :mod:`solarian.core.curve`). Unset on all three leaves the
@@ -305,8 +305,8 @@ class ControllerConfig(BaseModel):
     #: Deprecated, superseded by ``ui``. ``true`` still selects the console UI,
     #: which is what the old headless loop was; use ``ui: null`` for no UI.
     headless: bool = False
-    #: Seconds ahead of ``time.time()`` for keyboard / teleop SCHEDULE_WAYPOINT
-    #: stamps. Must exceed Mac→robot action latency or waypoints are dropped.
+    #: Unused by ``MOVE_*`` / ``SERVO_*`` skills. Kept so existing controller
+    #: yaml still loads.
     waypoint_lookahead_s: float = 0.25
     connection: ConnectionConfig
     modules: dict[str, ModuleConfig]

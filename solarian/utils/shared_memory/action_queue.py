@@ -336,7 +336,6 @@ class ModuleActionQueue:
         return self._module_action_class(
             action_type=action_type,
             data=filtered_data,
-            drop_timestamps=nested.get('drop_timestamps'),
             params=self._decode_params(flat_dict),
         )
     

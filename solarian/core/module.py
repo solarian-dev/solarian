@@ -62,11 +62,10 @@ class Module(ABC):
     
     
     
-    STOP is handled by default. SCHEDULE_WAYPOINT lives on
-    :class:`~solarian.core.actuator_module.ActuatorModule`, which owns the
-    trajectory interpolator; :class:`ArmModule` and :class:`GripperModule`
-    extend it with exclusive speed-limited moves (``params.named`` /
-    ``params.speed``). Subclasses can override these or add new actions.
+    STOP is handled by default. Motion types (``MOVE_*``, ``SERVO_*``,
+    ``SCHEDULE_*``) live on :class:`~solarian.core.arm_module.ArmModule` and
+    :class:`~solarian.core.gripper_module.GripperModule`. Subclasses can
+    override these or add new actions.
     """
 
     # Override in subclasses to use a custom config class (must extend ModuleConfig)
@@ -777,21 +776,20 @@ class Module(ABC):
         """Reset the module. Eg: set to home position"""
         pass
 
-    def _drop_timestamps(self, action: ModuleAction) -> bool:
-        # Missing / ``None`` honors the stamped time (``schedule_waypoint``).
-        if action.drop_timestamps is None:
-            return False
-        return bool(action.drop_timestamps)
+    _DRIVE_ACTION_TYPES = frozenset({
+        int(ActionType.MOVE_L),
+        int(ActionType.MOVE_J),
+        int(ActionType.SERVO_L),
+        int(ActionType.SERVO_J),
+    })
 
     def _is_drive_waypoint(self, action) -> bool:
-        return int(action.action_type) == int(
-            ActionType.SCHEDULE_WAYPOINT
-        ) and self._drop_timestamps(action)
+        return int(action.action_type) in self._DRIVE_ACTION_TYPES
 
     def _coalesce_actions(self, actions: list) -> list:
-        """Keep only the latest of the waypoints whose timing this module owns.
+        """Keep only the latest ``MOVE_*`` / ``SERVO_*``; keep every ``SCHEDULE_*``.
 
-        A drive waypoint means "be here as soon as you can", so a backlogged
+        A drive action means "be here as soon as you can", so a backlogged
         burst of them is stale and only thrashes the interpolator. A
         timestamped waypoint names its own moment instead, and a policy chunk
         is seconds of trajectory expressed as several of them, so collapsing
