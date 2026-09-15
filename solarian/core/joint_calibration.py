@@ -4,10 +4,10 @@ Used by :meth:`Module.calibrate` so hard-stop joints only need a range sweep.
 The recorded min/max *are* the limits — there is no artificial cap on how
 large a fraction of a turn the travel may be.
 
-A contiguous arc that sits next to 0/CPR keeps ``center_offset=0`` (raw =
-Present). An arc that *crosses* the encoder seam is unwrapped: ``center_offset``
-shifts Present so the travel is a linear ``range_min``/``range_max``. Vendor
-caps (e.g. Feetech Homing_Offset ±2047) are applied by the caller.
+A contiguous arc, including one that sits right next to 0/CPR without crossing,
+keeps ``center_offset=0`` (raw = Present). An arc that *crosses* the seam is
+rejected with :class:`SeamCrossingError`: the servo cannot be driven across the
+seam, so the caller has to recover by remounting the horn at mid-travel.
 
 Glitch handling during the sweep:
 * Reject a sample whose shortest path from the previous reading is a sudden
@@ -35,6 +35,24 @@ MAX_SPAN_FRACTION_OF_CPR = 1.0
 
 class CalibrationSafetyError(ValueError):
     """Raised when a recorded range / derived offset would be unsafe to write."""
+
+
+class SeamCrossingError(CalibrationSafetyError):
+    """Travel straddles the 0/CPR encoder seam, which the servo cannot be driven across.
+
+    No offset fixes this. The servo's position loop computes ``Goal - Present`` in
+    raw counts with no modulo, so a goal on the far side of the seam drives the
+    wrong way into a hard stop. Offsets (software ``center_offset`` or hardware
+    ``Homing_Offset``) are translations, which move the discontinuity without
+    removing it. Only rotating the horn takes the seam out of the travel.
+    """
+
+    def __init__(self, name: str, span: int, mid_raw: int, cpr: int):
+        self.name, self.span, self.mid_raw, self.cpr = name, span, mid_raw, cpr
+        super().__init__(
+            f"{name}: travel spans {span} counts across the 0/{cpr - 1} encoder seam "
+            f"(mid-travel reads {mid_raw}, wanted near {(cpr - 1) // 2})."
+        )
 
 
 @dataclass(frozen=True)
@@ -162,14 +180,25 @@ class EncoderRangeTracker:
         )
         return self.raw_min, self.raw_max
 
-    def derived(self, name: str, max_offset_abs: int | None = None) -> DerivedHoming:
-        """Present-frame calibration, unwrapping if the sweep crossed the seam."""
+    def live_window(self) -> tuple[int, int, int] | None:
+        """MIN, POS, MAX in one encoder frame for the sweep UI.
+
+        Raw POS wraps at 0/CPR; unwrapped MIN/MAX do not. Once a wrap is seen the
+        unwrapped frame is used instead, so POS stays between MIN and MAX even
+        though that sweep will be rejected as seam-crossing.
+        """
+        if self.last is None or self.raw_min is None or self.raw_max is None:
+            return None
+        if self.wrap_crossings and self.u_lo is not None and self.last_unwrapped is not None:
+            return int(self.u_lo), int(self.last_unwrapped), int(self.u_hi)
+        return int(self.raw_min), int(self.last), int(self.raw_max)
+
+    def derived(self, name: str) -> DerivedHoming:
+        """Calibration for this sweep, or :class:`SeamCrossingError` if it wrapped."""
         if self.raw_min is None or self.u_lo is None or self.u_hi is None:
             raise CalibrationSafetyError("No encoder samples recorded.")
         if self.wrap_committed:
-            return calibration_from_circular_arc(
-                name, self.u_lo, self.u_hi, self.cpr, max_offset_abs=max_offset_abs
-            )
+            return calibration_from_circular_arc(name, self.u_lo, self.u_hi, self.cpr)
         if self.wrap_crossings:
             self.wrap_rejected += self.wrap_crossings
         return calibration_from_raw_range(name, self.raw_min, self.raw_max, self.cpr)
@@ -228,21 +257,13 @@ def calibration_from_raw_range(
     )
 
 
-def calibration_from_circular_arc(
-    name: str,
-    u_lo: int,
-    u_hi: int,
-    cpr: int,
-    *,
-    max_offset_abs: int | None = None,
-) -> DerivedHoming:
-    """Map an unwrapped hard-stop arc onto a linear Present window.
+def calibration_from_circular_arc(name: str, u_lo: int, u_hi: int, cpr: int) -> DerivedHoming:
+    """Validate an unwrapped hard-stop arc, or reject it as seam-crossing.
 
-    ``u_lo``/``u_hi`` are unwrapped encoder ticks (may lie outside ``[0, cpr)``).
-    ``center_offset`` is chosen so ``Present = (raw - offset) mod cpr`` is a
-    contiguous interval inside ``[0, cpr-1]``. When ``max_offset_abs`` is set
-    (hardware register cap) the offset is taken from the valid ∩ allowed
-    interval; empty intersection means remount.
+    ``u_lo``/``u_hi`` are unwrapped encoder ticks and may lie outside ``[0, cpr)``.
+    An arc that stayed inside the window is a normal range; one that left it
+    straddles the seam and is only fixable by remounting the horn, so it raises
+    :class:`SeamCrossingError`.
     """
     span = int(u_hi) - int(u_lo)
     if span <= 0:
@@ -258,41 +279,8 @@ def calibration_from_circular_arc(
     if u_lo >= 0 and u_hi <= cpr - 1:
         return calibration_from_raw_range(name, u_lo, u_hi, cpr)
 
-    # Present = unwrapped - offset sits in [0, cpr-1] iff
-    # offset ∈ [u_hi - (cpr-1), u_lo].
-    lo_off = int(u_hi) - (cpr - 1)
-    hi_off = int(u_lo)
-    if max_offset_abs is not None:
-        lo_off = max(lo_off, -int(max_offset_abs))
-        hi_off = min(hi_off, int(max_offset_abs))
-    if lo_off > hi_off:
-        raise CalibrationSafetyError(
-            f"{name}: wrap cannot be cleared with |center_offset| <= "
-            f"{max_offset_abs}; remount the horn so travel does not straddle "
-            f"0/{cpr - 1}."
-        )
-    # Smallest-magnitude valid offset (0 if it is in range).
-    if lo_off <= 0 <= hi_off:
-        offset = 0
-    elif hi_off < 0:
-        offset = hi_off
-    else:
-        offset = lo_off
-
-    present_lo = int(u_lo) - offset
-    present_hi = int(u_hi) - offset
-    if present_lo < 0 or present_hi > cpr - 1 or present_hi <= present_lo:
-        raise CalibrationSafetyError(
-            f"{name}: Present window {present_lo}..{present_hi} after "
-            f"center_offset={offset} is not a linear encoder range."
-        )
-    mid = int(round((present_lo + present_hi) / 2.0))
-    return DerivedHoming(
-        center_offset=int(offset),
-        range_min=present_lo,
-        range_max=present_hi,
-        mid_raw=mid,
-    )
+    mid_raw = int(round((int(u_lo) + int(u_hi)) / 2.0)) % cpr
+    raise SeamCrossingError(name, span, mid_raw, cpr)
 
 
 def derive_homing_from_raw_range(

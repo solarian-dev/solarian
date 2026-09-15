@@ -72,9 +72,11 @@ class ActuatorModule(Module):
     def calibrate(self) -> None:
         """Calibrate hard-stop joints from a range sweep.
 
-        Records travel, unwraps a wrapping arc via ``center_offset``, and seeds
-        ``drive_mode``. IK modules skip the direction prompt (the live-mirror
-        sign check decides). Non-IK modules ask one physical low-command pose.
+        Records travel and seeds ``drive_mode``. A sweep that straddles the
+        encoder seam is recovered by centering the shaft and re-sweeping, since
+        the servo cannot be commanded across it. IK modules skip the direction
+        prompt (the live-mirror sign check decides). Non-IK modules ask one
+        physical low-command pose.
         Continuous joints are skipped; their zero is set in ``solarian calibrate``
         home.
         """
@@ -83,6 +85,7 @@ class ActuatorModule(Module):
             CalibrationSafetyError,
             DerivedHoming,
             EncoderRangeTracker,
+            SeamCrossingError,
             drive_mode_from_low_end_pose,
             low_command_label,
         )
@@ -119,85 +122,90 @@ class ActuatorModule(Module):
             "Move each hard-stop joint through its FULL mechanical travel, then press ENTER.\n"
         )
 
-        self.start_calibration_mode()
+        # A sweep that straddles the 0/CPR seam is unusable and unfixable in
+        # software, so it is recovered mechanically (center the shaft, refit the
+        # horn at mid-travel) and swept again.
+        while True:
+            self.start_calibration_mode()
 
-        for port, actuator_names in hw_by_port.items():
-            bus = self.module_bus.component_bus_by_port[port]
-            assert isinstance(bus, ActuatorBus)
-            bus.reset_calibration(actuator_names)
+            for port, actuator_names in hw_by_port.items():
+                bus = self.module_bus.component_bus_by_port[port]
+                assert isinstance(bus, ActuatorBus)
+                bus.reset_calibration(actuator_names)
 
-        trackers: dict[str, EncoderRangeTracker] = {}
-        bus_by_name: dict[str, ActuatorBus] = {}
-        for port, actuator_names in hw_by_port.items():
-            bus = self.module_bus.component_bus_by_port[port]
-            for name in actuator_names:
-                cpr = bus.counts_per_revolution(name)
-                if not cpr:
-                    print(
-                        f"\nCalibration aborted: {name} has no counts_per_revolution."
-                    )
-                    self.end_calibration_mode()
-                    return
-                trackers[name] = EncoderRangeTracker(cpr=int(cpr))
-                bus_by_name[name] = bus
+            trackers: dict[str, EncoderRangeTracker] = {}
+            for port, actuator_names in hw_by_port.items():
+                bus = self.module_bus.component_bus_by_port[port]
+                for name in actuator_names:
+                    cpr = bus.counts_per_revolution(name)
+                    if not cpr:
+                        print(
+                            f"\nCalibration aborted: {name} has no counts_per_revolution."
+                        )
+                        self.end_calibration_mode()
+                        return
+                    trackers[name] = EncoderRangeTracker(cpr=int(cpr))
 
-        
-        board = StatusBoard.start_ui()
-        board.table_title = "Step 1: Joint limits"
-        try:
-            while not enter_pressed():
-                status_min, status_pos, status_max = {}, {}, {}
-                for port, actuator_names in hw_by_port.items():
-                    bus = self.module_bus.component_bus_by_port[port]
-                    positions = bus.read(PosData, actuator_names, normalize=False)
-                    for name in actuator_names:
-                        pos = int(positions[name])
-                        trackers[name].update(pos)
-                        t = trackers[name]
-                        status_pos[name] = pos
-                        status_min[name] = t.raw_min
-                        status_max[name] = t.raw_max
-                        if t.rejected:
-                            StatusBoard.set(f"{name}_ignored", t.rejected)
-                StatusBoard.set("MIN", status_min)
-                StatusBoard.set("POS", status_pos)
-                StatusBoard.set("MAX", status_max)
-        finally:
-            StatusBoard.stop()
+            board = StatusBoard.start_ui()
+            board.table_title = "Step 1: Joint limits"
+            try:
+                while not enter_pressed():
+                    status_min, status_pos, status_max = {}, {}, {}
+                    for port, actuator_names in hw_by_port.items():
+                        bus = self.module_bus.component_bus_by_port[port]
+                        positions = bus.read(PosData, actuator_names, normalize=False)
+                        for name in actuator_names:
+                            t = trackers[name]
+                            t.update(int(positions[name]))
+                            window = t.live_window()
+                            if window is None:
+                                continue
+                            status_min[name], status_pos[name], status_max[name] = window
+                            if t.wrap_crossings:
+                                StatusBoard.set(f"{name}_frame", "unwrapped (crossed seam)")
+                            if t.rejected:
+                                StatusBoard.set(f"{name}_ignored", t.rejected)
+                    StatusBoard.set("MIN", status_min)
+                    StatusBoard.set("POS", status_pos)
+                    StatusBoard.set("MAX", status_max)
+            finally:
+                StatusBoard.stop()
 
-        derived: dict[str, DerivedHoming] = {}
-        try:
-            for name, tracker in trackers.items():
-                if tracker.rejected:
-                    print(
-                        f"  {name}: ignored {tracker.rejected} teleport sample(s)"
-                    )
-                bus = bus_by_name[name]
-                cap = bus.max_center_offset_abs(name)
-                derived[name] = tracker.derived(name, max_offset_abs=cap)
-                d = derived[name]
-                if tracker.wrap_committed:
-                    print(
-                        f"  {name}: crossed the encoder seam; center_offset={d.center_offset} "
-                        f"moves it into the unused gap. Present range "
-                        f"{d.range_min} .. {d.range_max} (span {d.range_max - d.range_min})."
-                    )
-                else:
+            derived: dict[str, DerivedHoming] = {}
+            seam_errors: dict[str, SeamCrossingError] = {}
+            try:
+                for name, tracker in trackers.items():
+                    if tracker.rejected:
+                        print(
+                            f"  {name}: ignored {tracker.rejected} teleport sample(s)"
+                        )
+                    try:
+                        derived[name] = tracker.derived(name)
+                    except SeamCrossingError as exc:
+                        seam_errors[name] = exc
+                        continue
+                    d = derived[name]
                     if tracker.wrap_rejected:
                         print(
                             f"  {name}: ignored {tracker.wrap_rejected} wrap-looking "
                             f"glitch(es); travel treated as contiguous."
                         )
                     print(
-                        f"  {name}: Present range {d.range_min} .. {d.range_max} "
-                        f"(span {d.range_max - d.range_min}, center_offset=0; "
+                        f"  {name}: range {d.range_min} .. {d.range_max} "
+                        f"(span {d.range_max - d.range_min}; center_offset=0, so "
                         f"raw encoder = Present)."
                     )
-        except CalibrationSafetyError as exc:
-            print(f"\nCalibration aborted (safety): {exc}")
-            logger.error("Calibration aborted (safety): %s", exc)
-            self.end_calibration_mode()
-            return
+            except CalibrationSafetyError as exc:
+                print(f"\nCalibration aborted (safety): {exc}")
+                logger.error("Calibration aborted (safety): %s", exc)
+                self.end_calibration_mode()
+                return
+
+            if not seam_errors:
+                break
+            if not self._recover_seam_crossing(seam_errors, hw_by_port):
+                self.end_calibration_mode()
+                return
 
         drive_modes: dict[str, int] = {}
         for name in derived:
@@ -227,11 +235,13 @@ class ActuatorModule(Module):
             self.calibration.update(port_calibration)
 
         if not has_ik:
+            self.disable_torque()
             print(
                 "\n=== Direction (one physical pose) ===\n"
-                "drive_mode is the sign between encoder and command. Move the\n"
-                "joint to the pose that should be the low command (e.g. fully\n"
-                "closed), not 'whichever encoder end is smaller'."
+                "Torque is off. drive_mode is the sign between encoder and\n"
+                "command. Move the joint by hand to the pose that should be\n"
+                "the low command (e.g. fully closed), not 'whichever encoder\n"
+                "end is smaller'."
             )
             for port, actuator_names in hw_by_port.items():
                 bus = self.module_bus.component_bus_by_port[port]
@@ -264,8 +274,113 @@ class ActuatorModule(Module):
             print("Saved joint-limit ranges. Next: home position.")
         else:
             print_calibration_output(self)
+            self._verify_normalized_travel()
         logger.info("Calibration written to actuators")
         self.end_calibration_mode()
+
+    def _recover_seam_crossing(self, errors: dict, hw_by_port: dict[str, list[str]]) -> bool:
+        """Center the shaft of each seam-crossing joint so its horn can be refitted.
+
+        Returns True when the limit sweep should be retried, False to abort.
+        """
+        offending = sorted(errors)
+        print("\n=== Encoder seam in the middle of travel ===")
+        for name in offending:
+            exc = errors[name]
+            print(
+                f"  {name}: travel spans {exc.span} counts across the 0/{exc.cpr - 1} "
+                f"seam; mid-travel reads {exc.mid_raw}, wanted near {(exc.cpr - 1) // 2}."
+            )
+        print(
+            "\nNo offset can fix this. The servo computes Goal - Present in raw counts\n"
+            "with no wraparound, so a goal on the far side of the seam drives the wrong\n"
+            "way into a hard stop (and overloads). The seam has to leave the travel,\n"
+            "which means rotating the horn on the shaft.\n"
+            "\nTo fix it:\n"
+            f"  1. Remove the horn / linkage from: {', '.join(offending)}\n"
+            "  2. The shaft is then driven to mid-encoder (it may turn most of a turn).\n"
+            "  3. Refit the horn with the mechanism at MID-travel (half open, for a gripper).\n"
+            "  4. Sweep the limits again.\n"
+        )
+        answer = input(
+            "Horn/linkage removed and the shaft turns freely? [y/N] (anything else aborts) "
+        ).strip().lower()
+        if answer not in ("y", "yes"):
+            print("Calibration aborted; nothing was written.")
+            return False
+
+        for port, port_names in hw_by_port.items():
+            names = [n for n in port_names if n in errors]
+            if not names:
+                continue
+            bus = self.module_bus.component_bus_by_port[port]
+            reached = bus.drive_to_encoder_center(names)
+            for name in names:
+                print(f"  {name}: shaft parked at {reached.get(name)} (torque off).")
+
+        input(
+            "\nRefit the horn with the mechanism at mid-travel, then press ENTER to "
+            "sweep the limits again..."
+        )
+        return True
+
+    def _flip_drive_modes(self, names: list[str]) -> None:
+        """Invert sign in yaml and the bus cache. Does not touch EEPROM or torque."""
+        for name in names:
+            entry = self.calibration[name]
+            entry.drive_mode = 0 if int(entry.drive_mode) else 1
+            print(f"  {name}: drive_mode={entry.drive_mode}")
+        self._save_calibration(self.calibration)
+        for port, port_names in self._hardware_actuators_by_port().items():
+            bus = self.module_bus.component_bus_by_port[port]
+            if bus.calibration is None:
+                bus.calibration = {}
+            for n in port_names:
+                if n in names:
+                    bus.calibration[n] = self.calibration[n]
+
+    def _verify_normalized_travel(self) -> None:
+        """Torque-off live readout so the operator can walk -100 … 100 by hand."""
+        names = [
+            n
+            for port_names in self._hardware_actuators_by_port().values()
+            for n in port_names
+        ]
+        if not names:
+            return
+        from solarian.utils.general import enter_pressed
+
+        print(
+            "\n=== Verify (-100 … 100) ===\n"
+            "Torque stays off. Move the gripper by hand through its full travel.\n"
+            "Closed should read near -100, open near 100. If the sign is wrong\n"
+            "we will flip drive_mode and you can check again."
+        )
+        self.disable_torque()
+        while True:
+            board = StatusBoard.start_ui()
+            board.table_title = "Verify (-100 … 100)"
+            try:
+                print("Move through the full travel, then press ENTER.")
+                while not enter_pressed():
+                    status = {}
+                    for port, port_names in self._hardware_actuators_by_port().items():
+                        bus = self.module_bus.component_bus_by_port[port]
+                        readings = bus.read(PosData, port_names, normalize=True)
+                        for n in port_names:
+                            status[n] = round(float(readings[n]), 1)
+                    StatusBoard.set("NORM", status)
+            finally:
+                StatusBoard.stop()
+            ans = input("Was closed ≈ -100 and open ≈ 100? [Y/n] ").strip().lower()
+            if ans in ("", "y", "yes"):
+                print("Sign is correct.")
+                return
+            if ans in ("n", "no"):
+                print("Flipping drive_mode and saving.")
+                self._flip_drive_modes(names)
+                continue
+            print("Enter Y or n.")
 
     def get_initial_action_values(self) -> np.ndarray:
         return np.array([0.0] * max(len(self.actuators), 1))
@@ -443,7 +558,8 @@ class ActuatorModule(Module):
             last_waypoint_time=self.last_waypoint_time,
             **self._get_max_speed_kwargs(),
         )
-        self.last_waypoint_time = target_time
+        # Speed limits can stretch past the requested stamp.
+        self.last_waypoint_time = float(self.interp.times[-1])
 
     def _write_scalar(self, value: float) -> None:
         name = self._scalar_actuator_name()

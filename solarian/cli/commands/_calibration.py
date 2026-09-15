@@ -134,6 +134,8 @@ def module_running(module: Module, warning: str):
 
     module.load_calibration()
     module.connect(module.get_calibration() or {})
+    if module.needs_motor_calibration() and module.calibration:
+        module.write_calibration()
     try:
         module.initialize()
         yield module

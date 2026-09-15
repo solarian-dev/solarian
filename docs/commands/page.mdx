@@ -161,6 +161,16 @@ solarian setup-module module_name=<attr>
 
 Interactive helper for setting up a hardware module — assigning servo IDs, picking a port, and writing the resulting values into `conf/<attr>.yaml`.
 
+### `calibrate-servo`
+
+```bash
+solarian calibrate-servo
+```
+
+Prepares one servo for use, before it is a module component: pick the brand, the port and the servo, then set its ID, reset the comms and position registers, and park the shaft at mid-encoder so you can fit the horn with the mechanism at mid-travel. Needs no project and no config.
+
+Do this on every new servo. A horn fitted at an arbitrary shaft angle can put the `0/4095` encoder seam inside the joint's travel, which [Calibration](/docs/modules/calibration) has to reject — the servo cannot be commanded across the seam. The brand menu lists every installed actuator bus plugin; a brand whose plugin has no scanning support says so instead of failing.
+
 ### `write-robot-calibration`
 
 ```bash

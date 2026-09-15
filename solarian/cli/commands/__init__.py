@@ -107,6 +107,13 @@ CommandRegistry.register_lazy(
     setup_modules=("robot",),
 )
 CommandRegistry.register_lazy(
+    "calibrate-servo",
+    module_path=f"{_pkg}.calibrate_servo",
+    help="Prepare a servo for use: set its ID, reset registers, and centre its range.",
+    config_name=None,
+    setup_modules=(),
+)
+CommandRegistry.register_lazy(
     "write-robot-calibration",
     module_path=f"{_pkg}.write_robot_calibration",
     help="Write robot calibration from configuration.",

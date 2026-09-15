@@ -1,17 +1,18 @@
 export const metadata = {
   title: 'Calibration',
   description:
-    'Record physical joint limits, shift the encoder so travel is a normal interval, and map those ranges and directions onto the sim model.',
+    'Record physical joint limits, check that travel does not straddle the encoder seam, and map those ranges and directions onto the sim model.',
 }
 
 # Calibration
 
-We record each joint’s physical limits, shift the encoder so that travel is a normal interval (`center_offset`), and map those ranges and directions onto the sim model. {{ className: 'lead' }}
+We record each joint’s physical limits, check that travel is a normal encoder interval, and map those ranges and directions onto the sim model. {{ className: 'lead' }}
 
 Do this on first hardware bring-up, after replacing a servo, or when travel changed.
 
 ## Before you start
 
+- Prepare each servo with `solarian calibrate-servo` before you mount it: it sets the ID, resets the comms and position registers, and parks the shaft at mid-encoder so you can fit the horn with the mechanism at **mid-travel**. That keeps the `0/4095` encoder seam out of the joint's travel, which is the one thing calibration cannot fix in software.
 - Assign servo IDs and the serial port in `conf/<module>.yaml` first — `solarian setup-module` if they are not already set. Servo model and continuous-vs-limited live on the Module class, not in yaml.
 - **Stop `run-robot`.** The bus can only be open once; every calibrate command talks to the device in-process, the same way `solarian calibrate` does.
 - Run on the machine the device is wired to (the Pi under a `pi` deployment; your laptop under `localhost`).
@@ -44,9 +45,20 @@ The console uses the same step titles as this page. Answer ENTER / Y / N in the 
 
 Move every hard-stop joint through its full travel. Continuous joints (`wrist_roll` on SO-106) are printed and skipped — they have no hard stop.
 
-The status board shows **MIN / POS / MAX**. `POS` is the raw encoder. If travel crosses `4095→0`, the tool writes `center_offset` so the saved range is a normal interval (no remount). A single wrap-looking glitch is ignored.
+The status board shows **MIN / POS / MAX**. `POS` is the raw encoder. A single wrap-looking glitch is ignored.
 
 ![Step 1: Joint limits status board](/images/calibration/step1-limits.png)
+
+#### If travel crosses the encoder seam
+
+Travel that straddles `4095→0` is rejected, and the command walks you through fixing it on the spot. No offset can help: the servo computes `Goal - Present` in raw counts with no wraparound, so a goal on the far side of the seam drives the wrong way into a hard stop and overloads. An offset — software `center_offset` or the hardware `Homing_Offset` register — is a translation, so it moves the discontinuity without removing it.
+
+The only fix is to rotate the horn on the shaft:
+
+1. Remove the horn / linkage from the joints the command lists.
+2. Confirm the shaft turns freely; the command then drives it to mid-encoder (`2048`), which can be most of a turn.
+3. Refit the horn with the mechanism at mid-travel (half open, for a gripper).
+4. The limit sweep restarts, and now saves `center_offset: 0`.
 
 ### Step 2: Home position
 
@@ -72,8 +84,8 @@ Values are written to `conf/right_arm.yaml` and to the servos (or applied in sof
 
 | Field | Meaning |
 | --- | --- |
-| `real_range_*` | Present-frame travel window (after any wrap shift) |
-| `center_offset` | Encoder-zero shift (`0` = no shift). Feetech/Dynamixel write the `Homing_Offset` register |
+| `real_range_*` | Travel window in encoder counts |
+| `center_offset` | Encoder-zero shift. `0` after a sweep; non-zero only from `set_half_turn_homings` on a continuous joint |
 | `drive_mode` | Sign vs the model (`0` or `1`) |
 | `home` | Normalized pose you matched. Not `move.yaml` `poses.home` |
 

@@ -674,6 +674,9 @@ class MujocoWorldServer(Process):
     def set_half_turn_homings(self, module: str, component_names: list[str]) -> dict:
         return {}
 
+    def drive_to_encoder_center(self, module: str, component_names: list[str]) -> dict:
+        return {}
+
     def record_ranges_of_motion(self, module: str, component_names: list[str]):
         return {}, {}
 
@@ -720,6 +723,7 @@ class MujocoWorldServer(Process):
                 "reset_calibration": self.reset_calibration,
                 "setup_component": self.setup_component,
                 "set_half_turn_homings": self.set_half_turn_homings,
+                "drive_to_encoder_center": self.drive_to_encoder_center,
                 "record_ranges_of_motion": self.record_ranges_of_motion,
                 "overview_defaults": self.overview_defaults,
                 "render_overview": self.render_overview,

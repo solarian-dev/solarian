@@ -145,7 +145,7 @@ class IKActuatorBus(ActuatorBus):
     # -- normalized <-> radian joint conversion ----------------------------
     # NOTE: ``drive_mode`` (joint direction sign) is owned by the *inner* joint
     # bus, which already applies it when normalizing raw encoder units to the
-    # ``[-100, 100]`` space (real: ``FeetechMotorsBus._normalize``; sim: the
+    # ``[-100, 100]`` space (real: ``ActuatorBus._normalize``; sim: the
     # MuJoCo world's ``_normalize``). This layer must NOT re-apply it -- doing so
     # would cancel it out (double flip), silently ignoring the sign set during
     # IK sim<->real alignment. So the conversions below are pure normalized<->
@@ -329,6 +329,10 @@ class IKActuatorBus(ActuatorBus):
     def set_half_turn_homings(self, actuator_names: list[str]) -> Dict[str, int]:
         names = self._joint_subset(actuator_names)
         return self.inner_bus.set_half_turn_homings(names) if names else {}
+
+    def drive_to_encoder_center(self, component_names: list[str]) -> Dict[str, int]:
+        names = self._joint_subset(component_names)
+        return self.inner_bus.drive_to_encoder_center(names) if names else {}
 
     def record_ranges_of_motion(self, actuator_names: list[str]):
         names = self._joint_subset(actuator_names)

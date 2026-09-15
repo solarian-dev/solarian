@@ -115,7 +115,7 @@ class CalibrateCommand(BaseCommand):
         if not hasattr(module.cfg, "aperture_open_cm"):
             return
         print(
-            "\nThis gripper's encoder range is saved. Physical aperture (cm) is\n"
+            "\nEncoder range and drive_mode are saved. Physical aperture (cm) is\n"
             "not measured here — set aperture_closed_cm / aperture_open_cm in\n"
             "the module yaml after a ruler check (`solarian calibrate-gripper-ranges`)."
         )

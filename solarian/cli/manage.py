@@ -145,6 +145,7 @@ def _build_command_list() -> str:
         "calibrate-gripper-ranges": "Robot",
         "calibrate-camera-latency": "Robot",
         "setup-module": "Robot",
+        "calibrate-servo": "Robot",
         "write-robot-calibration": "Robot",
         "verify-calibration": "Robot",
         "derive-model-limits": "Robot",
@@ -304,7 +305,7 @@ def main() -> None:
     subcommand = args.subcommand
 
     # Commands that don't need Hydra config or project settings
-    no_hydra_commands = ['add-module', 'create-project', 'create-plugin', 'list-cameras', 'detect-device', 'run-policy', 'onshape-export', 'keygen']
+    no_hydra_commands = ['add-module', 'create-project', 'create-plugin', 'list-cameras', 'detect-device', 'run-policy', 'onshape-export', 'keygen', 'calibrate-servo']
     no_hydra_commands += list(PLUGIN_NO_HYDRA_COMMANDS)
 
     # Resolve settings.py location (skip for commands that don't need it)

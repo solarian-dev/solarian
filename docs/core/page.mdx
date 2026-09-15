@@ -111,6 +111,19 @@ ComponentBus (abstract)
   <Property name="read_calibration() / write_calibration(dict)">
     Round-trip calibration parameters between the bus and a JSON file.
   </Property>
+  <Property name="drive_to_encoder_center(names)">
+    Actuator buses only. Physically rotates each shaft to the middle of its encoder
+    range and returns with torque off, so a horn can be refitted at mid-travel.
+    Requires a free output: the goal is absolute mid-encoder, which a mounted
+    linkage would fight. Unlike <code>set_half_turn_homings</code>, which moves
+    nothing and only shifts the stored frame, this changes no calibration.
+  </Property>
+  <Property name="available_ports() / scan_port(port) / provision_servo(port, found)">
+    Class-level (no components needed), used by <code>solarian calibrate-servo</code>
+    to find and prepare a servo that is not declared anywhere yet. Optional — the
+    default raises <code>NotImplementedError</code>, which the command reports as
+    unsupported for that brand.
+  </Property>
 </Properties>
 
 ### `ModuleBus`

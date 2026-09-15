@@ -58,6 +58,41 @@ class ActuatorBus(ComponentBus):
         """Set half turn homings for the actuators. Read present position and set/store"""
         pass
 
+    @abc.abstractmethod
+    def drive_to_encoder_center(self, component_names: list[str]) -> Dict[str, int]:
+        """Rotate each actuator to the middle of its encoder range; torque off on return.
+
+        The output must be free to turn: any zero offset is cleared and the goal is
+        absolute mid-encoder, so a mounted linkage would be driven into a hard stop.
+        Returns the raw reading reached per actuator.
+
+        Distinct from :meth:`set_half_turn_homings`, which moves nothing and only
+        shifts the stored frame so the *current* pose reads mid.
+        """
+        pass
+
+    # -- provisioning (class level: no module config, no declared components) --
+    #
+    # Port and servo discovery cannot be shared across brands: Feetech and
+    # Dynamixel are serial (comports + broadcast ping), Robstride is CAN. These
+    # stay non-abstract so proxy buses (BusClient, IKActuatorBus) are unaffected
+    # and ``solarian calibrate-servo`` can report an unsupported brand instead of
+    # failing to construct.
+    @classmethod
+    def available_ports(cls) -> list[str]:
+        """Ports this bus type can find (serial devices, CAN interfaces, ...)."""
+        raise NotImplementedError(f"{cls.__name__} cannot enumerate ports")
+
+    @classmethod
+    def scan_port(cls, port: str) -> list[dict]:
+        """Servos answering on *port*: ``[{"id", "model", "baudrate"}]``."""
+        raise NotImplementedError(f"{cls.__name__} cannot scan a port")
+
+    @classmethod
+    def provision_servo(cls, port: str, found: dict) -> None:
+        """Make one servo ready to use: comms defaults, ID, register reset, centering."""
+        raise NotImplementedError(f"{cls.__name__} cannot provision a servo")
+
     def record_ranges_of_motion(self, actuator_names: list[str]) -> tuple[dict[str, int], dict[str, int]]:
         """Interactively record the min/max encoder values of each motor.
         """
@@ -123,13 +158,11 @@ class ActuatorBus(ComponentBus):
         buses return ``CPR-1`` so a wrap can always be cleared. ``None`` means
         no known cap.
         """
-        hw = self.max_homing_offset_abs(name)
-        if hw is not None:
-            return hw
-        if not self.center_offset_in_hardware(name):
-            cpr = self.counts_per_revolution(name)
-            if cpr:
-                return int(cpr) - 1
+        if self.center_offset_in_hardware(name):
+            return self.max_homing_offset_abs(name)
+        cpr = self.counts_per_revolution(name)
+        if cpr:
+            return int(cpr) - 1
         return None
 
     def max_homing_offset_abs(self, name: str) -> int | None:

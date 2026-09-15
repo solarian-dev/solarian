@@ -15,14 +15,29 @@ from solarian.cli.commands._calibration import (
     pick_module,
     run_control_loop,
 )
+from solarian.core.data import PosData
 from solarian.core.gripper_module import GripperModule
 from solarian.utils.precise_sleep import precise_wait
 
 _RANGE_STEP = 0.5
 
 
-def _drive_to(module: GripperModule, value: float, settle_s: float = 0.2) -> None:
-    module.scheduleJ(value, time.time() + 0.3)
+def _aperture_ruler_steps(lo: float, hi: float, step: float = _RANGE_STEP) -> list[float]:
+    """Closed (if below 0), then 0, ``step``, … ``hi`` for a ruler check."""
+    steps: list[float] = []
+    if lo < 0.0:
+        steps.append(lo)
+    m = 0.0
+    while m <= hi + 1e-9:
+        steps.append(m)
+        m += step
+    if not steps or abs(steps[-1] - hi) > 1e-9:
+        steps.append(hi)
+    return steps
+
+
+def _drive_to(module: GripperModule, value: float, settle_s: float = 0.3) -> None:
+    module.moveJ(value)
     deadline = float(module.last_waypoint_time)
     freq = max(float(module.frequency), 1.0)
     dt = 1.0 / freq
@@ -51,13 +66,28 @@ class CalibrateGripperRangesCommand(BaseCommand):
         ):
             lo, hi = module.scalar_limits()
             suffix = module.aperture_unit_suffix()
-            m = 0
-            while m <= hi + 1e-9:
-                print(f"{m}{suffix}")
-                _drive_to(module, m)
+            name = module._scalar_actuator_name()
+            closed_norm = module._scalar_to_actuator(lo)
+            open_norm = module._scalar_to_actuator(hi)
+            print(
+                f"Limits {lo:g}{suffix} → norm {closed_norm:.1f} (closed), "
+                f"{hi:g}{suffix} → norm {open_norm:.1f} (open)."
+            )
+            for width in _aperture_ruler_steps(lo, hi):
+                cmd_norm = module._scalar_to_actuator(width)
+                extra = ""
+                if name:
+                    port = module.actuators[name].cfg.port
+                    bus = module.module_bus.component_bus_by_port[port]
+                    raw_goal = bus._unnormalize({name: cmd_norm})[name]
+                    extra = f"  raw Goal {raw_goal:.0f}"
+                print(f"{width:g}{suffix}  commanded norm {cmd_norm:.1f}{extra}")
+                _drive_to(module, width)
+                if name:
+                    reading = module.read_sensors(PosData, [name])
+                    meas_norm = float(reading[name]["value"])
+                    meas = module._actuator_to_scalar(meas_norm)
+                    print(
+                        f"  measured {meas_norm:.1f} norm / {meas:.2f}{suffix}"
+                    )
                 input("Press Enter for next measurement")
-                m += _RANGE_STEP
-
-            print(f"Max gripper width: {hi}{suffix}")
-            _drive_to(module, hi)
-            input("Press Enter for next measurement")

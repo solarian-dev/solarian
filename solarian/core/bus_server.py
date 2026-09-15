@@ -220,6 +220,9 @@ class BusClient(ComponentBus):
     def set_half_turn_homings(self, component_names: list[str]) -> dict:
         return self._call("set_half_turn_homings", component_names)
 
+    def drive_to_encoder_center(self, component_names: list[str]) -> dict:
+        return self._call("drive_to_encoder_center", component_names)
+
     def record_ranges_of_motion(self, component_names: list[str]):
         return self._call("record_ranges_of_motion", component_names)
 
@@ -236,7 +239,7 @@ class BusClient(ComponentBus):
         return self._call("max_center_offset_abs", name)
 
     def max_homing_offset_abs(self, name: str):
-        return self._call("max_center_offset_abs", name)
+        return self._call("max_homing_offset_abs", name)
 
     def highlight_joint(self, name: str | None):
         return self._call("highlight_joint", name)

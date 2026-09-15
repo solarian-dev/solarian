@@ -180,10 +180,10 @@ class IKAlignmentSteps:
 
         Always re-homes this pose to mid-encoder and persists that
         ``center_offset``. Skipping the re-home when the (already-homed) present
-        already fits writes ``center_offset=0`` over the servo's existing
-        EEPROM value; Present then jumps and home is no longer model 0 — the
-        sim looks constantly rotated even though verify-calibration's span
-        table passes.
+        already fits writes ``center_offset=0`` over the existing software
+        offset; Present then jumps and home is no longer model 0 — the sim
+        looks constantly rotated even though verify-calibration's span table
+        passes.
         """
         from solarian.core.calibration import MotorCalibration
         from solarian.core.data import PosData
@@ -226,7 +226,12 @@ class IKAlignmentSteps:
         def _read_center():
             out = ik_bus.read(PosData, [joint], normalize=False)
             raw = out[joint]
-            return float(raw["value"] if isinstance(raw, dict) else raw)
+            raw = float(raw["value"] if isinstance(raw, dict) else raw)
+            bus = getattr(ik_bus, "inner_bus", ik_bus)
+            present_fn = getattr(bus, "_present_ticks", None)
+            if callable(present_fn):
+                return float(present_fn(joint, raw))
+            return raw
 
         try:
             offsets = ik_bus.set_half_turn_homings([joint])

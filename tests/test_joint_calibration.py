@@ -5,6 +5,7 @@ import pytest
 from solarian.core.joint_calibration import (
     CalibrationSafetyError,
     EncoderRangeTracker,
+    SeamCrossingError,
     calibration_from_circular_arc,
     calibration_from_raw_range,
     circular_distance,
@@ -117,20 +118,36 @@ class TestEncoderRangeTracker:
         assert d.range_max == 4080
         assert t.wrap_rejected >= 1
 
-    def test_wrapping_sweep_sets_center_offset(self):
+    def test_wrapping_sweep_is_rejected(self):
         t = EncoderRangeTracker(cpr=CPR)
         path = [3900, 3950, 4000, 4050, 10, 50, 100, 150, 200]
         for p in path:
             assert t.update(p), f"rejected {p}"
-        d = t.derived("j", max_offset_abs=2047)
-        assert d.center_offset != 0
-        assert 0 <= d.range_min < d.range_max <= CPR - 1
-        assert (d.range_max - d.range_min) < CPR
-        for raw in path:
-            present = (raw - d.center_offset) % CPR
-            assert d.range_min <= present <= d.range_max, (
-                f"raw {raw} → present {present} outside {d.range_min}..{d.range_max}"
-            )
+        with pytest.raises(SeamCrossingError) as excinfo:
+            t.derived("j")
+        exc = excinfo.value
+        assert exc.span == 200 + CPR - 3900
+        assert exc.mid_raw == (3900 + 200 + CPR) // 2 % CPR
+        assert exc.cpr == CPR
+
+    def test_live_window_pos_stays_between_min_max_across_seam(self):
+        t = EncoderRangeTracker(cpr=CPR)
+        path = [3900, 3950, 4000, 4050, 10, 50, 100, 150, 200]
+        for p in path:
+            assert t.update(p), f"rejected {p}"
+            window = t.live_window()
+            assert window is not None
+            lo, pos, hi = window
+            assert lo <= pos <= hi, f"raw {p} → window {lo}..{pos}..{hi}"
+
+    def test_live_window_contiguous_matches_raw(self):
+        t = EncoderRangeTracker(cpr=CPR)
+        for p in range(3500, 4010, 20):
+            assert t.update(p)
+            lo, pos, hi = t.live_window()
+            assert lo == 3500
+            assert pos == p
+            assert hi == p
 
     def test_glitch_at_zero_does_not_unwrap(self):
         t = EncoderRangeTracker(cpr=CPR)
@@ -150,21 +167,21 @@ class TestCalibrationFromCircularArc:
         assert d.range_min == 1000
         assert d.range_max == 2000
 
-    def test_wrapping_arc_fits_in_present(self):
-        d = calibration_from_circular_arc("j", 3900, 3900 + 400, CPR, max_offset_abs=2047)
-        assert d.center_offset != 0
-        assert 0 <= d.range_min < d.range_max <= CPR - 1
-        assert d.range_max - d.range_min == 400
+    def test_wrapping_arc_raises_seam_crossing(self):
+        with pytest.raises(SeamCrossingError) as excinfo:
+            calibration_from_circular_arc("j", 3900, 3900 + 400, CPR)
+        exc = excinfo.value
+        assert exc.span == 400
+        assert exc.mid_raw == (3900 + 200) % CPR
+        assert "encoder seam" in str(exc)
+
+    def test_seam_crossing_is_a_safety_error(self):
+        # calibrate()'s outer handler still aborts on it if nobody recovers.
+        assert issubclass(SeamCrossingError, CalibrationSafetyError)
 
     def test_full_turn_raises(self):
         with pytest.raises(CalibrationSafetyError, match="full turn"):
             calibration_from_circular_arc("j", 0, CPR, CPR)
-
-    def test_clamp_cannot_clear_seam_raises(self):
-        with pytest.raises(CalibrationSafetyError, match="remount"):
-            calibration_from_circular_arc(
-                "j", 3000, 3000 + 2000, CPR, max_offset_abs=10
-            )
 
 
 class TestDriveMode:
