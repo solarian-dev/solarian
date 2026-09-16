@@ -100,6 +100,13 @@ CommandRegistry.register_lazy(
     setup_modules=("robot",),
 )
 CommandRegistry.register_lazy(
+    "calibrate-hand-eye",
+    module_path=f"{_pkg}.calibrate_hand_eye",
+    help="Measure camera-to-fingertip (robot-world hand-eye) against what a UMI policy assumes.",
+    config_name="robot",
+    setup_modules=("robot",),
+)
+CommandRegistry.register_lazy(
     "setup-module",
     module_path=f"{_pkg}.setup_module",
     help="Setup module device.",
