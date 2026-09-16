@@ -380,8 +380,20 @@ class ArmModule(ActuatorModule):
             self._joint_interp = JointTrajectoryInterpolator(
                 times=np.array([t_now]), values=q_now[None, :]
             )
-        target_time = time.monotonic() - synced_time() + float(target_time_wall)
-        target_time = self._resolve_waypoint_time(target_time, t_now)
+        target_time = self._resolve_waypoint_time(
+            time.monotonic() - synced_time() + float(target_time_wall),
+            t_now,
+        )
+        if target_time is None:
+            return
+        if target_time <= self.last_waypoint_time:
+            # Unused tail of a previous chunk: splice from live joints so an
+            # untracked lookahead cannot yank the command backward.
+            q_now = self._read_joints_rad()
+            self._joint_interp = JointTrajectoryInterpolator(
+                times=np.array([t_now]), values=q_now[None, :]
+            )
+            self.last_waypoint_time = t_now
         self._joint_interp = self._joint_interp.schedule_waypoint(
             q,
             time=target_time,
@@ -424,8 +436,18 @@ class ArmModule(ActuatorModule):
         self._ensure_pose_interpolator(t_now)
         assert self.interp is not None
         pose = np.asarray(pose, dtype=np.float64)
-        target_time = time.monotonic() - synced_time() + float(target_time_wall)
-        target_time = self._resolve_waypoint_time(target_time, t_now)
+        target_time = self._resolve_waypoint_time(
+            time.monotonic() - synced_time() + float(target_time_wall),
+            t_now,
+        )
+        if target_time is None:
+            return
+        if target_time <= self.last_waypoint_time:
+            # Unused tail of a previous chunk: splice from live FK so an
+            # untracked lookahead cannot yank the command back to the
+            # observation pose (the snap at overlapping replan).
+            self.interp = None
+            self._ensure_pose_interpolator(t_now)
         self.interp = self.interp.schedule_waypoint(
             pose=pose,
             time=target_time,

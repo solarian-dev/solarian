@@ -209,6 +209,10 @@ def _bare_arm() -> ArmModule:
     module.interp = None
     module.last_waypoint_time = 0.0
     module._joint_interp = None
+    module._exclusive_move = False
+    module._cancel_joint_motion = lambda: None
+    module._late_waypoint_warn_t = 0.0
+    module._late_waypoint_suppressed = 0
     module._read_current_pose = lambda: np.zeros(6, dtype=np.float64)
     return module
 
@@ -314,6 +318,51 @@ def test_schedule_l_honours_its_timestamp():
 
     assert module.last_waypoint_time - t_before == pytest.approx(lead, abs=0.05)
     assert module.last_waypoint_time > t_after
+
+
+def test_resolve_waypoint_time_discards_late():
+    from solarian.core.actuator_module import ActuatorModule
+
+    module = ActuatorModule.__new__(ActuatorModule)
+    module.name = "right_arm"
+    module._late_waypoint_warn_t = 0.0
+    module._late_waypoint_suppressed = 0
+
+    assert module._resolve_waypoint_time(2.0, 1.0) == 2.0
+    assert module._resolve_waypoint_time(1.0, 1.0) is None
+    assert module._resolve_waypoint_time(0.9, 1.0) is None
+
+
+def test_schedule_l_discards_a_late_waypoint():
+    """A past SCHEDULE_L must not be clamped into the next control period."""
+    module = _bare_arm()
+    t_now = time.monotonic()
+    module._ensure_pose_interpolator(t_now)
+    seed_t = module.last_waypoint_time
+    seed_times = np.array(module.interp.times)
+
+    module.scheduleL(
+        np.array([0.01, 0.0, 0.0, 0.0, 0.0, 0.0]), time.time() - 0.2
+    )
+
+    assert module.last_waypoint_time == seed_t
+    np.testing.assert_array_equal(module.interp.times, seed_times)
+
+
+def test_replacing_unused_tail_splices_from_measured_pose():
+    """Overlapping replan must not hop from an untracked commanded lookahead."""
+    module = _bare_arm()
+    measured = np.array([0.04, 0.0, 0.0, 0.0, 0.0, 0.0])
+    module._read_current_pose = lambda: measured.copy()
+
+    module.scheduleL(np.array([0.20, 0.0, 0.0, 0.0, 0.0, 0.0]), time.time() + 1.0)
+    far = module.last_waypoint_time
+
+    module.scheduleL(np.array([0.05, 0.0, 0.0, 0.0, 0.0, 0.0]), time.time() + 0.15)
+
+    assert module.last_waypoint_time < far
+    start = module.interp(module.interp.times[0])
+    np.testing.assert_allclose(start[:3], measured[:3], atol=1e-5)
 
 
 def test_ik_tcp_survives_bind():

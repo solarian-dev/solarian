@@ -392,9 +392,7 @@ class ActuatorModule(Module):
     def _is_scalar_interpolator(self) -> bool:
         return self.cfg.interpolator_type == InterpolatorType.SCALAR
 
-    def _warn_late_waypoint(
-        self, target_time: float, t_now: float, *, clamped: bool = False
-    ) -> None:
+    def _warn_late_waypoint(self, target_time: float, t_now: float) -> None:
         late_ms = (t_now - target_time) * 1000.0
         now_wall = time.time()
         if now_wall - self._late_waypoint_warn_t < 1.0:
@@ -404,21 +402,25 @@ class ActuatorModule(Module):
         self._late_waypoint_warn_t = now_wall
         self._late_waypoint_suppressed = 0
         extra = f" ({suppressed} more suppressed)" if suppressed else ""
-        action = "clamping" if clamped else "discarding"
         logger.warning(
-            "Module '%s': %s late SCHEDULE_J (%.1f ms late)%s",
+            "Module '%s': discarding late SCHEDULE (%.1f ms late)%s",
             self.name,
-            action,
             late_ms,
             extra,
         )
 
-    def _resolve_waypoint_time(self, target_time: float, t_now: float) -> float:
+    def _resolve_waypoint_time(
+        self, target_time: float, t_now: float
+    ) -> float | None:
+        """Keep a still-future time; drop a past one (UMI interpolator).
+
+        Clamping to ``now + 1/freq`` would splice a stale pose into the next
+        control period and yank the arm back at chunk overlap.
+        """
         if target_time > t_now:
             return float(target_time)
-        self._warn_late_waypoint(target_time, t_now, clamped=True)
-        horizon = 1.0 / max(float(self.frequency), 1.0)
-        return float(t_now + horizon)
+        self._warn_late_waypoint(target_time, t_now)
+        return None
 
     def _adaptive_drive_horizon(self, t_now: float) -> float:
         min_h = float(getattr(self.cfg, "drive_horizon_min_s", 1.0 / 30.0))
@@ -549,8 +551,15 @@ class ActuatorModule(Module):
     ) -> None:
         self._ensure_scalar_interpolator(t_now)
         assert self.interp is not None
-        target_time = time.monotonic() - synced_time() + float(target_time_wall)
-        target_time = self._resolve_waypoint_time(target_time, t_now)
+        target_time = self._resolve_waypoint_time(
+            time.monotonic() - synced_time() + float(target_time_wall),
+            t_now,
+        )
+        if target_time is None:
+            return
+        if target_time <= self.last_waypoint_time:
+            self.interp = None
+            self._ensure_scalar_interpolator(t_now)
         self.interp = self.interp.schedule_waypoint(
             value=float(value),
             time=target_time,
