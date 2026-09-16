@@ -20,7 +20,7 @@ from solarian.cli.commands._calibration import (
     ramp_to_plateau,
     run_control_loop,
 )
-from solarian.core.gripper_module import GripperModule
+from solarian.core.gripper_module import APERTURE_UNIT, GripperModule
 
 # Stay off the hard stops: the last tenth of travel at speed is a collision with
 # the end of the rail, and its deceleration is not a speed measurement.
@@ -40,12 +40,12 @@ def _configured_speed(module: GripperModule) -> float:
 
 def _drive(module: GripperModule, target: float, speed: float):
     """One full move at *speed*, returning ``(start, t, x)``."""
-    start = module.read_scalar()
+    start = module.read_aperture()
     module.moveJ(target, speed=speed)
     # The plan is built at the commanded speed even when the jaws cannot manage
     # it, so stopping at the planned end would cut the move short.
     duration = module.last_waypoint_time - time.monotonic() + SETTLE_S
-    t, x = run_control_loop(module, duration, record=module.read_scalar)
+    t, x = run_control_loop(module, duration, record=module.read_aperture)
     return start, t, x
 
 
@@ -55,10 +55,10 @@ def _run(module: GripperModule) -> None:
     near = lo + _STROKE_MARGIN * stroke
     far = hi - _STROKE_MARGIN * stroke
     configured = _configured_speed(module)
-    units = module.aperture_unit_suffix().strip("() ") or "units"
+    units = APERTURE_UNIT
 
     print(
-        f"\nSweeping {near:.2f} to {far:.2f}{module.aperture_unit_suffix()} at "
+        f"\nSweeping {near:.2f} to {far:.2f} {units} at "
         f"rising speed. Configured max_speed is {configured:.2f} {units}/s."
     )
 

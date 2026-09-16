@@ -1,57 +1,65 @@
-"""Unit tests for GripperModule scalar helpers used by the calibrate commands."""
+"""Unit tests for GripperModule aperture conversion and scalar helpers."""
 
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from solarian.cli.commands.calibrate_gripper_ranges import _aperture_ruler_steps
+from solarian.core.aperture_table import ApertureTable
 from solarian.core.gripper_module import GripperModule
 
 
-def test_aperture_ruler_starts_at_closed_when_closed_is_negative():
-    steps = _aperture_ruler_steps(-0.8, 8.5)
-    assert steps[0] == -0.8
-    assert 0.0 in steps
-    assert steps[-1] == 8.5
-
-
-def test_negative_closed_cm_maps_to_closed_norm():
-    from solarian_umi_slim.aperture import aperture_to_norm, norm_to_aperture
-
-    assert aperture_to_norm(-0.8, -0.8, 8.5) == -100.0
-    assert aperture_to_norm(8.5, -0.8, 8.5) == 100.0
-    zero = aperture_to_norm(0.0, -0.8, 8.5)
-    assert -90.0 < zero < -70.0
-    assert abs(norm_to_aperture(-100.0, -0.8, 8.5) - (-0.8)) < 1e-9
-
-
-def test_aperture_ruler_starts_at_zero_when_closed_is_zero():
-    steps = _aperture_ruler_steps(0.0, 8.5)
-    assert steps[0] == 0.0
-    assert steps[-1] == 8.5
+def _module(**cfg) -> GripperModule:
+    cfg.setdefault("aperture_table", None)
+    module = GripperModule.__new__(GripperModule)
+    module.cfg = SimpleNamespace(**cfg)
+    return module
 
 
 def test_scalar_limits_from_aperture_cfg():
-    module = GripperModule.__new__(GripperModule)
-    module.cfg = SimpleNamespace(aperture_closed_cm=0.0, aperture_open_cm=8.5)
-    module.open_value = None
-    assert module.scalar_limits() == (0.0, 8.5)
+    module = _module(aperture_closed_mm=0.0, aperture_open_mm=85.0)
+    assert module.scalar_limits() == (0.0, 85.0)
 
 
-def test_scalar_limits_fall_back_to_the_declared_open_value():
-    module = GripperModule.__new__(GripperModule)
-    module.cfg = SimpleNamespace()
-    module.open_value = 1.0
-    assert module.scalar_limits() == (0.0, 1.0)
+def test_negative_closed_mm_maps_to_closed_norm():
+    module = _module(aperture_closed_mm=-8.0, aperture_open_mm=85.0)
+
+    assert module._scalar_to_actuator(-8.0) == -100.0
+    assert module._scalar_to_actuator(85.0) == 100.0
+    # Zero is a fraction of the way along a travel that starts below it.
+    assert -90.0 < module._scalar_to_actuator(0.0) < -70.0
+    assert module._actuator_to_scalar(-100.0) == pytest.approx(-8.0)
+    assert module._actuator_to_scalar(100.0) == pytest.approx(85.0)
 
 
-def test_aperture_unit_suffix_when_open_cm_set():
-    module = GripperModule.__new__(GripperModule)
-    module.cfg = SimpleNamespace(aperture_open_cm=8.5)
-    assert module.aperture_unit_suffix() == " (cm)"
-    module.cfg = SimpleNamespace()
-    assert module.aperture_unit_suffix() == ""
+def test_linear_map_saturates_past_the_ends():
+    module = _module(aperture_closed_mm=0.0, aperture_open_mm=85.0)
+    assert module._scalar_to_actuator(-50.0) == -100.0
+    assert module._scalar_to_actuator(999.0) == 100.0
+
+
+def test_measured_table_supersedes_the_linear_map():
+    # Compressed at the closed end, which is what the linkage actually does.
+    table = ApertureTable(
+        norm=[-100.0, -50.0, 0.0, 50.0, 100.0],
+        aperture_mm=[0.0, 8.0, 25.0, 55.0, 85.0],
+    )
+    module = _module(
+        aperture_closed_mm=0.0, aperture_open_mm=85.0, aperture_table=table
+    )
+
+    linear = _module(aperture_closed_mm=0.0, aperture_open_mm=85.0)
+    assert module._scalar_to_actuator(25.0) == pytest.approx(0.0, abs=1e-6)
+    assert linear._scalar_to_actuator(25.0) == pytest.approx(-41.18, abs=0.01)
+    assert module._actuator_to_scalar(0.0) == pytest.approx(25.0)
+
+
+def test_scalar_limits_come_from_the_table_when_present():
+    table = ApertureTable(norm=[-100.0, 100.0], aperture_mm=[2.0, 70.0])
+    module = _module(
+        aperture_closed_mm=0.0, aperture_open_mm=85.0, aperture_table=table
+    )
+    assert module.scalar_limits() == (2.0, 70.0)
 
 
 def test_schedule_j_records_speed_limited_arrival(monkeypatch):
@@ -66,18 +74,18 @@ def test_schedule_j_records_speed_limited_arrival(monkeypatch):
 
     module = ActuatorModule.__new__(ActuatorModule)
     module.interp = ScalarTrajectoryInterpolator(
-        np.array([t0]), np.array([8.5], dtype=np.float64)
+        np.array([t0]), np.array([85.0], dtype=np.float64)
     )
     module.last_waypoint_time = t0
     module.frequency = 120.0
-    module._get_max_speed_kwargs = lambda: {"max_speed": 15.0}
+    module._get_max_speed_kwargs = lambda: {"max_speed": 150.0}
     module._resolve_waypoint_time = lambda target, now: (
         target if target > now else now + 1.0 / 120.0
     )
 
-    # Request 0.3 s; 8.5 → -0.8 at 15 cm/s needs 0.62 s.
-    module._schedule_scalar_waypoint(-0.8, wall + 0.3, t_now=t0)
-    assert module.last_waypoint_time == pytest.approx(t0 + (8.5 - -0.8) / 15.0)
+    # Request 0.3 s; 85 → -8 at 150 mm/s needs 0.62 s.
+    module._schedule_scalar_waypoint(-8.0, wall + 0.3, t_now=t0)
+    assert module.last_waypoint_time == pytest.approx(t0 + (85.0 - -8.0) / 150.0)
 
 
 def test_schedule_j_never_drops_timestamps():
@@ -90,15 +98,15 @@ def test_schedule_j_never_drops_timestamps():
         captured["t_now"] = t_now
 
     module._schedule_scalar_waypoint = fake  # type: ignore[method-assign]
-    module.scheduleJ(4.2, 123.0)
-    assert captured["value"] == 4.2
+    module.scheduleJ(42.0, 123.0)
+    assert captured["value"] == 42.0
     assert captured["wall"] == 123.0
 
 
-def test_read_scalar_delegates_to_current():
+def test_read_aperture_delegates_to_current():
     module = GripperModule.__new__(GripperModule)
-    module._read_current_scalar = lambda: 3.25  # type: ignore[method-assign]
-    assert module.read_scalar() == 3.25
+    module._read_current_scalar = lambda: 32.5  # type: ignore[method-assign]
+    assert module.read_aperture() == 32.5
 
 
 def test_flip_drive_modes_toggles_yaml_and_bus_cache():

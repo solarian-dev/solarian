@@ -21,7 +21,7 @@ from solarian.cli.commands._calibration import (
     report_read_latency,
     run_control_loop,
 )
-from solarian.core.gripper_module import GripperModule
+from solarian.core.gripper_module import APERTURE_UNIT, GripperModule
 from solarian.utils.latency import get_latency
 
 _DURATION_S = 10.0
@@ -46,7 +46,7 @@ def _run_action_latency(module: GripperModule) -> None:
         module.scheduleJ(width[i], timestamps[i])
 
     actual_t, actual_x = run_control_loop(
-        module, _DURATION_S + 1.0, record=module.read_scalar
+        module, _DURATION_S + 1.0, record=module.read_aperture
     )
     if actual_t.size < 2:
         print("Not enough samples to estimate latency.")
@@ -73,12 +73,12 @@ def _run_action_latency(module: GripperModule) -> None:
         x_actual=actual_x,
         latency=latency,
         info=info,
-        ylabel=module.aperture_unit_suffix().strip() or "gripper-width",
+        ylabel=f"aperture ({APERTURE_UNIT})",
     )
 
 
 def _run_obs_latency(module: GripperModule) -> None:
-    durations = measure_read_latency(module.read_scalar, _OBS_ITERATIONS)
+    durations = measure_read_latency(module.read_aperture, _OBS_ITERATIONS)
     report_read_latency(durations, "gripper_obs_latency")
 
 

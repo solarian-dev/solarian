@@ -45,7 +45,7 @@ max_speed: [0.25, 0.6]    # meaning depends on type (see below)
     Selects <code>PoseTrajectoryInterpolator</code>, <code>ScalarTrajectoryInterpolator</code>, or <code>JointTrajectoryInterpolator</code>. Pose and scalar are fully wired in core <code>Module</code>.
   </Property>
   <Property name="max_speed" type="float | list[float]">
-    Speed limit passed into <code>{'schedule_waypoint'}</code>. Pose: <code>{'[max_pos_m_s, max_rot_rad_s]'}</code>. Scalar: a single rate in action units per second (e.g. cm/s for aperture).
+    Speed limit passed into <code>{'schedule_waypoint'}</code>. Pose: <code>{'[max_pos_m_s, max_rot_rad_s]'}</code>. Scalar: a single rate in action units per second (e.g. mm/s for aperture).
   </Property>
   <Property name="frequency" type="float">
     Module control rate — how often the interpolator is sampled and written.
@@ -112,30 +112,27 @@ Each module tick: sample `PoseTrajectoryInterpolator` → write `x..rz` → IK.
 
 ## Example: gripper (scalar)
 
-Grippers use the same action type with `interpolator_type: scalar`. The interpolator works in **action units** (aperture cm for UMI-slim); convert to servo/normalized units only at the write and seed edges.
+Grippers use the same action type with `interpolator_type: scalar`. The interpolator works in **millimetres of aperture**; `GripperModule` converts to the servo's normalized `[-100, 100]` at the write and seed edges, so a subclass only declares which actuator to drive.
 
 ### Module + yaml
 
 ```python
-class UmiSlimModule(Module):
+class UmiSlimModule(GripperModule):
     scalar_actuator = "gripper"   # field name on SCHEDULE_J
     gripper = FeetechServo()
-
-    def _scalar_to_actuator(self, value: float) -> float:
-        return self.aperture_to_norm(value)   # cm → [-100, 100]
-
-    def _actuator_to_scalar(self, value: float) -> float:
-        return self.norm_to_aperture(value)   # seed interpolator from sensors
 ```
 
 ```yaml
 # conf/right_gripper.yaml
 frequency: 120
 interpolator_type: scalar
-max_speed: 15.0            # cm/s aperture rate limit
+max_speed: 150.0           # mm/s aperture rate limit
+aperture_table:            # written by `solarian calibrate-gripper-ranges`
+    norm: [-100.0, -50.0, 0.0, 50.0, 100.0]
+    aperture_mm: [0.0, 8.0, 25.0, 55.0, 85.0]
 ```
 
-If action units already match `write_actuators`, you can skip the conversion hooks.
+The mm → normalized conversion follows `aperture_table` when it is present, and a straight line between `aperture_closed_mm` and `aperture_open_mm` otherwise.
 
 ### Scheduling from a controller
 
@@ -146,7 +143,7 @@ target_time = time.time() + 1.0 / controller_fps
 gripper_action = {
     "action_type": ActionType.SCHEDULE_J,
     "data": {
-        "gripper": {"value": aperture_cm, "timestamp": target_time},
+        "gripper": {"value": aperture_mm, "timestamp": target_time},
     },
 }
 return Action(
@@ -167,7 +164,7 @@ Diffusion (and similar) policies emit a chunk of absolute target times. For each
 ## Pitfalls
 
 - **Past timestamps are ignored.** Always schedule ahead of `curr_time` (teleop: one controller period; policies: absolute future times).
-- **Units must match `max_speed`.** Pose speeds are m/s and rad/s; scalar speed is in the same units as the waypoint value (cm/s if you command cm).
+- **Units must match `max_speed`.** Pose speeds are m/s and rad/s; scalar speed is in the same units as the waypoint value (mm/s for an aperture).
 - **One interpolator owns the stream.** Controller/skill = sparse setpoints; module = upsample + write.
 - **Override `control_step` carefully.** Call `super().control_step()` if you still want core pose/scalar sampling, or replace it entirely for latch-only modules.
 

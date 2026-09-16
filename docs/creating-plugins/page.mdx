@@ -114,17 +114,17 @@ A module plugin composes actuators/sensors into a ready-to-use unit and ships a 
 
 ```python
 # solarian_umi_slim/module.py
-from solarian.core.module import Module
-from solarian.core.configs import ModuleConfig
+from solarian.core.gripper_module import GripperConfig, GripperModule
 from solarian.core.data import PosData
 from solarian_feetech.actuator import FeetechServo
 
-class UmiSlimConfig(ModuleConfig):
-    aperture_closed_cm: float = 2.94
-    aperture_open_cm: float = 13.84
+class UmiSlimConfig(GripperConfig):
+    aperture_closed_mm: float = 0.0                  # straight-line fallback
+    aperture_open_mm: float = 85.0                   # until a table is measured
 
-class UmiSlimModule(Module):
+class UmiSlimModule(GripperModule):
     config_class = UmiSlimConfig
+    scalar_actuator = "gripper"
     gripper = FeetechServo(model="sts3215")          # one logical actuator
 
     def initialize(self):
@@ -155,8 +155,8 @@ Ship a `conf.yaml` next to the module so [`add-module`](/docs/using-plugins#hard
 # solarian_umi_slim/conf.yaml
 port: /dev/ttyUSB0
 frequency: 30
-aperture_closed_cm: 2.94
-aperture_open_cm: 13.84
+aperture_closed_mm: 0.0
+aperture_open_mm: 85.0
 actuators:
   gripper:
     id: 1

@@ -112,10 +112,10 @@ class CalibrateCommand(BaseCommand):
 
     @staticmethod
     def _maybe_gripper_note(module) -> None:
-        if not hasattr(module.cfg, "aperture_open_cm"):
+        if not hasattr(module.cfg, "aperture_open_mm"):
             return
         print(
-            "\nEncoder range and drive_mode are saved. Physical aperture (cm) is\n"
-            "not measured here — set aperture_closed_cm / aperture_open_cm in\n"
-            "the module yaml after a ruler check (`solarian calibrate-gripper-ranges`)."
+            "\nEncoder range and drive_mode are saved. How far the jaws actually\n"
+            "open at each servo command is not measured here — run\n"
+            "`solarian calibrate-gripper-ranges` with a ruler to record it."
         )

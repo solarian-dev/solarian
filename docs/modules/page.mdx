@@ -201,7 +201,7 @@ A skill therefore constructs the [`SCHEDULE_L / SCHEDULE_J` envelope](/docs/acti
 
 ### Named poses
 
-A pose name like `"home"` is the *skill's* vocabulary, not a module's — the module knows its ends of travel and its speed limits, which are facts about the hardware, but nothing about what a task considers home. So named poses live in the skill's `conf/<config_name>.yaml`, keyed pose then module then actuator, in each actuator's own command units (normalized `[-100, 100]` for a range-mode servo, cm of aperture for a gripper):
+A pose name like `"home"` is the *skill's* vocabulary, not a module's — the module knows its ends of travel and its speed limits, which are facts about the hardware, but nothing about what a task considers home. So named poses live in the skill's `conf/<config_name>.yaml`, keyed pose then module then actuator, in each actuator's own command units (normalized `[-100, 100]` for a range-mode servo, mm of aperture for a gripper):
 
 ```yaml
 # conf/move.yaml
@@ -215,7 +215,7 @@ poses:
             wrist_yaw: 0.0
             wrist_roll: 0.0
         right_gripper:
-            gripper: 8.5
+            gripper: 85.0
 ```
 
 `MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"})` looks up that pose and sends each module its own targets. A dict in `pose` is an inline joint or Cartesian target for the arm instead.

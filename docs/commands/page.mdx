@@ -137,7 +137,7 @@ The same two modes for any `GripperModule` (UMI `calibrate_gripper_latency`): a 
 solarian calibrate-gripper-ranges
 ```
 
-Steps the jaws from closed to open (0.5 units, centimetres when `aperture_open_cm` is set) so you can check them against a ruler (UMI `calibrate_gripper_ranges`). Prints the configured max; does not write files.
+Sweeps the servo across its normalized range and asks you for a ruler reading (mm) at each stop, then writes the pairs to `aperture_table` in the module yaml (UMI `calibrate_gripper_ranges`). That table is what `GripperModule` interpolates to turn a commanded aperture into a servo value. Without it the module assumes the opening is a straight line between `aperture_closed_mm` and `aperture_open_mm`, which a parallel gripper's linkage does not follow.
 
 ### `calibrate-camera-latency`
 

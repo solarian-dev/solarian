@@ -114,7 +114,7 @@ solarian verify-calibration
 
 ## Calibrate a gripper
 
-Same **Step 1** (one actuator). Then one physical low-command pose (typically fully closed) — no sim mapping. Measure aperture with a ruler and set `aperture_closed_cm` / `aperture_open_cm`; check with `solarian calibrate-gripper-ranges`.
+Same **Step 1** (one actuator). Then one physical low-command pose (typically fully closed) — no sim mapping. That fixes the servo's travel; it says nothing about how far the jaws open along it. Run `solarian calibrate-gripper-ranges` to sweep the servo and record a ruler reading (mm) at each stop, which is saved as `aperture_table` and interpolated at runtime.
 
 ## Using the module
 
