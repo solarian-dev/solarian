@@ -9,18 +9,27 @@ reveals the error -- a frame that looks perfectly aimed is still aimed at the
 wrong distance.
 
 Ported from UMI's ``record_robot_world_hand_eye.py`` +
-``calibrate_robot_world_hand_eye.py`` pair, with a checkerboard in place of the
-ArUco tag (Solarian already ships one, and the fisheye code that reads it) and
-with recording and solving in one command, because a Solarian module owns its
-hardware for the lifetime of a process.
+``calibrate_robot_world_hand_eye.py`` pair, keeping their target: tag 12 off
+the table marker sheet, which is what ``--tag_id 12`` in their own hand-eye
+script reads. Recording and solving are one command here, because a Solarian
+module owns its hardware for the lifetime of a process.
 
-Torque is released once and left off for good, so the arm walks from pose to
-pose in one continuous motion and stays in the user's hands at the end. One
-confirmation starts the run and one Enter takes each sample; nothing else is
-asked. A preview window draws the detected corners and the board axes solved
-from them, which is the check worth watching: corners only prove the detector
-found a grid, while axes standing square on the board prove the pose behind
-them — the input every number below rests on — is right.
+Each pose is sampled with the arm held by its own servos rather than by hand.
+Torque comes off to walk the arm into position, then on to hold it while the
+hands come away, because the pose the servos hold is the one forward
+kinematics describes -- a hand-held arm sags and flexes by degrees, and
+degrees at the tag's distance are tens of mm of error. Confirm twice per pose:
+once positioned, once let go.
+
+A preview window draws the tag outline and the axes solved from it, which is
+the check worth watching: an outline only proves a quad with the right ID was
+found, while axes lying along the printed edges prove the pose behind them --
+the input every number below rests on -- is right.
+
+Nothing is printed unless the fit earns it. Two constants have to explain
+every pose pair at once, so the residual is a real verdict, and a run that
+cannot resolve the offset it is measuring says so and stops rather than
+handing over numbers that look like measurements.
 
 The camera's ``resize_*`` is dropped for the run so the board is measured on
 the remap's full 1920x1080 rather than the 640x360 the policy consumes. Corner
@@ -39,15 +48,16 @@ The result splits into two halves that are fixed in different places:
   ``ik_tcp`` edit corrects a camera mounted at the wrong distance. The printed
   offset is an instruction for the mount.
 
-    solarian calibrate-hand-eye square=25.0
+    solarian calibrate-hand-eye
 
-Overrides: ``samples=16 board=9x6 arm=right_arm``.
+Overrides: ``samples=16 tag=12 marker=160.0 arm=right_arm``.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import textwrap
 import time
 from pathlib import Path
 
@@ -64,7 +74,7 @@ from solarian.cli.commands._calibration import (
 from solarian.cli.commands._ik_common import load_module, select_ik_module
 from solarian.core.camera import Camera
 from solarian.core.data import ImageData
-from solarian.core.fisheye import find_chessboard, load_intrinsics, parse_board
+from solarian.core.fisheye import load_intrinsics
 from solarian.core.optical_remap import resolve_remap_path
 from solarian.core.pose import rotvec_to_quat
 
@@ -74,6 +84,23 @@ from solarian.core.pose import rotvec_to_quat
 #   cam_to_tip_offset    = 0.01465 + 0.205   (GoPro mount + finger length)
 # with zero rotation, so a released checkpoint expects its fingertips here.
 UMI_TIP_IN_CAMERA = np.array([0.0, 0.086, 0.21965])
+
+# UMI's table marker sheet, umi-gripper.github.io/share/table_marker.pdf, off
+# their scripts/gen_aruco_tag_pdf.py: DICT_4X4_50, ids 12-19, 160 mm each, one
+# per page. Tag 12 is the default in their own hand-eye script, so measuring
+# against it keeps this comparable to UMI_TIP_IN_CAMERA rather than merely
+# self-consistent.
+_ARUCO_DICT = "DICT_4X4_50"
+_TAG_ID = 12
+_MARKER_MM = 160.0
+# Four coplanar points admit two poses. The runner-up has to reproject this
+# much worse than the winner or the tag has not actually determined which way
+# it leans, and picking wrong is an error of tens of degrees, silently. From
+# 300 noise trials at 0.3 px through this exact fisheye path: beyond
+# _MIN_TILT_DEG the ratio's 5th percentile is 25 and the wrong pose never won,
+# while at 5 deg the median is 6-10 and it won up to 42% of the time.
+_MIN_AMBIGUITY_RATIO = 10.0
+_MIN_TILT_DEG = 20.0
 
 _SAMPLES = 12
 # cv2.calibrateRobotWorldHandEye needs 3. Below roughly 8 poses the translation
@@ -97,12 +124,18 @@ _CONFIRM_KEYS = (13, 10, 32)
 # leave the lever arm unobservable, and the lever arm is the measurement. The
 # user is the one looking at the rig, so this warns rather than refuses.
 _MIN_ROT_STEP_DEG = 8.0
-# Corner noise on a downscaled fisheye frame puts a floor under the rotation
-# this can resolve; under it a "correction" would just be that noise.
-_ROT_NOISE_DEG = 1.0
-# A pose the two constants cannot explain to better than this is not a noisy
-# sample, it is a wrong one.
-_OUTLIER_MM = 8.0
+# Let the arm stop ringing after the hand comes off it, before reading.
+_SETTLE_S = 0.4
+# The two pose reads bracketing a frame grab should agree to this, or the arm
+# was knocked and the frame is paired with a pose it has already left.
+_MOVE_POS_M = 0.003
+_MOVE_ROT_DEG = 1.0
+# Pass marks for the fit. See _grade: these are what it takes to resolve an
+# offset of a few tens of mm, not aspirational tolerances.
+_MAX_RESIDUAL_MM = 8.0
+_MAX_ROT_RMS_DEG = 1.0
+# A pose this far outside the median is a wrong detection, not a noisy one.
+_OUTLIER_FACTOR = 3.0
 
 
 def _pose_to_mat(pose) -> np.ndarray:
@@ -123,12 +156,35 @@ def _offset_to_mat(offset) -> np.ndarray:
     return mat
 
 
-def _board_points(board: tuple[int, int], square_m: float) -> np.ndarray:
-    """Inner-corner grid on z=0, ordered as ``find_chessboard`` returns them."""
-    cols, rows = board
-    pts = np.zeros((cols * rows, 3), dtype=np.float64)
-    pts[:, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2) * square_m
-    return pts
+def _marker_points(marker_m: float) -> np.ndarray:
+    """The tag's four corners on z=0, ordered as ArUco reports them.
+
+    Centred on the tag, both because that is cv2.aruco's own convention and
+    because SOLVEPNP_IPPE_SQUARE requires exactly this order and centring.
+    """
+    half = marker_m / 2.0
+    return np.array(
+        [
+            [-half, +half, 0.0],
+            [+half, +half, 0.0],
+            [+half, -half, 0.0],
+            [-half, -half, 0.0],
+        ],
+        dtype=np.float64,
+    )
+
+
+def _aruco_detector():
+    import cv2
+
+    params = cv2.aruco.DetectorParameters()
+    # The whole pose rests on four corners, so they are worth refining, and
+    # UMI's own detector does the same.
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    return cv2.aruco.ArucoDetector(
+        cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, _ARUCO_DICT)),
+        params,
+    )
 
 
 def _remap_gopro_schema(sensor_cfg, conf_dir: Path):
@@ -155,27 +211,42 @@ def _remap_gopro_schema(sensor_cfg, conf_dir: Path):
         return json.load(fp)["gopro_intrinsics"]
 
 
-def _board_in_camera(corners, obj_pts, intr):
-    """Board pose in camera axes, as ``(rvec, tvec, reprojection_rms_px)``.
+def _tag_in_camera(corners, obj_pts, intr):
+    """Tag pose in camera axes: ``(rvec, tvec, reprojection_rms_px, ratio)``.
 
-    Undistorting the corners to normalized rays first is what lets ``solvePnP``
+    Undistorting the corners to normalized rays first is what lets the solver
     run with an identity camera matrix, and that is the only way to use it on a
-    fisheye frame whose distortion its pinhole model cannot express.
+    fisheye frame whose distortion a pinhole model cannot express.
+
+    ``solvePnPGeneric`` is used over ``solvePnP`` for the second solution, not
+    the first. A square's four corners fit two poses that mirror through the
+    tag plane, and near fronto-parallel both reproject so well that the wrong
+    one wins on noise alone. Returning how much worse the runner-up is lets
+    the caller refuse a pose the geometry never pinned down, instead of
+    averaging a flipped one into the answer.
     """
     import cv2
 
     norm = cv2.fisheye.undistortPoints(
         corners.reshape(-1, 1, 2).astype(np.float64), intr["K"], intr["D"]
     )
-    ok, rvec, tvec = cv2.solvePnP(
-        obj_pts, norm, np.eye(3), np.zeros(4), flags=cv2.SOLVEPNP_IPPE
+    found, rvecs, tvecs, errs = cv2.solvePnPGeneric(
+        obj_pts, norm, np.eye(3), np.zeros(4), flags=cv2.SOLVEPNP_IPPE_SQUARE
     )
-    if not ok:
+    if not found:
         return None
+    errs = np.asarray(errs, dtype=np.float64).ravel()
+    order = np.argsort(errs)
+    best = int(order[0])
+    ratio = (
+        float(errs[order[1]] / max(errs[best], 1e-12)) if found > 1 else float("inf")
+    )
+    rvec = np.ascontiguousarray(np.asarray(rvecs[best], dtype=np.float64).reshape(3, 1))
+    tvec = np.ascontiguousarray(np.asarray(tvecs[best], dtype=np.float64).reshape(3, 1))
     proj, _ = cv2.projectPoints(obj_pts, rvec, tvec, np.eye(3), np.zeros(4))
     # Scaled by fx so the residual reads in the pixels the corners came from.
     err = np.linalg.norm((proj - norm).reshape(-1, 2), axis=1) * float(intr["K"][0, 0])
-    return rvec, tvec, float(np.sqrt(np.mean(err**2)))
+    return rvec, tvec, float(np.sqrt(np.mean(err**2))), ratio
 
 
 def _rot_between_deg(pose_a, pose_b) -> float:
@@ -185,32 +256,32 @@ def _rot_between_deg(pose_a, pose_b) -> float:
     return float(np.degrees(np.linalg.norm((rot_a.inv() * rot_b).as_rotvec())))
 
 
-def _draw_board(view, corners, solved, obj_pts, intr, k: float) -> None:
-    """Draw the corner path, then the solved board frame on top of it.
+def _draw_tag(view, corners, solved, obj_pts, intr, k: float) -> None:
+    """Draw the tag outline, then the solved tag frame on top of it.
 
     Everything is already in full-frame pixels; *k* only fattens the strokes so
-    they stay visible at whatever resolution the frame is. That is also why the
-    corner path is drawn here rather than by ``cv2.drawChessboardCorners``,
-    whose marker size is hardcoded and vanishes on a 1920-wide frame.
+    they stay visible at whatever resolution the frame is, which is why this
+    draws its own outline rather than calling ``drawDetectedMarkers``, whose
+    stroke width vanishes on a 1920-wide frame.
 
-    The axes are the check that matters. The path only says the detector found
-    something grid-shaped and walked it in order; red X and green Y lying along
-    the rows and columns, with blue Z square to them, say the pose behind them
-    is right -- and that pose is what every number below is built on.
+    The axes are the check that matters. The outline only says a quad carrying
+    the right ID was found; red X and green Y lying along the printed edges,
+    with blue Z standing out of the paper, say the pose behind them is right --
+    and that pose is what every number below is built on.
     """
     import cv2
 
     if corners is None:
         return
     path = corners.reshape(-1, 2).astype(np.int32)
-    cv2.polylines(view, [path], False, (0, 0, 0), round(4 * k))
-    cv2.polylines(view, [path], False, (0, 255, 255), max(1, round(1.5 * k)))
+    cv2.polylines(view, [path], True, (0, 0, 0), round(4 * k))
+    cv2.polylines(view, [path], True, (0, 255, 255), max(1, round(1.5 * k)))
     for point in path:
         cv2.circle(view, tuple(point), round(3 * k), (0, 0, 255), -1)
     if solved is None:
         return
-    rvec, tvec, _rms = solved
-    length = float(obj_pts[:, 0].max()) / 2.0
+    rvec, tvec, _rms, _ratio = solved
+    length = float(obj_pts[:, 0].max())
     tips = np.array(
         [[0, 0, 0], [length, 0, 0], [0, length, 0], [0, 0, length]],
         dtype=np.float64,
@@ -229,21 +300,28 @@ def _draw_board(view, corners, solved, obj_pts, intr, k: float) -> None:
     cv2.circle(view, tuple(pts[0]), round(5 * k), (255, 255, 255), -1)
 
 
-def _detect(gray, board, gate_wh):
-    """Board corners at full resolution, gated by a cheap look at a small copy.
+def _detect(gray, detector, tag_id: int, gate_wh):
+    """The tag's corners at full resolution, gated by a look at a small copy.
 
-    ``findChessboardCorners`` is fast when it finds a board and slow when it
-    does not, because CALIB_CB_FAST_CHECK scans the whole image before giving
-    up -- at 1920x1080 that is ~50 ms against ~6 ms for the same miss at
-    640x360. Most frames while the arm is being aimed are misses, so paying for
-    them at full resolution is what would make the preview crawl.
+    Marker detection thresholds and walks every contour in the image, and on a
+    frame with no tag in it that whole sweep is spent proving the absence.
+    Most frames while the arm is being aimed are exactly that, so the small
+    copy answers "is it there" cheaply and only a hit pays full resolution for
+    the corners the measurement needs.
     """
     import cv2
 
     small = cv2.resize(gray, gate_wh, interpolation=cv2.INTER_AREA)
-    if find_chessboard(small, board) is None:
+    _corners, ids, _rejected = detector.detectMarkers(small)
+    if ids is None or tag_id not in ids:
         return None
-    return find_chessboard(gray, board)
+    corners, ids, _rejected = detector.detectMarkers(gray)
+    if ids is None:
+        return None
+    for quad, found in zip(corners, ids.ravel()):
+        if int(found) == tag_id:
+            return quad.reshape(4, 2).astype(np.float64)
+    return None
 
 
 def _draw_status(view, lines, k: float) -> None:
@@ -288,15 +366,73 @@ def _shell_line() -> str | None:
     return raw.strip() if raw else None
 
 
-def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_samples):
-    """Pair hand-placed arm poses with board detections, torque off throughout.
+def _measure(
+    arm, camera, sensor_name, detector, tag_id, obj_pts, intr, color_mode, gate_wh
+):
+    """One sample, on dedicated reads, or ``(None, reason)`` saying why not.
 
-    Torque comes off once and never goes back on, so the arm can be walked from
-    pose to pose in one continuous motion and is left in the user's hands at the
-    end. Every sample is taken on one confirmation and nothing else: Enter in
-    the preview window, or Enter in the shell when there is no display.
+    The pose is read on both sides of the frame grab. With the servos holding
+    and the hands away the two should agree; if they do not, the arm was
+    knocked or is still creeping, and a frame paired with a pose the arm has
+    already left is exactly the corrupt sample the fit cannot distinguish from
+    a bad rig.
+    """
+    import cv2
 
-    The window shows the full frame; only the cheap detection gate works on a
+    pose_before = arm.read_pose()
+    frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name]["value"]
+    pose_after = arm.read_pose()
+
+    drift_m = float(np.linalg.norm(pose_after[:3] - pose_before[:3]))
+    drift_deg = _rot_between_deg(pose_before, pose_after)
+    if drift_m > _MOVE_POS_M or drift_deg > _MOVE_ROT_DEG:
+        return None, (
+            f"the arm moved {drift_m * 1000:.0f} mm / {drift_deg:.1f} deg while "
+            "measuring"
+        )
+
+    full = _opencv_bgr(frame, color_mode)
+    corners = _detect(cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), detector, tag_id, gate_wh)
+    if corners is None:
+        return None, f"tag {tag_id} is not in this frame"
+    solved = _tag_in_camera(corners, obj_pts, intr)
+    if solved is None:
+        return None, "the tag corners did not solve to a pose"
+    rvec, tvec, rms_px, ratio = solved
+    if ratio < _MIN_AMBIGUITY_RATIO:
+        return None, (
+            f"the tag is too flat-on to tell which way it leans (ambiguity "
+            f"{ratio:.1f}, {_MIN_AMBIGUITY_RATIO:g} needed) -- tilt it past "
+            f"{_MIN_TILT_DEG:g} deg"
+        )
+
+    tx_world2cam = np.eye(4)
+    tx_world2cam[:3, :3] = cv2.Rodrigues(rvec)[0]
+    tx_world2cam[:3, 3] = np.asarray(tvec).squeeze()
+    return {
+        # OpenCV's base2gripper: the base in TCP coordinates.
+        "tx_base2tcp": np.linalg.inv(_pose_to_mat(pose_after)),
+        "tx_world2cam": tx_world2cam,
+        "pose": pose_after,
+        "rms_px": rms_px,
+        "ratio": ratio,
+        "tag_m": float(np.linalg.norm(tvec)),
+    }, None
+
+
+def _collect(
+    arm, camera, sensor_name, detector, tag_id, obj_pts, intr, color_mode, n_samples
+):
+    """Pair arm poses with tag detections, two confirmations per pose.
+
+    The cycle is walk, hold, let go, measure. Torque is off to move the arm and
+    on to sample, and the order matters both ways: it comes on while the hand
+    is still there so a jerk is caught, and the sample is taken only after the
+    hand is away so the pose belongs to the servos rather than to the grip.
+    ``hold_measured_pose`` latches the reading first, which is what keeps
+    energising silent instead of a snap to a stale goal.
+
+    The window shows the full frame; only the detection gate works on a
     downscaled copy, and that is for latency, not for display.
     """
     import cv2
@@ -311,6 +447,7 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
     # initialize() energised the arm on the way in, so this is what makes it
     # movable again -- it is not redundant with whatever state it was left in.
     arm.start_calibration_mode()
+    holding = False
 
     preview = True
     window_wh = (
@@ -323,19 +460,22 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
     except cv2.error:
         preview = False
     print(
-        f"\nTorque is OFF and stays off: move the arm freely, and it is yours "
-        f"to put down at the end. Aim the camera at the board from "
-        f"{n_samples} angles, varying tilt and roll by at least "
-        f"{_MIN_ROT_STEP_DEG:g} deg between them — poses that differ only by a "
-        "translation leave the lever arm being measured unobservable."
+        f"\nTwo confirmations per pose, {n_samples} poses.\n"
+        "  1. Torque is off: walk the arm until the tag is in view, tilted at "
+        f"least\n     {_MIN_TILT_DEG:g} deg off flat-on, then confirm. The arm "
+        "energises and holds.\n"
+        "  2. Let go of the arm, then confirm again. The sample is taken with "
+        "the\n     servos holding it, not your hand.\n"
+        f"Vary tilt and roll by {_MIN_ROT_STEP_DEG:g} deg or more between "
+        "poses: poses that differ\nonly by a translation leave the lever arm "
+        "being measured unobservable."
         + (
-            f"\nThe window shows the full {frame_w}x{frame_h} frame, opened at "
-            f"{window_wh[0]}x{window_wh[1]} -- drag it larger to inspect "
-            "focus.\n"
-            "ENTER measures and q finishes early, from either the window or "
-            "this shell."
+            f"\n\nThe window shows the full {frame_w}x{frame_h} frame, opened "
+            f"at {window_wh[0]}x{window_wh[1]} -- drag it\nlarger to inspect "
+            "focus. ENTER confirms and q finishes early, from\neither the "
+            "window or this shell."
             if preview
-            else "\nNo display, so no preview window."
+            else "\n\nNo display, so no preview window."
         )
     )
 
@@ -345,52 +485,64 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
     try:
         while len(samples) < n_samples:
             # A blocking prompt has to be answered before the frame is grabbed,
-            # or the measurement would predate the pose being set up. The
-            # preview is already grabbing continuously, so there the keypress
-            # marks a frame that is live and the order is the other way round.
+            # or the status would describe a pose the user has already left.
+            # The preview is already grabbing continuously, so there the
+            # keypress marks a live frame and the order is the other way round.
             if not preview:
-                answer = input(
-                    f"Sample {len(samples) + 1}/{n_samples}: "
-                    "Enter to measure, q to finish: "
+                prompt = (
+                    "  let go of the arm, then Enter to measure (q to finish): "
+                    if holding
+                    else (
+                        f"Pose {len(samples) + 1}/{n_samples}: position the arm,"
+                        " then Enter to hold it (q to finish): "
+                    )
                 )
-                if answer.strip().lower() == "q":
+                if input(prompt).strip().lower() == "q":
                     break
 
-            frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name]["value"]
-            pose = arm.read_pose()
-            full = _opencv_bgr(frame, color_mode)
-            corners = _detect(
-                cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), board, gate_wh
-            )
-            solved = (
-                _board_in_camera(corners, obj_pts, intr)
-                if corners is not None
-                else None
-            )
-            rot_step = (
-                _rot_between_deg(samples[-1]["pose"], pose) if samples else None
-            )
-
-            now = time.monotonic()
-            take = not preview
+            confirmed = not preview
             if preview:
+                frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name][
+                    "value"
+                ]
+                full = _opencv_bgr(frame, color_mode)
+                corners = _detect(
+                    cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), detector, tag_id, gate_wh
+                )
+                solved = (
+                    _tag_in_camera(corners, obj_pts, intr)
+                    if corners is not None
+                    else None
+                )
+                pose = arm.read_pose()
+                rot_step = (
+                    _rot_between_deg(samples[-1]["pose"], pose) if samples else None
+                )
+                now = time.monotonic()
+
                 # Copied, not drawn on in place: for a BGR camera _opencv_bgr
                 # hands back the bus's own frame buffer, and the overlay must
                 # not end up in whatever the bus serves next.
                 view = full.copy()
-                _draw_board(view, corners, solved, obj_pts, intr, overlay_k)
+                _draw_tag(view, corners, solved, obj_pts, intr, overlay_k)
                 if solved is None:
-                    detection = ("board not found", (0, 0, 255))
+                    detection = (f"tag {tag_id} not found", (0, 0, 255))
+                elif solved[3] < _MIN_AMBIGUITY_RATIO:
+                    detection = (
+                        f"too flat-on: ambiguity {solved[3]:.1f} of "
+                        f"{_MIN_AMBIGUITY_RATIO:g} -- tilt it more",
+                        (0, 165, 255),
+                    )
                 else:
                     detection = (
-                        f"board {np.linalg.norm(solved[1]):.2f} m, "
-                        f"{solved[2]:.2f} px reprojection",
+                        f"tag {np.linalg.norm(solved[1]):.2f} m, "
+                        f"{solved[2]:.2f} px, ambiguity {solved[3]:.0f}",
                         (0, 255, 0),
                     )
                 if now - flash_mono < 0.6:
                     turn = ("SAMPLE TAKEN", (0, 255, 255))
                 elif rot_step is None:
-                    turn = ("first sample, any angle", (200, 200, 200))
+                    turn = ("first pose, any angle", (200, 200, 200))
                 elif rot_step < _MIN_ROT_STEP_DEG:
                     turn = (
                         f"only {rot_step:.0f} deg from the last, "
@@ -402,10 +554,14 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
                 _draw_status(
                     view,
                     [
-                        (f"sample {len(samples)} / {n_samples}", (255, 255, 255)),
+                        (f"pose {len(samples)} / {n_samples}", (255, 255, 255)),
                         detection,
                         turn,
-                        ("ENTER measure   q finish", (200, 200, 200)),
+                        (
+                            ("HOLDING - let go, then ENTER to measure", (0, 255, 255))
+                            if holding
+                            else ("ENTER to hold this pose   q finish", (200, 200, 200))
+                        ),
                         # Hershey fonts are ASCII only, so no typographic dots.
                         (res_label, (200, 200, 200)),
                     ],
@@ -420,36 +576,44 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
                 line = _shell_line()
                 if key == ord("q") or (line is not None and line.lower() == "q"):
                     break
-                take = key in _CONFIRM_KEYS or line is not None
+                confirmed = key in _CONFIRM_KEYS or line is not None
 
-            if not take:
+            if not confirmed:
                 continue
-            if solved is None:
-                print("  no board in this frame; nothing recorded.")
-                continue
-            if rot_step is not None and rot_step < _MIN_ROT_STEP_DEG:
-                print(
-                    f"  only {rot_step:.0f} deg from the previous pose; "
-                    f"{_MIN_ROT_STEP_DEG:g} or more conditions the solve better."
-                )
 
-            rvec, tvec, rms_px = solved
-            tx_world2cam = np.eye(4)
-            tx_world2cam[:3, :3] = cv2.Rodrigues(rvec)[0]
-            tx_world2cam[:3, 3] = np.asarray(tvec).squeeze()
-            samples.append(
-                {
-                    # OpenCV's base2gripper: the base in TCP coordinates.
-                    "tx_base2tcp": np.linalg.inv(_pose_to_mat(pose)),
-                    "tx_world2cam": tx_world2cam,
-                    "pose": pose,
-                }
+            if not holding:
+                # Latch before energising, and energise while the hand is still
+                # on the arm: both halves of not being surprised by this.
+                arm.hold_measured_pose()
+                arm.enable_torque()
+                holding = True
+                print("  holding. Let go of the arm, then confirm to measure.")
+                continue
+
+            time.sleep(_SETTLE_S)
+            sample, reason = _measure(
+                arm,
+                camera,
+                sensor_name,
+                detector,
+                tag_id,
+                obj_pts,
+                intr,
+                color_mode,
+                gate_wh,
             )
-            flash_mono = now
+            arm.disable_torque()
+            holding = False
+            if sample is None:
+                print(f"  nothing recorded: {reason}.")
+                continue
+
+            samples.append(sample)
+            flash_mono = time.monotonic()
             print(
-                f"  sample {len(samples)}/{n_samples}: board at "
-                f"{np.linalg.norm(tvec):.3f} m, reprojection {rms_px:.2f} px, "
-                f"TCP z {pose[2]:+.4f} m"
+                f"  sample {len(samples)}/{n_samples}: tag at "
+                f"{sample['tag_m']:.3f} m, reprojection {sample['rms_px']:.2f} px, "
+                f"ambiguity {sample['ratio']:.0f}, TCP z {sample['pose'][2]:+.4f} m"
             )
     except KeyboardInterrupt:
         print("\nInterrupted.")
@@ -459,9 +623,10 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
                 cv2.destroyWindow(_CAM_WINDOW)
             except cv2.error:
                 pass
-        # Deliberately no enable_torque: the user is holding the arm and will
-        # put it down herself. Energising here would either fight her grip or
-        # snap to the pre-freedrive goal position still latched in the servos.
+        # end_calibration_mode does not touch torque, so leaving mid-hold would
+        # hand back an energised arm. The user is holding it and will put it
+        # down herself, so it has to come back limp however this exits.
+        arm.disable_torque()
         arm.end_calibration_mode()
     return samples
 
@@ -525,20 +690,151 @@ def _derive(tx_tcp2camera: np.ndarray, ik_tcp) -> dict:
     }
 
 
-def _report(derived, trans_mm, rot_deg, arm_name, ik_tcp, frame_wh) -> None:
-    res = f"{frame_wh[0]}x{frame_wh[1]}"
-    print(f"\n=== fit over {trans_mm.size} poses ===")
-    print(
-        f"  residual {np.sqrt(np.mean(trans_mm**2)):.1f} mm rms "
-        f"({trans_mm.max():.1f} mm worst), "
-        f"{np.sqrt(np.mean(rot_deg**2)):.2f} deg rms"
+def _grade(trans_mm, rot_deg) -> dict:
+    """Whether the fit resolved anything, and the numbers behind that call.
+
+    The limits come from what the answer is for. The offset being measured is
+    a few tens of mm, and the solve averages the poses, so a residual at
+    ``_MAX_RESIDUAL_MM`` over ``_MIN_SAMPLES`` poses still lands the offset
+    inside a few mm -- tight enough to act on. Looser than that and the
+    correction is smaller than its own error bar.
+    """
+    n = int(trans_mm.size)
+    trans_rms = float(np.sqrt(np.mean(trans_mm**2)))
+    rot_rms = float(np.sqrt(np.mean(rot_deg**2)))
+    checks = (
+        (
+            "translation residual",
+            f"{trans_rms:.1f} mm rms",
+            f"{_MAX_RESIDUAL_MM:.1f} mm",
+            trans_rms <= _MAX_RESIDUAL_MM,
+        ),
+        (
+            "rotation residual",
+            f"{rot_rms:.2f} deg rms",
+            f"{_MAX_ROT_RMS_DEG:.2f} deg",
+            rot_rms <= _MAX_ROT_RMS_DEG,
+        ),
+        ("poses", f"{n}", f"{_MIN_SAMPLES} min", n >= _MIN_SAMPLES),
     )
-    if trans_mm.max() > _OUTLIER_MM:
-        print(
-            f"  The worst pose is {trans_mm.max():.1f} mm out, which is the "
-            "size of the thing being measured. Re-run before acting on any of "
-            "this: one bad detection poisons the translation."
+    median = float(np.median(trans_mm))
+    return {
+        "n": n,
+        "trans_rms": trans_rms,
+        "trans_max": float(trans_mm.max()),
+        "rot_rms": rot_rms,
+        # What the poses disagree by, divided down by how many agreed: the
+        # error bar on the offsets printed below.
+        "stderr_mm": trans_rms / np.sqrt(max(n, 1)),
+        "rot_floor_deg": 3.0 * rot_rms / np.sqrt(max(n, 1)),
+        "checks": checks,
+        "passed": all(ok for *_, ok in checks),
+        "outliers": [
+            i
+            for i, mm in enumerate(trans_mm)
+            if mm > _OUTLIER_FACTOR * median and mm > _MAX_RESIDUAL_MM
+        ],
+    }
+
+
+def _banner(text: str) -> None:
+    rule = "=" * 68
+    print(f"\n{rule}\n{text}\n{rule}")
+
+
+def _para(text: str, indent: str = "  ") -> None:
+    """Wrap a paragraph that carries interpolated numbers.
+
+    The fixed prose below is hand-wrapped, but a paragraph whose width depends
+    on how many digits a residual came out to cannot be, and an unwrapped one
+    is unreadable in the terminal this is read in.
+    """
+    print(
+        textwrap.fill(
+            text, width=76, initial_indent=indent, subsequent_indent=indent
         )
+    )
+
+
+def _print_checks(grade) -> None:
+    for label, value, limit, ok in grade["checks"]:
+        print(f"  {label:<22}{value:<16}{limit:<12}{'ok' if ok else 'FAIL'}")
+
+
+def _diagnose(samples, trans_mm, grade) -> None:
+    """Name which of the two failure shapes this is; they need opposite fixes.
+
+    A couple of poses far outside the rest is a misdetection, and re-running
+    fixes it. Error spread evenly with the rotation residual over its limit is
+    the arm, and re-running the same way reproduces it exactly.
+    """
+    if grade["outliers"]:
+        print(
+            f"\n  Suspect poses, residual over {_OUTLIER_FACTOR:g}x the median:"
+        )
+        for i in grade["outliers"]:
+            print(
+                f"    pose {i + 1}: {trans_mm[i]:.1f} mm, "
+                f"{samples[i]['rms_px']:.2f} px reprojection, "
+                f"tag at {samples[i]['tag_m']:.2f} m"
+            )
+        keep = [s for i, s in enumerate(samples) if i not in grade["outliers"]]
+        if len(keep) >= _MIN_SAMPLES:
+            regrade = _grade(*_fit_error(keep, *_solve(keep)))
+            if regrade["passed"]:
+                _para(
+                    f"Without them the remaining {len(keep)} poses do fit, at "
+                    f"{regrade['trans_rms']:.1f} mm rms. So the rig is fine and "
+                    "these are bad detections: re-run, and watch the axes sit "
+                    "square on the tag before confirming each sample."
+                )
+                return
+            _para(
+                f"Dropping them still leaves {regrade['trans_rms']:.1f} mm rms, "
+                "so they are not the whole story."
+            )
+
+    if grade["rot_rms"] > _MAX_ROT_RMS_DEG:
+        tag_m = float(np.mean([s["tag_m"] for s in samples]))
+        implied = 1000.0 * tag_m * np.sin(np.radians(grade["rot_rms"]))
+        print()
+        _para(
+            "The error is spread across the poses, and the rotation residual "
+            f"is {grade['rot_rms']:.2f} deg. Only the rotation chain feeds "
+            f"that number, and a {_MARKER_MM:.0f} mm tag gives its own "
+            "orientation to a fraction of a degree at this range, so what is "
+            "left is the arm: its forward kinematics does not know the tool "
+            "orientation this well."
+        )
+        print()
+        _para(
+            f"At the tag's {tag_m:.2f} m, {grade['rot_rms']:.2f} deg is "
+            f"{implied:.0f} mm, which is the translation residual above -- one "
+            "cause, whole budget. Re-running the same way will reproduce it; "
+            "what changes it is how the arm is held while sampling."
+        )
+
+
+def _report_fail(samples, trans_mm, grade) -> None:
+    _banner("CALIBRATION FAILED -- DO NOT USE THESE NUMBERS. RUN IT AGAIN.")
+    _print_checks(grade)
+    print(
+        "\n  No offsets are printed, deliberately. A fit this loose cannot "
+        "resolve\n  the tens of mm it exists to measure, so any number here "
+        "would be noise\n  wearing the costume of a measurement."
+    )
+    _diagnose(samples, trans_mm, grade)
+
+
+def _report_pass(derived, grade, arm_name, ik_tcp, frame_wh) -> None:
+    res = f"{frame_wh[0]}x{frame_wh[1]}"
+    _banner("CALIBRATION PASSED")
+    _print_checks(grade)
+    print()
+    _para(
+        f"Offsets below carry about {grade['stderr_mm']:.1f} mm of error, from "
+        f"{grade['trans_rms']:.1f} mm rms over {grade['n']} poses."
+    )
 
     tip, delta = derived["tip_in_camera"], derived["tip_delta"] * 1000.0
     print("\n=== fingertips in camera axes ===")
@@ -551,69 +847,71 @@ def _report(derived, trans_mm, rot_deg, arm_name, ik_tcp, frame_wh) -> None:
     print(
         "\n  This half is hardware. The policy sends translation deltas in tool\n"
         "  axes, and a delta moves the fingertips by the same vector wherever\n"
-        "  ik_tcp puts its origin, so no config value absorbs it. Close the gap\n"
-        "  by moving one of the two, along the camera's own axes (+Z out of the\n"
-        "  lens):\n"
-        f"    camera     [{-delta[0]:+.1f}, {-delta[1]:+.1f}, {-delta[2]:+.1f}] mm\n"
-        f"    fingertips [{delta[0]:+.1f}, {delta[1]:+.1f}, {delta[2]:+.1f}] mm\n"
-        "  Moving the camera is the better of the two: it also makes the fingers\n"
-        "  look the right size in frame, and the policy uses its own fingertips\n"
-        "  as a metric reference (training and eval both mask with\n"
-        "  gripper=True, finger=False, so it can see them)."
+        "  ik_tcp puts its origin, so no config value absorbs it."
     )
 
+    rotate = derived["misalign_deg"] > grade["rot_floor_deg"]
     print(f"\n=== {arm_name} ik_tcp rotation ===")
-    print(
-        f"  the declared TCP axes are {derived['misalign_deg']:.2f} deg off the "
-        "camera's"
+    _para(
+        f"the declared TCP axes are {derived['misalign_deg']:.2f} deg off the "
+        f"camera's, against a {grade['rot_floor_deg']:.2f} deg floor for this "
+        "fit"
     )
-    if derived["misalign_deg"] < _ROT_NOISE_DEG:
+    if not rotate:
         print(
-            f"  Under the {_ROT_NOISE_DEG:g} deg this procedure resolves on {res} "
-            "frames. Leave ik_tcp as it is."
+            "  That is inside what this run can resolve, so it is not a "
+            "measurement of\n  anything. Leave ik_tcp alone."
         )
-    else:
+
+    print("\n=== what to do with this ===")
+    step = 1
+    print(
+        f"  {step}. Move the camera "
+        f"[{-delta[0]:+.1f}, {-delta[1]:+.1f}, {-delta[2]:+.1f}] mm along its own\n"
+        "     axes (+Z out of the lens). Moving the camera beats moving the\n"
+        "     fingertips: it also makes the fingers look the right size in\n"
+        "     frame, and the policy uses its own fingertips as a metric\n"
+        "     reference (training and eval both mask with gripper=True,\n"
+        "     finger=False, so it can see them)."
+    )
+    if rotate:
+        step += 1
         quat = derived["quat"]
-        print(
-            "  A policy translation is a delta in these axes, so this angle "
-            "skews\n  every command it issues. Set the arm's ik_tcp to:\n"
-        )
         pos = ", ".join(f"{float(v):.6f}" for v in ik_tcp.pos)
-        print(f"    pos=({pos}),")
         print(
-            f"    quat=({quat[0]:.6f}, {quat[1]:.6f}, {quat[2]:.6f}, {quat[3]:.6f}),\n"
+            f"  {step}. Set {arm_name}'s ik_tcp to the orientation below. A policy\n"
+            "     translation is a delta in these axes, so this angle skews every\n"
+            "     command it issues. pos is unchanged; only orientation was\n"
+            "     measured here.\n\n"
+            f"       pos=({pos}),\n"
+            f"       quat=({quat[0]:.6f}, {quat[1]:.6f}, {quat[2]:.6f}, {quat[3]:.6f}),"
         )
-        print(
-            "  pos is unchanged — only the orientation was measured here. "
-            "Re-running\n  after the edit should report an angle under the "
-            "noise floor."
-        )
+    step += 1
+    print(
+        f"  {step}. Re-run this command. The edit landed if the difference above\n"
+        f"     drops under about {max(grade['stderr_mm'] * 3.0, 5.0):.0f} mm and the "
+        "rotation under its floor. If it\n"
+        "     does not move, the change did not reach the running config."
+    )
 
     cam = derived["camera_in_flange"]
     print(
-        f"\n  Cross-check: the camera solved to [{cam[0]:+.4f}, {cam[1]:+.4f}, "
-        f"{cam[2]:+.4f}] m in the flange\n  frame. Compare it against the "
-        "gripper CAD's camera mount; a large\n  disagreement means the board, "
-        "the square size or a pose is wrong, not\n  that the mount is."
+        f"\n  Cross-check before cutting anything: the camera solved to\n"
+        f"  [{cam[0]:+.4f}, {cam[1]:+.4f}, {cam[2]:+.4f}] m in the flange frame. "
+        "Compare that against the\n  gripper CAD's camera mount. A disagreement "
+        "much larger than the error\n  above means the tag, its printed size or "
+        "a pose is wrong, not the mount."
     )
 
 
 @CommandRegistry.register("calibrate-hand-eye", "robot")
 class CalibrateHandEyeCommand(BaseCommand):
     help = "Measure camera-to-fingertip (robot-world hand-eye) against what a UMI policy assumes."
-    params = ("arm", "board", "square", "samples")
+    params = ("arm", "tag", "marker", "samples")
 
     def handle(self, cfg) -> None:
-        square_mm = OmegaConf.select(cfg, "square")
-        if square_mm is None:
-            print(
-                "square=<mm> is required: the side of one printed checkerboard "
-                "square, off a ruler. It is the only thing that sets the scale "
-                "of the answer, so a 4% printing error is a 4% error in the "
-                "measured offset."
-            )
-            return
-        board = parse_board(str(OmegaConf.select(cfg, "board") or "9x6"))
+        tag_id = int(OmegaConf.select(cfg, "tag") or _TAG_ID)
+        marker_mm = float(OmegaConf.select(cfg, "marker") or _MARKER_MM)
         n_samples = max(int(OmegaConf.select(cfg, "samples") or _SAMPLES), _MIN_SAMPLES)
 
         arm_name, template = select_ik_module(OmegaConf.select(cfg, "arm"))
@@ -633,7 +931,7 @@ class CalibrateHandEyeCommand(BaseCommand):
             name for name, s in camera.sensors.items() if isinstance(s, Camera)
         )
         sensor_cfg = camera.sensors[sensor_name].cfg
-        obj_pts = _board_points(board, float(square_mm) / 1000.0)
+        obj_pts = _marker_points(marker_mm / 1000.0)
         # Resolved before any hardware opens: a missing remap should fail now,
         # not after the board is taped down and the arm is in the user's hands.
         conf_dir = Path(
@@ -653,12 +951,19 @@ class CalibrateHandEyeCommand(BaseCommand):
 
         with module_running(
             camera,
-            f"Tape the {board[0]}x{board[1]} checkerboard flat where the arm "
-            "can see it from several angles, and do not move it again: it is "
-            "the fixed world frame of the solve.\n"
-            "Connecting the arm energises it briefly and it holds whatever "
-            "position was last commanded, so keep the volume clear and a hand "
-            "on the power. It goes limp for the rest of the session.",
+            f"Tape UMI's table marker tag {tag_id} flat where the arm can "
+            "see it from\nseveral angles, and do not move it again: it is the "
+            "fixed world frame of\nthe solve.\n"
+            "  umi-gripper.github.io/share/table_marker.pdf\n"
+            "Print it at 100 percent, never fit-to-page: the sheet is 220 mm "
+            "wide so it\noverflows A4, but the outer margin is blank and clips "
+            "harmlessly. Then\nmeasure the black square edge to edge -- it has "
+            f"to be {marker_mm:.0f} mm, or pass\nmarker=<mm> with what it "
+            "actually came out as. That number alone sets the\nscale of the "
+            "answer, so a 4 percent printing error is a 4 percent error in "
+            "the\nmeasured offset.\n"
+            "Connecting the arm energises it, so keep the volume clear and a "
+            "hand on\nthe power. It goes limp as soon as the run starts.",
         ):
             # Intrinsics come from the frame that actually arrived, never from
             # what the config predicted: intrinsics describing a different
@@ -679,7 +984,8 @@ class CalibrateHandEyeCommand(BaseCommand):
                     arm,
                     camera,
                     sensor_name,
-                    board,
+                    _aruco_detector(),
+                    tag_id,
                     obj_pts,
                     intr,
                     str(sensor_cfg.color_mode),
@@ -696,14 +1002,61 @@ class CalibrateHandEyeCommand(BaseCommand):
 
         tx_base2world, tx_tcp2camera = _solve(samples)
         trans_mm, rot_deg = _fit_error(samples, tx_base2world, tx_tcp2camera)
+        grade = _grade(trans_mm, rot_deg)
         derived = _derive(tx_tcp2camera, template.ik_tcp)
-        _report(derived, trans_mm, rot_deg, arm_name, template.ik_tcp, frame_wh)
+
+        if not grade["passed"]:
+            _report_fail(samples, trans_mm, grade)
+            # The per-pose record, so a failed run stays diagnosable without
+            # having to be reproduced. Under a name nothing loads, because the
+            # numbers in it are the ones just refused.
+            fail_path = (
+                conf_dir / "calibrations" / f"{camera.name}_hand_eye_FAILED.json"
+            )
+            fail_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(fail_path, "w") as fp:
+                json.dump(
+                    {
+                        "passed": False,
+                        "arm": arm_name,
+                        "tag": {"id": tag_id, "marker_mm": marker_mm},
+                        "frame_size": list(frame_wh),
+                        "fit": {
+                            "trans_rms_mm": grade["trans_rms"],
+                            "trans_max_mm": grade["trans_max"],
+                            "rot_rms_deg": grade["rot_rms"],
+                            "limits": {
+                                "trans_rms_mm": _MAX_RESIDUAL_MM,
+                                "rot_rms_deg": _MAX_ROT_RMS_DEG,
+                            },
+                        },
+                        "poses": [
+                            {
+                                "pose": [float(v) for v in s["pose"]],
+                                "tx_world2cam": s["tx_world2cam"].tolist(),
+                                "residual_mm": float(trans_mm[i]),
+                                "residual_deg": float(rot_deg[i]),
+                                "rms_px": s["rms_px"],
+                                "ambiguity": s["ratio"],
+                                "tag_m": s["tag_m"],
+                            }
+                            for i, s in enumerate(samples)
+                        ],
+                    },
+                    fp,
+                    indent=2,
+                )
+            print(f"\nWrote the per-pose record to {fail_path}")
+            return
+
+        _report_pass(derived, grade, arm_name, template.ik_tcp, frame_wh)
 
         out_path = conf_dir / "calibrations" / f"{camera.name}_hand_eye.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w") as fp:
             json.dump(
                 {
+                    "passed": True,
                     # UMI's key and convention (OpenCV's R_g2c / t_g2c) with the
                     # gripper frame being the flange, which is what its own
                     # recorder zeroes the TCP to. This file therefore drops
@@ -720,17 +1073,14 @@ class CalibrateHandEyeCommand(BaseCommand):
                         "quat": [float(v) for v in template.ik_tcp.quat],
                     },
                     "arm": arm_name,
-                    "board": {
-                        "cols": board[0],
-                        "rows": board[1],
-                        "square_mm": float(square_mm),
-                    },
+                    "tag": {"id": tag_id, "marker_mm": marker_mm},
                     "frame_size": list(frame_wh),
                     "n_samples": len(samples),
                     "fit": {
-                        "trans_rms_mm": float(np.sqrt(np.mean(trans_mm**2))),
-                        "trans_max_mm": float(trans_mm.max()),
-                        "rot_rms_deg": float(np.sqrt(np.mean(rot_deg**2))),
+                        "trans_rms_mm": grade["trans_rms"],
+                        "trans_max_mm": grade["trans_max"],
+                        "rot_rms_deg": grade["rot_rms"],
+                        "stderr_mm": grade["stderr_mm"],
                     },
                     "umi_tip_in_camera": UMI_TIP_IN_CAMERA.tolist(),
                     "tip_in_camera": derived["tip_in_camera"].tolist(),
