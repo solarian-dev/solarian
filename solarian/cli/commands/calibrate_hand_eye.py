@@ -80,9 +80,16 @@ _SAMPLES = 12
 # is dominated by corner noise instead of by the geometry being solved for.
 _MIN_SAMPLES = 8
 _CAM_WINDOW = "calibrate-hand-eye"
-# Width the preview window and the cheap detection gate run at. Measurement
-# runs on the full frame regardless; see _detect.
-_PREVIEW_W = 640
+# Width the cheap detection gate runs at; see _detect. Nothing to do with what
+# the window shows, which is the full frame.
+_GATE_W = 640
+# Width the window opens at. The image in it is full resolution -- this only
+# stops a 1920-wide frame opening fullscreen on a Pi screen, and the window is
+# WINDOW_NORMAL so it can be dragged larger to inspect detail.
+_WINDOW_W = 960
+# Overlay geometry is authored against a 640-wide view and scaled from there,
+# so text and axes stay the same apparent size whatever the frame is.
+_OVERLAY_REF_W = 640
 # Torque stays off for the whole session, so the arm has to be held the whole
 # time and a keypress per sample would mean letting go of it. Samples trigger
 # on the arm sitting inside this much jitter for this long instead.
@@ -180,22 +187,28 @@ def _rot_between_deg(pose_a, pose_b) -> float:
     return float(np.degrees(np.linalg.norm((rot_a.inv() * rot_b).as_rotvec())))
 
 
-def _draw_board(view, board, corners, solved, obj_pts, intr, scale: float) -> None:
-    """Draw the corner grid, then the solved board frame on top of it.
+def _draw_board(view, corners, solved, obj_pts, intr, k: float) -> None:
+    """Draw the corner path, then the solved board frame on top of it.
 
-    Corners and axes are measured on the full frame and drawn on the smaller
-    preview, so both are scaled by *scale* on the way in.
+    Everything is already in full-frame pixels; *k* only fattens the strokes so
+    they stay visible at whatever resolution the frame is. That is also why the
+    corner path is drawn here rather than by ``cv2.drawChessboardCorners``,
+    whose marker size is hardcoded and vanishes on a 1920-wide frame.
 
-    The axes are the check that matters. Corners only say the detector found
-    something grid-shaped; red X and green Y lying along the rows and columns,
-    with blue Z square to them, say the pose behind them is right -- and that
-    pose is what every number below is built on.
+    The axes are the check that matters. The path only says the detector found
+    something grid-shaped and walked it in order; red X and green Y lying along
+    the rows and columns, with blue Z square to them, say the pose behind them
+    is right -- and that pose is what every number below is built on.
     """
     import cv2
 
     if corners is None:
         return
-    cv2.drawChessboardCorners(view, board, corners * scale, True)
+    path = corners.reshape(-1, 2).astype(np.int32)
+    cv2.polylines(view, [path], False, (0, 0, 0), round(4 * k))
+    cv2.polylines(view, [path], False, (0, 255, 255), max(1, round(1.5 * k)))
+    for point in path:
+        cv2.circle(view, tuple(point), round(3 * k), (0, 0, 255), -1)
     if solved is None:
         return
     rvec, tvec, _rms = solved
@@ -211,14 +224,14 @@ def _draw_board(view, board, corners, solved, obj_pts, intr, scale: float) -> No
         intr["K"],
         intr["D"],
     )
-    pts = (pts.reshape(-1, 2) * scale).astype(int)
+    pts = pts.reshape(-1, 2).astype(int)
     for tip, color in zip(pts[1:], [(0, 0, 255), (0, 255, 0), (255, 0, 0)]):
-        cv2.line(view, tuple(pts[0]), tuple(tip), (0, 0, 0), 5)
-        cv2.line(view, tuple(pts[0]), tuple(tip), color, 3)
-    cv2.circle(view, tuple(pts[0]), 5, (255, 255, 255), -1)
+        cv2.line(view, tuple(pts[0]), tuple(tip), (0, 0, 0), round(5 * k))
+        cv2.line(view, tuple(pts[0]), tuple(tip), color, round(3 * k))
+    cv2.circle(view, tuple(pts[0]), round(5 * k), (255, 255, 255), -1)
 
 
-def _detect(gray, board, preview_wh):
+def _detect(gray, board, gate_wh):
     """Board corners at full resolution, gated by a cheap look at a small copy.
 
     ``findChessboardCorners`` is fast when it finds a board and slow when it
@@ -229,22 +242,30 @@ def _detect(gray, board, preview_wh):
     """
     import cv2
 
-    small = cv2.resize(gray, preview_wh, interpolation=cv2.INTER_AREA)
+    small = cv2.resize(gray, gate_wh, interpolation=cv2.INTER_AREA)
     if find_chessboard(small, board) is None:
         return None
     return find_chessboard(gray, board)
 
 
-def _draw_status(view, lines) -> None:
-    """Stack ``(text, colour)`` lines top-left, each over a dark outline."""
+def _draw_status(view, lines, k: float) -> None:
+    """Stack ``(text, colour)`` lines top-left, each over a dark outline.
+
+    *k* scales the type with the frame, so the same overlay reads the same on a
+    640-wide view and on a 1920-wide one.
+    """
     import cv2
 
     for row, (text, color) in enumerate(lines):
-        origin = (10, 24 + row * 22)
+        origin = (round(10 * k), round((24 + row * 22) * k))
         cv2.putText(
-            view, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3
+            view, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.55 * k, (0, 0, 0),
+            round(3 * k),
         )
-        cv2.putText(view, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1)
+        cv2.putText(
+            view, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.55 * k, color,
+            max(1, round(k)),
+        )
 
 
 def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_samples):
@@ -255,14 +276,18 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
     end. That leaves no hand free to press anything, so a sample is taken when
     the arm settles rather than on a keypress, and the preview window shows what
     the detector and PnP are making of the board while it is being aimed.
+
+    The window shows the full frame; only the cheap detection gate works on a
+    downscaled copy, and that is for latency, not for display.
     """
     import cv2
 
-    # Off the intrinsics rather than off a frame, so the preview can never end
+    # Off the intrinsics rather than off a frame, so the overlay can never end
     # up scaled against a different resolution than the one being measured.
     frame_w, frame_h = int(intr["DIM"][0]), int(intr["DIM"][1])
-    preview_scale = min(1.0, _PREVIEW_W / frame_w)
-    preview_wh = (round(frame_w * preview_scale), round(frame_h * preview_scale))
+    gate_scale = min(1.0, _GATE_W / frame_w)
+    gate_wh = (round(frame_w * gate_scale), round(frame_h * gate_scale))
+    overlay_k = frame_w / _OVERLAY_REF_W
 
     print(
         f"\nAim the camera at the board and hold still: a sample is taken once "
@@ -274,17 +299,22 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
     arm.start_calibration_mode()
 
     preview = True
+    window_wh = (
+        round(frame_w * min(1.0, _WINDOW_W / frame_w)),
+        round(frame_h * min(1.0, _WINDOW_W / frame_w)),
+    )
     try:
         cv2.namedWindow(_CAM_WINDOW, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(_CAM_WINDOW, *window_wh)
     except cv2.error:
         preview = False
     print(
         "Torque is OFF and stays off. Keep hold of the arm: it is yours to put "
         "down at the end, nothing will energise or drive it home."
         + (
-            f"\nThe window is downscaled to {preview_wh[0]}x{preview_wh[1]} to "
-            f"stay responsive; corners and axes in it were measured on the "
-            f"full {frame_w}x{frame_h} frame.\n"
+            f"\nThe window shows the full {frame_w}x{frame_h} frame, opened at "
+            f"{window_wh[0]}x{window_wh[1]} -- drag it larger to inspect "
+            "focus.\n"
             "SPACE takes a sample regardless of the gates, q finishes early."
             if preview
             else "\nNo display, so no preview window: samples are taken on "
@@ -292,9 +322,7 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
         )
     )
 
-    res_label = (
-        f"measuring {frame_w}x{frame_h}, showing {preview_wh[0]}x{preview_wh[1]}"
-    )
+    res_label = f"frame {frame_w}x{frame_h}, fx {intr['K'][0, 0]:.0f} px"
     samples: list[dict] = []
     anchor = arm.read_pose()
     anchor_mono = time.monotonic()
@@ -306,7 +334,7 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
             pose = arm.read_pose()
             full = _opencv_bgr(frame, color_mode)
             corners = _detect(
-                cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), board, preview_wh
+                cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), board, gate_wh
             )
             solved = (
                 _board_in_camera(corners, obj_pts, intr)
@@ -327,10 +355,11 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
 
             key = -1
             if preview:
-                view = cv2.resize(full, preview_wh, interpolation=cv2.INTER_AREA)
-                _draw_board(
-                    view, board, corners, solved, obj_pts, intr, preview_scale
-                )
+                # Copied, not drawn on in place: for a BGR camera _opencv_bgr
+                # hands back the bus's own frame buffer, and the overlay must
+                # not end up in whatever the bus serves next.
+                view = full.copy()
+                _draw_board(view, corners, solved, obj_pts, intr, overlay_k)
                 if solved is None:
                     detection = ("board not found", (0, 0, 255))
                 else:
@@ -365,6 +394,7 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
                         # Hershey fonts are ASCII only, so no typographic dots.
                         (res_label, (200, 200, 200)),
                     ],
+                    overlay_k,
                 )
                 try:
                     cv2.imshow(_CAM_WINDOW, view)
