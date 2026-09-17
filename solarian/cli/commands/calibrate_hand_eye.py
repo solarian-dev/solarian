@@ -15,12 +15,12 @@ with recording and solving in one command, because a Solarian module owns its
 hardware for the lifetime of a process.
 
 Torque is released once and left off for good, so the arm walks from pose to
-pose in one continuous motion and stays in the user's hands at the end. That
-leaves no hand free for a keypress, so samples are taken when the arm settles.
-A preview window draws the detected corners and the board axes solved from
-them, which is the check worth watching: corners only prove the detector found
-a grid, while axes standing square on the board prove the pose behind them —
-the input every number below rests on — is right.
+pose in one continuous motion and stays in the user's hands at the end. One
+confirmation starts the run and one Enter takes each sample; nothing else is
+asked. A preview window draws the detected corners and the board axes solved
+from them, which is the check worth watching: corners only prove the detector
+found a grid, while axes standing square on the board prove the pose behind
+them — the input every number below rests on — is right.
 
 The camera's ``resize_*`` is dropped for the run so the board is measured on
 the remap's full 1920x1080 rather than the 640x360 the policy consumes. Corner
@@ -90,14 +90,12 @@ _WINDOW_W = 960
 # Overlay geometry is authored against a 640-wide view and scaled from there,
 # so text and axes stay the same apparent size whatever the frame is.
 _OVERLAY_REF_W = 640
-# Torque stays off for the whole session, so the arm has to be held the whole
-# time and a keypress per sample would mean letting go of it. Samples trigger
-# on the arm sitting inside this much jitter for this long instead.
-_STILL_S = 0.6
-_STILL_POS_M = 0.005
-_STILL_ROT_DEG = 2.5
-# Consecutive samples must differ in rotation: a translation-only pair leaves
-# the lever arm unobservable, and the lever arm is the measurement.
+# Enter arrives as CR or LF depending on the HighGUI backend; space is there
+# because it is the reflex key for "now" in a video window.
+_CONFIRM_KEYS = (13, 10, 32)
+# Advisory, not enforced: consecutive poses that differ only by a translation
+# leave the lever arm unobservable, and the lever arm is the measurement. The
+# user is the one looking at the rig, so this warns rather than refuses.
 _MIN_ROT_STEP_DEG = 8.0
 # Corner noise on a downscaled fisheye frame puts a floor under the rotation
 # this can resolve; under it a "correction" would just be that noise.
@@ -268,14 +266,35 @@ def _draw_status(view, lines, k: float) -> None:
         )
 
 
+def _shell_line() -> str | None:
+    """The line waiting on stdin, stripped, or None when none is waiting.
+
+    The preview window is the obvious place to press Enter, but the shell is
+    where the instruction was read, so both are accepted. This has to poll
+    rather than block: an input() call would freeze the window on a stale
+    frame, which is the one thing the preview must not do.
+    """
+    import select
+    import sys
+
+    try:
+        if not select.select([sys.stdin], [], [], 0)[0]:
+            return None
+        raw = sys.stdin.readline()
+    except (OSError, ValueError):  # not a selectable stream
+        return None
+    # A closed stdin selects as ready forever, and an empty read is the only
+    # thing that distinguishes it from a bare Enter.
+    return raw.strip() if raw else None
+
+
 def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_samples):
     """Pair hand-placed arm poses with board detections, torque off throughout.
 
     Torque comes off once and never goes back on, so the arm can be walked from
     pose to pose in one continuous motion and is left in the user's hands at the
-    end. That leaves no hand free to press anything, so a sample is taken when
-    the arm settles rather than on a keypress, and the preview window shows what
-    the detector and PnP are making of the board while it is being aimed.
+    end. Every sample is taken on one confirmation and nothing else: Enter in
+    the preview window, or Enter in the shell when there is no display.
 
     The window shows the full frame; only the cheap detection gate works on a
     downscaled copy, and that is for latency, not for display.
@@ -289,13 +308,8 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
     gate_wh = (round(frame_w * gate_scale), round(frame_h * gate_scale))
     overlay_k = frame_w / _OVERLAY_REF_W
 
-    print(
-        f"\nAim the camera at the board and hold still: a sample is taken once "
-        f"the arm settles and the axes lock onto the board. Rotate at least "
-        f"{_MIN_ROT_STEP_DEG:g} deg between samples — tilt and roll, not just "
-        "distance, or the solve cannot see the lever arm it is measuring."
-    )
-    input("Take hold of the arm, then press Enter to release torque...")
+    # initialize() energised the arm on the way in, so this is what makes it
+    # movable again -- it is not redundant with whatever state it was left in.
     arm.start_calibration_mode()
 
     preview = True
@@ -309,27 +323,39 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
     except cv2.error:
         preview = False
     print(
-        "Torque is OFF and stays off. Keep hold of the arm: it is yours to put "
-        "down at the end, nothing will energise or drive it home."
+        f"\nTorque is OFF and stays off: move the arm freely, and it is yours "
+        f"to put down at the end. Aim the camera at the board from "
+        f"{n_samples} angles, varying tilt and roll by at least "
+        f"{_MIN_ROT_STEP_DEG:g} deg between them — poses that differ only by a "
+        "translation leave the lever arm being measured unobservable."
         + (
             f"\nThe window shows the full {frame_w}x{frame_h} frame, opened at "
             f"{window_wh[0]}x{window_wh[1]} -- drag it larger to inspect "
             "focus.\n"
-            "SPACE takes a sample regardless of the gates, q finishes early."
+            "ENTER measures and q finishes early, from either the window or "
+            "this shell."
             if preview
-            else "\nNo display, so no preview window: samples are taken on "
-            "stillness alone. Ctrl+C to stop."
+            else "\nNo display, so no preview window."
         )
     )
 
     res_label = f"frame {frame_w}x{frame_h}, fx {intr['K'][0, 0]:.0f} px"
     samples: list[dict] = []
-    anchor = arm.read_pose()
-    anchor_mono = time.monotonic()
     flash_mono = 0.0
-    report_mono = 0.0
     try:
         while len(samples) < n_samples:
+            # A blocking prompt has to be answered before the frame is grabbed,
+            # or the measurement would predate the pose being set up. The
+            # preview is already grabbing continuously, so there the keypress
+            # marks a frame that is live and the order is the other way round.
+            if not preview:
+                answer = input(
+                    f"Sample {len(samples) + 1}/{n_samples}: "
+                    "Enter to measure, q to finish: "
+                )
+                if answer.strip().lower() == "q":
+                    break
+
             frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name]["value"]
             pose = arm.read_pose()
             full = _opencv_bgr(frame, color_mode)
@@ -341,19 +367,12 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
                 if corners is not None
                 else None
             )
-
-            now = time.monotonic()
-            if (
-                np.linalg.norm(pose[:3] - anchor[:3]) > _STILL_POS_M
-                or _rot_between_deg(anchor, pose) > _STILL_ROT_DEG
-            ):
-                anchor, anchor_mono = pose, now
-            still_for = now - anchor_mono
             rot_step = (
-                _rot_between_deg(samples[-1]["pose"], pose) if samples else np.inf
+                _rot_between_deg(samples[-1]["pose"], pose) if samples else None
             )
 
-            key = -1
+            now = time.monotonic()
+            take = not preview
             if preview:
                 # Copied, not drawn on in place: for a BGR camera _opencv_bgr
                 # hands back the bus's own frame buffer, and the overlay must
@@ -369,56 +388,50 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
                         (0, 255, 0),
                     )
                 if now - flash_mono < 0.6:
-                    gate = ("SAMPLE TAKEN", (0, 255, 255))
-                elif solved is None:
-                    gate = ("waiting for the board", (0, 165, 255))
+                    turn = ("SAMPLE TAKEN", (0, 255, 255))
+                elif rot_step is None:
+                    turn = ("first sample, any angle", (200, 200, 200))
                 elif rot_step < _MIN_ROT_STEP_DEG:
-                    gate = (
-                        f"rotate more: {rot_step:.0f} of "
-                        f"{_MIN_ROT_STEP_DEG:g} deg",
+                    turn = (
+                        f"only {rot_step:.0f} deg from the last, "
+                        f"{_MIN_ROT_STEP_DEG:g} wanted",
                         (0, 165, 255),
                     )
                 else:
-                    gate = (
-                        f"hold still {min(still_for, _STILL_S):.1f}/"
-                        f"{_STILL_S:g} s",
-                        (0, 255, 255),
-                    )
+                    turn = (f"{rot_step:.0f} deg from the last", (0, 255, 0))
                 _draw_status(
                     view,
                     [
                         (f"sample {len(samples)} / {n_samples}", (255, 255, 255)),
                         detection,
-                        gate,
-                        ("SPACE force   q finish", (200, 200, 200)),
+                        turn,
+                        ("ENTER measure   q finish", (200, 200, 200)),
                         # Hershey fonts are ASCII only, so no typographic dots.
                         (res_label, (200, 200, 200)),
                     ],
                     overlay_k,
                 )
+                key = -1
                 try:
                     cv2.imshow(_CAM_WINDOW, view)
                     key = cv2.waitKey(1) & 0xFF
                 except cv2.error:
                     preview = False
-            elif now - report_mono > 1.0:
-                report_mono = now
-                found = "board found" if solved is not None else "no board"
-                turned = "first" if not samples else f"rotated {rot_step:.0f} deg"
-                print(
-                    f"  {len(samples)}/{n_samples} samples, {found}, "
-                    f"still {still_for:.1f} s, {turned}"
-                )
+                line = _shell_line()
+                if key == ord("q") or (line is not None and line.lower() == "q"):
+                    break
+                take = key in _CONFIRM_KEYS or line is not None
 
-            if key == ord("q"):
-                break
-            # SPACE skips the stillness and rotation gates but never the
-            # detection: there is nothing to record without a board pose.
-            if solved is None or not (
-                key == ord(" ")
-                or (still_for >= _STILL_S and rot_step >= _MIN_ROT_STEP_DEG)
-            ):
+            if not take:
                 continue
+            if solved is None:
+                print("  no board in this frame; nothing recorded.")
+                continue
+            if rot_step is not None and rot_step < _MIN_ROT_STEP_DEG:
+                print(
+                    f"  only {rot_step:.0f} deg from the previous pose; "
+                    f"{_MIN_ROT_STEP_DEG:g} or more conditions the solve better."
+                )
 
             rvec, tvec, rms_px = solved
             tx_world2cam = np.eye(4)
@@ -640,10 +653,12 @@ class CalibrateHandEyeCommand(BaseCommand):
 
         with module_running(
             camera,
-            f"The camera will be opened. Tape the {board[0]}x{board[1]} "
-            "checkerboard flat where the arm can see it from several angles, "
-            "and do not move it again: it is the fixed world frame of the "
-            "solve.",
+            f"Tape the {board[0]}x{board[1]} checkerboard flat where the arm "
+            "can see it from several angles, and do not move it again: it is "
+            "the fixed world frame of the solve.\n"
+            "Connecting the arm energises it briefly and it holds whatever "
+            "position was last commanded, so keep the volume clear and a hand "
+            "on the power. It goes limp for the rest of the session.",
         ):
             # Intrinsics come from the frame that actually arrived, never from
             # what the config predicted: intrinsics describing a different
@@ -657,13 +672,9 @@ class CalibrateHandEyeCommand(BaseCommand):
                 f"(fx {intr['K'][0, 0]:.0f} px)."
             )
 
-            with module_running(
-                arm,
-                "Torque will be released so you can aim the camera by hand at "
-                f"{n_samples} poses, and it stays released: the arm is yours to "
-                "hold throughout and to put down at the end.\n"
-                "Keep the volume clear and keep a hand on the power.",
-            ):
+            # The prompt above already covered both modules; a second one here
+            # would just be a keystroke between the user and the same decision.
+            with module_running(arm, "Connecting the arm...", confirm=False):
                 samples = _collect(
                     arm,
                     camera,

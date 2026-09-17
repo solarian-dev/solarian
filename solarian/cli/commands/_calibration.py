@@ -138,10 +138,16 @@ def pick_module(
 
 
 @contextmanager
-def module_running(module: Module, warning: str):
-    """Connect, initialise, and always release the hardware afterwards."""
+def module_running(module: Module, warning: str, confirm: bool = True):
+    """Connect, initialise, and always release the hardware afterwards.
+
+    Set *confirm* false for the inner module of a nested pair, where the outer
+    module's prompt already stood in for both and a second one just adds a
+    keystroke between the user and the same decision.
+    """
     print(f"\n{warning}")
-    input("Press Enter to start...")
+    if confirm:
+        input("Press Enter to start...")
 
     module.load_calibration()
     module.connect(module.get_calibration() or {})

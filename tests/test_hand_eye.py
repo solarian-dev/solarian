@@ -260,13 +260,21 @@ class _FakeCam:
         return {names[0]: {"value": np.zeros((360, 640, 3), dtype=np.uint8)}}
 
 
-def _run_collect(monkeypatch, poses, stop_after, n_samples=99):
-    """Drive _collect with the board detector stubbed out and no display."""
+def _run_collect(monkeypatch, poses, stop_after, n_samples=99, find=None):
+    """Drive _collect with the board detector stubbed out and no display.
+
+    With no display _collect takes the blocking-prompt path, and ``input`` is
+    patched to return immediately, so one loop iteration is one confirmation.
+    """
     import cv2
 
     import solarian.cli.commands.calibrate_hand_eye as mod
 
-    monkeypatch.setattr(mod, "find_chessboard", lambda *_a: np.zeros((54, 1, 2), np.float32))
+    if find is None:
+        def find(*_a):
+            return np.zeros((54, 1, 2), np.float32)
+
+    monkeypatch.setattr(mod, "find_chessboard", find)
     monkeypatch.setattr(
         mod, "_board_in_camera", lambda *_a: (np.zeros((3, 1)), np.array([0.0, 0.0, 0.3]), 0.2)
     )
@@ -315,6 +323,30 @@ def test_collect_never_energises_the_arm_even_when_interrupted(monkeypatch):
     assert isinstance(samples, list)
 
 
+def test_shell_line_reports_nothing_waiting_on_an_unselectable_stdin(monkeypatch):
+    """No stdin to poll must read as "no keypress", not as a confirmation.
+
+    Under pytest, systemd, or a pipe, sys.stdin may have no usable fileno at
+    all. Treating that as a waiting line would fire a sample every frame.
+    """
+    import io as _io
+
+    import solarian.cli.commands.calibrate_hand_eye as mod
+
+    monkeypatch.setattr("sys.stdin", _io.StringIO("ignored"))
+    assert mod._shell_line() is None
+
+
+def test_collect_records_nothing_without_a_board(monkeypatch):
+    """A confirmation with no board in view is refused, not recorded blank."""
+    poses = [_pose(0.0, 30.0 * i) for i in range(6)]
+    _arm, _cam, samples = _run_collect(
+        monkeypatch, poses, stop_after=6, find=lambda *_a: None
+    )
+
+    assert samples == []
+
+
 def test_detect_measures_on_the_full_frame_not_the_preview(monkeypatch):
     """The cheap gate runs on a small copy; the corners come from the full one.
 
@@ -354,26 +386,32 @@ def test_detect_skips_the_full_frame_when_the_gate_finds_nothing(monkeypatch):
     assert seen == [(360, 640)]
 
 
-def test_collect_takes_one_sample_per_pose_once_the_arm_settles(monkeypatch):
-    """Three still reads per pose is enough to trip the stillness gate."""
-    poses = []
-    for i in range(5):
-        poses.extend([_pose(0.0, 40.0 * i)] * 4)
-    _arm, _cam, samples = _run_collect(monkeypatch, poses, stop_after=len(poses))
+def test_collect_takes_exactly_one_sample_per_confirmation(monkeypatch):
+    """One Enter, one sample, and it stops asking once it has what it needs."""
+    poses = [_pose(0.0, 40.0 * i) for i in range(20)]
+    _arm, cam, samples = _run_collect(
+        monkeypatch, poses, stop_after=99, n_samples=6
+    )
 
-    # Five distinct orientations, each held still, so five samples and no
-    # duplicates: the rotation gate suppresses re-firing on the same pose.
+    assert len(samples) == 6
+    # Six confirmations, six camera reads: no frame is grabbed speculatively
+    # before the prompt it belongs to is answered.
+    assert cam.reads == 6
+
+
+def test_collect_accepts_poses_that_only_translate_with_a_warning(monkeypatch):
+    """The rotation advice is advice: the user's Enter is what decides.
+
+    Blocking the sample would mean pressing Enter and having nothing happen,
+    which is the failure mode this flow exists to avoid. A translation-only
+    sweep conditions the solve badly, so it warns and records.
+    """
+    poses = [_pose(0.02 * i, 0.0) for i in range(20)]
+    _arm, _cam, samples = _run_collect(
+        monkeypatch, poses, stop_after=99, n_samples=5
+    )
+
     assert len(samples) == 5
-
-
-def test_collect_rejects_poses_that_only_translate(monkeypatch):
-    """A translation-only sweep leaves the lever arm unobservable, so it gates."""
-    poses = [_pose(0.02 * i, 0.0) for i in range(8) for _ in range(4)]
-    _arm, _cam, samples = _run_collect(monkeypatch, poses, stop_after=len(poses))
-
-    # Only the very first sample has no predecessor to compare against; every
-    # later pose is pure translation and must be refused.
-    assert len(samples) == 1
 
 
 def test_umi_training_tip_matches_the_dataset_plan_constants():
