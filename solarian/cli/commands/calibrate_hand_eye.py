@@ -301,27 +301,44 @@ def _draw_tag(view, corners, solved, obj_pts, intr, k: float) -> None:
 
 
 def _detect(gray, detector, tag_id: int, gate_wh):
-    """The tag's corners at full resolution, gated by a look at a small copy.
+    """``(corners, ids_in_view)`` -- the wanted tag, and whatever else is there.
 
     Marker detection thresholds and walks every contour in the image, and on a
     frame with no tag in it that whole sweep is spent proving the absence.
     Most frames while the arm is being aimed are exactly that, so the small
     copy answers "is it there" cheaply and only a hit pays full resolution for
     the corners the measurement needs.
+
+    The ids come back too because the sheet carries eight tags and only one
+    page of it gets printed. "Not found" and "you are pointing at tag 13" are
+    the same frame to the detector and completely different problems to the
+    user, and the gate has already paid for the distinction.
     """
     import cv2
 
     small = cv2.resize(gray, gate_wh, interpolation=cv2.INTER_AREA)
     _corners, ids, _rejected = detector.detectMarkers(small)
-    if ids is None or tag_id not in ids:
-        return None
+    seen = [] if ids is None else sorted({int(i) for i in ids.ravel()})
+    if tag_id not in seen:
+        return None, seen
     corners, ids, _rejected = detector.detectMarkers(gray)
-    if ids is None:
-        return None
-    for quad, found in zip(corners, ids.ravel()):
-        if int(found) == tag_id:
-            return quad.reshape(4, 2).astype(np.float64)
-    return None
+    if ids is not None:
+        for quad, found in zip(corners, ids.ravel()):
+            if int(found) == tag_id:
+                return quad.reshape(4, 2).astype(np.float64), seen
+    return None, seen
+
+
+def _missing_tag_reason(tag_id: int, seen) -> str:
+    """Why there is no pose, phrased so the next action is obvious."""
+    others = [i for i in seen if i != tag_id]
+    if not others:
+        return f"tag {tag_id} is not in this frame"
+    names = ", ".join(str(i) for i in others)
+    return (
+        f"tag {tag_id} is not in this frame, but tag {names} is -- that is "
+        f"another page of the same sheet, so re-run with tag={others[0]}"
+    )
 
 
 def _draw_status(view, lines, k: float) -> None:
@@ -392,9 +409,11 @@ def _measure(
         )
 
     full = _opencv_bgr(frame, color_mode)
-    corners = _detect(cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), detector, tag_id, gate_wh)
+    corners, seen = _detect(
+        cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), detector, tag_id, gate_wh
+    )
     if corners is None:
-        return None, f"tag {tag_id} is not in this frame"
+        return None, _missing_tag_reason(tag_id, seen)
     solved = _tag_in_camera(corners, obj_pts, intr)
     if solved is None:
         return None, "the tag corners did not solve to a pose"
@@ -506,7 +525,7 @@ def _collect(
                     "value"
                 ]
                 full = _opencv_bgr(frame, color_mode)
-                corners = _detect(
+                corners, seen = _detect(
                     cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), detector, tag_id, gate_wh
                 )
                 solved = (
@@ -525,7 +544,14 @@ def _collect(
                 # not end up in whatever the bus serves next.
                 view = full.copy()
                 _draw_tag(view, corners, solved, obj_pts, intr, overlay_k)
-                if solved is None:
+                if solved is None and [i for i in seen if i != tag_id]:
+                    other = [i for i in seen if i != tag_id][0]
+                    detection = (
+                        f"that is tag {other}, not {tag_id} -- restart with "
+                        f"tag={other}",
+                        (0, 165, 255),
+                    )
+                elif solved is None:
                     detection = (f"tag {tag_id} not found", (0, 0, 255))
                 elif solved[3] < _MIN_AMBIGUITY_RATIO:
                     detection = (

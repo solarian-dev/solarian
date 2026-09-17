@@ -516,10 +516,13 @@ def test_detect_measures_on_the_full_frame_not_the_gate():
     import solarian.cli.commands.calibrate_hand_eye as mod
 
     det = _FakeDetector(_quad)
-    corners = mod._detect(np.zeros((1080, 1920), np.uint8), det, _TAG_ID, (640, 360))
+    corners, ids = mod._detect(
+        np.zeros((1080, 1920), np.uint8), det, _TAG_ID, (640, 360)
+    )
 
     assert det.seen == [(360, 640), (1080, 1920)]
     assert corners[1].tolist() == [960.0, 0.0]
+    assert ids == [_TAG_ID]
 
 
 def test_detect_skips_the_full_frame_when_the_gate_sees_nothing():
@@ -529,22 +532,40 @@ def test_detect_skips_the_full_frame_when_the_gate_sees_nothing():
     det = _FakeDetector(lambda _g: ([], None, []))
     gray = np.zeros((1080, 1920), np.uint8)
 
-    assert mod._detect(gray, det, _TAG_ID, (640, 360)) is None
+    assert mod._detect(gray, det, _TAG_ID, (640, 360)) == (None, [])
     assert det.seen == [(360, 640)]
 
 
-def test_detect_ignores_other_tags_from_the_same_sheet():
-    """Ids 12-19 are all 160 mm and all on the table; only one is the world."""
+def test_detect_ignores_other_tags_but_reports_seeing_them():
+    """Ids 12-19 are all 160 mm and all on the table; only one is the world.
+
+    Only one page of the sheet gets printed, so aiming at the wrong tag is the
+    likely first-run mistake -- and to the detector it looks identical to an
+    empty table. Handing the ids back is what lets the command tell them apart.
+    """
     import solarian.cli.commands.calibrate_hand_eye as mod
 
     def others(gray):
         corners, _ids, rejected = _quad(gray)
-        return corners, np.array([[_TAG_ID + 3]]), rejected
+        return corners, np.array([[_TAG_ID + 1]]), rejected
 
     det = _FakeDetector(others)
     gray = np.zeros((720, 1280), np.uint8)
 
-    assert mod._detect(gray, det, _TAG_ID, (640, 360)) is None
+    assert mod._detect(gray, det, _TAG_ID, (640, 360)) == (None, [_TAG_ID + 1])
+
+
+def test_a_wrong_sheet_page_is_named_with_the_flag_that_fixes_it():
+    """"Not found" and "that is tag 13" are different problems to the user."""
+    import solarian.cli.commands.calibrate_hand_eye as mod
+
+    empty = mod._missing_tag_reason(_TAG_ID, [])
+    assert empty == f"tag {_TAG_ID} is not in this frame"
+    assert "tag=" not in empty
+
+    wrong = mod._missing_tag_reason(_TAG_ID, [_TAG_ID + 1])
+    assert f"tag {_TAG_ID + 1} is" in wrong
+    assert f"tag={_TAG_ID + 1}" in wrong
 
 
 class _FakeArm:
@@ -628,7 +649,7 @@ def _run_collect(
     monkeypatch.setattr(
         mod,
         "_detect",
-        lambda *_a: (np.zeros((4, 2), np.float32) if corners else None),
+        lambda *_a: ((np.zeros((4, 2), np.float32), [_TAG_ID]) if corners else (None, [])),
     )
     monkeypatch.setattr(
         mod,
