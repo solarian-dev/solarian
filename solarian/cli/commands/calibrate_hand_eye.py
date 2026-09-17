@@ -9,10 +9,10 @@ reveals the error -- a frame that looks perfectly aimed is still aimed at the
 wrong distance.
 
 Ported from UMI's ``record_robot_world_hand_eye.py`` +
-``calibrate_robot_world_hand_eye.py`` pair, keeping their target: tag 12 off
-the table marker sheet, which is what ``--tag_id 12`` in their own hand-eye
-script reads. Recording and solving are one command here, because a Solarian
-module owns its hardware for the lifetime of a process.
+``calibrate_robot_world_hand_eye.py`` pair, keeping their target: the 160 mm
+tag on the table marker page they publish for download. Recording and solving
+are one command here, because a Solarian module owns its hardware for the
+lifetime of a process.
 
 Each pose is sampled with the arm held by its own servos rather than by hand.
 Torque comes off to walk the arm into position, then on to hold it while the
@@ -50,7 +50,7 @@ The result splits into two halves that are fixed in different places:
 
     solarian calibrate-hand-eye
 
-Overrides: ``samples=16 tag=12 marker=160.0 arm=right_arm``.
+Overrides: ``samples=16 tag=13 marker=160.0 arm=right_arm``.
 """
 
 from __future__ import annotations
@@ -85,13 +85,15 @@ from solarian.core.pose import rotvec_to_quat
 # with zero rotation, so a released checkpoint expects its fingertips here.
 UMI_TIP_IN_CAMERA = np.array([0.0, 0.086, 0.21965])
 
-# UMI's table marker sheet, umi-gripper.github.io/share/table_marker.pdf, off
-# their scripts/gen_aruco_tag_pdf.py: DICT_4X4_50, ids 12-19, 160 mm each, one
-# per page. Tag 12 is the default in their own hand-eye script, so measuring
-# against it keeps this comparable to UMI_TIP_IN_CAMERA rather than merely
-# self-consistent.
+# UMI's published table marker, umi-gripper.github.io/share/table_marker.pdf:
+# one 220x220 mm page carrying DICT_4X4_50 tag 13 at 160.0 mm, measured off
+# the file itself. Their scripts/gen_aruco_tag_pdf.py emits a different
+# artifact -- an eight-page aruco_cubes_letter.pdf of ids 12-19 -- and the
+# `--tag_id 12` in their hand-eye script's usage line refers to that one, not
+# to the PDF they put behind the download link. The download is what people
+# actually print, so it is the default here.
 _ARUCO_DICT = "DICT_4X4_50"
-_TAG_ID = 12
+_TAG_ID = 13
 _MARKER_MM = 160.0
 # Four coplanar points admit two poses. The runner-up has to reproject this
 # much worse than the winner or the tag has not actually determined which way
@@ -309,10 +311,11 @@ def _detect(gray, detector, tag_id: int, gate_wh):
     copy answers "is it there" cheaply and only a hit pays full resolution for
     the corners the measurement needs.
 
-    The ids come back too because the sheet carries eight tags and only one
-    page of it gets printed. "Not found" and "you are pointing at tag 13" are
-    the same frame to the detector and completely different problems to the
-    user, and the gate has already paid for the distinction.
+    The ids come back too because there is more than one 160 mm table tag in
+    circulation -- the published page and the generated eight-page sheet do
+    not carry the same one. "Not found" and "you are pointing at a different
+    tag" are the same frame to the detector and completely different problems
+    to the user, and the gate has already paid for the distinction.
     """
     import cv2
 
@@ -336,8 +339,8 @@ def _missing_tag_reason(tag_id: int, seen) -> str:
         return f"tag {tag_id} is not in this frame"
     names = ", ".join(str(i) for i in others)
     return (
-        f"tag {tag_id} is not in this frame, but tag {names} is -- that is "
-        f"another page of the same sheet, so re-run with tag={others[0]}"
+        f"tag {tag_id} is not in this frame, but tag {names} is -- same "
+        f"160 mm table marker, different id, so re-run with tag={others[0]}"
     )
 
 
