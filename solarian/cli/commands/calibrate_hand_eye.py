@@ -14,12 +14,18 @@ ArUco tag (Solarian already ships one, and the fisheye code that reads it) and
 with recording and solving in one command, because a Solarian module owns its
 hardware for the lifetime of a process.
 
-Torque is released once and left off, so the arm walks from pose to pose in
-one continuous motion. That leaves no hand free for a keypress, so samples are
-taken when the arm settles. A preview window draws the detected corners and
-the board axes solved from them, which is the check worth watching: corners
-only prove the detector found a grid, while axes standing square on the board
-prove the pose behind them — the input every number below rests on — is right.
+Torque is released once and left off for good, so the arm walks from pose to
+pose in one continuous motion and stays in the user's hands at the end. That
+leaves no hand free for a keypress, so samples are taken when the arm settles.
+A preview window draws the detected corners and the board axes solved from
+them, which is the check worth watching: corners only prove the detector found
+a grid, while axes standing square on the board prove the pose behind them —
+the input every number below rests on — is right.
+
+The camera's ``resize_*`` is dropped for the run so the board is measured on
+the remap's full 1920x1080 rather than the 640x360 the policy consumes. Corner
+precision scales with focal length in pixels, and the downscale throws away a
+factor of three of it for nothing.
 
 The result splits into two halves that are fixed in different places:
 
@@ -51,17 +57,15 @@ from omegaconf import OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.cli.commands._calibration import (
-    SETTLE_S,
     _opencv_bgr,
     module_running,
     pick_module,
-    returns_to_start,
 )
 from solarian.cli.commands._ik_common import load_module, select_ik_module
 from solarian.core.camera import Camera
 from solarian.core.data import ImageData
 from solarian.core.fisheye import find_chessboard, load_intrinsics, parse_board
-from solarian.core.optical_remap import camera_output_hw, resolve_remap_path
+from solarian.core.optical_remap import resolve_remap_path
 from solarian.core.pose import rotvec_to_quat
 
 # UMI's ``scripts_slam_pipeline/06_generate_dataset_plan.py`` freezes the
@@ -76,6 +80,9 @@ _SAMPLES = 12
 # is dominated by corner noise instead of by the geometry being solved for.
 _MIN_SAMPLES = 8
 _CAM_WINDOW = "calibrate-hand-eye"
+# Width the preview window and the cheap detection gate run at. Measurement
+# runs on the full frame regardless; see _detect.
+_PREVIEW_W = 640
 # Torque stays off for the whole session, so the arm has to be held the whole
 # time and a keypress per sample would mean letting go of it. Samples trigger
 # on the arm sitting inside this much jitter for this long instead.
@@ -119,14 +126,17 @@ def _board_points(board: tuple[int, int], square_m: float) -> np.ndarray:
     return pts
 
 
-def _frame_intrinsics(sensor_cfg, frame_wh: tuple[int, int], conf_dir: Path):
-    """The fisheye model describing the frames this camera emits, at their size.
+def _remap_gopro_schema(sensor_cfg, conf_dir: Path):
+    """The fisheye schema describing the frames this camera emits.
 
     Frames leave the bus already warped into GoPro optics by
-    ``finish_camera_frame``, so what describes them is the GoPro model out of
-    the remap JSON, rescaled to whatever ``resize_*`` left behind. Without a
-    remap there is nothing to measure against: the point of the exercise is the
-    pose in the frame the UMI checkpoint consumes.
+    ``finish_camera_frame``, so the GoPro model out of the remap JSON is what
+    describes them. Without a remap there is nothing to measure against: the
+    point of the exercise is the pose in the frame the checkpoint consumes.
+
+    Returned as an unscaled schema rather than as intrinsics, because the
+    resolution it has to be rescaled to is whatever the camera turns out to
+    emit, and that is not known until a frame has been read.
     """
     if not sensor_cfg.optical_remap:
         print(
@@ -137,8 +147,7 @@ def _frame_intrinsics(sensor_cfg, frame_wh: tuple[int, int], conf_dir: Path):
         return None
     path = resolve_remap_path(str(sensor_cfg.optical_remap), conf_dir)
     with open(path, "r") as fp:
-        remap = json.load(fp)
-    return load_intrinsics(remap["gopro_intrinsics"], frame_wh)
+        return json.load(fp)["gopro_intrinsics"]
 
 
 def _board_in_camera(corners, obj_pts, intr):
@@ -171,8 +180,11 @@ def _rot_between_deg(pose_a, pose_b) -> float:
     return float(np.degrees(np.linalg.norm((rot_a.inv() * rot_b).as_rotvec())))
 
 
-def _draw_board(view, board, corners, solved, obj_pts, intr) -> None:
+def _draw_board(view, board, corners, solved, obj_pts, intr, scale: float) -> None:
     """Draw the corner grid, then the solved board frame on top of it.
+
+    Corners and axes are measured on the full frame and drawn on the smaller
+    preview, so both are scaled by *scale* on the way in.
 
     The axes are the check that matters. Corners only say the detector found
     something grid-shaped; red X and green Y lying along the rows and columns,
@@ -183,7 +195,7 @@ def _draw_board(view, board, corners, solved, obj_pts, intr) -> None:
 
     if corners is None:
         return
-    cv2.drawChessboardCorners(view, board, corners, True)
+    cv2.drawChessboardCorners(view, board, corners * scale, True)
     if solved is None:
         return
     rvec, tvec, _rms = solved
@@ -199,11 +211,28 @@ def _draw_board(view, board, corners, solved, obj_pts, intr) -> None:
         intr["K"],
         intr["D"],
     )
-    pts = pts.reshape(-1, 2).astype(int)
+    pts = (pts.reshape(-1, 2) * scale).astype(int)
     for tip, color in zip(pts[1:], [(0, 0, 255), (0, 255, 0), (255, 0, 0)]):
         cv2.line(view, tuple(pts[0]), tuple(tip), (0, 0, 0), 5)
         cv2.line(view, tuple(pts[0]), tuple(tip), color, 3)
     cv2.circle(view, tuple(pts[0]), 5, (255, 255, 255), -1)
+
+
+def _detect(gray, board, preview_wh):
+    """Board corners at full resolution, gated by a cheap look at a small copy.
+
+    ``findChessboardCorners`` is fast when it finds a board and slow when it
+    does not, because CALIB_CB_FAST_CHECK scans the whole image before giving
+    up -- at 1920x1080 that is ~50 ms against ~6 ms for the same miss at
+    640x360. Most frames while the arm is being aimed are misses, so paying for
+    them at full resolution is what would make the preview crawl.
+    """
+    import cv2
+
+    small = cv2.resize(gray, preview_wh, interpolation=cv2.INTER_AREA)
+    if find_chessboard(small, board) is None:
+        return None
+    return find_chessboard(gray, board)
 
 
 def _draw_status(view, lines) -> None:
@@ -221,11 +250,11 @@ def _draw_status(view, lines) -> None:
 def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_samples):
     """Pair hand-placed arm poses with board detections, torque off throughout.
 
-    Torque comes off once and stays off, so the arm can be walked from pose to
-    pose in one continuous motion. That leaves no hand free to press anything,
-    so a sample is taken when the arm settles rather than on a keypress, and
-    the preview window shows what the detector and PnP are making of the board
-    while it is being aimed.
+    Torque comes off once and never goes back on, so the arm can be walked from
+    pose to pose in one continuous motion and is left in the user's hands at the
+    end. That leaves no hand free to press anything, so a sample is taken when
+    the arm settles rather than on a keypress, and the preview window shows what
+    the detector and PnP are making of the board while it is being aimed.
     """
     import cv2
 
@@ -244,7 +273,8 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
     except cv2.error:
         preview = False
     print(
-        "Torque is OFF and stays off until the end. Keep hold of the arm."
+        "Torque is OFF and stays off. Keep hold of the arm: it is yours to put "
+        "down at the end, nothing will energise or drive it home."
         + (
             "\nSPACE takes a sample regardless of the gates, q finishes early."
             if preview
@@ -254,6 +284,11 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
     )
 
     samples: list[dict] = []
+    # Off the intrinsics rather than off a frame, so the preview can never end
+    # up scaled against a different resolution than the one being measured.
+    frame_w, frame_h = int(intr["DIM"][0]), int(intr["DIM"][1])
+    preview_scale = min(1.0, _PREVIEW_W / frame_w)
+    preview_wh = (round(frame_w * preview_scale), round(frame_h * preview_scale))
     anchor = arm.read_pose()
     anchor_mono = time.monotonic()
     flash_mono = 0.0
@@ -262,8 +297,10 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
         while len(samples) < n_samples:
             frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name]["value"]
             pose = arm.read_pose()
-            view = _opencv_bgr(frame, color_mode)
-            corners = find_chessboard(cv2.cvtColor(view, cv2.COLOR_BGR2GRAY), board)
+            full = _opencv_bgr(frame, color_mode)
+            corners = _detect(
+                cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), board, preview_wh
+            )
             solved = (
                 _board_in_camera(corners, obj_pts, intr)
                 if corners is not None
@@ -283,7 +320,10 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
 
             key = -1
             if preview:
-                _draw_board(view, board, corners, solved, obj_pts, intr)
+                view = cv2.resize(full, preview_wh, interpolation=cv2.INTER_AREA)
+                _draw_board(
+                    view, board, corners, solved, obj_pts, intr, preview_scale
+                )
                 if solved is None:
                     detection = ("board not found", (0, 0, 255))
                 else:
@@ -367,13 +407,10 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
                 cv2.destroyWindow(_CAM_WINDOW)
             except cv2.error:
                 pass
-        # Goal positions survive the torque-off, so latch them onto where the
-        # arm now is before energising or it snaps back to the pre-freedrive
-        # target the moment torque returns.
-        arm.hold_measured_pose()
+        # Deliberately no enable_torque: the user is holding the arm and will
+        # put it down herself. Energising here would either fight her grip or
+        # snap to the pre-freedrive goal position still latched in the servos.
         arm.end_calibration_mode()
-        arm.enable_torque()
-        time.sleep(SETTLE_S)
     return samples
 
 
@@ -546,15 +583,21 @@ class CalibrateHandEyeCommand(BaseCommand):
         sensor_cfg = camera.sensors[sensor_name].cfg
         obj_pts = _board_points(board, float(square_mm) / 1000.0)
         # Resolved before any hardware opens: a missing remap should fail now,
-        # not after the board is taped down and the arm is energised.
+        # not after the board is taped down and the arm is in the user's hands.
         conf_dir = Path(
             os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
         )
-        height, width = camera_output_hw(sensor_cfg, conf_dir)
-        frame_wh = (width, height)
-        intr = _frame_intrinsics(sensor_cfg, frame_wh, conf_dir)
-        if intr is None:
+        gopro_schema = _remap_gopro_schema(sensor_cfg, conf_dir)
+        if gopro_schema is None:
             return
+
+        # Corner precision scales with focal length in pixels, and resize_* is
+        # set to the 640x360 the policy wants, where the GoPro model is fx~141
+        # and a quarter-pixel of corner noise is already 0.1 deg. Dropping the
+        # resize leaves the remap's own 1920x1080, three times that. The bus
+        # reads these two fields per frame, so clearing them is enough.
+        sensor_cfg.resize_width = None
+        sensor_cfg.resize_height = None
 
         with module_running(
             camera,
@@ -563,34 +606,35 @@ class CalibrateHandEyeCommand(BaseCommand):
             "and do not move it again: it is the fixed world frame of the "
             "solve.",
         ):
+            # Intrinsics come from the frame that actually arrived, never from
+            # what the config predicted: intrinsics describing a different
+            # resolution than the image they are used on would not fail, it
+            # would quietly return a plausible and wrong answer.
+            frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name]["value"]
+            frame_wh = (frame.shape[1], frame.shape[0])
+            intr = load_intrinsics(gopro_schema, frame_wh)
+            print(
+                f"\nMeasuring on {frame_wh[0]}x{frame_wh[1]} frames "
+                f"(fx {intr['K'][0, 0]:.0f} px)."
+            )
+
             with module_running(
                 arm,
                 "Torque will be released so you can aim the camera by hand at "
-                f"{n_samples} poses, and the arm will drive back to where it "
-                "started at the end.\n"
+                f"{n_samples} poses, and it stays released: the arm is yours to "
+                "hold throughout and to put down at the end.\n"
                 "Keep the volume clear and keep a hand on the power.",
             ):
-                max_speed = arm.cfg.max_speed
-                speed = float(
-                    max_speed
-                    if isinstance(max_speed, (int, float))
-                    else max_speed[0]
+                samples = _collect(
+                    arm,
+                    camera,
+                    sensor_name,
+                    board,
+                    obj_pts,
+                    intr,
+                    str(sensor_cfg.color_mode),
+                    n_samples,
                 )
-                with returns_to_start(arm, speed):
-                    samples = _collect(
-                        arm,
-                        camera,
-                        sensor_name,
-                        board,
-                        obj_pts,
-                        intr,
-                        str(sensor_cfg.color_mode),
-                        n_samples,
-                    )
-                    input(
-                        "\nTake the board out of the arm's path, then press "
-                        "Enter to drive back to the start pose..."
-                    )
 
         if len(samples) < _MIN_SAMPLES:
             print(

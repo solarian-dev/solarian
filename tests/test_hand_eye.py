@@ -283,7 +283,14 @@ def _run_collect(monkeypatch, poses, stop_after, n_samples=99):
     arm = _FakeArm(poses)
     cam = _FakeCam(arm, stop_after)
     samples = mod._collect(
-        arm, cam, "camera", BOARD, _board_points(BOARD, SQUARE_M), None, "bgr", n_samples
+        arm,
+        cam,
+        "camera",
+        BOARD,
+        _board_points(BOARD, SQUARE_M),
+        load_shipped_gopro_intrinsics(FRAME_WH),
+        "bgr",
+        n_samples,
     )
     return arm, cam, samples
 
@@ -292,18 +299,59 @@ def _pose(x, yaw_deg):
     return np.concatenate([[x, 0.0, 0.2], np.deg2rad([0.0, 0.0, yaw_deg])])
 
 
-def test_collect_releases_torque_once_and_always_restores_it(monkeypatch):
-    """Torque off once at the start; latched and re-energised once at the end.
+def test_collect_never_energises_the_arm_even_when_interrupted(monkeypatch):
+    """Torque off once and never back on, so the arm stays in the user's hands.
 
-    Skipping hold_measured_pose would snap the arm back to its pre-freedrive
-    goal the instant torque returned, so the order here is a safety property,
-    not a detail. It has to hold even when the run is interrupted part-way.
+    Re-energising would either fight her grip or snap to the goal position the
+    servos still hold from before free-drive, and she is holding the arm
+    precisely so she can put it down herself. _FakeArm keeps enable_torque and
+    hold_measured_pose so a regression that calls either shows up here, and it
+    has to hold even when the run is interrupted part-way.
     """
     poses = [_pose(0.0, 30.0 * i) for i in range(6)]
     arm, _cam, samples = _run_collect(monkeypatch, poses, stop_after=20)
 
-    assert arm.torque == ["off", "hold", "end", "on"]
+    assert arm.torque == ["off", "end"]
     assert isinstance(samples, list)
+
+
+def test_detect_measures_on_the_full_frame_not_the_preview(monkeypatch):
+    """The cheap gate runs on a small copy; the corners come from the full one.
+
+    Returning the gate's corners would throw away the resolution the frame was
+    read at, which is the whole reason the bus resize is dropped for the run.
+    """
+    import solarian.cli.commands.calibrate_hand_eye as mod
+
+    seen: list[tuple[int, int]] = []
+
+    def fake_find(gray, _board):
+        seen.append(gray.shape[:2])
+        # A single corner dead centre, so its coordinates name the resolution.
+        return np.array(
+            [[[gray.shape[1] / 2.0, gray.shape[0] / 2.0]]], dtype=np.float32
+        )
+
+    monkeypatch.setattr(mod, "find_chessboard", fake_find)
+    corners = mod._detect(np.zeros((1080, 1920), np.uint8), BOARD, (640, 360))
+
+    assert seen == [(360, 640), (1080, 1920)]
+    assert corners[0, 0].tolist() == [960.0, 540.0]
+
+
+def test_detect_skips_the_full_frame_when_the_gate_finds_nothing(monkeypatch):
+    """Misses are the slow case at full resolution, so they stop at the gate."""
+    import solarian.cli.commands.calibrate_hand_eye as mod
+
+    seen: list[tuple[int, int]] = []
+
+    def fake_find(gray, _board):
+        seen.append(gray.shape[:2])
+        return None
+
+    monkeypatch.setattr(mod, "find_chessboard", fake_find)
+    assert mod._detect(np.zeros((1080, 1920), np.uint8), BOARD, (640, 360)) is None
+    assert seen == [(360, 640)]
 
 
 def test_collect_takes_one_sample_per_pose_once_the_arm_settles(monkeypatch):
