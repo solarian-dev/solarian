@@ -258,6 +258,12 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
     """
     import cv2
 
+    # Off the intrinsics rather than off a frame, so the preview can never end
+    # up scaled against a different resolution than the one being measured.
+    frame_w, frame_h = int(intr["DIM"][0]), int(intr["DIM"][1])
+    preview_scale = min(1.0, _PREVIEW_W / frame_w)
+    preview_wh = (round(frame_w * preview_scale), round(frame_h * preview_scale))
+
     print(
         f"\nAim the camera at the board and hold still: a sample is taken once "
         f"the arm settles and the axes lock onto the board. Rotate at least "
@@ -276,19 +282,20 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
         "Torque is OFF and stays off. Keep hold of the arm: it is yours to put "
         "down at the end, nothing will energise or drive it home."
         + (
-            "\nSPACE takes a sample regardless of the gates, q finishes early."
+            f"\nThe window is downscaled to {preview_wh[0]}x{preview_wh[1]} to "
+            f"stay responsive; corners and axes in it were measured on the "
+            f"full {frame_w}x{frame_h} frame.\n"
+            "SPACE takes a sample regardless of the gates, q finishes early."
             if preview
             else "\nNo display, so no preview window: samples are taken on "
             "stillness alone. Ctrl+C to stop."
         )
     )
 
+    res_label = (
+        f"measuring {frame_w}x{frame_h}, showing {preview_wh[0]}x{preview_wh[1]}"
+    )
     samples: list[dict] = []
-    # Off the intrinsics rather than off a frame, so the preview can never end
-    # up scaled against a different resolution than the one being measured.
-    frame_w, frame_h = int(intr["DIM"][0]), int(intr["DIM"][1])
-    preview_scale = min(1.0, _PREVIEW_W / frame_w)
-    preview_wh = (round(frame_w * preview_scale), round(frame_h * preview_scale))
     anchor = arm.read_pose()
     anchor_mono = time.monotonic()
     flash_mono = 0.0
@@ -355,6 +362,8 @@ def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_sampl
                         detection,
                         gate,
                         ("SPACE force   q finish", (200, 200, 200)),
+                        # Hershey fonts are ASCII only, so no typographic dots.
+                        (res_label, (200, 200, 200)),
                     ],
                 )
                 try:
