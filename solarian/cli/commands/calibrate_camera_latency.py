@@ -34,7 +34,11 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
-from solarian.cli.commands._calibration import module_running, pick_module
+from solarian.cli.commands._calibration import (
+    _opencv_bgr,
+    module_running,
+    pick_module,
+)
 from solarian.core.camera import Camera
 from solarian.core.clock_sync import sync_with_server, synced_time
 from solarian.core.data import ImageData
@@ -99,17 +103,6 @@ def _qr_gray(frame) -> np.ndarray:
     if frame.ndim == 2:
         return frame
     return frame.mean(axis=2).astype(np.uint8)
-
-
-def _opencv_bgr(frame, color_mode: str) -> np.ndarray:
-    """cv2.imshow / imwrite expect BGR. Wrist cameras publish RGB."""
-    import cv2
-
-    if frame.ndim == 2:
-        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    if str(color_mode).lower() == "rgb":
-        return np.ascontiguousarray(frame[:, :, ::-1])
-    return np.ascontiguousarray(frame)
 
 
 def _qr_detectors():

@@ -206,6 +206,128 @@ def test_corner_noise_stays_well_under_the_offset_being_measured():
     assert np.degrees(np.linalg.norm((truth.inv() * suggested).as_rotvec())) < 1.5
 
 
+def test_rot_between_deg_measures_the_angle_between_orientations():
+    from solarian.cli.commands.calibrate_hand_eye import _rot_between_deg
+
+    flat = np.zeros(6)
+    assert _rot_between_deg(flat, flat) == pytest.approx(0.0)
+    turned = np.concatenate([np.zeros(3), np.deg2rad([0.0, 0.0, 12.0])])
+    assert _rot_between_deg(flat, turned) == pytest.approx(12.0)
+    # Position is irrelevant: only the rotation part counts.
+    moved = np.concatenate([[1.0, 2.0, 3.0], turned[3:]])
+    assert _rot_between_deg(flat, moved) == pytest.approx(12.0)
+
+
+class _FakeArm:
+    """Records the torque calls _collect makes, and replays scripted poses."""
+
+    def __init__(self, poses):
+        self.poses = poses
+        self.tick = -1
+        self.torque = []
+
+    def read_pose(self):
+        return self.poses[min(self.tick, len(self.poses) - 1)]
+
+    def start_calibration_mode(self):
+        self.torque.append("off")
+
+    def hold_measured_pose(self):
+        self.torque.append("hold")
+
+    def end_calibration_mode(self):
+        self.torque.append("end")
+
+    def enable_torque(self):
+        self.torque.append("on")
+
+
+class _FakeCam:
+    """Steps the fake arm once per read, then stops the loop from outside."""
+
+    frequency = 30.0
+
+    def __init__(self, arm, stop_after):
+        self.arm = arm
+        self.stop_after = stop_after
+        self.reads = 0
+
+    def read_sensors(self, _cls, names):
+        self.reads += 1
+        if self.reads > self.stop_after:
+            raise KeyboardInterrupt
+        self.arm.tick += 1
+        return {names[0]: {"value": np.zeros((360, 640, 3), dtype=np.uint8)}}
+
+
+def _run_collect(monkeypatch, poses, stop_after, n_samples=99):
+    """Drive _collect with the board detector stubbed out and no display."""
+    import cv2
+
+    import solarian.cli.commands.calibrate_hand_eye as mod
+
+    monkeypatch.setattr(mod, "find_chessboard", lambda *_a: np.zeros((54, 1, 2), np.float32))
+    monkeypatch.setattr(
+        mod, "_board_in_camera", lambda *_a: (np.zeros((3, 1)), np.array([0.0, 0.0, 0.3]), 0.2)
+    )
+    # No preview window in a test run; this is also the headless code path.
+    monkeypatch.setattr(cv2, "namedWindow", lambda *_a, **_k: (_ for _ in ()).throw(cv2.error("no display")))
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: "")
+
+    ticks = iter(range(10_000))
+    monkeypatch.setattr(
+        mod.time, "monotonic", lambda: next(ticks) * 0.25, raising=False
+    )
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None, raising=False)
+
+    arm = _FakeArm(poses)
+    cam = _FakeCam(arm, stop_after)
+    samples = mod._collect(
+        arm, cam, "camera", BOARD, _board_points(BOARD, SQUARE_M), None, "bgr", n_samples
+    )
+    return arm, cam, samples
+
+
+def _pose(x, yaw_deg):
+    return np.concatenate([[x, 0.0, 0.2], np.deg2rad([0.0, 0.0, yaw_deg])])
+
+
+def test_collect_releases_torque_once_and_always_restores_it(monkeypatch):
+    """Torque off once at the start; latched and re-energised once at the end.
+
+    Skipping hold_measured_pose would snap the arm back to its pre-freedrive
+    goal the instant torque returned, so the order here is a safety property,
+    not a detail. It has to hold even when the run is interrupted part-way.
+    """
+    poses = [_pose(0.0, 30.0 * i) for i in range(6)]
+    arm, _cam, samples = _run_collect(monkeypatch, poses, stop_after=20)
+
+    assert arm.torque == ["off", "hold", "end", "on"]
+    assert isinstance(samples, list)
+
+
+def test_collect_takes_one_sample_per_pose_once_the_arm_settles(monkeypatch):
+    """Three still reads per pose is enough to trip the stillness gate."""
+    poses = []
+    for i in range(5):
+        poses.extend([_pose(0.0, 40.0 * i)] * 4)
+    _arm, _cam, samples = _run_collect(monkeypatch, poses, stop_after=len(poses))
+
+    # Five distinct orientations, each held still, so five samples and no
+    # duplicates: the rotation gate suppresses re-firing on the same pose.
+    assert len(samples) == 5
+
+
+def test_collect_rejects_poses_that_only_translate(monkeypatch):
+    """A translation-only sweep leaves the lever arm unobservable, so it gates."""
+    poses = [_pose(0.02 * i, 0.0) for i in range(8) for _ in range(4)]
+    _arm, _cam, samples = _run_collect(monkeypatch, poses, stop_after=len(poses))
+
+    # Only the very first sample has no predecessor to compare against; every
+    # later pose is pure translation and must be refused.
+    assert len(samples) == 1
+
+
 def test_umi_training_tip_matches_the_dataset_plan_constants():
     """The constant the whole command compares against, from UMI's own terms."""
     cam_to_center_height = 0.086

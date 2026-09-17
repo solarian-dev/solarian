@@ -14,6 +14,13 @@ ArUco tag (Solarian already ships one, and the fisheye code that reads it) and
 with recording and solving in one command, because a Solarian module owns its
 hardware for the lifetime of a process.
 
+Torque is released once and left off, so the arm walks from pose to pose in
+one continuous motion. That leaves no hand free for a keypress, so samples are
+taken when the arm settles. A preview window draws the detected corners and
+the board axes solved from them, which is the check worth watching: corners
+only prove the detector found a grid, while axes standing square on the board
+prove the pose behind them — the input every number below rests on — is right.
+
 The result splits into two halves that are fixed in different places:
 
 * A **rotation**, which config can absorb. The arm's ``ik_tcp`` declares the
@@ -44,7 +51,8 @@ from omegaconf import OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.cli.commands._calibration import (
-    free_drive_pose,
+    SETTLE_S,
+    _opencv_bgr,
     module_running,
     pick_module,
     returns_to_start,
@@ -67,9 +75,16 @@ _SAMPLES = 12
 # cv2.calibrateRobotWorldHandEye needs 3. Below roughly 8 poses the translation
 # is dominated by corner noise instead of by the geometry being solved for.
 _MIN_SAMPLES = 8
-# The camera thread can still be holding a frame shot while the arm was being
-# moved by hand, which would be paired with the pose it ended up at.
-_FLUSH_FRAMES = 3
+_CAM_WINDOW = "calibrate-hand-eye"
+# Torque stays off for the whole session, so the arm has to be held the whole
+# time and a keypress per sample would mean letting go of it. Samples trigger
+# on the arm sitting inside this much jitter for this long instead.
+_STILL_S = 0.6
+_STILL_POS_M = 0.005
+_STILL_ROT_DEG = 2.5
+# Consecutive samples must differ in rotation: a translation-only pair leaves
+# the lever arm unobservable, and the lever arm is the measurement.
+_MIN_ROT_STEP_DEG = 8.0
 # Corner noise on a downscaled fisheye frame puts a floor under the rotation
 # this can resolve; under it a "correction" would just be that noise.
 _ROT_NOISE_DEG = 1.0
@@ -149,47 +164,216 @@ def _board_in_camera(corners, obj_pts, intr):
     return rvec, tvec, float(np.sqrt(np.mean(err**2)))
 
 
-def _collect(arm, camera, sensor_name, board, obj_pts, intr, gray_code, n_samples):
-    """Pair each hand-placed arm pose with a board detection from that pose."""
+def _rot_between_deg(pose_a, pose_b) -> float:
+    """Angle between the orientations of two 6D poses, in degrees."""
+    rot_a = st.Rotation.from_rotvec(np.asarray(pose_a, dtype=np.float64)[3:6])
+    rot_b = st.Rotation.from_rotvec(np.asarray(pose_b, dtype=np.float64)[3:6])
+    return float(np.degrees(np.linalg.norm((rot_a.inv() * rot_b).as_rotvec())))
+
+
+def _draw_board(view, board, corners, solved, obj_pts, intr) -> None:
+    """Draw the corner grid, then the solved board frame on top of it.
+
+    The axes are the check that matters. Corners only say the detector found
+    something grid-shaped; red X and green Y lying along the rows and columns,
+    with blue Z square to them, say the pose behind them is right -- and that
+    pose is what every number below is built on.
+    """
     import cv2
 
+    if corners is None:
+        return
+    cv2.drawChessboardCorners(view, board, corners, True)
+    if solved is None:
+        return
+    rvec, tvec, _rms = solved
+    length = float(obj_pts[:, 0].max()) / 2.0
+    tips = np.array(
+        [[0, 0, 0], [length, 0, 0], [0, length, 0], [0, 0, length]],
+        dtype=np.float64,
+    )
+    pts, _ = cv2.fisheye.projectPoints(
+        tips.reshape(-1, 1, 3),
+        np.ascontiguousarray(np.asarray(rvec, dtype=np.float64).reshape(3, 1)),
+        np.ascontiguousarray(np.asarray(tvec, dtype=np.float64).reshape(3, 1)),
+        intr["K"],
+        intr["D"],
+    )
+    pts = pts.reshape(-1, 2).astype(int)
+    for tip, color in zip(pts[1:], [(0, 0, 255), (0, 255, 0), (255, 0, 0)]):
+        cv2.line(view, tuple(pts[0]), tuple(tip), (0, 0, 0), 5)
+        cv2.line(view, tuple(pts[0]), tuple(tip), color, 3)
+    cv2.circle(view, tuple(pts[0]), 5, (255, 255, 255), -1)
+
+
+def _draw_status(view, lines) -> None:
+    """Stack ``(text, colour)`` lines top-left, each over a dark outline."""
+    import cv2
+
+    for row, (text, color) in enumerate(lines):
+        origin = (10, 24 + row * 22)
+        cv2.putText(
+            view, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3
+        )
+        cv2.putText(view, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1)
+
+
+def _collect(arm, camera, sensor_name, board, obj_pts, intr, color_mode, n_samples):
+    """Pair hand-placed arm poses with board detections, torque off throughout.
+
+    Torque comes off once and stays off, so the arm can be walked from pose to
+    pose in one continuous motion. That leaves no hand free to press anything,
+    so a sample is taken when the arm settles rather than on a keypress, and
+    the preview window shows what the detector and PnP are making of the board
+    while it is being aimed.
+    """
+    import cv2
+
+    print(
+        f"\nAim the camera at the board and hold still: a sample is taken once "
+        f"the arm settles and the axes lock onto the board. Rotate at least "
+        f"{_MIN_ROT_STEP_DEG:g} deg between samples — tilt and roll, not just "
+        "distance, or the solve cannot see the lever arm it is measuring."
+    )
+    input("Take hold of the arm, then press Enter to release torque...")
+    arm.start_calibration_mode()
+
+    preview = True
+    try:
+        cv2.namedWindow(_CAM_WINDOW, cv2.WINDOW_NORMAL)
+    except cv2.error:
+        preview = False
+    print(
+        "Torque is OFF and stays off until the end. Keep hold of the arm."
+        + (
+            "\nSPACE takes a sample regardless of the gates, q finishes early."
+            if preview
+            else "\nNo display, so no preview window: samples are taken on "
+            "stillness alone. Ctrl+C to stop."
+        )
+    )
+
     samples: list[dict] = []
-    while len(samples) < n_samples:
-        pose = free_drive_pose(
-            arm,
-            f"Sample {len(samples) + 1} of {n_samples}: aim the camera at the "
-            "board from a new angle. Vary tilt and roll, not just distance — "
-            "poses that differ only by a translation leave the rotation "
-            "unobservable and the solve degenerate.",
-        )
-        for _ in range(_FLUSH_FRAMES):
+    anchor = arm.read_pose()
+    anchor_mono = time.monotonic()
+    flash_mono = 0.0
+    report_mono = 0.0
+    try:
+        while len(samples) < n_samples:
             frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name]["value"]
-            time.sleep(1.0 / max(float(camera.frequency), 1.0))
+            pose = arm.read_pose()
+            view = _opencv_bgr(frame, color_mode)
+            corners = find_chessboard(cv2.cvtColor(view, cv2.COLOR_BGR2GRAY), board)
+            solved = (
+                _board_in_camera(corners, obj_pts, intr)
+                if corners is not None
+                else None
+            )
 
-        corners = find_chessboard(cv2.cvtColor(frame, gray_code), board)
-        if corners is None:
-            print("  board not found in this frame; reposition and retry.")
-            continue
-        solved = _board_in_camera(corners, obj_pts, intr)
-        if solved is None:
-            print("  PnP failed on this detection; reposition and retry.")
-            continue
+            now = time.monotonic()
+            if (
+                np.linalg.norm(pose[:3] - anchor[:3]) > _STILL_POS_M
+                or _rot_between_deg(anchor, pose) > _STILL_ROT_DEG
+            ):
+                anchor, anchor_mono = pose, now
+            still_for = now - anchor_mono
+            rot_step = (
+                _rot_between_deg(samples[-1]["pose"], pose) if samples else np.inf
+            )
 
-        rvec, tvec, rms_px = solved
-        tx_world2cam = np.eye(4)
-        tx_world2cam[:3, :3] = cv2.Rodrigues(rvec)[0]
-        tx_world2cam[:3, 3] = np.asarray(tvec).squeeze()
-        samples.append(
-            {
-                # OpenCV's base2gripper: the base expressed in TCP coordinates.
-                "tx_base2tcp": np.linalg.inv(_pose_to_mat(pose)),
-                "tx_world2cam": tx_world2cam,
-            }
-        )
-        print(
-            f"  board at {np.linalg.norm(tvec):.3f} m, reprojection "
-            f"{rms_px:.2f} px, TCP z {pose[2]:+.4f} m"
-        )
+            key = -1
+            if preview:
+                _draw_board(view, board, corners, solved, obj_pts, intr)
+                if solved is None:
+                    detection = ("board not found", (0, 0, 255))
+                else:
+                    detection = (
+                        f"board {np.linalg.norm(solved[1]):.2f} m, "
+                        f"{solved[2]:.2f} px reprojection",
+                        (0, 255, 0),
+                    )
+                if now - flash_mono < 0.6:
+                    gate = ("SAMPLE TAKEN", (0, 255, 255))
+                elif solved is None:
+                    gate = ("waiting for the board", (0, 165, 255))
+                elif rot_step < _MIN_ROT_STEP_DEG:
+                    gate = (
+                        f"rotate more: {rot_step:.0f} of "
+                        f"{_MIN_ROT_STEP_DEG:g} deg",
+                        (0, 165, 255),
+                    )
+                else:
+                    gate = (
+                        f"hold still {min(still_for, _STILL_S):.1f}/"
+                        f"{_STILL_S:g} s",
+                        (0, 255, 255),
+                    )
+                _draw_status(
+                    view,
+                    [
+                        (f"sample {len(samples)} / {n_samples}", (255, 255, 255)),
+                        detection,
+                        gate,
+                        ("SPACE force   q finish", (200, 200, 200)),
+                    ],
+                )
+                try:
+                    cv2.imshow(_CAM_WINDOW, view)
+                    key = cv2.waitKey(1) & 0xFF
+                except cv2.error:
+                    preview = False
+            elif now - report_mono > 1.0:
+                report_mono = now
+                found = "board found" if solved is not None else "no board"
+                turned = "first" if not samples else f"rotated {rot_step:.0f} deg"
+                print(
+                    f"  {len(samples)}/{n_samples} samples, {found}, "
+                    f"still {still_for:.1f} s, {turned}"
+                )
+
+            if key == ord("q"):
+                break
+            # SPACE skips the stillness and rotation gates but never the
+            # detection: there is nothing to record without a board pose.
+            if solved is None or not (
+                key == ord(" ")
+                or (still_for >= _STILL_S and rot_step >= _MIN_ROT_STEP_DEG)
+            ):
+                continue
+
+            rvec, tvec, rms_px = solved
+            tx_world2cam = np.eye(4)
+            tx_world2cam[:3, :3] = cv2.Rodrigues(rvec)[0]
+            tx_world2cam[:3, 3] = np.asarray(tvec).squeeze()
+            samples.append(
+                {
+                    # OpenCV's base2gripper: the base in TCP coordinates.
+                    "tx_base2tcp": np.linalg.inv(_pose_to_mat(pose)),
+                    "tx_world2cam": tx_world2cam,
+                    "pose": pose,
+                }
+            )
+            flash_mono = now
+            print(
+                f"  sample {len(samples)}/{n_samples}: board at "
+                f"{np.linalg.norm(tvec):.3f} m, reprojection {rms_px:.2f} px, "
+                f"TCP z {pose[2]:+.4f} m"
+            )
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+    finally:
+        if preview:
+            try:
+                cv2.destroyWindow(_CAM_WINDOW)
+            except cv2.error:
+                pass
+        # Goal positions survive the torque-off, so latch them onto where the
+        # arm now is before energising or it snaps back to the pre-freedrive
+        # target the moment torque returns.
+        arm.hold_measured_pose()
+        arm.end_calibration_mode()
+        arm.enable_torque()
+        time.sleep(SETTLE_S)
     return samples
 
 
@@ -331,8 +515,6 @@ class CalibrateHandEyeCommand(BaseCommand):
     params = ("arm", "board", "square", "samples")
 
     def handle(self, cfg) -> None:
-        import cv2
-
         square_mm = OmegaConf.select(cfg, "square")
         if square_mm is None:
             print(
@@ -362,11 +544,6 @@ class CalibrateHandEyeCommand(BaseCommand):
             name for name, s in camera.sensors.items() if isinstance(s, Camera)
         )
         sensor_cfg = camera.sensors[sensor_name].cfg
-        gray_code = (
-            cv2.COLOR_RGB2GRAY
-            if str(sensor_cfg.color_mode) == "rgb"
-            else cv2.COLOR_BGR2GRAY
-        )
         obj_pts = _board_points(board, float(square_mm) / 1000.0)
         # Resolved before any hardware opens: a missing remap should fail now,
         # not after the board is taped down and the arm is energised.
@@ -407,13 +584,21 @@ class CalibrateHandEyeCommand(BaseCommand):
                         board,
                         obj_pts,
                         intr,
-                        gray_code,
+                        str(sensor_cfg.color_mode),
                         n_samples,
                     )
                     input(
                         "\nTake the board out of the arm's path, then press "
                         "Enter to drive back to the start pose..."
                     )
+
+        if len(samples) < _MIN_SAMPLES:
+            print(
+                f"\nOnly {len(samples)} samples; the translation needs at least "
+                f"{_MIN_SAMPLES} to come out of the geometry rather than out of "
+                "the corner noise. Nothing solved."
+            )
+            return
 
         tx_base2world, tx_tcp2camera = _solve(samples)
         trans_mm, rot_deg = _fit_error(samples, tx_base2world, tx_tcp2camera)

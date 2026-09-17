@@ -25,6 +25,17 @@ from solarian.utils.precise_sleep import precise_wait
 SETTLE_S = 0.5
 
 
+def _opencv_bgr(frame, color_mode: str) -> np.ndarray:
+    """cv2.imshow / imwrite expect BGR. Wrist cameras publish RGB."""
+    import cv2
+
+    if frame.ndim == 2:
+        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if str(color_mode).lower() == "rgb":
+        return np.ascontiguousarray(frame[:, :, ::-1])
+    return np.ascontiguousarray(frame)
+
+
 def prompt_choice(prompt: str, n: int) -> int:
     while True:
         user_input = input(f"{prompt} (1-{n}): ").strip()
