@@ -229,9 +229,8 @@ def free_drive_pose(module, instruction: str):
 
     # Goal position survives the torque-off, so latch it to where the arm now is
     # before energising or it snaps back to the pre-freedrive target.
-    module.hold_measured_pose()
     module.end_calibration_mode()
-    module.enable_torque()
+    module.enable_torque_holding()
     time.sleep(SETTLE_S)
 
     # Read after the user lets go: held, the pose includes whatever they were

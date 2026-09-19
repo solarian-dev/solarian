@@ -295,16 +295,118 @@ def test_reachable_travel_handles_the_negative_direction():
     assert blocked == ["j"]
 
 
+def _hold_arm(reads):
+    module = ArmModule.__new__(ArmModule)
+    written: dict = {}
+    module._ik_joint_names = lambda: ["a", "b", "c"]
+    module._joint_raw_wrap_spans = lambda: np.zeros(3)
+    module._read_joints_raw = lambda: next(reads)
+    module._write_joints_raw = lambda q: written.update(q=np.asarray(q))
+    return module, written
+
+
 def test_hold_measured_pose_writes_back_what_it_read():
     """Goal position survives torque-off, so re-energising snaps the arm unless
     the measured configuration is latched first."""
-    module = ArmModule.__new__(ArmModule)
-    written: dict = {}
-    module._read_joints_rad = lambda: np.array([0.1, -0.2, 0.3])
-    module._write_joints_rad = lambda q: written.update(q=np.asarray(q))
+    module, written = _hold_arm(iter([np.array([0.1, -0.2, 0.3])] * 2))
+
+    assert module.hold_measured_pose().tolist() == [0.1, -0.2, 0.3]
+    assert written["q"].tolist() == [0.1, -0.2, 0.3]
+
+
+def test_hold_measured_pose_confirms_the_reading_before_writing():
+    """Hand tremor between the two reads is fine; it is still the same pose."""
+    module, written = _hold_arm(
+        iter(
+            [
+                np.array([0.1, -0.2, 0.3]),
+                np.array([0.1004, -0.2003, 0.2998]),
+            ]
+        )
+    )
 
     module.hold_measured_pose()
-    assert written["q"].tolist() == [0.1, -0.2, 0.3]
+    # The confirming read is the one written: it is the more recent truth.
+    assert written["q"] == pytest.approx([0.1004, -0.2003, 0.2998])
+
+
+def test_hold_measured_pose_refuses_to_latch_a_reading_it_cannot_confirm():
+    """A mis-parsed sync read must not become a goal the arm is driven to.
+
+    This is the only write with no check after it, because torque comes on
+    next. wrist_roll is geared for a full turn, so a goal on the far side of
+    the encoder wrap sends it all the way round rather than nowhere.
+    """
+    module, written = _hold_arm(
+        iter([np.array([0.1, 0.0, float(i * 200)]) for i in range(10)])
+    )
+
+    with pytest.raises(RuntimeError, match="Refusing to latch"):
+        module.hold_measured_pose()
+    assert written == {}
+
+
+def test_hold_measured_pose_retries_through_a_single_bad_read():
+    """One corrupt sample should cost a retry, not the whole operation."""
+    module, written = _hold_arm(
+        iter(
+            [
+                np.array([0.1, -0.2, 0.3]),
+                np.array([0.1, -0.2, 80.0]),  # garbage
+                np.array([0.1, -0.2, 0.3]),
+                np.array([0.1, -0.2, 0.3]),
+            ]
+        )
+    )
+
+    module.hold_measured_pose()
+    assert written["q"] == pytest.approx([0.1, -0.2, 0.3])
+
+
+def test_hold_measured_pose_treats_the_continuous_wrap_as_the_same_pose():
+    """Tick 0 and tick 4095 on wrist_roll are neighbours, not a full turn."""
+    from solarian.core.arm_module import _max_wrapped_abs
+
+    assert _max_wrapped_abs(np.array([4095.0]), np.array([4096.0])) == pytest.approx(1.0)
+    assert _max_wrapped_abs(np.array([2.0]), np.array([0.0])) == pytest.approx(2.0)
+
+    module, written = _hold_arm(iter([np.array([4094.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0])]))
+    module._joint_raw_wrap_spans = lambda: np.array([4096.0, 0.0, 0.0])
+
+    module.hold_measured_pose()
+    assert written["q"] == pytest.approx([1.0, 0.0, 0.0])
+
+
+def test_enable_torque_holding_rewrites_the_latch_after_energising():
+    """Some Feetech firmware ignores Goal_Position while torque is off."""
+    module, written = _hold_arm(iter([np.array([100.0, 200.0, 300.0])] * 4))
+    order: list[str] = []
+    module.enable_torque = lambda: order.append("on")
+    module._write_joints_raw = lambda q: (
+        written.update(q=np.asarray(q)),
+        order.append("write"),
+    )
+
+    module.enable_torque_holding()
+    assert order == ["write", "on", "write"]
+    assert written["q"] == pytest.approx([100.0, 200.0, 300.0])
+
+
+def test_hold_measured_pose_writes_raw_ticks_not_a_converted_command():
+    """drive_mode / offset / radians are how wrist_roll got a full-turn goal."""
+    module = ArmModule.__new__(ArmModule)
+    written: dict = {}
+    module._ik_joint_names = lambda: ["wrist_roll"]
+    module._joint_raw_wrap_spans = lambda: np.array([4096.0])
+    module._read_joints_raw = lambda: np.array([12.0])
+    module._write_joints_raw = lambda q: written.update(q=np.asarray(q))
+    module._read_joints_norm = lambda: (_ for _ in ()).throw(AssertionError("no conversion"))
+    module._write_joints_norm = lambda q: (_ for _ in ()).throw(AssertionError("no conversion"))
+    module._read_joints_rad = lambda: (_ for _ in ()).throw(AssertionError("no conversion"))
+    module._write_joints_rad = lambda q: (_ for _ in ()).throw(AssertionError("no conversion"))
+
+    module.hold_measured_pose()
+    assert written["q"].tolist() == [12.0]
 
 
 def test_schedule_l_honours_its_timestamp():

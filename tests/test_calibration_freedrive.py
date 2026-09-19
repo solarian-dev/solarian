@@ -32,12 +32,18 @@ class _StubArm:
 
     def hold_measured_pose(self):
         self._record("latch")
+        return self.pose
 
     def end_calibration_mode(self):
         self._record("end_calibration_mode")
 
     def enable_torque(self):
         self._record("torque_on")
+
+    def enable_torque_holding(self):
+        self.hold_measured_pose()
+        self.enable_torque()
+        return self.pose
 
     def moveL(self, pose, speed):
         self._record(f"moveL({pose[0]:.1f})")
@@ -79,7 +85,7 @@ def test_free_drive_latches_the_pose_before_energising(monkeypatch, arm):
     _calibration.free_drive_pose(arm, "place it somewhere safe")
 
     hardware = [step for step in arm.log if not step.startswith("prompt:")]
-    assert hardware == ["torque_off", "latch", "end_calibration_mode", "torque_on", "read_pose"]
+    assert hardware == ["torque_off", "end_calibration_mode", "latch", "torque_on", "read_pose"]
 
 
 def test_free_drive_reads_the_pose_after_the_user_lets_go(monkeypatch, arm):

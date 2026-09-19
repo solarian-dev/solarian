@@ -24,10 +24,13 @@ from solarian.cli.commands.calibrate_hand_eye import (
     _MIN_AMBIGUITY_RATIO,
     _MIN_TILT_DEG,
     _TAG_ID,
+    _ask_replacements,
+    _default_replacements,
     _derive,
     _diagnose,
     _fit_error,
     _grade,
+    _parse_replacements,
     _marker_points,
     _offset_to_mat,
     _pose_to_mat,
@@ -376,7 +379,8 @@ def test_failed_report_prints_the_verdict_and_no_offsets(capsys):
 
     out = capsys.readouterr().out
     assert "CALIBRATION FAILED" in out
-    assert "RUN IT AGAIN" in out
+    assert "DO NOT USE THESE NUMBERS" in out
+    assert "RUN IT AGAIN" not in out
     assert "28.5 mm rms" in out and "FAIL" in out
     # Nothing that could be pasted or measured against.
     for leak in ("quat=", "pos=", "fingertips in camera", "what to do with this"):
@@ -402,7 +406,7 @@ def test_failed_report_names_a_bad_detection_and_clears_the_rig(capsys):
     assert "pose 5:" in out
     assert "2.40 px" in out
     assert "bad detections" in out
-    assert "re-run" in out
+    assert "recapture" in out
 
 
 def test_failed_report_blames_the_arm_when_the_error_is_spread(capsys):
@@ -431,6 +435,60 @@ def test_failed_report_blames_the_arm_when_the_error_is_spread(capsys):
     assert "spread across the poses" in out
     assert "forward kinematics" in out
     assert "one cause, whole budget" in out
+
+
+def test_default_replacements_are_the_outliers_or_the_worst_pose():
+    """A failed fit has to name what to recapture, not dump the whole run."""
+    with_outlier = np.full(12, 1.0)
+    with_outlier[7] = 40.0
+    with_outlier[2] = 38.0
+    assert _default_replacements(
+        with_outlier, _grade(with_outlier, np.full(12, 0.2))
+    ) == [2, 7]
+
+    spread = np.linspace(10.0, 21.0, 12)
+    grade = _grade(spread, np.full(12, 2.0))
+    assert grade["outliers"] == []
+    assert _default_replacements(spread, grade) == [int(np.argmax(spread))]
+
+
+def test_parse_replacements_accepts_enter_numbers_and_quit():
+    default = [0]
+    assert _parse_replacements("", 12, default) == [0]
+    assert _parse_replacements("1 9 12", 12, default) == [0, 8, 11]
+    assert _parse_replacements("1, 9", 12, default) == [0, 8]
+    assert _parse_replacements("q", 12, default) is None
+    with pytest.raises(ValueError, match="not in 1..12"):
+        _parse_replacements("0", 12, default)
+    with pytest.raises(ValueError, match="not a pose number"):
+        _parse_replacements("all", 12, default)
+
+
+def test_ask_replacements_defaults_to_the_named_outliers(monkeypatch, capsys):
+    samples = _simulate(IK_TCP, n=12, seed=9)
+    trans_mm = np.full(12, 2.0)
+    trans_mm[0] = 42.6
+    grade = _grade(trans_mm, np.full(12, 0.2))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "")
+
+    assert _ask_replacements(samples, trans_mm, grade) == [0]
+    out = capsys.readouterr().out
+    assert "Pose 1 (42.6 mm)" in out
+    assert "poisoning the fit" in out
+
+
+def test_substituting_an_outlier_recovers_a_clean_fit():
+    """The recapture path has to actually clear a wrecked pose, not just ask."""
+    clean = _simulate(IK_TCP, seed=9)
+    wrecked = [dict(s) for s in clean]
+    wrecked[0] = dict(wrecked[0])
+    wrecked[0]["tx_world2cam"] = wrecked[0]["tx_world2cam"] @ _pose_to_mat(
+        np.concatenate([[0.03, 0.0, 0.0], np.deg2rad([0.0, 12.0, 0.0])])
+    )
+
+    assert not _grade(*_fit_error(wrecked, *_solve(wrecked)))["passed"]
+    wrecked[0] = clean[0]
+    assert _grade(*_fit_error(wrecked, *_solve(wrecked)))["passed"]
 
 
 def test_passing_report_prints_both_deliverables_and_the_verify_loop(capsys):
@@ -476,7 +534,7 @@ def test_umi_training_tip_matches_the_dataset_plan_constants():
     tcp_offset = 0.205
     assert np.allclose(
         UMI_TIP_IN_CAMERA,
-        [0.0, cam_to_center_height, cam_to_mount_offset + tcp_offset],
+        [0.0, cam_to_center_height, tcp_offset - cam_to_mount_offset],
     )
 
 
@@ -593,9 +651,19 @@ class _FakeArm:
 
     def hold_measured_pose(self):
         self.torque.append("latch")
+        return np.zeros(6)
 
     def enable_torque(self):
         self.torque.append("on")
+
+    def enable_torque_holding(self):
+        self.hold_measured_pose()
+        self.enable_torque()
+        self.torque.append("rewrite")
+        return np.zeros(6)
+
+    def joint_command_delta(self, _reference):
+        return 0.0
 
     def disable_torque(self):
         self.torque.append("off")
@@ -635,12 +703,14 @@ def _run_collect(
     ratio=50.0,
     drift_m=0.0,
     drift_deg=0.0,
+    arm_cls=_FakeArm,
+    recapture=None,
 ):
     """Drive _collect headless, counting the confirmations it asks for.
 
     With no display _collect takes the blocking-prompt path, and ``input`` is
     patched to answer instantly, so one loop iteration is one confirmation and
-    a pose costs two.
+    a pose costs three: hold, measure, release.
     """
     import cv2
 
@@ -671,7 +741,7 @@ def _run_collect(
     monkeypatch.setattr("builtins.input", fake_input)
     monkeypatch.setattr(mod.time, "sleep", lambda _s: None, raising=False)
 
-    arm = _FakeArm(poses, drift_m=drift_m, drift_deg=drift_deg)
+    arm = arm_cls(poses, drift_m=drift_m, drift_deg=drift_deg)
     cam = _FakeCam(stop_after)
     samples = mod._collect(
         arm,
@@ -683,12 +753,13 @@ def _run_collect(
         load_shipped_gopro_intrinsics(FRAME_WH),
         "bgr",
         n_samples,
+        recapture,
     )
     return arm, cam, samples, prompts
 
 
 def test_collect_holds_the_arm_for_every_sample_and_leaves_it_limp(monkeypatch):
-    """The torque cycle is the whole point of the two-stage capture.
+    """The torque cycle is the whole point of the three-step capture.
 
     Latch before energising or the arm snaps to a stale goal; energise before
     the sample or the pose belongs to the user's grip instead of the servos;
@@ -703,11 +774,13 @@ def test_collect_holds_the_arm_for_every_sample_and_leaves_it_limp(monkeypatch):
     assert len(samples) == 2
     assert arm.torque == [
         "free",
-        "latch", "on", "off",
-        "latch", "on", "off",
+        "latch", "on", "rewrite", "off",
+        "latch", "on", "rewrite", "off",
         # The finally, which is what a mid-hold interrupt relies on.
         "off", "end",
     ]
+    # Torque stays on across the sample: off comes after the release confirm,
+    # not after the measurement.
 
 
 def test_collect_leaves_torque_off_when_interrupted_mid_hold(monkeypatch):
@@ -722,19 +795,68 @@ def test_collect_leaves_torque_off_when_interrupted_mid_hold(monkeypatch):
     assert arm.torque[-2:] == ["off", "end"]
 
 
-def test_collect_takes_one_sample_per_two_confirmations(monkeypatch):
-    """Position and confirm, let go and confirm: one pose, two prompts."""
+def test_collect_does_not_drop_the_arm_until_the_release_confirm(monkeypatch):
+    """After the sample the servos still hold; limp comes on the next Enter."""
+    poses = [_pose(0.0, 40.0 * i) for i in range(8)]
+    arm, _cam, samples, prompts = _run_collect(
+        monkeypatch, poses, stop_after=99, n_samples=1
+    )
+    assert len(samples) == 1
+    assert "hold the arm" in prompts[2]
+    # Release confirm then finally. Measurement itself does not limp the arm.
+    assert arm.torque == ["free", "latch", "on", "rewrite", "off", "off", "end"]
+
+
+def test_collect_takes_one_sample_per_three_confirmations(monkeypatch):
+    """Hold, measure, then take the arm before torque comes off."""
     poses = [_pose(0.0, 40.0 * i) for i in range(20)]
     _arm, cam, samples, prompts = _run_collect(
         monkeypatch, poses, stop_after=99, n_samples=3
     )
 
     assert len(samples) == 3
-    assert len(prompts) == 6
+    assert len(prompts) == 9
     assert "position the arm" in prompts[0]
     assert "let go" in prompts[1]
+    assert "hold the arm" in prompts[2]
     # One frame per measurement, and none grabbed while merely aiming.
     assert cam.reads == 3
+
+
+def test_collect_names_the_pose_being_recaptured(monkeypatch):
+    """A retry has to say which poison pose is being replaced."""
+    poses = [_pose(0.0, 40.0 * i) for i in range(8)]
+    _arm, _cam, samples, prompts = _run_collect(
+        monkeypatch, poses, stop_after=99, n_samples=1, recapture=[1]
+    )
+
+    assert len(samples) == 1
+    assert "Recapture pose 1" in prompts[0]
+    assert "position the arm" in prompts[0]
+
+
+def test_collect_drops_torque_when_a_joint_jumps_on_energising(monkeypatch):
+    """A wrist_roll spin is invisible in TCP xyz; the joint check has to catch it."""
+
+    class _JumpArm(_FakeArm):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._jumps = 0
+
+        def joint_command_delta(self, _reference):
+            self._jumps += 1
+            if self._jumps > 1:
+                raise KeyboardInterrupt
+            return 2000.0
+
+    poses = [_pose(0.0, 30.0 * i) for i in range(6)]
+    arm, _cam, samples, _prompts = _run_collect(
+        monkeypatch, poses, stop_after=4, n_samples=2, arm_cls=_JumpArm
+    )
+
+    assert samples == []
+    assert "on" in arm.torque
+    assert arm.torque[-2:] == ["off", "end"]
 
 
 def test_collect_rejects_a_sample_when_the_arm_moves_while_measuring(monkeypatch):

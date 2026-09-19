@@ -39,6 +39,25 @@ _DEFAULT_JOINT_SPEED = 1.05
 _REACH_ITERATIONS = 300
 _LIMIT_MARGIN_RAD = np.deg2rad(1.0)
 
+# Latch agreement in raw encoder ticks. STS/SMS are 4096 ticks/turn, so 60
+# is about 5 deg: above tremor between two reads, far below a wrap flip.
+_LATCH_AGREE_TICKS = 60
+_LATCH_CONFIRM_TRIES = 3
+# After torque comes on, gravity sag is a few degrees. A wrap-flipped
+# wrist_roll is a half turn (~2048 ticks). This is the line between them.
+_LATCH_JUMP_TICKS = 120
+
+
+def _max_wrapped_abs(delta: np.ndarray, spans: np.ndarray) -> float:
+    """Largest per-joint error, wrapping continuous joints onto their circle."""
+    delta = np.asarray(delta, dtype=np.float64).reshape(-1)
+    spans = np.asarray(spans, dtype=np.float64).reshape(-1)
+    wrapped = delta.copy()
+    for i, span in enumerate(spans):
+        if span > 0:
+            wrapped[i] = (delta[i] + span / 2.0) % span - span / 2.0
+    return float(np.max(np.abs(wrapped))) if wrapped.size else 0.0
+
 
 class ArmModule(ActuatorModule):
     """Actuator module with IK, Cartesian interpolators, and UR-style moves."""
@@ -202,6 +221,42 @@ class ArmModule(ActuatorModule):
             }
         )
 
+    def _read_joints_raw(self) -> np.ndarray:
+        """Present_Position ticks, no drive_mode / offset / radian conversion."""
+        names = self._ik_joint_names()
+        readings = self.read_sensors(PosData, names, normalize=False)
+        return np.array(
+            [
+                float(
+                    readings[n]["value"]
+                    if isinstance(readings[n], dict)
+                    else readings[n].value
+                )
+                for n in names
+            ],
+            dtype=np.float64,
+        )
+
+    def _write_joints_raw(self, q: np.ndarray) -> None:
+        """Goal_Position := the ticks just read. The servo sees no conversion."""
+        names = self._ik_joint_names()
+        q = np.asarray(q, dtype=np.float64).reshape(-1)
+        self.write_actuators(
+            {name: PosData(value=int(round(q[i]))) for i, name in enumerate(names)},
+            normalize=False,
+        )
+
+    def _joint_raw_wrap_spans(self) -> np.ndarray:
+        """Encoder circle for continuous joints, 0 when the joint does not wrap."""
+        names = self._ik_joint_names()
+        spans = np.zeros(len(names), dtype=np.float64)
+        actuators = getattr(self, "actuators", None) or {}
+        for i, name in enumerate(names):
+            act = actuators.get(name)
+            if act is not None and getattr(act, "is_continuous", False):
+                spans[i] = 4096.0
+        return spans
+
     # ========= Cartesian pose interpolator ============
     def _cartesian_pose_names(self) -> list[str]:
         """Ordered Cartesian actuator names (by ``cfg.id`` 0..5)."""
@@ -274,15 +329,53 @@ class ArmModule(ActuatorModule):
             t,
         )
 
-    def hold_measured_pose(self) -> None:
-        """Latch goal positions onto the measured joints.
+    def hold_measured_pose(self) -> np.ndarray:
+        """Copy Present_Position onto Goal_Position, tick for tick.
 
-        Servos keep their last ``Goal_Position`` while torque is off, so
-        re-energising after the arm was moved by hand snaps it back to wherever
-        it was commanded before. Writing the measured configuration first makes
-        that transition silent.
+        Enabling torque with no write is not a hold: Feetech servos keep the
+        last Goal_Position while limp, so they run back to wherever they were
+        commanded before free-drive -- usually the pose from ``initialize``.
+        The write has to happen. What must not happen is converting that
+        reading through drive_mode, center_offset, or radians. ``wrist_roll``
+        is a full encoder circle; any of those can send Goal to the far side
+        of the wrap, and the servo takes the long way around.
+
+        Two reads have to agree first. A grouped sync read that mis-parses
+        hands back a plausible number, and that number as a goal is a spin.
         """
-        self._write_joints_rad(self._read_joints_rad())
+        previous = self._read_joints_raw()
+        spans = self._joint_raw_wrap_spans()
+        for _ in range(_LATCH_CONFIRM_TRIES):
+            measured = self._read_joints_raw()
+            if _max_wrapped_abs(measured - previous, spans) <= _LATCH_AGREE_TICKS:
+                self._write_joints_raw(measured)
+                return measured
+            previous = measured
+        raise RuntimeError(
+            "Refusing to latch a hold pose: consecutive joint reads disagree "
+            f"by more than {_LATCH_AGREE_TICKS:g} encoder ticks, so the "
+            "measurement cannot be trusted and energising onto it could drive "
+            "the arm a long way. Check the bus wiring and Return_Delay_Time."
+        )
+
+    def enable_torque_holding(self) -> np.ndarray:
+        """Energise the arm so it holds the ticks it is on right now.
+
+        The same raw ticks are written again after torque comes on, because
+        some Feetech firmware ignores Goal_Position while limp. Not a new
+        read: a new read after a spin has started would freeze it mid-turn.
+        """
+        latched = self.hold_measured_pose()
+        self.enable_torque()
+        self._write_joints_raw(latched)
+        return latched
+
+    def joint_command_delta(self, reference) -> float:
+        """How far the joints have moved from *reference*, wrapping circles."""
+        return _max_wrapped_abs(
+            self._read_joints_raw() - np.asarray(reference, dtype=np.float64),
+            self._joint_raw_wrap_spans(),
+        )
 
     def reachable_travel(self, start_pose, axis: int, distance: float) -> tuple[float, list[str]]:
         """Signed travel actually achievable along *axis*, and the joints stopping it.

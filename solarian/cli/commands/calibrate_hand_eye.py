@@ -18,8 +18,9 @@ Each pose is sampled with the arm held by its own servos rather than by hand.
 Torque comes off to walk the arm into position, then on to hold it while the
 hands come away, because the pose the servos hold is the one forward
 kinematics describes -- a hand-held arm sags and flexes by degrees, and
-degrees at the tag's distance are tens of mm of error. Confirm twice per pose:
-once positioned, once let go.
+degrees at the tag's distance are tens of mm of error. Confirm three times
+per pose: once positioned, once let go, once holding the arm again so torque
+can come off without dropping it.
 
 A preview window draws the tag outline and the axes solved from it, which is
 the check worth watching: an outline only proves a quad with the right ID was
@@ -72,6 +73,7 @@ from solarian.cli.commands._calibration import (
     pick_module,
 )
 from solarian.cli.commands._ik_common import load_module, select_ik_module
+from solarian.core.arm_module import _LATCH_JUMP_TICKS
 from solarian.core.camera import Camera
 from solarian.core.data import ImageData
 from solarian.core.fisheye import load_intrinsics
@@ -81,9 +83,11 @@ from solarian.core.pose import rotvec_to_quat
 # UMI's ``scripts_slam_pipeline/06_generate_dataset_plan.py`` freezes the
 # camera-to-fingertip transform into every training episode:
 #   cam_to_center_height = 0.086             (fixed for the UMI gripper)
-#   cam_to_tip_offset    = 0.01465 + 0.205   (GoPro mount + finger length)
-# with zero rotation, so a released checkpoint expects its fingertips here.
-UMI_TIP_IN_CAMERA = np.array([0.0, 0.086, 0.21965])
+#   cam_to_tip_offset    = 0.205 - 0.01465   (finger length minus GoPro mount)
+# Optical center is in front of the mount screw, so the mount offset
+# shortens the tip distance. Zero rotation, so a released checkpoint
+# expects its fingertips here.
+UMI_TIP_IN_CAMERA = np.array([0.0, 0.086, 0.19035])
 
 # UMI's published table marker, umi-gripper.github.io/share/table_marker.pdf:
 # one 220x220 mm page carrying DICT_4X4_50 tag 13 at 160.0 mm, measured off
@@ -132,6 +136,8 @@ _SETTLE_S = 0.4
 # was knocked and the frame is paired with a pose it has already left.
 _MOVE_POS_M = 0.003
 _MOVE_ROT_DEG = 1.0
+# Energising onto a correctly latched pose is silent. Anything past this is
+# the arm being driven somewhere, and it gets cut short rather than watched.
 # Pass marks for the fit. See _grade: these are what it takes to resolve an
 # offset of a few tens of mm, not aspirational tolerances.
 _MAX_RESIDUAL_MM = 8.0
@@ -443,19 +449,29 @@ def _measure(
 
 
 def _collect(
-    arm, camera, sensor_name, detector, tag_id, obj_pts, intr, color_mode, n_samples
+    arm,
+    camera,
+    sensor_name,
+    detector,
+    tag_id,
+    obj_pts,
+    intr,
+    color_mode,
+    n_samples,
+    recapture=None,
 ):
-    """Pair arm poses with tag detections, two confirmations per pose.
+    """Pair arm poses with tag detections, three confirmations per pose.
 
-    The cycle is walk, hold, let go, measure. Torque is off to move the arm and
-    on to sample, and the order matters both ways: it comes on while the hand
-    is still there so a jerk is caught, and the sample is taken only after the
-    hand is away so the pose belongs to the servos rather than to the grip.
-    ``hold_measured_pose`` latches the reading first, which is what keeps
-    energising silent instead of a snap to a stale goal.
+    The cycle is walk, hold, let go, measure, take the arm, release. Torque
+    stays on after the sample so the arm does not drop before a hand is on
+    it. It comes on while the hand is still there so a jerk is caught, and
+    the sample is taken only after the hand is away so the pose belongs to
+    the servos rather than to the grip.
 
-    The window shows the full frame; only the detection gate works on a
-    downscaled copy, and that is for latency, not for display.
+    *recapture* is the 1-based pose numbers being replaced after a failed
+    fit; the prompts name those instead of counting from one. The window
+    shows the full frame; only the detection gate works on a downscaled
+    copy, and that is for latency, not for display.
     """
     import cv2
 
@@ -470,6 +486,7 @@ def _collect(
     # movable again -- it is not redundant with whatever state it was left in.
     arm.start_calibration_mode()
     holding = False
+    releasing = False
 
     preview = True
     window_wh = (
@@ -481,44 +498,68 @@ def _collect(
         cv2.resizeWindow(_CAM_WINDOW, *window_wh)
     except cv2.error:
         preview = False
-    print(
-        f"\nTwo confirmations per pose, {n_samples} poses.\n"
-        "  1. Torque is off: walk the arm until the tag is in view, tilted at "
-        f"least\n     {_MIN_TILT_DEG:g} deg off flat-on, then confirm. The arm "
-        "energises and holds.\n"
-        "  2. Let go of the arm, then confirm again. The sample is taken with "
-        "the\n     servos holding it, not your hand.\n"
-        f"Vary tilt and roll by {_MIN_ROT_STEP_DEG:g} deg or more between "
-        "poses: poses that differ\nonly by a translation leave the lever arm "
-        "being measured unobservable."
-        + (
-            f"\n\nThe window shows the full {frame_w}x{frame_h} frame, opened "
-            f"at {window_wh[0]}x{window_wh[1]} -- drag it\nlarger to inspect "
-            "focus. ENTER confirms and q finishes early, from\neither the "
-            "window or this shell."
-            if preview
-            else "\n\nNo display, so no preview window."
-        )
+    window_help = (
+        f"\n\nThe window shows the full {frame_w}x{frame_h} frame, opened "
+        f"at {window_wh[0]}x{window_wh[1]} -- drag it\nlarger to inspect "
+        "focus. ENTER confirms and q finishes early, from\neither the "
+        "window or this shell."
+        if preview
+        else "\n\nNo display, so no preview window."
     )
+    if recapture:
+        names = ", ".join(str(i) for i in recapture)
+        print(
+            f"\nRecapturing pose{'s' if len(recapture) != 1 else ''} {names}. "
+            "Same three confirmations:\n  hold, let go, take the arm."
+            + window_help
+        )
+    else:
+        print(
+            f"\nThree confirmations per pose, {n_samples} poses.\n"
+            "  1. Torque is off: walk the arm until the tag is in view, tilted at "
+            f"least\n     {_MIN_TILT_DEG:g} deg off flat-on, then confirm. The arm "
+            "energises and holds.\n"
+            "  2. Let go of the arm, then confirm again. The sample is taken with "
+            "the\n     servos holding it, not your hand.\n"
+            "  3. Take hold of the arm, then confirm. Torque comes off so you can "
+            "walk\n     it to the next pose.\n"
+            f"Vary tilt and roll by {_MIN_ROT_STEP_DEG:g} deg or more between "
+            "poses: poses that differ\nonly by a translation leave the lever arm "
+            "being measured unobservable."
+            + window_help
+        )
 
     res_label = f"frame {frame_w}x{frame_h}, fx {intr['K'][0, 0]:.0f} px"
     samples: list[dict] = []
     flash_mono = 0.0
     try:
-        while len(samples) < n_samples:
+        while len(samples) < n_samples or releasing:
             # A blocking prompt has to be answered before the frame is grabbed,
             # or the status would describe a pose the user has already left.
             # The preview is already grabbing continuously, so there the
             # keypress marks a live frame and the order is the other way round.
             if not preview:
-                prompt = (
-                    "  let go of the arm, then Enter to measure (q to finish): "
-                    if holding
-                    else (
-                        f"Pose {len(samples) + 1}/{n_samples}: position the arm,"
-                        " then Enter to hold it (q to finish): "
+                if releasing:
+                    prompt = (
+                        "  hold the arm, then Enter to release it "
+                        "(q to finish): "
                     )
-                )
+                elif holding:
+                    prompt = (
+                        "  let go of the arm, then Enter to measure "
+                        "(q to finish): "
+                    )
+                else:
+                    which = (
+                        recapture[len(samples)]
+                        if recapture is not None
+                        else f"{len(samples) + 1}/{n_samples}"
+                    )
+                    prompt = (
+                        f"Recapture pose {which}: position the arm,"
+                        if recapture is not None
+                        else f"Pose {which}: position the arm,"
+                    ) + " then Enter to hold it (q to finish): "
                 if input(prompt).strip().lower() == "q":
                     break
 
@@ -587,9 +628,20 @@ def _collect(
                         detection,
                         turn,
                         (
-                            ("HOLDING - let go, then ENTER to measure", (0, 255, 255))
+                            (
+                                "HOLD THE ARM, then ENTER to release",
+                                (0, 255, 255),
+                            )
+                            if releasing
+                            else (
+                                "HOLDING - let go, then ENTER to measure",
+                                (0, 255, 255),
+                            )
                             if holding
-                            else ("ENTER to hold this pose   q finish", (200, 200, 200))
+                            else (
+                                "ENTER to hold this pose   q finish",
+                                (200, 200, 200),
+                            )
                         ),
                         # Hershey fonts are ASCII only, so no typographic dots.
                         (res_label, (200, 200, 200)),
@@ -610,12 +662,38 @@ def _collect(
             if not confirmed:
                 continue
 
+            if releasing:
+                arm.disable_torque()
+                holding = False
+                releasing = False
+                if len(samples) < n_samples:
+                    print("  limp. Walk it to the next pose.")
+                continue
+
             if not holding:
                 # Latch before energising, and energise while the hand is still
                 # on the arm: both halves of not being surprised by this.
-                arm.hold_measured_pose()
-                arm.enable_torque()
+                try:
+                    latched = arm.enable_torque_holding()
+                except RuntimeError as exc:
+                    print(f"  {exc}")
+                    continue
                 holding = True
+                time.sleep(_SETTLE_S)
+                # wrist_roll spins about the tool axis, so a full turn leaves
+                # TCP xyz where it started and a Cartesian jump check cannot
+                # see it. The joints can.
+                if arm.joint_command_delta(latched) > _LATCH_JUMP_TICKS:
+                    arm.disable_torque()
+                    holding = False
+                    print(
+                        "  a joint moved on energising, so torque is back off "
+                        "and nothing was recorded. The latched goal did not "
+                        "match the arm -- often wrist_roll taking the long "
+                        "way around its wrap. Re-seat this pose and try "
+                        "again; if it repeats, the joint reads are unreliable."
+                    )
+                    continue
                 print("  holding. Let go of the arm, then confirm to measure.")
                 continue
 
@@ -631,19 +709,19 @@ def _collect(
                 color_mode,
                 gate_wh,
             )
-            arm.disable_torque()
-            holding = False
             if sample is None:
                 print(f"  nothing recorded: {reason}.")
-                continue
-
-            samples.append(sample)
-            flash_mono = time.monotonic()
-            print(
-                f"  sample {len(samples)}/{n_samples}: tag at "
-                f"{sample['tag_m']:.3f} m, reprojection {sample['rms_px']:.2f} px, "
-                f"ambiguity {sample['ratio']:.0f}, TCP z {sample['pose'][2]:+.4f} m"
-            )
+            else:
+                samples.append(sample)
+                flash_mono = time.monotonic()
+                print(
+                    f"  sample {len(samples)}/{n_samples}: tag at "
+                    f"{sample['tag_m']:.3f} m, reprojection {sample['rms_px']:.2f} px, "
+                    f"ambiguity {sample['ratio']:.0f}, TCP z {sample['pose'][2]:+.4f} m"
+                )
+            # Still energised: the arm must not go limp until a hand is on it.
+            releasing = True
+            print("  hold the arm, then confirm to release it.")
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:
@@ -814,13 +892,14 @@ def _diagnose(samples, trans_mm, grade) -> None:
                 _para(
                     f"Without them the remaining {len(keep)} poses do fit, at "
                     f"{regrade['trans_rms']:.1f} mm rms. So the rig is fine and "
-                    "these are bad detections: re-run, and watch the axes sit "
-                    "square on the tag before confirming each sample."
+                    "these are bad detections: recapture them, and watch the "
+                    "axes sit square on the tag before confirming each sample."
                 )
                 return
             _para(
                 f"Dropping them still leaves {regrade['trans_rms']:.1f} mm rms, "
-                "so they are not the whole story."
+                "so they are not the whole story. Recapture them, and name any "
+                "other poses whose residual looks just as wrong."
             )
 
     if grade["rot_rms"] > _MAX_ROT_RMS_DEG:
@@ -839,13 +918,73 @@ def _diagnose(samples, trans_mm, grade) -> None:
         _para(
             f"At the tag's {tag_m:.2f} m, {grade['rot_rms']:.2f} deg is "
             f"{implied:.0f} mm, which is the translation residual above -- one "
-            "cause, whole budget. Re-running the same way will reproduce it; "
+            "cause, whole budget. Recapturing the same way will reproduce it; "
             "what changes it is how the arm is held while sampling."
         )
 
 
+def _default_replacements(trans_mm, grade) -> list[int]:
+    """Poses to recapture if the user just confirms: outliers, else the worst."""
+    if grade["outliers"]:
+        return list(grade["outliers"])
+    return [int(np.argmax(trans_mm))]
+
+
+def _parse_replacements(line: str, n: int, default: list[int]) -> list[int] | None:
+    """Enter keeps *default*, pose numbers pick a set, q gives up.
+
+    Returns 0-based indices, or None when the user wants to stop. Raises
+    ValueError on tokens that are not pose numbers in ``1..n``.
+    """
+    text = line.strip().lower()
+    if text in ("q", "quit", "n", "no"):
+        return None
+    if text in ("", "y", "yes"):
+        return list(default)
+    indices: list[int] = []
+    for tok in text.replace(",", " ").split():
+        if not tok.isdigit():
+            raise ValueError(f"{tok!r} is not a pose number")
+        i = int(tok)
+        if i < 1 or i > n:
+            raise ValueError(f"pose {i} is not in 1..{n}")
+        if i - 1 not in indices:
+            indices.append(i - 1)
+    if not indices:
+        raise ValueError("name at least one pose")
+    return indices
+
+
+def _ask_replacements(samples, trans_mm, grade) -> list[int] | None:
+    """Offer to substitute the poison poses instead of starting over."""
+    default = _default_replacements(trans_mm, grade)
+    named = ", ".join(
+        f"{i + 1} ({trans_mm[i]:.1f} mm)" for i in default
+    )
+    kind = "poisoning the fit" if grade["outliers"] else "the worst residual"
+    noun = "Pose" if len(default) == 1 else "Poses"
+    verb = "it" if len(default) == 1 else "them"
+    print(
+        f"\n  {noun} {named} {'is' if len(default) == 1 else 'are'} {kind}."
+    )
+    print(
+        f"  Enter to recapture {verb}, pose numbers (e.g. 1 9 12) to pick "
+        "others, or q to stop."
+    )
+    while True:
+        try:
+            return _parse_replacements(
+                input("  recapture: "), len(samples), default
+            )
+        except ValueError as exc:
+            print(
+                f"  {exc}. Pose numbers, Enter for the suspect ones, or q "
+                "to stop."
+            )
+
+
 def _report_fail(samples, trans_mm, grade) -> None:
-    _banner("CALIBRATION FAILED -- DO NOT USE THESE NUMBERS. RUN IT AGAIN.")
+    _banner("CALIBRATION FAILED -- DO NOT USE THESE NUMBERS.")
     _print_checks(grade)
     print(
         "\n  No offsets are printed, deliberately. A fit this loose cannot "
@@ -933,6 +1072,45 @@ def _report_pass(derived, grade, arm_name, ik_tcp, frame_wh) -> None:
     )
 
 
+def _write_failed_record(
+    path, arm_name, tag_id, marker_mm, frame_wh, samples, trans_mm, rot_deg, grade
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as fp:
+        json.dump(
+            {
+                "passed": False,
+                "arm": arm_name,
+                "tag": {"id": tag_id, "marker_mm": marker_mm},
+                "frame_size": list(frame_wh),
+                "fit": {
+                    "trans_rms_mm": grade["trans_rms"],
+                    "trans_max_mm": grade["trans_max"],
+                    "rot_rms_deg": grade["rot_rms"],
+                    "limits": {
+                        "trans_rms_mm": _MAX_RESIDUAL_MM,
+                        "rot_rms_deg": _MAX_ROT_RMS_DEG,
+                    },
+                },
+                "poses": [
+                    {
+                        "pose": [float(v) for v in s["pose"]],
+                        "tx_world2cam": s["tx_world2cam"].tolist(),
+                        "residual_mm": float(trans_mm[i]),
+                        "residual_deg": float(rot_deg[i]),
+                        "rms_px": s["rms_px"],
+                        "ambiguity": s["ratio"],
+                        "tag_m": s["tag_m"],
+                    }
+                    for i, s in enumerate(samples)
+                ],
+            },
+            fp,
+            indent=2,
+        )
+    print(f"\nWrote the per-pose record to {path}")
+
+
 @CommandRegistry.register("calibrate-hand-eye", "robot")
 class CalibrateHandEyeCommand(BaseCommand):
     help = "Measure camera-to-fingertip (robot-world hand-eye) against what a UMI policy assumes."
@@ -1008,77 +1186,94 @@ class CalibrateHandEyeCommand(BaseCommand):
 
             # The prompt above already covered both modules; a second one here
             # would just be a keystroke between the user and the same decision.
+            detector = _aruco_detector()
+            color_mode = str(sensor_cfg.color_mode)
+            fail_path = (
+                conf_dir / "calibrations" / f"{camera.name}_hand_eye_FAILED.json"
+            )
             with module_running(arm, "Connecting the arm...", confirm=False):
                 samples = _collect(
                     arm,
                     camera,
                     sensor_name,
-                    _aruco_detector(),
+                    detector,
                     tag_id,
                     obj_pts,
                     intr,
-                    str(sensor_cfg.color_mode),
+                    color_mode,
                     n_samples,
                 )
+                while True:
+                    if len(samples) < _MIN_SAMPLES:
+                        print(
+                            f"\nOnly {len(samples)} samples; the translation "
+                            f"needs at least {_MIN_SAMPLES} to come out of the "
+                            "geometry rather than out of the corner noise. "
+                            "Nothing solved."
+                        )
+                        return
 
-        if len(samples) < _MIN_SAMPLES:
-            print(
-                f"\nOnly {len(samples)} samples; the translation needs at least "
-                f"{_MIN_SAMPLES} to come out of the geometry rather than out of "
-                "the corner noise. Nothing solved."
-            )
-            return
+                    tx_base2world, tx_tcp2camera = _solve(samples)
+                    trans_mm, rot_deg = _fit_error(
+                        samples, tx_base2world, tx_tcp2camera
+                    )
+                    grade = _grade(trans_mm, rot_deg)
+                    if grade["passed"]:
+                        break
 
-        tx_base2world, tx_tcp2camera = _solve(samples)
-        trans_mm, rot_deg = _fit_error(samples, tx_base2world, tx_tcp2camera)
-        grade = _grade(trans_mm, rot_deg)
-        derived = _derive(tx_tcp2camera, template.ik_tcp)
+                    _report_fail(samples, trans_mm, grade)
+                    replace = _ask_replacements(samples, trans_mm, grade)
+                    if replace is None:
+                        # Under a name nothing loads: the numbers in it are
+                        # the ones just refused.
+                        _write_failed_record(
+                            fail_path,
+                            arm_name,
+                            tag_id,
+                            marker_mm,
+                            frame_wh,
+                            samples,
+                            trans_mm,
+                            rot_deg,
+                            grade,
+                        )
+                        return
 
-        if not grade["passed"]:
-            _report_fail(samples, trans_mm, grade)
-            # The per-pose record, so a failed run stays diagnosable without
-            # having to be reproduced. Under a name nothing loads, because the
-            # numbers in it are the ones just refused.
-            fail_path = (
-                conf_dir / "calibrations" / f"{camera.name}_hand_eye_FAILED.json"
-            )
-            fail_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(fail_path, "w") as fp:
-                json.dump(
-                    {
-                        "passed": False,
-                        "arm": arm_name,
-                        "tag": {"id": tag_id, "marker_mm": marker_mm},
-                        "frame_size": list(frame_wh),
-                        "fit": {
-                            "trans_rms_mm": grade["trans_rms"],
-                            "trans_max_mm": grade["trans_max"],
-                            "rot_rms_deg": grade["rot_rms"],
-                            "limits": {
-                                "trans_rms_mm": _MAX_RESIDUAL_MM,
-                                "rot_rms_deg": _MAX_ROT_RMS_DEG,
-                            },
-                        },
-                        "poses": [
-                            {
-                                "pose": [float(v) for v in s["pose"]],
-                                "tx_world2cam": s["tx_world2cam"].tolist(),
-                                "residual_mm": float(trans_mm[i]),
-                                "residual_deg": float(rot_deg[i]),
-                                "rms_px": s["rms_px"],
-                                "ambiguity": s["ratio"],
-                                "tag_m": s["tag_m"],
-                            }
-                            for i, s in enumerate(samples)
-                        ],
-                    },
-                    fp,
-                    indent=2,
-                )
-            print(f"\nWrote the per-pose record to {fail_path}")
-            return
+                    extra = _collect(
+                        arm,
+                        camera,
+                        sensor_name,
+                        detector,
+                        tag_id,
+                        obj_pts,
+                        intr,
+                        color_mode,
+                        len(replace),
+                        recapture=[i + 1 for i in replace],
+                    )
+                    if not extra:
+                        _write_failed_record(
+                            fail_path,
+                            arm_name,
+                            tag_id,
+                            marker_mm,
+                            frame_wh,
+                            samples,
+                            trans_mm,
+                            rot_deg,
+                            grade,
+                        )
+                        return
+                    for src, dst in zip(extra, replace):
+                        samples[dst] = src
+                    print(
+                        "  substituted pose "
+                        + ", ".join(str(i + 1) for i in replace[: len(extra)])
+                        + ". Re-solving."
+                    )
 
-        _report_pass(derived, grade, arm_name, template.ik_tcp, frame_wh)
+                derived = _derive(tx_tcp2camera, template.ik_tcp)
+                _report_pass(derived, grade, arm_name, template.ik_tcp, frame_wh)
 
         out_path = conf_dir / "calibrations" / f"{camera.name}_hand_eye.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
