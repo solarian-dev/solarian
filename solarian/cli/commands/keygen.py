@@ -10,9 +10,19 @@ from solarian.core.curve import generate_keypair
 
 @CommandRegistry.register("keygen", None)
 class KeygenCommand(BaseCommand):
-    help = (
-        "Generate CurveZMQ keypairs for the relay, the robot and the controller "
-        "(prints the deployment yaml to paste)"
+    help = "Generate CurveZMQ keypairs for the relay, the robot and the controller."
+    description = """
+    Prints three fresh keypairs and the yaml blocks that use them: the relay's
+    allowlist for conf/server.yaml, and one connection block per peer for that
+    peer's conf/deployment/<name>.yaml.
+
+    Generates only; nothing is written. Each peer keeps its own secret key, so the
+    three blocks usually belong in three different deployment profiles.
+    """
+    usage = ""
+    examples = (
+        "solarian keygen",
+        "solarian keygen > keys.txt",
     )
 
     def handle(self, cfg: DictConfig) -> None:

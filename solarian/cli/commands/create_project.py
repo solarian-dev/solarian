@@ -17,6 +17,24 @@ from solarian.cli import BaseCommand, CommandRegistry
 @CommandRegistry.register('create-project')
 class CreateProjectCommand(BaseCommand):
     help = 'Create a new Solarian project with the specified name'
+    description = """
+    Scaffolds a project directory in the current working directory: a Robot and a
+    Controller class, a settings.py the CLI discovers, a conf/ tree with the yaml
+    each command composes (robot, controller, server, record, replay, train) and
+    a pyproject.toml where module plugins are added as dependencies.
+
+    Add hardware to the new project with `solarian add-module`.
+    """
+    usage = "<project_name> [--force]"
+    options = {
+        "<project_name>": "Directory and Python package to create. Use a valid "
+                          "identifier: it is imported as a package.",
+        "--force": "Overwrite files that already exist.",
+    }
+    examples = (
+        "solarian create-project my_robot",
+        "solarian create-project my_robot --force",
+    )
 
     def handle(self, cfg: DictConfig) -> None:
         project_name = os.environ.get("SOLARIAN_CREATE_PROJECT_NAME")

@@ -601,6 +601,17 @@ def open_camera_preview(cam: dict) -> None:
 @CommandRegistry.register("list-cameras")
 class ListCamerasCommand(BaseCommand):
     help = "Detect connected cameras and optionally open a live preview."
+    description = """
+    Enumerates every camera backend available on this machine (USB/UVC, the Pi's
+    CSI cameras via picamera2, and network streams), prints model, backend and
+    port for each, then opens a live preview of the one you pick so you can tell
+    which physical camera it is before naming its port in a camera module yaml.
+
+    Run it with the robot stopped: run-robot and run-server hold the camera open,
+    and a CSI camera admits one reader at a time.
+    """
+    usage = ""
+    examples = ("solarian list-cameras",)
 
     def handle(self, cfg: DictConfig) -> None:
         os.environ.setdefault("LIBCAMERA_LOG_LEVELS", "*:ERROR")

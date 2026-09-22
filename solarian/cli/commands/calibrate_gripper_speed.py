@@ -110,6 +110,17 @@ def _run(module: GripperModule) -> None:
 @CommandRegistry.register("calibrate-gripper-speed", "robot")
 class CalibrateGripperSpeedCommand(BaseCommand):
     help = "Measure the aperture speed the gripper sustains, for max_speed."
+    description = """
+    Strokes the jaws open and closed at rising speeds and reports the aperture
+    speed the gripper keeps up with, which is the value for max_speed in the
+    gripper's module yaml. Nothing is written.
+
+    The limit does not slow the jaws down, it moves a waypoint's arrival time
+    later, so a value under the truth manufactures lag and one over it turns into
+    tracking error. It drives faster than the configured limit on purpose: keep
+    clear and keep a hand on the power.
+    """
+    examples = ("solarian calibrate-gripper-speed",)
 
     def handle(self, cfg) -> None:
         del cfg

@@ -651,17 +651,46 @@ def _run_overlay(
 @CommandRegistry.register("calibrate-umi-camera", "controller")
 class CalibrateUmiCameraCommand(BaseCommand):
     help = (
-        "Calibrate a connected camera onto GoPro Hero 10 + Max Lens Mod optics, "
-        "save the remap, and overlay fingers/holders/screws vs the shipped UMI gold image "
-        "(override with gold=<path>)."
+        "Calibrate a connected camera onto GoPro Hero 10 + Max Lens Mod optics "
+        "and overlay vs UMI gold."
     )
-    params = (
-        "gold",
-        "camera_yaml",
-        "images",
-        "gopro_images",
-        "overlay_only",
-        "skip_overlay",
+    description = """
+    Walks the whole alignment in one sitting:
+
+      1. Pick the camera to calibrate (same enumeration as list-cameras)
+      2. Optionally pick a GoPro on the SAME mount for a paired homography
+      3. Capture a 9x6 checkerboard from at least 8 varied views
+      4. Fisheye-calibrate it and remap it onto the shipped GoPro HDMI 1080p model
+      5. Write the remap JSON and point the camera yaml at it, at 640x360
+      6. Open the live gold overlay to check fingers, holders and screws
+
+    Run it with the robot stopped: run-robot and run-server hold the camera. Once a
+    remap exists, overlay_only=true skips straight to step 6, which is how the
+    camera gets aimed after it is mounted.
+
+    In the overlay, click to trace polygons on the gold (left) and live (middle)
+    panels: o/w pick the class, right-click or c closes one, z undoes a vertex,
+    x deletes the last, r resets, f freezes the live frame, g ghosts the gold
+    outlines, m cycles views, s saves a contact sheet, q quits.
+    """
+    params = {
+        "gold": "Path to a custom gold policy image; defaults to the UMI image "
+                "shipped with Solarian.",
+        "camera_yaml": "Camera config to read the capture size from and write the "
+                       "remap into; defaults to the skill's camera module.",
+        "images": "Directory of checkerboard PNGs to reuse instead of capturing.",
+        "gopro_images": "Matching GoPro captures for the paired homography, named "
+                        "to pair with images.",
+        "overlay_only": "true to skip capture and calibration and open the live "
+                        "overlay against the remap the camera yaml already names "
+                        "(default: false).",
+        "skip_overlay": "true to stop after writing the remap (default: false).",
+    }
+    examples = (
+        "solarian calibrate-umi-camera",
+        "solarian calibrate-umi-camera overlay_only=true",
+        "solarian calibrate-umi-camera images=.cache/umi_camera_calib/20260919_101530/user",
+        "solarian calibrate-umi-camera camera_yaml=right_wrist_camera_arducam_lens.yaml",
     )
 
     def handle(self, cfg: DictConfig) -> None:

@@ -85,6 +85,18 @@ def _run_obs_latency(module: GripperModule) -> None:
 @CommandRegistry.register("calibrate-gripper-latency", "robot")
 class CalibrateGripperLatencyCommand(BaseCommand):
     help = "Measure gripper action latency (sinusoid) or observation latency (read timing)."
+    description = """
+    Pick a gripper module, then a mode:
+
+      action  the jaws follow an aperture sinusoid and the measured aperture is
+              cross-correlated against the command -> gripper_action_latency
+      obs     repeated aperture reads are timed -> gripper_obs_latency
+
+    Prints the delay to put in the module yaml; nothing is written. The two keys
+    compensate in opposite directions, so measure both. The jaws move in action
+    mode: keep clear of the workspace.
+    """
+    examples = ("solarian calibrate-gripper-latency",)
 
     def handle(self, cfg) -> None:
         del cfg

@@ -30,6 +30,27 @@ from solarian.cli import BaseCommand, CommandRegistry
 @CommandRegistry.register('run-policy')
 class RunPolicyCommand(BaseCommand):
     help = 'Run the policy server associated with a skill'
+    description = """
+    Looks up the named skill, reads the policy server module it declares and the
+    checkpoint from its bundled config, and runs that server as a subprocess. The
+    controller then reaches it over HTTP at policy_server_url.
+
+    Run it on the machine that holds the checkpoint and the GPU, which is often not
+    the robot. The flags override what the skill's config says.
+    """
+    usage = "<skill_name> [--checkpoint PATH] [--host HOST] [--port PORT]"
+    options = {
+        "<skill_name>": "Skill whose policy server to run; unknown names print the "
+                        "installed skills.",
+        "--checkpoint PATH": "Checkpoint to serve, overriding the skill's configured "
+                             "one.",
+        "--host HOST": "Address to bind (default: the skill's config).",
+        "--port PORT": "Port to bind (default: the skill's config).",
+    }
+    examples = (
+        "solarian run-policy cup_arrange",
+        "solarian run-policy cup_arrange --checkpoint data/models/cup.ckpt --port 8001",
+    )
 
     def handle(self, cfg: DictConfig) -> None:
         skill_name = os.environ.get("SOLARIAN_RUN_POLICY_SKILL")

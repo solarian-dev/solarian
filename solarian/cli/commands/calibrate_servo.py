@@ -54,6 +54,17 @@ def select(kind: str, options: list, label=str):
 @CommandRegistry.register("calibrate-servo")
 class CalibrateServoCommand(BaseCommand):
     help = "Prepare a servo for use: set its ID, reset registers, and centre its range."
+    description = """
+    Walks brand -> port -> servo, then sets the servo's ID, resets the registers
+    that matter and parks the shaft at mid-encoder so the horn can be fitted at
+    mid-travel. Loops so a whole arm can be numbered in one sitting.
+
+    Run it before the servo is part of a module: it needs no project and no yaml.
+    Connect one new servo at a time, since fresh units share the factory ID and
+    collide on a shared bus.
+    """
+    usage = ""
+    examples = ("solarian calibrate-servo",)
 
     def handle(self, cfg) -> None:
         del cfg  # no project config: the servo is not a declared component yet

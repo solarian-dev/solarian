@@ -18,7 +18,21 @@ def _collect_modules_from_class(cls) -> dict[str, type]:
 
 @CommandRegistry.register('setup-module', 'robot')
 class SetupModuleCommand(BaseCommand):
-    help = 'Setup module device.'
+    help = "Run a module's one-off device setup (actuator IDs, baud rates, modes)"
+    description = """
+    Lists the modules the project's Robot and Controller declare, connects the one
+    you pick and runs its setup() hook: the one-off device provisioning a module
+    needs before it can be used, such as writing actuator IDs, baud rates and
+    operating modes onto the hardware.
+
+    What setup() does is the module plugin's business, and it writes to the
+    device, not to the yaml. Run it once per new piece of hardware, before
+    `solarian calibrate`.
+    """
+    examples = (
+        "solarian setup-module",
+        "solarian setup-module -d pi",
+    )
 
     def get_config_class(self):
         """Return the config class for this command."""

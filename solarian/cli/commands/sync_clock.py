@@ -13,9 +13,20 @@ from solarian.core.configs import ServerConfig
 
 @CommandRegistry.register("sync-clock", "server")
 class SyncClockCommand(BaseCommand):
-    help = (
-        "Sync this machine's Solarian clock offset to the relay server "
-        "(Cristian / NTP-style; does not change the OS clock)"
+    help = "Sync Solarian wall-clock offset to the relay server (does not change OS time)."
+    description = """
+    Takes 12 timing samples against the relay's clock-sync port and reports the
+    offset and round trip. Use it to check that two machines agree on a timebase
+    before trusting anything that subtracts their timestamps, such as
+    calibrate-camera-latency across a laptop and a robot.
+
+    The relay must already be running (`solarian run-server`). The offset applies
+    to this invocation only; run-robot and run-controller sync themselves on
+    connect, and the OS clock is never touched.
+    """
+    examples = (
+        "solarian sync-clock",
+        "solarian sync-clock -d pi",
     )
 
     def get_config_class(self):

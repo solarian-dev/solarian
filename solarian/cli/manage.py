@@ -18,6 +18,7 @@ from omegaconf import DictConfig, OmegaConf
 import colorama
 
 from .base import CommandRegistry
+from .help import GLOBAL_OPTIONS, format_command_help
 
 
 def _find_settings_path(cwd: Path | None = None) -> str:
@@ -70,6 +71,22 @@ COMMAND_ENTRY_POINT_GROUP = "solarian.commands"
 #: Plugin commands that operate directly on hardware and therefore must run
 #: without Hydra config or project ``settings.py`` discovery.
 PLUGIN_NO_HYDRA_COMMANDS = {"feetech-set-id", "feetech-inspect"}
+
+#: Commands that take no Hydra config and need no project ``settings.py``:
+#: scaffolding that runs before a project exists, and tools that talk straight
+#: to a device. The global ``--conf`` / ``--deployment`` flags do nothing for
+#: them, so their help leaves those out.
+NO_HYDRA_COMMANDS = {
+    "add-module",
+    "create-project",
+    "create-plugin",
+    "list-cameras",
+    "detect-device",
+    "run-policy",
+    "onshape-export",
+    "keygen",
+    "calibrate-servo",
+} | PLUGIN_NO_HYDRA_COMMANDS
 
 
 def _get_version() -> str:
@@ -144,6 +161,7 @@ def _build_command_list() -> str:
         "calibrate-gripper-latency": "Robot",
         "calibrate-gripper-ranges": "Robot",
         "calibrate-camera-latency": "Robot",
+        "calibrate-hand-eye": "Robot",
         "setup-module": "Robot",
         "calibrate-servo": "Robot",
         "write-robot-calibration": "Robot",
@@ -200,7 +218,11 @@ def main() -> None:
 
     available_commands = CommandRegistry.get_all_command_names()
 
-    epilog = "available commands:\n" + _build_command_list()
+    epilog = (
+        "available commands:\n"
+        + _build_command_list()
+        + "\nRun `solarian <command> --help` for that command's arguments and examples.\n"
+    )
 
     parser = argparse.ArgumentParser(
         prog="solarian",
@@ -215,11 +237,8 @@ def main() -> None:
         metavar="subcommand",
         help="The subcommand to run (see list below).",
     )
-    parser.add_argument("--conf", type=str, default="conf", help="The conf directory with yaml config files to use.")
-    parser.add_argument("--deployment", "-d", type=str, default=None,
-                        help="Deployment profile in conf/deployment/ (relay address and device ports). "
-                             "Defaults to $SOLARIAN_DEPLOYMENT, then 'localhost'.")
-    parser.add_argument("--settings", type=str, default=None, help="Path to settings.py (auto-discovered if not given).")
+    for flags, kwargs in GLOBAL_OPTIONS:
+        parser.add_argument(*flags, **kwargs)
     parser.add_argument("--version", "-V", action="version", version=f"%(prog)s {_get_version()}",
                         help="Print the installed solarian version and exit.")
     
@@ -227,6 +246,20 @@ def main() -> None:
     if len(sys.argv) < 2:
         parser.print_help()
         sys.exit(1)
+
+    # `solarian <command> --help` describes that command. Answered before
+    # argparse sees the flag, which would otherwise print the root help.
+    if sys.argv[1] in available_commands and {"-h", "--help"}.intersection(sys.argv[2:]):
+        print(
+            format_command_help(
+                sys.argv[1],
+                CommandRegistry.get_command(sys.argv[1]),
+                config_name=CommandRegistry.get_config_name(sys.argv[1]),
+                uses_config=sys.argv[1] not in NO_HYDRA_COMMANDS,
+            ),
+            end="",
+        )
+        sys.exit(0)
 
     # Handle positional arguments for specific commands
     args, remaining = parser.parse_known_args()
@@ -304,12 +337,8 @@ def main() -> None:
 
     subcommand = args.subcommand
 
-    # Commands that don't need Hydra config or project settings
-    no_hydra_commands = ['add-module', 'create-project', 'create-plugin', 'list-cameras', 'detect-device', 'run-policy', 'onshape-export', 'keygen', 'calibrate-servo']
-    no_hydra_commands += list(PLUGIN_NO_HYDRA_COMMANDS)
-
     # Resolve settings.py location (skip for commands that don't need it)
-    if subcommand not in no_hydra_commands:
+    if subcommand not in NO_HYDRA_COMMANDS:
         if args.settings:
             settings_path = str(Path(os.getcwd()) / args.settings)
         else:
@@ -338,7 +367,7 @@ def main() -> None:
         print(f"Unknown command: {subcommand}")
         sys.exit(1)
     
-    if subcommand in no_hydra_commands:
+    if subcommand in NO_HYDRA_COMMANDS:
         # For commands that don't need Hydra, just call handle with empty config
         try:
             cmd.handle(OmegaConf.create({}))

@@ -24,6 +24,25 @@ from solarian.cli import BaseCommand, CommandRegistry
 @CommandRegistry.register('create-plugin')
 class CreatePluginCommand(BaseCommand):
     help = 'Scaffold a new Solarian plugin (or add a component type to an existing one)'
+    description = """
+    Writes plugins/solarian-<name>/ with the source layout and a pyproject.toml
+    whose entry points advertise the component to Solarian, so installing the
+    plugin is all it takes for the CLI and the registries to find it.
+
+    Run it again with a different type and the same name to add a second
+    component to the plugin that already exists; the shared files are left alone.
+    """
+    usage = "<type> <name> [--force]"
+    options = {
+        "<type>": "Component to scaffold: actuator, sensor, module, robot, command "
+                  "or policy.",
+        "<name>": "Plugin name without the solarian- prefix (feetech, ur5, ...).",
+        "--force": "Overwrite files that already exist.",
+    }
+    examples = (
+        "solarian create-plugin actuator feetech",
+        "solarian create-plugin module feetech    # second component, same plugin",
+    )
 
     def handle(self, cfg: DictConfig) -> None:
         from solarian.cli.plugin_scaffolder import (

@@ -1,4 +1,4 @@
-from typing import Dict, Type, Optional, Any, NamedTuple
+from typing import Dict, Mapping, Type, Optional, Any, NamedTuple
 from abc import ABC, abstractmethod
 import importlib
 from omegaconf import DictConfig
@@ -95,14 +95,32 @@ class CommandRegistry:
         return None
 
 class BaseCommand(ABC):
-    help = ""  # Command help text
+    #: One line, listed by ``solarian --help`` and repeated at the top of this
+    #: command's own help.
+    help = ""
 
-    # Ad-hoc CLI parameters this command reads off ``cfg`` that are not keys of
-    # its yaml (``role``, ``module``, ``sweep``, ...). Hydra composes in struct
-    # mode, so ``key=value`` for a key the yaml never declares is rejected;
-    # naming it here seeds it as null so the plain form works. Undeclared names
-    # still fail, which is what catches a mistyped override.
-    params: tuple = ()
+    #: What the command does, printed by ``solarian <command> --help`` under
+    #: ``help``: prerequisites, the flow it walks through, what it writes.
+    description = ""
+
+    #: Argument spec as the user types it, after the command name.
+    usage = "[key=value ...]"
+
+    #: Ad-hoc CLI parameters this command reads off ``cfg`` that are not keys of
+    #: its yaml (``role``, ``module``, ``sweep``, ...), mapped to their help
+    #: text. Hydra composes in struct mode, so ``key=value`` for a key the yaml
+    #: never declares is rejected; naming it here seeds it as null so the plain
+    #: form works. Undeclared names still fail, which is what catches a
+    #: mistyped override.
+    params: Mapping[str, str] = {}
+
+    #: Positional arguments and flags the command parses itself rather than
+    #: through Hydra, written as the user types them.
+    options: Mapping[str, str] = {}
+
+    #: Example invocations, one command line each.
+    examples: tuple = ()
+
     
     def get_config_class(self) -> Optional[Type[Any]]:
         """

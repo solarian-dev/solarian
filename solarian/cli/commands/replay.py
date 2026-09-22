@@ -1,7 +1,6 @@
 import time
 import threading
 from omegaconf import DictConfig, OmegaConf
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.utils import get_class
@@ -16,7 +15,20 @@ from solarian.core import Action
 
 @CommandRegistry.register('replay', 'replay')
 class ReplayCommand(BaseCommand):
-    help = 'Replay sessions'
+    help = "Replay a recorded dataset's actions back onto the robot"
+    description = """
+    Prints what a recorded LeRobot dataset contains, then feeds its recorded actions
+    back to the robot so an episode runs again without an operator. Use it to check
+    that a dataset drives the hardware the way it was captured.
+
+    The robot and the relay have to be up, and the scene has to start where the
+    episode started: the actions are played as recorded, with no feedback.
+    conf/replay.yaml holds repo_id, episodes, reset_time_s and reset_period.
+    """
+    examples = (
+        "solarian replay",
+        "solarian replay repo_id=my-user/cup-arrange episodes=[3]",
+    )
 
     def get_features_lerobot_format(self):
 
@@ -71,14 +83,12 @@ class ReplayCommand(BaseCommand):
 
 
     def handle(self, cfg: DictConfig) -> None:
-
-        
+        # Imported here so `solarian replay --help` does not need lerobot installed.
+        from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata
 
         # Instantiate config
         cfg = ReplayConfig(**OmegaConf.to_object(cfg))
         self.cfg = cfg
-        
-        
 
         ds_meta = LeRobotDatasetMetadata(cfg.repo_id)
 

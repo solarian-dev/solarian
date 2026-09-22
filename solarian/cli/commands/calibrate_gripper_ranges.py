@@ -124,6 +124,18 @@ def _build_table(measured: list[tuple[float, float]]) -> ApertureTable | None:
 @CommandRegistry.register("calibrate-gripper-ranges", "robot")
 class CalibrateGripperRangesCommand(BaseCommand):
     help = "Sweep the gripper and record the aperture curve against a ruler."
+    description = """
+    Steps the servo through its normalized range and stops at each step for you to
+    measure the fingertip separation with a ruler. The pairs are written to the
+    gripper's module yaml as aperture_table, which the gripper interpolates at
+    runtime to turn millimetres into servo commands.
+
+    Two points would describe the ends of travel and everything between them
+    wrong, because a parallel gripper's linkage compresses the opening at one end
+    of the stroke; the whole curve has to be measured. Skip any stop the ruler
+    cannot reach. Needs an encoder calibration first (`solarian calibrate`).
+    """
+    examples = ("solarian calibrate-gripper-ranges",)
 
     def handle(self, cfg) -> None:
         del cfg

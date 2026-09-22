@@ -1,16 +1,30 @@
 import pickle
 import os
 from omegaconf import DictConfig, OmegaConf
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
 from solarian.cli import BaseCommand, CommandRegistry
 
 
 @CommandRegistry.register('dataset2lerobot', 'dataset2lerobot')
 class Dataset2LeRobotCommand(BaseCommand):
-    help = 'Convert dataset to lerobot dataset.'
+    help = "Convert a pickled Solarian recording into a LeRobot dataset"
+    description = """
+    Reads the pickled episodes a Solarian recording left under <input_root>/pickles
+    and rewrites them as a LeRobot dataset at output_root, keeping the feature
+    schema recorded alongside them. Pushes to the Hub afterwards when
+    push_to_hub is set.
+
+    Use it for recordings captured before the dataset was written in LeRobot form;
+    `solarian record` already writes it directly.
+    """
+    examples = (
+        "solarian dataset2lerobot",
+        "solarian dataset2lerobot repo_id=my-user/cup-arrange push_to_hub=true",
+    )
 
     def handle(self, cfg: DictConfig) -> None:
+        # Imported here so `--help` does not need lerobot installed.
+        from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
         from solarian.conf import settings
 

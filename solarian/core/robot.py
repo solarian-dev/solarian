@@ -36,6 +36,11 @@ from solarian.core.execution import ExecutionMode
 import logging
 logger = logging.getLogger("robot")
 
+# A command older than this was meant for a session that is already over.
+# The relay holds the in-flight send until a robot connects, and the drain
+# at control-loop start races that handshake, so the check is on every recv.
+_MAX_COMMAND_AGE_S = 1.0
+
 
 class RobotSchemaError(Exception):
     """Raised when a robot module has no matching entry in the
@@ -436,21 +441,29 @@ class Robot(EventHost, ABC):
             bytes = self.action_socket.recv(zmq.NOBLOCK)
             msg = Message.deserialize(bytes)
 
-            # Any message that arrives is evidence the link is up, including a
-            # heartbeat carrying no action. This is the only place that can
-            # tell "the controller has nothing to say" from "the controller is
-            # gone", so it is where the watchdog's clock is reset.
-            self._last_command_ns = time.monotonic_ns()
-
-            if "action" not in msg.data:
-                return None
-
             latency_ms = latency_ms_from_stamp_ns(msg.controller_timestamp)
             if latency_ms is not None:
                 StatusBoard.set(
                     "Action latency (ms)",
                     format_latency_status(self._action_latency, latency_ms),
                 )
+            if latency_ms is not None and latency_ms > _MAX_COMMAND_AGE_S * 1000.0:
+                logger.warning(
+                    "Dropping command %.1f s old (limit %.1f s)",
+                    latency_ms / 1000.0,
+                    _MAX_COMMAND_AGE_S,
+                )
+                return None
+
+            # Any fresh message is evidence the link is up, including a
+            # heartbeat carrying no action. This is the only place that can
+            # tell "the controller has nothing to say" from "the controller is
+            # gone", so it is where the watchdog's clock is reset. A command
+            # left over from a previous session is not that evidence.
+            self._last_command_ns = time.monotonic_ns()
+
+            if "action" not in msg.data:
+                return None
 
             raw_action = msg.data["action"]
             action = Action(action_type=ActionType(raw_action["action_type"]), data=raw_action["data"])

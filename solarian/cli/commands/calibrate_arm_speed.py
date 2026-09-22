@@ -178,7 +178,27 @@ def _rot_speed(module: ArmModule) -> str:
 @CommandRegistry.register("calibrate-arm-speed", "robot")
 class CalibrateArmSpeedCommand(BaseCommand):
     help = "Measure the Cartesian speed the arm sustains across the workspace, for max_speed."
-    params = ("poses", "distance")
+    description = """
+    Commands short moves at rising speeds from several poses and reports the
+    translation speed the arm actually keeps up with, which is the value for
+    max_speed[0] in the arm's module yaml. Nothing is written.
+
+    Measure it per pose because the joint speed limit reaches the end effector
+    through the Jacobian: what is achievable near the middle of the workspace is
+    not achievable stretched out. The command takes the slowest result.
+
+    Torque is released first so you can place the arm, and it returns to where it
+    started. It deliberately drives faster than the configured limit: keep the
+    volume clear and a hand on the power.
+    """
+    params = {
+        "poses": "How many poses to sample, each placed by hand (default: 3).",
+        "distance": "Length of each test move in metres (default: 0.06).",
+    }
+    examples = (
+        "solarian calibrate-arm-speed",
+        "solarian calibrate-arm-speed poses=5 distance=0.1",
+    )
 
     def handle(self, cfg) -> None:
         module = pick_module("arm", base_cls=ArmModule)

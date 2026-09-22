@@ -28,6 +28,22 @@ from solarian.core.ai.system1.trainer_registry import (
 @CommandRegistry.register('train', 'train')
 class TrainCommand(BaseCommand):
     help = 'Train a policy via an installed policy trainer plugin.'
+    description = """
+    Reads the policy key from conf/train.yaml, resolves the matching trainer plugin
+    (solarian-policy-diffusion, solarian-policy-lerobot, ...), validates the whole
+    config against that trainer's schema and runs it.
+
+    Checkpoints land in output_dir, defaulting to models/<job_name>. Set
+    modal.enabled to run the same config on Modal's GPUs instead of this machine.
+    The framework knows nothing about the training itself: everything specific
+    lives in the plugin, so the keys the config accepts are the ones that trainer
+    declares.
+    """
+    examples = (
+        "solarian train",
+        "solarian train policy=diffusion job_name=cup_arrange_v3",
+        "solarian train modal.enabled=true",
+    )
 
     def get_config_class(self):
         # Validation is deferred to the resolved trainer's config_class(),

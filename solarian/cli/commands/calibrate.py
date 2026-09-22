@@ -25,6 +25,24 @@ def _has_ik(module_cls) -> bool:
 @CommandRegistry.register("calibrate", "robot")
 class CalibrateCommand(BaseCommand):
     help = "Calibrate a module: hard-stop sweep, then IK alignment for arms."
+    description = """
+    Lists the modules the project's Robot and Controller declare, then calibrates
+    the one you pick and writes the result to its module yaml: real_range_* (the
+    travel window), center_offset (encoder-zero shift), drive_mode (sign) and home
+    (normalized home pose).
+
+    Torque is released for the sweep so you can move the joints by hand through
+    their full mechanical range. For an arm with an IK backend it continues into
+    the sim alignment steps, which home the model at q=0 and fix each joint's
+    sign against a live MuJoCo mirror.
+
+    Grippers stop at the encoder range; how far the jaws actually open at each
+    command is measured separately by calibrate-gripper-ranges.
+    """
+    examples = (
+        "solarian calibrate",
+        "solarian calibrate -d pi",
+    )
 
     def handle(self, cfg) -> None:
         from solarian.conf import settings

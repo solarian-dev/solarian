@@ -15,6 +15,19 @@ from solarian.cli import BaseCommand, CommandRegistry
 @CommandRegistry.register('shell', None)
 class ShellCommand(BaseCommand):
     help = 'Open an interactive Python shell with project settings loaded.'
+    description = """
+    Starts IPython (or the stdlib console when IPython is not installed) with the
+    project already wired up: `settings`, a `robot` built from conf/robot.yaml and
+    a `controller` built from conf/controller.yaml, plus the `solarian` package.
+
+    The instances are constructed but not connected, so hardware stays untouched
+    until you call robot.connect() yourself.
+    """
+    usage = ""
+    examples = (
+        "solarian shell",
+        "solarian shell -d pi",
+    )
 
     def get_config_class(self):
         """This command doesn't require configuration."""

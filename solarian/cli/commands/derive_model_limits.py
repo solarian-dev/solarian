@@ -16,7 +16,24 @@ from solarian.cli import BaseCommand, CommandRegistry
 @CommandRegistry.register("derive-model-limits", "robot")
 class DeriveModelLimitsCommand(BaseCommand):
     help = "Derive MJCF joint ranges (radians) from the real arm's mechanical limits."
-    params = ("module", "sweep")
+    description = """
+    Reads the arm's real hard-stop range, converts encoder counts to radians with
+    the servo's resolution, and prints <joint range="lo hi"> lines centered at zero
+    to paste into the MJCF.
+
+    Nothing is written: the model is yours to edit. Keep the module yaml's sim
+    range_min / range_max in sync with what you paste, then confirm with
+    `solarian verify-calibration`.
+    """
+    params = {
+        "module": "Name of the IK module to derive limits for; prompts when omitted.",
+        "sweep": "true to record the ranges now by moving the joints by hand, "
+                 "instead of reading the existing calibration (default: false).",
+    }
+    examples = (
+        "solarian derive-model-limits",
+        "solarian derive-model-limits module=right_arm sweep=true",
+    )
 
     def handle(self, cfg) -> None:
         from solarian.core.ik import alignment

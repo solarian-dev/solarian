@@ -186,7 +186,29 @@ def _run_obs_latency(module: ArmModule) -> None:
 @CommandRegistry.register("calibrate-arm-latency", "robot")
 class CalibrateArmLatencyCommand(BaseCommand):
     help = "Measure arm action latency (Cartesian sinusoid) or observation latency (read timing)."
-    params = ("axis", "amplitude", "freq")
+    description = """
+    Pick an arm module, then a mode:
+
+      action  the arm follows a Cartesian sinusoid on one axis and the measured
+              pose is cross-correlated against the command -> arm_action_latency
+      obs     repeated reads are timed -> arm_obs_latency
+
+    Prints the delay to put in the module yaml; nothing is written. The action mode
+    releases torque first so you can place the arm by hand, sweeps around that
+    pose, and returns to it. Keep the volume clear and a hand on the power.
+
+    The sweep is refused when amplitude and freq together would exceed the arm's
+    configured max_speed, so raise the limit rather than forcing it.
+    """
+    params = {
+        "axis": "Axis the action sweep runs on: x, y or z (default: z).",
+        "amplitude": "Half-stroke of the sweep in metres (default: 0.02).",
+        "freq": "Sweep frequency in Hz (default: 1.25).",
+    }
+    examples = (
+        "solarian calibrate-arm-latency",
+        "solarian calibrate-arm-latency axis=y amplitude=0.03 freq=1.0",
+    )
 
     def handle(self, cfg) -> None:
         module = pick_module("arm", base_cls=ArmModule)

@@ -8,7 +8,17 @@ from solarian.utils import get_class
 
 @CommandRegistry.register('calibrate-controller', 'controller')
 class CalibrateControllerCommand(BaseCommand):
-    help = 'Calibrates controller'
+    help = "Calibrate the operator-side hardware (leader arm, pedals, ...)"
+    description = """
+    Connects the project's Controller and runs its calibrate() hook, so the
+    operator-side hardware gets the same treatment as the robot: a leader arm's
+    joint ranges and zero, a pedal's rest position, whatever the controller
+    declares.
+
+    Writes to the controller's module yamls. Its robot-side counterpart is
+    `solarian calibrate`.
+    """
+    examples = ("solarian calibrate-controller",)
 
     def handle(self, cfg: DictConfig) -> None:
 

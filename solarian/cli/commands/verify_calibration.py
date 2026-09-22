@@ -14,7 +14,24 @@ from solarian.cli import BaseCommand, CommandRegistry
 @CommandRegistry.register("verify-calibration", "robot")
 class VerifyCalibrationCommand(BaseCommand):
     help = "Verify calibration spans against the IK model, then live-mirror the arm."
-    params = ("module",)
+    description = """
+    Converts each calibrated joint span to radians and compares it with the MuJoCo
+    model's jnt_range, printing a per-joint pass/fail table. Then connects the real
+    arm and opens the live sim mirror so you can watch sim and hardware move
+    together.
+
+    Run it after `solarian calibrate`. A mismatch means the model and the real arm
+    disagree: fix the model with `solarian derive-model-limits`, or re-run the
+    sweep. Joints whose servo reports no encoder resolution can only be checked in
+    the mirror.
+    """
+    params = {
+        "module": "Name of the IK module to verify; prompts when omitted.",
+    }
+    examples = (
+        "solarian verify-calibration",
+        "solarian verify-calibration module=right_arm",
+    )
 
     def handle(self, cfg) -> None:
         from solarian.core.ik import alignment

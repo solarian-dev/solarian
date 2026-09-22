@@ -71,6 +71,29 @@ def _parse_module_arg(module_name: str) -> Tuple[str, str, Optional[Path]]:
 @CommandRegistry.register('add-module')
 class AddModuleCommand(BaseCommand):
     help = 'Install a module plugin and copy its default configuration to the project'
+    description = """
+    Runs pip install for the plugin, copies the module's shipped default yaml to
+    conf/<config_name>.yaml, and adds the package to the project's
+    pyproject.toml dependencies.
+
+    The config name is how the module is addressed from then on: the yaml the
+    module reads, the attribute to declare on the Robot or Controller class, and
+    the name every other command lists it under. Run this once per physical
+    component, so two arms are two names (left_arm, right_arm) off one plugin.
+    """
+    usage = "<module_name_or_path> <config_name>"
+    options = {
+        "<module_name_or_path>": "Short plugin name (ur5 installs solarian-ur5) or a "
+                                 "local path to a plugin directory for an editable "
+                                 "install.",
+        "<config_name>": "Name for this instance of the module; becomes "
+                         "conf/<config_name>.yaml.",
+    }
+    examples = (
+        "solarian add-module ur5 arm",
+        "solarian add-module umi-gripper gripper",
+        "solarian add-module ./plugins/solarian-ur5 right_arm",
+    )
 
     def handle(self, cfg: DictConfig) -> None:
         """Install the plugin package and copy its conf.yaml to the project."""

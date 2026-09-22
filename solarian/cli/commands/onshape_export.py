@@ -89,6 +89,32 @@ def _ensure_credentials(keys_file: str | None) -> None:
 @CommandRegistry.register("onshape-export")
 class OnshapeExportCommand(BaseCommand):
     help = "Export an Onshape assembly into an attachable MuJoCo sim model"
+    description = """
+    Pulls the assembly named by the directory's config.json, then cleans the raw
+    export into an MJCF a Module can attach to a simulated Robot's scene.
+
+    Joint limits flow CAD -> MJCF -> config.json: the Onshape mate limits win over
+    stale joint_properties.*.limits, and the cleaned ranges are written back.
+
+    Credentials come from ONSHAPE_ACCESS_KEY / ONSHAPE_SECRET_KEY, or from a
+    KEY=VALUE file (onshape_keys.txt, then .env, unless --keys-file says
+    otherwise). Create keys at https://dev-portal.onshape.com/keys.
+    """
+    usage = "<assembly_dir> [--clean-only] [--keys-file PATH] [--update-yaml PATH]"
+    options = {
+        "<assembly_dir>": "Directory holding the assembly's config.json.",
+        "--clean-only": "Re-clean a previous raw export; no network and no "
+                        "credentials needed.",
+        "--keys-file PATH": "File with the ONSHAPE_* KEY=VALUE lines (default: "
+                            "onshape_keys.txt, then .env).",
+        "--update-yaml PATH": "Also write the exported joint ranges into this module "
+                              "conf's sim_range_min / sim_range_max.",
+    }
+    examples = (
+        "solarian onshape-export assets/so106_description",
+        "solarian onshape-export assets/so106_description --update-yaml conf/right_arm.yaml",
+        "solarian onshape-export assets/umi_slim_gripper_description --clean-only",
+    )
 
     def handle(self, cfg: DictConfig) -> None:
         assembly_dir = os.environ.get("SOLARIAN_ONSHAPE_EXPORT_DIR")

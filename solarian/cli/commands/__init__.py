@@ -46,14 +46,14 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "run-robot",
     module_path=f"{_pkg}.run_robot",
-    help="Run robot with the specified configuration",
+    help="Run the robot: connect its modules and join the relay a controller drives it through",
     config_name="robot",
     setup_modules=("robot", "observation", "action"),
 )
 CommandRegistry.register_lazy(
     "calibrate",
     module_path=f"{_pkg}.calibrate",
-    help="Calibrate a module (hard-stop sweep, then IK alignment for arms).",
+    help="Calibrate a module: hard-stop sweep, then IK alignment for arms.",
     config_name="robot",
     setup_modules=("robot", "observation", "action"),
 )
@@ -88,7 +88,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "calibrate-gripper-ranges",
     module_path=f"{_pkg}.calibrate_gripper_ranges",
-    help="Step the gripper through its aperture range for a ruler check.",
+    help="Sweep the gripper and record the aperture curve against a ruler.",
     config_name="robot",
     setup_modules=("robot",),
 )
@@ -109,7 +109,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "setup-module",
     module_path=f"{_pkg}.setup_module",
-    help="Setup module device.",
+    help="Run a module's one-off device setup (actuator IDs, baud rates, modes)",
     config_name="robot",
     setup_modules=("robot",),
 )
@@ -123,7 +123,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "write-robot-calibration",
     module_path=f"{_pkg}.write_robot_calibration",
-    help="Write robot calibration from configuration.",
+    help="Write the calibration in the robot's yamls onto its hardware",
     config_name="robot",
     setup_modules=("robot",),
 )
@@ -146,14 +146,14 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "run-controller",
     module_path=f"{_pkg}.run_controller",
-    help="Teleop client that connects to a relay server",
+    help="Teleop client: drive the robot through the relay",
     config_name="controller",
     setup_modules=("controller", "observation", "action"),
 )
 CommandRegistry.register_lazy(
     "calibrate-controller",
     module_path=f"{_pkg}.calibrate_controller",
-    help="Calibrates controller",
+    help="Calibrate the operator-side hardware (leader arm, pedals, ...)",
     config_name="controller",
     setup_modules=("controller",),
 )
@@ -167,7 +167,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "write-controller-calibration",
     module_path=f"{_pkg}.write_controller_calibration",
-    help="Writes controller calibration to the controller",
+    help="Write the calibration in the controller's yamls onto its hardware",
     config_name="controller",
     setup_modules=("controller",),
 )
@@ -181,7 +181,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "run-server",
     module_path=f"{_pkg}.run_server",
-    help="Run the relay server",
+    help="Run the relay server the robot and the controller connect through",
     config_name="server",
     setup_modules=("server",),
 )
@@ -190,14 +190,14 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "record",
     module_path=f"{_pkg}.record",
-    help="Record sessions",
+    help="Teleoperate and record episodes into a LeRobot dataset",
     config_name="record",
     setup_modules=("robot", "observation", "action", "controller"),
 )
 CommandRegistry.register_lazy(
     "replay",
     module_path=f"{_pkg}.replay",
-    help="Replay sessions",
+    help="Replay a recorded dataset's actions back onto the robot",
     config_name="replay",
     setup_modules=("robot", "observation", "action", "controller"),
 )
@@ -206,14 +206,14 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "train",
     module_path=f"{_pkg}.train",
-    help="Train a model.",
+    help="Train a policy via an installed policy trainer plugin.",
     config_name="train",
     setup_modules=(),
 )
 CommandRegistry.register_lazy(
     "dataset2lerobot",
     module_path=f"{_pkg}.dataset2lerobot",
-    help="Convert dataset to lerobot dataset.",
+    help="Convert a pickled Solarian recording into a LeRobot dataset",
     config_name="dataset2lerobot",
     setup_modules=(),
 )
@@ -236,7 +236,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "detect-device",
     module_path=f"{_pkg}.detect_device",
-    help="Detects devices connected to the computer (port and name).",
+    help="Detect a serial device by plugging it in (prints port and name)",
 )
 CommandRegistry.register_lazy(
     "list-cameras",

@@ -385,7 +385,43 @@ def _run_capture(
 @CommandRegistry.register("calibrate-camera-latency", "robot")
 class CalibrateCameraLatencyCommand(BaseCommand):
     help = "Measure camera_obs_latency by filming a timestamp QR code (UMI method)."
-    params = ("role", "monitor_hz", "qr_size", "n_frames", "plot", "allow_unsynced")
+    description = """
+    UMI's method: one machine displays a QR code encoding the instant it was drawn,
+    the other films that screen, and the gap between the decoded instant and the
+    instant the pipeline stamped the frame is the camera's observation latency.
+    Prints camera_obs_latency for the camera module's yaml; nothing is written.
+
+    Two invocations, one per role, because the camera is usually on the robot and
+    the screen on a laptop:
+
+      role=display   on the machine with the monitor
+      role=capture   on the machine the camera is wired to
+
+    Both sides subtract timestamps from the relay's timebase, so the relay has to
+    be running (`solarian run-server`) unless both roles are on this same machine,
+    which is what allow_unsynced=true declares. Aim the camera with the Camera
+    window the capture role opens, not with an external preview.
+    """
+    params = {
+        "role": "display on the machine with the monitor, capture on the machine "
+                "with the camera. Required.",
+        "monitor_hz": "Refresh rate of the screen being filmed. Required for "
+                      "role=capture, since l_display = 1.5 / f_monitor is part of "
+                      "the arithmetic; paces the redraw for role=display "
+                      "(default: 60).",
+        "qr_size": "Side of the displayed QR code in pixels (default: 720).",
+        "n_frames": "How many decoded frames role=capture averages (default: 120).",
+        "plot": "true to show the per-frame latency plot when capture finishes "
+                "(default: false).",
+        "allow_unsynced": "true to measure without the relay, valid only when the "
+                          "display and the camera are on this same machine "
+                          "(default: false).",
+    }
+    examples = (
+        "solarian calibrate-camera-latency role=display monitor_hz=60",
+        "solarian calibrate-camera-latency role=capture monitor_hz=60",
+        "solarian calibrate-camera-latency role=capture monitor_hz=120 n_frames=240 plot=true",
+    )
 
     def handle(self, cfg) -> None:
         role = str(_cfg_get(cfg, "role", "")).lower()

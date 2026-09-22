@@ -1,7 +1,6 @@
 import time
 import threading
 from omegaconf import DictConfig, OmegaConf
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
 from solarian.cli import BaseCommand, CommandRegistry
 from solarian.utils import get_class
@@ -16,7 +15,23 @@ from solarian.core import Action
 
 @CommandRegistry.register('record', 'record')
 class RecordCommand(BaseCommand):
-    help = 'Record sessions'
+    help = "Teleoperate and record episodes into a LeRobot dataset"
+    description = """
+    Teleoperates the robot like run-controller and writes what happens to a LeRobot
+    dataset: every observation, every action and one video stream per camera, cut
+    into episodes.
+
+    The robot (`solarian run-robot`) and the relay (`solarian run-server`) have to
+    be up. conf/record.yaml holds the run: repo_id, num_episodes, episode_time_s,
+    reset_time_s, fps, video_res, tasks, and push_to_hub / tags / private for the
+    Hub upload. start_episode resumes into an existing dataset rather than
+    overwriting it.
+    """
+    examples = (
+        "solarian record",
+        "solarian record repo_id=my-user/cup-arrange num_episodes=50",
+        "solarian record num_episodes=10 start_episode=51 episode_time_s=20",
+    )
 
     def get_features_lerobot_format(self):
         from solarian.conf import settings

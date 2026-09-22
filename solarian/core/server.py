@@ -21,6 +21,7 @@ class RelayServer:
         self.running = False
         self.cfg = cfg
         self.captured_click = None
+        self._logged_absent_robot = False
 
         # ZAP first: the authenticator has to be running before any CURVE server
         # socket completes a handshake, or early connections are refused.
@@ -38,11 +39,11 @@ class RelayServer:
         self.robot_cmd_sender = self.context.socket(zmq.PUSH)
         self.robot_cmd_sender.setsockopt(zmq.CONFLATE, 1)
         self.robot_cmd_sender.setsockopt(zmq.LINGER, 0)
-        # IMMEDIATE=1 makes PUSH only enqueue to completed connections, so a
-        # controller talking to the relay while no robot is attached won't
-        # accumulate a stale message that hits the next robot to connect
-        # (which previously caused the robot to auto-launch the last
-        # controller-issued skill on startup).
+        # IMMEDIATE=1 makes PUSH only enqueue to completed connections. The
+        # relay send is non-blocking, so a controller talking while no robot
+        # is attached drops the command instead of blocking the relay thread
+        # on it. A blocking send holds that one message and delivers it to
+        # the next robot that connects.
         self.robot_cmd_sender.setsockopt(zmq.IMMEDIATE, 1)
         curve.apply_server(self.robot_cmd_sender, cfg.connection, "action sender")
         self.robot_cmd_sender.bind(f"tcp://*:{self.cfg.connection.action_sender_port}")  # Robot connects here
@@ -96,7 +97,16 @@ class RelayServer:
                     else:
                         self.captured_click = None
 
-                    self.robot_cmd_sender.send(msg.serialize())
+                    try:
+                        self.robot_cmd_sender.send(msg.serialize(), zmq.NOBLOCK)
+                    except zmq.Again:
+                        if not self._logged_absent_robot:
+                            logger.warning(
+                                "No robot connected; dropping actions until one connects"
+                            )
+                            self._logged_absent_robot = True
+                    else:
+                        self._logged_absent_robot = False
 
                 except Exception as e:
                     print(f"Error processing message: {e}")
