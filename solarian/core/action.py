@@ -38,6 +38,12 @@ class ActionType:
     SERVO_L = 12
     #: Streaming configuration-space target (``servoJ``).
     SERVO_J = 13
+    #: Episode boundaries. Actions rather than a side channel because the
+    #: robot owns recording, and this is the path that already reaches it.
+    RECORD_START = 14
+    RECORD_STOP = 15
+    #: Seal and delete: the operator is re-recording a bad take.
+    RECORD_DROP = 16
     CUSTOM_START = 100
 
     def __init__(self, value: int = 0):
@@ -74,6 +80,18 @@ class ActionType:
     def name_of(cls, value: int) -> str:
         return cls._registry.get(value, f"UNKNOWN({value})")
 
+
+# ``CUSTOM_START`` is the boundary marker for project-defined types, not an
+# action type itself, so it is deliberately left out of the registry.
+ActionType._registry.update(
+    {
+        value: name
+        for name, value in vars(ActionType).items()
+        if isinstance(value, int)
+        and not name.startswith("_")
+        and name != "CUSTOM_START"
+    }
+)
 
 
 def action_handler(action_type: int):

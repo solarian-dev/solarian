@@ -25,9 +25,6 @@ from .module_bus import ModuleBus
 # core/sensor_bus.py
 from .sensor_bus import SensorBus
 
-# core/dataset.py
-from .dataset import Dataset
-
 # core/message.py
 from .message import Message
 

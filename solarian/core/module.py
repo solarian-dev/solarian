@@ -184,6 +184,10 @@ class Module(ABC):
         
         self.observation_buffer = observation_buffer
         self.action_queue = action_queue
+        #: Archive encoders for this module's cameras, by sensor name. Set by
+        #: the robot before the module starts, so the sink crosses the process
+        #: boundary the same way the observation buffer does.
+        self.archive_sinks: dict = {}
 
         # Explicit argument beats YAML, which beats the class default.
         resolved = execution_mode or getattr(cfg, "execution", None)
@@ -331,6 +335,8 @@ class Module(ABC):
         """Connect this module's hardware bus."""
         if self.is_connected:
             return
+        self.module_bus.archive_sinks = self.archive_sinks
+        self.module_bus.capture_latency = self.cfg.receive_latency
         self.module_bus.connect(calibration or {})
         self.is_connected = True
 
@@ -735,7 +741,14 @@ class Module(ABC):
             sensor_names = [sensor_name for _, sensor_name, _ in field_list]
             sensor_data = self.read_sensors(data_class, sensor_names)
             for field_name, sensor_name, _ in field_list:
-                sensor_data[sensor_name]['timestamp'] = synced_time() - self.cfg.receive_latency
+                # A bus that reports its own capture time wins: an archived
+                # frame and the observation of it have to name the same
+                # instant, or the episode table points at the wrong frame.
+                sensor_data[sensor_name]['timestamp'] = (
+                    self.module_bus.capture_timestamps.get(
+                        sensor_name, synced_time() - self.cfg.receive_latency
+                    )
+                )
                 data[field_name] = sensor_data[sensor_name]
 
         obs = self._module_obs_cls(data)

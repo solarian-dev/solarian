@@ -104,7 +104,7 @@ The `ai` extra installs PyTorch, torchvision, datasets, ultralytics, einops, ope
 
 ### macOS on Apple Silicon (arm64)
 
-The `atomics` package needs to be built from source on Apple Silicon. From a checked-out source tree:
+The `atomics` package only publishes x86_64 wheels, and the macOS one installs on Apple Silicon and then fails at `dlopen`. It has to be built from source. `uv` does that on its own (`no-binary-package` in `pyproject.toml`); under plain pip, from a checked-out source tree:
 
 ```bash
 pip install -r requirements-macos-arm64.txt

@@ -157,9 +157,8 @@ class BusClient(ComponentBus):
         port: str,
         components: Dict[str, "Component"],
     ):
+        super().__init__(port=port, components=components)
         self._conn = client_conn
-        self.port = port
-        self.components = components
         self._connected = False
 
     def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
@@ -182,7 +181,16 @@ class BusClient(ComponentBus):
         self._connected = False
 
     def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
-        return self._call("read", data_type, component_names, normalize=normalize)
+        values = self._call("read", data_type, component_names, normalize=normalize)
+        # The bus doing the capture is in another process, so the archive is
+        # tapped here, on the frame as it arrives. For a simulated camera this
+        # is also the only frame there is: MuJoCo renders straight to the
+        # observation size, so there is no higher-fidelity source to keep.
+        for name in self.archive_sinks:
+            frame = values.get(name)
+            if frame is not None:
+                self.archive_capture(name, frame, self.components[name].cfg)
+        return values
 
     def write(self, values: Dict[str, Data], normalize: bool = True, snap: bool = False):
         # snap teleports MuJoCo qpos; hardware buses have no such kwarg.

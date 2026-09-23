@@ -190,7 +190,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "record",
     module_path=f"{_pkg}.record",
-    help="Teleoperate and record episodes into a LeRobot dataset",
+    help="Teleoperate and record a training dataset, episode by episode",
     config_name="record",
     setup_modules=("robot", "observation", "action", "controller"),
 )
@@ -204,20 +204,18 @@ CommandRegistry.register_lazy(
 
 # ── Training & Data commands ─────────────────────────────────────────
 CommandRegistry.register_lazy(
+    "export-dataset",
+    module_path=f"{_pkg}.export_dataset",
+    help="Convert a recorded session into a LeRobot dataset",
+    setup_modules=(),
+)
+CommandRegistry.register_lazy(
     "train",
     module_path=f"{_pkg}.train",
     help="Train a policy via an installed policy trainer plugin.",
     config_name="train",
     setup_modules=(),
 )
-CommandRegistry.register_lazy(
-    "dataset2lerobot",
-    module_path=f"{_pkg}.dataset2lerobot",
-    help="Convert a pickled Solarian recording into a LeRobot dataset",
-    config_name="dataset2lerobot",
-    setup_modules=(),
-)
-
 # ── Utility commands ─────────────────────────────────────────────────
 CommandRegistry.register_lazy(
     "sync-clock",

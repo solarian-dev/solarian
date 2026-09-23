@@ -6,6 +6,7 @@ import math
 import numpy as np
 from abc import ABC
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Any
 from multiprocessing.managers import SharedMemoryManager
 
@@ -43,6 +44,7 @@ from solarian.core.ui.base import (
     UICommandType,
     UIImage,
     UISnapshot,
+    recording_status,
 )
 from solarian.core.ai.system1.skill import Skill, SkillStatus
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
@@ -64,6 +66,11 @@ logger = logging.getLogger(__name__)
 # does not wait on it.
 _REMOTE_STOP_RETRY_S = 0.2
 _REMOTE_STOP_TIMEOUT_S = 3.0
+
+# How long to keep re-requesting an episode boundary before giving up. Resent
+# every tick rather than on a slower timer: teleop is unusable while it is
+# pending, and an episode with a late boundary is worth less than one tick.
+_RECORD_REQUEST_TIMEOUT_S = 3.0
 
 
 @dataclass
@@ -221,8 +228,7 @@ class Controller(EventHost, ABC):
         # Create events dictionary directly instead of using init_keyboard_listener
         self.events = {
             "exit_early": False,
-            "rerecord_episode": False, 
-            "stop_recording": False,
+            "rerecord_episode": False,
             "track all": False,
             "verbose": False,
             "prompt": None,
@@ -231,6 +237,8 @@ class Controller(EventHost, ABC):
         }
 
         self.last_observation = Observation({})
+
+        self._init_recording()
 
         # Shared-memory infrastructure mirroring what Robot owns on its side.
         # The controller keeps a per-module ObservationBuffer so downstream
@@ -425,6 +433,9 @@ class Controller(EventHost, ABC):
                 self._put_module_observation(module_name, module_observation)
 
             StatusBoard.set("Observation", self.last_observation)
+
+        if "recording" in msg.data:
+            self.recording_state = msg.data["recording"]
 
         if "skill_status" in msg.data:
             recs = msg.data["skill_status"]
@@ -627,28 +638,6 @@ class Controller(EventHost, ABC):
     def stop(self):
         self.running = False
 
-    # def record_frame(self, dataset, action, task):
-
-    #     # "action": nparray shape 6
-    #     # "observation.state": nparray shape 6
-    #     # "observation.images.front": nparray shape (480, 640, 3)
-    #     # "observation.images.wrist": nparray shape (480, 640, 3)
-    #     # "task": string
-
-    #     self.last_observation = self.observation_buffer.get()
-        
-    #     frame = {**self.last_observation.to_lerobot_format(), **action.to_lerobot_format()}
-
-    #     # resize images if necessary
-    #     for key in frame:
-    #         if key.startswith("observation.images."):
-    #             img = frame[key]
-    #             if img.shape[0] != self.cfg.video_res[0] or img.shape[1] != self.cfg.video_res[1]:
-    #                 frame[key] = cv2.resize(img, (self.cfg.video_res[1], self.cfg.video_res[0]), interpolation=cv2.INTER_AREA)
-        
-    #     dataset.add_frame(frame, task)
-        
-    
     def _build_display_schema(self):
         """Build and cache the mapping of image/bbox fields per module."""
         obs_spec = Observation.get_module_obs_spec()
@@ -825,7 +814,11 @@ class Controller(EventHost, ABC):
         subclass's ``@event_handler``, so a subclass that binds keys should
         extend this with its own rows.
         """
-        return [("space", "stop all skills")]
+        return [
+            ("space", "stop all skills"),
+            ("r", "start / stop recording"),
+            ("delete", "discard this episode and re-record"),
+        ]
 
     def ui_snapshot(self) -> UISnapshot:
         """Everything the front end needs to draw one frame.
@@ -850,7 +843,14 @@ class Controller(EventHost, ABC):
                 "running": running,
             },
             telemetry=telemetry,
-            status=", ".join(running) if running else "idle",
+            recording=dict(self.recording_state),
+            # Recording first: a window with the episode number in it is the
+            # difference between noticing a session was never armed and
+            # finding out when the dataset is empty.
+            status=" · ".join(
+                (recording_status(self.recording_state),
+                 ", ".join(running) if running else "idle")
+            ),
         )
 
     def ui_hello(self) -> dict:
@@ -922,13 +922,11 @@ class Controller(EventHost, ABC):
             case UICommandType.STOP_ALL:
                 self.stop_all_skills()
             case UICommandType.RECORD_START:
-                # ``record`` owns the episode loop; from a UI, "start" only
-                # clears the flags that would end the run at the next boundary.
-                self.events["stop_recording"] = False
-                self.events["exit_early"] = False
+                self.start_recording(data.get("task"))
             case UICommandType.RECORD_STOP:
-                self.events["stop_recording"] = True
-                self.events["exit_early"] = True
+                self.stop_recording()
+            case UICommandType.RECORD_REDO:
+                self.redo_recording()
             case UICommandType.INPUT_SAMPLE:
                 self._dispatch_input_sample(data)
             case UICommandType.QUIT:
@@ -956,14 +954,11 @@ class Controller(EventHost, ABC):
             return
         accept_sample(data.get("fields") or {})
 
-    def control_loop(self, dataset=None, episode_time_s=120, single_task=None):
+    def control_loop(self):
         try:
-            timestamp = 0
-            start_episode_t = time.perf_counter()
             self.send_stop_tracking()
-            while timestamp < episode_time_s:
+            while self.running:
                 start_loop_t = time.time_ns()
-                timestamp = time.perf_counter() - start_episode_t
 
                 # Events and local state are refreshed by the loop, not by
                 # control_step, so a controller that overrides control_step
@@ -1185,6 +1180,119 @@ class Controller(EventHost, ABC):
         if event.data.get("key") in (" ", "space"):
             self.stop_all_skills()
 
+    # ========= recording ============
+    def _init_recording(self) -> None:
+        #: Recording state as the robot last reported it. The controller asks
+        #: for episodes but never owns them, so this is only ever echoed back.
+        #: ``request`` is the id of the last boundary the robot acted on.
+        self.recording_state: dict = {
+            "enabled": False,
+            "active": False,
+            "episode": 0,
+            "request": 0,
+        }
+
+        #: Set when the episode in progress ends, whoever ended it. A recording
+        #: schedule waits on this rather than sleeping out its timer, so the
+        #: operator pressing delete cuts the wait short instead of being
+        #: ignored until the clock runs out.
+        self.episode_over = threading.Event()
+
+        #: The episode boundary the robot has not confirmed yet, resent every
+        #: tick by :meth:`_retry_record_request`.
+        self._record_request: Action | None = None
+        self._record_request_id = 0
+        self._record_request_deadline = 0.0
+
+    @event_handler(EventType.KEY_DOWN)
+    def toggle_recording_on_r(self, event: Event) -> None:
+        """``r`` toggles the episode, ``delete`` throws the current one away.
+
+        Both names for delete: the key a laptop labels *delete* is backspace,
+        and only a full-size keyboard has the forward one.
+        """
+        key = event.data.get("key")
+        if key == "r":
+            if self.recording_state["active"]:
+                self.stop_recording()
+            else:
+                self.start_recording()
+        elif key in ("delete", "backspace"):
+            self.redo_recording()
+
+    def start_recording(self, task: str | None = None, session: str | None = None) -> None:
+        """Ask the robot to open an episode.
+
+        Nothing is recorded here. The robot holds the encoders and the table,
+        so an episode boundary is a request sent down the ordinary action
+        path, and the state shown back to the operator is whatever the robot
+        reports having done with it.
+
+        Args:
+            task: Stamped on the episode. Defaults to the controller's ``task``.
+            session: Directory the robot files this episode under. ``None``
+                leaves the robot on whichever session it is already writing.
+        """
+        self.episode_over.clear()
+        self._request_recording(
+            ActionType.RECORD_START,
+            {
+                "task": task if task is not None else self.cfg.task,
+                "session": session,
+            },
+        )
+
+    def stop_recording(self) -> None:
+        self._request_recording(ActionType.RECORD_STOP, {})
+        self.episode_over.set()
+
+    def redo_recording(self) -> None:
+        """Throw the episode in progress away and cut its timer short.
+
+        ``solarian record`` sees ``rerecord_episode`` and starts another
+        without advancing its counter, so the next take gets a full-length
+        episode rather than the remainder of the one just discarded.
+        """
+        self._request_recording(ActionType.RECORD_DROP, {})
+        self.events["rerecord_episode"] = True
+        self.episode_over.set()
+
+    def _request_recording(self, action_type: int, data: dict) -> None:
+        """Queue an episode boundary and keep asking until the robot echoes it.
+
+        An episode boundary is the one action that cannot be dropped: a lost
+        RECORD_STOP leaves the next take appended to this one. Every hop of
+        the link is CONFLATE and the control loop sends at fps, so a boundary
+        put straight on the socket is very likely to be overwritten before the
+        robot reads it. Only the last request matters, so a newer one replaces
+        an unconfirmed older one rather than queueing behind it.
+        """
+        self._record_request_id += 1
+        self._record_request = Action(
+            action_type=action_type,
+            data={**data, "request": self._record_request_id},
+        )
+        self._record_request_deadline = time.monotonic() + _RECORD_REQUEST_TIMEOUT_S
+
+    def _retry_record_request(self) -> Action | None:
+        """The pending episode boundary, or ``None`` once the robot confirms it."""
+        request = self._record_request
+        if request is None:
+            return None
+        if self.recording_state["request"] >= self._record_request_id:
+            self._record_request = None
+            return None
+        if time.monotonic() > self._record_request_deadline:
+            logger.error(
+                "Robot never acknowledged %s after %.1f s; the episode "
+                "boundary is lost",
+                ActionType.name_of(int(request.action_type)),
+                _RECORD_REQUEST_TIMEOUT_S,
+            )
+            self._record_request = None
+            return None
+        return request
+
     def start_skill(self, skill: Skill) -> str:
         """Run a skill the caller built, preempting whatever overlaps it.
 
@@ -1373,6 +1481,12 @@ class Controller(EventHost, ABC):
                 self._remote_stopping.pop(name, None)
 
     def _tick_skills(self) -> Action | None:
+        # Before the skills: an episode boundary that loses a race with a
+        # teleop action is a corrupt episode, not a late one.
+        record_request = self._retry_record_request()
+        if record_request is not None:
+            return record_request
+
         self._retry_remote_stops()
         if self._pending_actions:
             return self._pending_actions.pop(0)
@@ -1469,19 +1583,15 @@ class Controller(EventHost, ABC):
         """
         return self._tick_skills()
 
-    def start(self, dataset=None, episode_time_s=None, single_task=None):
-        """Implements the control loop
-        
+    def start(self, session: Callable[[], None] | None = None):
+        """Run the controller until the operator quits or *session* is done.
+
         Args:
-            dataset (Dataset, optional): Dataset to record data. Defaults to None.
-            events (dict, optional): Events to trigger. Defaults to None.
-            episode_time_s (float, optional): Episode time in seconds. Defaults to None.
-            single_task (str, optional): Single task to run. Defaults to None.
+            session: A schedule driven from outside the UI loop — ``solarian
+                record`` passes the one that brackets episodes. It runs on its
+                own thread once the loop is live, and returning from it ends
+                the run.
         """
-
-        if episode_time_s is None:
-            episode_time_s = float("inf")
-
         self.running = True
         self._thread_error = None
         # StatusBoard.set() during connect defers the UI thread; start it now.
@@ -1492,7 +1602,7 @@ class Controller(EventHost, ABC):
 
         # spin control loop in a separate thread
         logger.info("Starting control loop")
-        t = threading.Thread(target=self.control_loop, args=(dataset, episode_time_s + 1, single_task), daemon=True)
+        t = threading.Thread(target=self.control_loop, daemon=True)
         t.start()
 
         self.ui = build_ui(self)
@@ -1505,12 +1615,19 @@ class Controller(EventHost, ABC):
         # whatever skill the application wants running from the start.
         self.on_start()
 
+        # After on_start, so an episode opened here contains whatever skill
+        # the application brought up with it. A session brackets its own
+        # episodes and would only have to close this one first.
+        if self.cfg.record and session is None:
+            self.start_recording()
+
+        if session is not None:
+            threading.Thread(target=self._run_session, args=(session,), daemon=True).start()
+
         logger.info("Starting UI loop (%s)", type(self.ui).__name__)
         fps = self.cfg.fps or 30
-        timestamp = 0.0
-        start_episode_t = time.perf_counter()
         try:
-            while timestamp < episode_time_s and self.running:
+            while self.running:
                 start_loop_t = time.time_ns()
 
                 quit_requested = False
@@ -1523,13 +1640,16 @@ class Controller(EventHost, ABC):
 
                 self.ui.render(self.ui_snapshot())
 
-                timestamp = time.perf_counter() - start_episode_t
                 if self.events["exit_early"]:
                     break
 
                 self.ui.tick(fps)
                 manual_profile("ui loop latency", (time.time_ns() - start_loop_t))
         finally:
+            # Sealed here rather than left to the robot's shutdown, which can
+            # only mark the episode interrupted.
+            if self.recording_state["active"]:
+                self.stop_recording()
             self.running = False
             t.join(timeout=5.0)
             self.events["exit_early"] = False
@@ -1538,6 +1658,16 @@ class Controller(EventHost, ABC):
 
         if self._thread_error is not None:
             raise self._thread_error
+
+    def _run_session(self, session: Callable[[], None]) -> None:
+        try:
+            session()
+        except Exception as e:
+            if self._thread_error is None:
+                self._thread_error = e
+        finally:
+            # The schedule is the run: when it is over, so is the UI loop.
+            self.running = False
 
 
     def is_calibrated(self):

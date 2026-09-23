@@ -333,7 +333,15 @@ def _opencv_from_payload(payload, actual_wh=None) -> dict:
     return payload
 
 
-def load_aligner(path: str) -> Aligner:
+def load_aligner(path: str, camera_wh: Optional[tuple[int, int]] = None) -> Aligner:
+    """Build the warp described by *path*.
+
+    Args:
+        camera_wh: Size of the frames this aligner will actually be given. The
+            maps sample the source image, so they have to be built at the
+            resolution the frames are in — export warps a downscaled archive,
+            not the full-resolution frame the camera was calibrated at.
+    """
     with open(path, "r") as fp:
         data = json.load(fp)
     gopro_src = data.get("gopro_intrinsics")
@@ -341,7 +349,7 @@ def load_aligner(path: str) -> Aligner:
     if gopro_src is None or cam_src is None:
         raise ValueError(f"remap JSON missing intrinsics: {path}")
     gopro_intr = _opencv_from_payload(gopro_src)
-    camera_intr = _opencv_from_payload(cam_src)
+    camera_intr = _opencv_from_payload(cam_src, camera_wh)
     out_size = tuple(data["out_size"]) if data.get("out_size") else GOPRO_OUT_SIZE
     if "transform" in data:
         transform = np.array(data["transform"], dtype=np.float64)
@@ -569,9 +577,14 @@ def resolve_remap_path(raw: str, conf_dir: Optional[Path] = None) -> Path:
 class OpticalRemap:
     """Cached aligner + coverage for per-frame warp on a camera bus."""
 
-    def __init__(self, remap_path: str, conf_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        remap_path: str,
+        conf_dir: Optional[Path] = None,
+        camera_wh: Optional[tuple[int, int]] = None,
+    ):
         self.path = resolve_remap_path(remap_path, conf_dir)
-        self.aligner = load_aligner(str(self.path))
+        self.aligner = load_aligner(str(self.path), camera_wh)
         self.coverage = load_coverage_mask(out_size=self.aligner.out_size)
 
     def apply(self, frame: np.ndarray) -> np.ndarray:

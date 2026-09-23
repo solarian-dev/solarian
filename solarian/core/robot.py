@@ -4,6 +4,7 @@ import threading
 import os
 import sys
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 from multiprocessing.managers import SharedMemoryManager
 
@@ -214,6 +215,14 @@ class Robot(EventHost, ABC):
         self.verbose = True
         self.captured_start_pos = False        
         self.connected = False
+        #: Built by :meth:`_open_recorder` just before the modules fork.
+        #: ``None`` when recording is disabled.
+        self.recorder = None
+        #: Id of the last episode boundary acted on, echoed back with the
+        #: observation. Every hop of the action link is CONFLATE, so a
+        #: RECORD_START the controller sent may never arrive; this is how it
+        #: learns the difference and asks again.
+        self._record_request = 0
         self._action_latency = LatencyEma()
         self._obs_compress_latency = LatencyEma()
         #: Monotonic stamp of the last message from the controller, action or
@@ -487,6 +496,18 @@ class Robot(EventHost, ABC):
         raw_obs = observation.to_dict()
         msg.data = {"observation": raw_obs}
 
+        # The controller displays recording state but does not own it, so it
+        # gets told rather than asked. A RECORD_START it sent is not evidence
+        # the robot received it; this is. Sent even with recording disabled,
+        # because "the robot heard you and is not recording" is the answer a
+        # controller retrying a boundary needs.
+        msg.data["recording"] = {
+            "enabled": self.recorder is not None,
+            "active": self.recorder is not None and self.recorder.is_recording,
+            "episode": self.recorder.episode_count if self.recorder else 0,
+            "request": self._record_request,
+        }
+
         # Forward any pending skill status transitions to the controller so
         # that the think process can react to them.  ``drain`` advances a
         # local cursor so records are only sent once even though this
@@ -570,6 +591,11 @@ class Robot(EventHost, ABC):
         while self.running:
             try:
                 observation = self.get_observation()
+                # Before the send, which compresses the observation in place.
+                # This is also the event the episode table is keyed on:
+                # get_observation returns exactly the modules that advanced.
+                if self.recorder is not None:
+                    self.recorder.write_row(observation)
                 self.send_observation(observation)
                 StatusBoard.set("Observation", observation)
             except Exception as e:
@@ -871,6 +897,137 @@ class Robot(EventHost, ABC):
                 self.cfg.connection.curve_server_key,
             )
 
+    # ========= recording ============
+    def _open_recorder(self) -> None:
+        """Start one encoder per camera and the session recorder.
+
+        Runs before the modules fork, because a camera bus reaches its encoder
+        the same way it reaches its observation buffer: by having been handed
+        the shared memory while it was still in this process.
+        """
+        cfg = self.cfg.recording
+        if not cfg.enabled:
+            return
+
+        from solarian.core.recording import (
+            CameraMeta,
+            SessionRecorder,
+            VideoWriter,
+            build_schema,
+        )
+
+        schema = build_schema()
+        fps = float(cfg.fps if cfg.fps is not None else self.cfg.fps)
+        writers: dict[str, VideoWriter] = {}
+        cameras: dict[str, CameraMeta] = {}
+
+        for camera in schema.cameras:
+            module = self.modules.get(camera.module)
+            if module is None:
+                continue
+            sensor_cfg = module.sensors[camera.sensor].cfg
+            height, width, _ = self._archive_shape(sensor_cfg)
+            writer = VideoWriter(
+                name=camera.name,
+                fps=fps,
+                shape=(height, width, 3),
+                codec=cfg.codec,
+                crf=cfg.crf,
+                keyint=cfg.keyint,
+                preset=cfg.preset,
+                input_pix_fmt="bgr24" if sensor_cfg.color_mode == "bgr" else "rgb24",
+                buffer_size=cfg.queue_size,
+            )
+            module.archive_sinks[camera.sensor] = writer.open(self.shm_manager)
+            writers[camera.name] = writer
+            cameras[camera.name] = CameraMeta(
+                width=width,
+                height=height,
+                color_mode=sensor_cfg.color_mode,
+                source_fps=float(sensor_cfg.fps),
+                sensor_mode=f"{sensor_cfg.width}x{sensor_cfg.height}",
+                # Stored rather than applied: the archive is pre-remap, so
+                # export needs to know which calibration to warp it with.
+                optical_remap=sensor_cfg.optical_remap,
+                observation_resize=(
+                    (sensor_cfg.resize_width, sensor_cfg.resize_height)
+                    if sensor_cfg.resize_width is not None
+                    else None
+                ),
+            )
+
+        root = Path(cfg.root)
+        if not root.is_absolute():
+            root = Path(os.environ.get("SOLARIAN_PROJECT_PATH", os.getcwd())) / root
+
+        self.recorder = SessionRecorder(
+            root=root,
+            # Until a controller names one. `solarian record name=...` does;
+            # an ordinary teleop session has no name to give.
+            session=self.__class__.__name__,
+            fps=fps,
+            writers=writers,
+            robot_name=self.__class__.__name__,
+            cameras=cameras,
+            video_options={
+                "codec": cfg.codec,
+                "crf": cfg.crf,
+                "keyint": cfg.keyint,
+                "preset": cfg.preset,
+                "pix_fmt": "yuv420p",
+            },
+            max_session_bytes=(
+                int(cfg.max_session_gb * 1e9) if cfg.max_session_gb else None
+            ),
+            schema=schema,
+        )
+
+    def _archive_shape(self, sensor_cfg) -> tuple[int, int, int]:
+        """``(height, width, 3)`` of the frames this camera will archive."""
+        if self.is_sim:
+            # MuJoCo renders straight to the observation size, so there is no
+            # higher-fidelity source to keep. See sim.runtime._camera_spec.
+            if sensor_cfg.resize_width is not None:
+                height, width = sensor_cfg.resize_height, sensor_cfg.resize_width
+            else:
+                height, width = sensor_cfg.height, sensor_cfg.width
+        elif sensor_cfg.rotation in (90, -90):
+            height, width = sensor_cfg.width, sensor_cfg.height
+        else:
+            height, width = sensor_cfg.height, sensor_cfg.width
+
+        if sensor_cfg.archive_width is not None and sensor_cfg.archive_height is not None:
+            height, width = sensor_cfg.archive_height, sensor_cfg.archive_width
+        return int(height), int(width), 3
+
+    @action_handler(ActionType.RECORD_START)
+    def start_recording(self, action, t_now: float) -> bool:
+        self._record_request = int(action.data.get("request", 0))
+        if self.recorder is None:
+            logger.warning("Recording is disabled on this robot; ignoring RECORD_START")
+            return True
+        session = action.data.get("session")
+        if session:
+            self.recorder.open_session(session)
+        self.recorder.start_episode(
+            task=action.data.get("task"), skill=action.data.get("skill")
+        )
+        return True
+
+    @action_handler(ActionType.RECORD_STOP)
+    def stop_recording(self, action, t_now: float) -> bool:
+        self._record_request = int(action.data.get("request", 0))
+        if self.recorder is not None:
+            self.recorder.end_episode()
+        return True
+
+    @action_handler(ActionType.RECORD_DROP)
+    def drop_recording(self, action, t_now: float) -> bool:
+        self._record_request = int(action.data.get("request", 0))
+        if self.recorder is not None:
+            self.recorder.drop_episode()
+        return True
+
     def initialize(self):
         # if not self.is_connected():
         #     raise Exception("Robot not connected, cannot initialize, must call connect() first.")
@@ -918,6 +1075,8 @@ class Robot(EventHost, ABC):
                 # talk to the server instead of opening the port themselves.
                 self._start_shared_bus_servers()
 
+            self._open_recorder()
+
             for module_name, module in self.modules.items():
                 # The whole connection, not just host and port: with CURVE on,
                 # the clock port refuses a plaintext peer like every other relay
@@ -957,6 +1116,11 @@ class Robot(EventHost, ABC):
             sim_teardown(self)
 
         self.running = False
+        # Before the modules go: an episode still open has to be sealed while
+        # its encoders are alive, or its mp4 is left without a footer.
+        if self.recorder is not None:
+            self.recorder.close()
+            self.recorder = None
         if self.action_socket is not None:
             self.action_socket.close()
             self.action_socket = None
@@ -1017,6 +1181,12 @@ class Robot(EventHost, ABC):
         """
 
         if action.action_type == ActionType.MODULE_ACTION:
+            # Recorded here rather than on the controller: the action path is
+            # conflated end to end, and only the actions that arrived moved
+            # the robot. Training on one that was dropped teaches a mapping
+            # that never happened.
+            if self.recorder is not None:
+                self.recorder.note_action(action)
             # put module actions into action queues
             for module_name, module_action in action.items():
                 self.action_queues[module_name].put(module_action)

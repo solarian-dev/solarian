@@ -84,6 +84,7 @@ NO_HYDRA_COMMANDS = {
     "detect-device",
     "run-policy",
     "onshape-export",
+    "export-dataset",
     "keygen",
     "calibrate-servo",
 } | PLUGIN_NO_HYDRA_COMMANDS
@@ -175,8 +176,8 @@ def _build_command_list() -> str:
         "run-server": "Controller",
         "record": "Recording & Replay",
         "replay": "Recording & Replay",
+        "export-dataset": "Training & Data",
         "train": "Training & Data",
-        "dataset2lerobot": "Training & Data",
         "detect-device": "Utilities",
         "list-cameras": "Utilities",
         "shell": "Utilities",
@@ -292,6 +293,32 @@ def main() -> None:
             os.environ["SOLARIAN_ONSHAPE_EXPORT_KEYS_FILE"] = oe_args.keys_file
         if oe_args.update_yaml:
             os.environ["SOLARIAN_ONSHAPE_EXPORT_UPDATE_YAML"] = oe_args.update_yaml
+        overrides = []
+    elif args.subcommand == "export-dataset":
+        ed_parser = argparse.ArgumentParser(prog="solarian export-dataset")
+        ed_parser.add_argument("session_dir", help="Recorded session to convert.")
+        ed_parser.add_argument("output_dir", nargs="?", default=None,
+                               help="Where to write (default: <session_dir>/export/lerobot).")
+        ed_parser.add_argument("--fps", default=None,
+                               help="Rate to resample onto (default: the session's video grid).")
+        ed_parser.add_argument("--episodes", default=None, metavar="A,B,C",
+                               help="Only these episode indices (default: all sealed ones).")
+        ed_parser.add_argument("--no-remap", action="store_true",
+                               help="Keep the archive geometry instead of producing policy frames.")
+        ed_parser.add_argument("--overwrite", action="store_true",
+                               help="Replace the output directory if it exists.")
+        ed_args = ed_parser.parse_args(remaining)
+        os.environ["SOLARIAN_EXPORT_SESSION"] = ed_args.session_dir
+        if ed_args.output_dir:
+            os.environ["SOLARIAN_EXPORT_OUT"] = ed_args.output_dir
+        if ed_args.fps:
+            os.environ["SOLARIAN_EXPORT_FPS"] = ed_args.fps
+        if ed_args.episodes:
+            os.environ["SOLARIAN_EXPORT_EPISODES"] = ed_args.episodes
+        if ed_args.no_remap:
+            os.environ["SOLARIAN_EXPORT_NO_REMAP"] = "true"
+        if ed_args.overwrite:
+            os.environ["SOLARIAN_EXPORT_OVERWRITE"] = "true"
         overrides = []
     elif args.subcommand == "create-project":
         if len(remaining) < 1:

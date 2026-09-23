@@ -101,6 +101,13 @@ class SensorConfig(ComponentConfig):
     #: Applied after color/rotation and before ``resize_*``. Relative paths are
     #: resolved against the project / conf directory.
     optical_remap: str | None = None
+    #: Resolution the recorded archive stream is captured at, before the
+    #: optical remap and before the ``resize_*`` the observation path applies.
+    #: Unset archives at the sensor's own ``width`` / ``height``. Lowering it
+    #: is the knob for encoder CPU on a Raspberry Pi; it does not touch the
+    #: sensor mode, so the field of view and the calibration stay valid.
+    archive_width: int | None = None
+    archive_height: int | None = None
     #: Optional simulation mapping; used only when the robot runs with is_sim.
     sim: SimSensorConfig | None = None
 
@@ -281,10 +288,41 @@ class ConnectionConfig(BaseModel):
     heartbeat_s: float = 0.5
 
 # A robot is composed by multiple modules, eg: arms, legs, base, etc.
+class RecordingConfig(BaseModel):
+    """Episode recording, which the robot owns end to end.
+
+    On by default: a session that was not recorded cannot be recovered, and
+    the cost of an mp4 nobody wanted is a deletion. ``max_session_gb`` is the
+    counterweight — on-by-default without a cap fills an SD card.
+    """
+
+    enabled: bool = True
+    #: Where sessions are written. Relative paths resolve against the project,
+    #: which is only the right default while the project lives on local disk —
+    #: point this elsewhere rather than mux an mp4 over a network mount.
+    root: str = "datasets"
+    #: Grid the archive video is encoded onto. Defaults to the robot's ``fps``.
+    fps: float | None = None
+    codec: str = "libx264"
+    #: Constant Rate Factor. 18 is near-transparent, 23 is the x264 default;
+    #: 20 keeps an archive that survives a later re-encode at policy resolution.
+    crf: int = 20
+    #: Keyframe interval. Short GOPs cost a few percent of size and buy the
+    #: cheap random access that training-time frame sampling does all day.
+    keyint: int = 30
+    preset: str = "veryfast"
+    #: Captures buffered per camera before frames are dropped rather than
+    #: stalling the camera's loop.
+    queue_size: int = 64
+    #: Stop recording once the session reaches this size.
+    max_session_gb: float | None = 64.0
+
+
 class RobotConfig(BaseModel):
     img_compression_quality: int
     connection: ConnectionConfig
     fps: int
+    recording: RecordingConfig = RecordingConfig()
     #: Run in MuJoCo simulation. ``None`` (default) defers to the robot class's
     #: ``is_sim`` attribute; set it here (or via ``run-robot sim=true``) to
     #: override, so the same robot class can run on hardware or in sim.
@@ -320,6 +358,12 @@ class ControllerConfig(BaseModel):
     #: cloud-hosted controller uses a leader arm plugged into the operator's
     #: laptop, without the project's code changing.
     remote_input_modules: list[str] = []
+    #: Ask the robot to start recording as soon as the session is up. The robot
+    #: is what records; this only decides whether an operator has to press a
+    #: key first. A teleop session that was not recorded cannot be recovered.
+    record: bool = True
+    #: Task string stamped on the episodes this session records.
+    task: str | None = None
     #: Deprecated, superseded by ``ui``. ``true`` still selects the console UI,
     #: which is what the old headless loop was; use ``ui: null`` for no UI.
     headless: bool = False
@@ -330,23 +374,29 @@ class ControllerConfig(BaseModel):
     modules: dict[str, ModuleConfig]
 
 class RecordConfig(ControllerConfig):
-    repo_id: str
+    """The ``solarian record`` run: an operator collecting a training set.
+
+    Only the shape of the session lives here — how many episodes, how long
+    each one runs, how long to reset between them. Everything about *how* an
+    episode is stored belongs to the robot's :class:`RecordingConfig`, because
+    the robot is what writes it.
+    """
+
+    #: Session directory the robot files these episodes under, below its own
+    #: ``RecordingConfig.root``. A timestamp is appended, so a rerun gets its
+    #: own directory rather than mixing with episodes an older build wrote.
+    name: str = "session"
     num_episodes: int
-    episode_time_s: float
+    #: Cut the episode here. ``null`` records until the operator says stop.
+    episode_time_s: float | None
+    #: Teleop time between episodes, for putting the scene back.
     reset_time_s: float
-    
-    reset_period: int
-    play_sounds: bool
-    display_cameras: bool
-    tasks: list[str] | None
-    tags: str | None
-    private: bool
-    num_image_writer_processes: int
-    num_image_writer_threads_per_camera: int
-    start_episode: int
-    video: bool
-    
-    video_res: list[int]
+    #: Reset every N episodes rather than after each one.
+    reset_period: int = 1
+    play_sounds: bool = True
+    #: Tasks to cycle through, one episode each. Empty records the
+    #: controller's own ``task``.
+    tasks: list[str] = []
 
 class ReplayConfig(ControllerConfig):
     repo_id: str

@@ -273,6 +273,7 @@ class ExternalUI:
             "key_help": [list(row) for row in snapshot.key_help],
             "skills": {key: list(value) for key, value in snapshot.skills.items()},
             "telemetry": dict(snapshot.telemetry),
+            "recording": dict(snapshot.recording),
             "status": snapshot.status,
         }
 

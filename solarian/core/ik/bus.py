@@ -68,13 +68,14 @@ class IKActuatorBus(ActuatorBus):
         cartesian_components: Dict[str, Any],
         backend: DifferentialIKBackend,
     ):
-        self.inner_bus = inner_bus
         self.joint_components = dict(joint_components)
         self.cartesian_components = dict(cartesian_components)
+        super().__init__(
+            port=getattr(inner_bus, "port", None),
+            components={**self.joint_components, **self.cartesian_components},
+        )
+        self.inner_bus = inner_bus
         self.backend = backend
-
-        self.port = getattr(inner_bus, "port", None)
-        self.components = {**self.joint_components, **self.cartesian_components}
 
         # Pose index (0..5) each Cartesian actuator drives.
         self.cartesian_index = {

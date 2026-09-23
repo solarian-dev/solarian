@@ -6,7 +6,6 @@ from solarian.cli import BaseCommand, CommandRegistry
 from solarian.utils import get_class
 from solarian.core.configs import ReplayConfig
 from solarian.utils import log_say
-from solarian.core.dataset import Dataset
 from solarian.core import Observation
 from solarian.core.data import PosData, SpeedData, ImageData, BoundingBoxData, TemperatureData
 from solarian.core import Action

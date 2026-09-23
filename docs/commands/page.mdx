@@ -247,7 +247,9 @@ Starts a [`RelayServer`](/docs/servers) using `conf/server.yaml`. Run this on th
 solarian record num_episodes=10 episode_time_s=20
 ```
 
-Records teleoperated episodes by simultaneously running the controller and observation receiver, then writes the result to disk in the format declared by `conf/record.yaml` (`repo_id`, `tasks`, video options). Imports robot, observation, action, and controller modules.
+The same teleop loop as `run-controller`, cut into episodes: reset the scene, record for `episode_time_s`, seal, repeat. Press `delete` during an episode to throw it away and record it again — the index is reused, so a bad take leaves no gap — `r` to seal early, and quit the UI to end the session.
+
+The robot is what writes the dataset, so `conf/record.yaml` holds only the shape of the session (`name`, `num_episodes`, `episode_time_s`, `reset_time_s`, `tasks`) and the robot's `conf/robot.yaml` `recording:` block holds where and how. See [Recording](/docs/recording).
 
 ### `replay`
 
@@ -259,6 +261,14 @@ Replays a previously recorded episode by streaming its actions back through the 
 
 ## Training & data commands
 
+### `export-dataset`
+
+```bash
+solarian export-dataset datasets/cup_stacking__2026-09-22T19-04-11
+```
+
+Turns a recorded session — archive mp4s plus one parquet per episode, all at native rates — into a LeRobot v2.1 dataset: every signal resampled onto one grid, every frame warped through the camera's optical remap and downscaled to the observation resolution. The session is never modified, so recalibrate a camera or change your mind about the rate and export again from the same recording. `--fps`, `--episodes A,B,C`, `--no-remap` and `--overwrite` cover the rest. See [Recording](/docs/recording).
+
 ### `train`
 
 ```bash
@@ -266,14 +276,6 @@ solarian train
 ```
 
 Trains a policy from a recorded dataset using the configuration in `conf/train.yaml`. Supports ACT and diffusion policies (`model.type=act` or `model.type=diffusion`) and optional Weights & Biases logging.
-
-### `dataset2lerobot`
-
-```bash
-solarian dataset2lerobot
-```
-
-Converts a Solarian-recorded dataset to the [LeRobot](https://github.com/huggingface/lerobot) on-disk format.
 
 ## Utility commands
 

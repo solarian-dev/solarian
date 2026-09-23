@@ -139,6 +139,9 @@ class OpenCVCameraBus(SensorBus):
         elif cfg.rotation == Rotation.ROTATE_270.value:
             processed = cv2.rotate(processed, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
+        camera_name = next(iter(self.components.keys()))
+        self.archive_capture(camera_name, processed, cfg)
+
         from solarian.core.optical_remap import finish_camera_frame
 
         processed = finish_camera_frame(processed, cfg, self._optical_remap)
@@ -146,7 +149,6 @@ class OpenCVCameraBus(SensorBus):
         if not isinstance(processed, np.ndarray):
             raise TypeError(f"Expected numpy.ndarray, got {type(processed)}")
 
-        camera_name = next(iter(self.components.keys()))
         return {camera_name: processed}
 
     def is_calibrated(self) -> bool:

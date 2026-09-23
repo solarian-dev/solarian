@@ -14,7 +14,7 @@ dependencies = [
     "msgpack==1.1.0",
     # WebSocket server behind ``ui=external`` (solarian/core/ui/external.py).
     "websockets>=13",
-    "atomics==1.0.3; platform_system != 'Darwin' or platform_machine != 'arm64'",
+    "atomics==1.0.3",
 
     # Data input, validation and settings
     "pynput>=1.7.7",
@@ -48,6 +48,8 @@ dependencies = [
     "pillow",
     "imageio==2.34.0",
     "imageio-ffmpeg",
+    # H.264 encoding of the episode archive (solarian/core/recording).
+    "av>=14",
 
     # Other
     "cmake==4.0.3",
@@ -80,6 +82,12 @@ sim = [
 all = [
     "solarian[ai,sim]",
 ]
+
+[tool.uv]
+# atomics only publishes x86_64 wheels; the macOS one loads on an Apple Silicon
+# machine and then fails at dlopen. Build it instead. Shared memory — and so
+# every module process and every recording encoder — is built on it.
+no-binary-package = ["atomics"]
 
 [project.scripts]
 solarian = "solarian.cli.manage:main"

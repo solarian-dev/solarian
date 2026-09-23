@@ -127,6 +127,7 @@ class TeleopCtrl(Controller):
 
     def __init__(self):
         self._init_skill_orchestration()
+        self._init_recording()
         self.cfg = SimpleNamespace(fps=30, waypoint_lookahead_s=0.25)
         self.skill_command_queue = FakeCommandQueue()
         self.skill_status_buffer = None

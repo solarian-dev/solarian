@@ -32,6 +32,8 @@ class UICommandType(str, Enum):
     STOP_ALL = "stop_all"
     RECORD_START = "record_start"
     RECORD_STOP = "record_stop"
+    #: Seal and delete the episode in progress, then start a fresh one.
+    RECORD_REDO = "record_redo"
     #: One reading of a teleop device sampled wherever that device is plugged in.
     INPUT_SAMPLE = "input_sample"
     QUIT = "quit"
@@ -89,7 +91,26 @@ class UISnapshot:
     skills: dict[str, list[str]] = field(default_factory=dict)
     #: Pre-formatted rows (latencies, clock offset, link age).
     telemetry: dict[str, str] = field(default_factory=dict)
+    #: Recording state as the robot reports it: ``enabled``, ``active``,
+    #: ``episode`` (sealed so far) and ``request``. Echoed back rather than
+    #: tracked locally, because the robot is what actually records and a
+    #: command the controller sent is not evidence that it arrived.
+    recording: dict[str, Any] = field(default_factory=dict)
     status: str = ""
+
+
+def recording_status(state: dict[str, Any]) -> str:
+    """One line every front end shows the same way.
+
+    ``episode`` counts what is sealed, so the episode recording right now is
+    the one after it — the operator is told the number they will find on disk,
+    not an index they have to adjust.
+    """
+    if not state.get("enabled"):
+        return "not recording"
+    if state.get("active"):
+        return f"REC episode {state.get('episode', 0)}"
+    return f"paused, {state.get('episode', 0)} recorded"
 
 
 @runtime_checkable

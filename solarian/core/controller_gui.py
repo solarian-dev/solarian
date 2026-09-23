@@ -43,6 +43,12 @@ _KEY_HELD = (90, 220, 130)
 _KEY_HELD_BG = (35, 70, 45)
 _WARN = (240, 200, 80)
 _HIGH = (240, 80, 80)
+
+#: Keys pygame reports by name rather than as a character, which controllers
+#: nonetheless bind. Without these, ``space`` and ``delete`` never reach a
+#: handler. Every other multi-character name (arrows, modifiers, function
+#: keys) is still dropped.
+_NAMED_KEYS = frozenset({"space", "delete", "backspace"})
 LEVEL_COLORS = {"mid": _WARN, "high": _HIGH}
 
 
@@ -84,9 +90,9 @@ class ControllerGUI:
     ) -> bool:
         """Drain the event queue.
 
-        Routes single-character key-down / key-up events to *on_press* /
-        *on_release* and tracks the held-key set. Returns ``True`` if the user
-        asked to quit (window closed, ``q`` or ``Esc``).
+        Routes key-down / key-up events to *on_press* / *on_release* and tracks
+        the held-key set. Returns ``True`` if the user asked to quit (window
+        closed or ``Esc``).
         """
         pygame = self._pygame
         quit_requested = False
@@ -114,11 +120,11 @@ class ControllerGUI:
         return quit_requested
 
     def _event_char(self, key: int) -> Optional[str]:
-        """Return the lowercase character for a pygame key code, or None for
-        non-character keys (arrows, modifiers, function keys, ...)."""
-        name = self._pygame.key.name(key)
-        if len(name) == 1:
-            return name.lower()
+        """Return the lowercase name for a pygame key code, or None for the
+        keys nothing binds (arrows, modifiers, function keys, ...)."""
+        name = self._pygame.key.name(key).lower()
+        if len(name) == 1 or name in _NAMED_KEYS:
+            return name
         return None
 
     @property
