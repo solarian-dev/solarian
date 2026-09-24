@@ -73,6 +73,8 @@ recording:
   root: datasets
   crf: 20        # near-transparent; survives a later re-encode
   keyint: 30     # short GOPs buy cheap random access at training time
+  preset: veryfast
+  threads: 1     # per camera, out of the cores the control loop also wants
   max_session_gb: 64.0
 ```
 
@@ -87,17 +89,21 @@ sensors:
   camera:
     width: 2028          # what the sensor is opened at
     height: 1520
-    resize_width: 960    # what the policy sees
-    resize_height: 540
-    archive_width: 1332  # what is recorded
-    archive_height: 1000
+    resize_width: 1014   # what the observation carries
+    resize_height: 760
+    archive_width: 1014  # what is recorded
+    archive_height: 760
 ```
 
 Leave `archive_*` unset to record at the sensor's full resolution. It exists because a Raspberry Pi 5 has no hardware H.264 encoder, so the archive size is bounded by what software x264 keeps up with — measure before raising it.
 
+Prefer a size that divides the sensor by a whole number. `cv2.resize` with `INTER_AREA` only takes its fast path at integer ratios, and the difference is not subtle: on a Pi 5, 2028x1520 down to 1014x760 costs 1.5 ms, while 1332x1000 — a 1.523 ratio, only 42% more pixels — costs 33.6 ms, which is a whole core at 30 fps. Re-encoding real wrist-camera footage on a Pi 5, the encoder itself costs 0.51 of a core at 1014x760 and 0.97 at 1332x1000. Skipping the resize entirely and archiving the native 2028x1520 is the worst of both: 2.88 cores, because the 1.5 ms of resize you save buys you seventy of encoding.
+
 ## Recording a session
 
 Recording is on while you teleop, so `solarian run-controller` already records. Press `r` to seal the episode and open the next one, `delete` to throw the current one away and re-record it.
+
+To start idle instead and open the first episode by hand, set `record: false` in the controller's config. That is a different switch from the robot's `recording.enabled`, and the two answer different questions: `recording.enabled` is whether the robot can record at all, while `record` is only whether an operator has to press a key first. Turning `enabled` off to get a quiet startup also means `r` does nothing and `solarian record` refuses to run. `solarian record` ignores `record` either way, since it opens and seals every episode itself.
 
 For a deliberate collection run, `solarian record` cuts the same teleop loop into episodes:
 

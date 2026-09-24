@@ -1042,6 +1042,7 @@ class Robot(EventHost, ABC):
                 crf=cfg.crf,
                 keyint=cfg.keyint,
                 preset=cfg.preset,
+                threads=cfg.threads,
                 input_pix_fmt="bgr24" if sensor_cfg.color_mode == "bgr" else "rgb24",
                 buffer_size=cfg.queue_size,
             )

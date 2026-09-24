@@ -674,6 +674,75 @@ def test_an_open_episode_still_queues_the_downscaled_frame():
     assert captured == [(1000, 1332, 3)]
 
 
+@pytest.mark.parametrize("pix_fmt", ["rgb24", "bgr24"])
+def test_the_archive_keeps_the_cameras_colour_order(tmp_path, pix_fmt):
+    """The encoder converts to YUV itself rather than letting swscale do it.
+
+    Reaching for the wrong conversion would swap red and blue in every
+    episode a bgr camera records, and nothing downstream looks at a colour
+    closely enough to notice.
+    """
+    import av
+
+    shape = (48, 64, 3)
+    red = np.zeros(shape, dtype=np.uint8)
+    red[..., 2 if pix_fmt == "bgr24" else 0] = 255
+
+    path = tmp_path / "take.mp4"
+    with SharedMemoryManager() as shm_manager:
+        writer = VideoWriter(
+            name="cam", fps=FPS, shape=shape, preset="ultrafast",
+            input_pix_fmt=pix_fmt,
+        )
+        sink = writer.open(shm_manager)
+        writer.start_episode(str(path), 100.0)
+        for i in range(3):
+            sink.write_frame(red, 100.0 + i / FPS)
+        stats = writer.end_episode(100.0 + 5 / FPS)
+        writer.close()
+
+    assert stats is not None and stats.n_frames > 0
+    with av.open(str(path)) as container:
+        decoded = next(container.decode(video=0)).to_ndarray(format="rgb24")
+    r, g, b = (int(v) for v in decoded[24, 32])
+    assert r > 150 and g < 80 and b < 80, f"decoded as rgb({r}, {g}, {b})"
+
+
+def test_a_capture_held_across_slots_gets_a_timestamp_per_copy(tmp_path):
+    """A camera slower than the grid repeats a capture to fill the gap.
+
+    Each copy is a distinct frame to the muxer and needs its own pts. Letting
+    the encoder infer one only works while no capture ever repeats, and the
+    mp4 an equal pts produces is rejected outright rather than degraded.
+    """
+    import av
+
+    shape = (48, 64, 3)
+    fps = 10.0
+    path = tmp_path / "take.mp4"
+    with SharedMemoryManager() as shm_manager:
+        writer = VideoWriter(name="cam", fps=fps, shape=shape, preset="ultrafast")
+        sink = writer.open(shm_manager)
+        writer.start_episode(str(path), 100.0)
+        # One capture every 0.3 s against a 0.1 s grid: three slots apiece.
+        for i in range(5):
+            sink.write_frame(np.full(shape, i * 40, dtype=np.uint8), 100.0 + i * 0.3)
+        stats = writer.end_episode(100.0 + 5 * 0.3)
+        writer.close()
+
+    assert stats.n_repeat > 0, "the capture rate should have forced repeats"
+    assert stats.complete, "the episode did not seal"
+    with av.open(str(path)) as container:
+        pts = [frame.pts for frame in container.decode(video=0)]
+    assert pts == sorted(set(pts)), f"duplicate or out-of-order pts: {pts}"
+    assert len(pts) == stats.n_frames
+
+
+def test_the_encoder_does_not_thread_by_default():
+    """Left to itself x264 counts the cores and takes them from the control loop."""
+    assert VideoWriter(name="cam", fps=FPS, shape=ARCHIVE_SHAPE).threads == 1
+
+
 def test_the_archive_is_not_fed_between_episodes(recorder):
     session, sink = recorder
 

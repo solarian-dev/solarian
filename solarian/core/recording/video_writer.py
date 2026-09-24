@@ -118,6 +118,7 @@ class VideoWriter(mp.Process):
         crf: int = 20,
         keyint: int = 30,
         preset: str = "veryfast",
+        threads: int = 1,
         input_pix_fmt: str = "rgb24",
         output_pix_fmt: str = "yuv420p",
         buffer_size: int = 64,
@@ -125,11 +126,15 @@ class VideoWriter(mp.Process):
         super().__init__(name=f"VideoWriter-{name}", daemon=True)
         self.camera_name = name
         self.fps = float(fps)
+        #: The grid rate as an exact rational. Frame timestamps are counted in
+        #: its units, and PyAV wants a rational rather than a rounded float.
+        self._rate = Fraction(self.fps).limit_denominator(10000)
         self.shape = tuple(shape)
         self.codec = codec
         self.crf = int(crf)
         self.keyint = int(keyint)
         self.preset = preset
+        self.threads = int(threads)
         self.input_pix_fmt = input_pix_fmt
         self.output_pix_fmt = output_pix_fmt
         self.buffer_size = int(buffer_size)
@@ -253,7 +258,22 @@ class VideoWriter(mp.Process):
         self, video_path: str, start_time: float, scratch: dict
     ) -> bool:
         """Encode until the episode's last frame. True if shutdown was asked."""
+        import cv2
+
         container, stream = self._open_container(video_path)
+        # x264 wants yuv420p either way. Handing it rgb24 makes swscale do the
+        # conversion inside ``encode``, which costs about twice what OpenCV
+        # does at archive resolution.
+        #
+        # Do not call cv2.setNumThreads here. This process is forked from one
+        # that is itself resizing frames, and resizing OpenCV's pool in the
+        # child deadlocks on a mutex the fork copied mid-flight. Measured, it
+        # would buy nothing anyway: the convert is the same cost either way.
+        to_yuv = (
+            cv2.COLOR_BGR2YUV_I420
+            if self.input_pix_fmt == "bgr24"
+            else cv2.COLOR_RGB2YUV_I420
+        )
 
         next_index = 0
         n_unique = 0
@@ -312,8 +332,19 @@ class VideoWriter(mp.Process):
             n_unique += 1
             n_repeat += n_repeats - 1
 
-            frame = av.VideoFrame.from_ndarray(scratch["img"], format=self.input_pix_fmt)
-            for _ in range(n_repeats):
+            # Converted once even when the slot repeats: a repeat is the same
+            # capture written twice, not a second capture.
+            frame = av.VideoFrame.from_ndarray(
+                cv2.cvtColor(scratch["img"], to_yuv), format="yuv420p"
+            )
+            frame.time_base = 1 / self._rate
+            for slot in range(next_index - n_repeats, next_index):
+                # Stamped per copy, not left to the encoder. This frame is
+                # already in the stream's own format, so nothing reformats it
+                # and ``encode`` is handed this very object each time round;
+                # an inferred timestamp would repeat with it, and a repeated
+                # one is not a worse video but a file the muxer refuses.
+                frame.pts = slot
                 for packet in stream.encode(frame):
                     container.mux(packet)
 
@@ -358,20 +389,20 @@ class VideoWriter(mp.Process):
                 mode="w",
                 options={"movflags": "frag_keyframe+empty_moov+default_base_moof"},
             )
-            # PyAV wants an exact rational frame rate, not a float, so that
-            # the container's time base is exact rather than rounded.
-            stream = container.add_stream(
-                self.codec, rate=Fraction(self.fps).limit_denominator(10000)
-            )
+            stream = container.add_stream(self.codec, rate=self._rate)
             height, width, _ = self.shape
             stream.width = width
             stream.height = height
             stream.pix_fmt = self.output_pix_fmt
-            # PyAV defaults to slice threading, which splits each frame across
-            # the cores and scales poorly; frame threading is worth about 1.8x
-            # at archive resolution. The latency it adds does not matter to a
-            # file nothing reads until the episode is over.
+            # Inert at one thread, but the right kind to grow into: slice
+            # threading splits a single frame across cores and scales poorly.
+            # The latency frame threading adds does not matter to a file
+            # nothing reads until the episode is over.
             stream.codec_context.thread_type = "FRAME"
+            # Pinned rather than left to count the cores. Threading here buys
+            # wall-clock at the cost of total CPU, and on a board shared with
+            # a control loop the frame interval is already met without it.
+            stream.codec_context.thread_count = self.threads
             # A short GOP costs a few percent of size and buys cheap random
             # access, which is all training-time frame sampling ever does.
             stream.options = {

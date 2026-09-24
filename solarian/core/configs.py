@@ -319,6 +319,12 @@ class RecordingConfig(BaseModel):
     #: cheap random access that training-time frame sampling does all day.
     keyint: int = 30
     preset: str = "veryfast"
+    #: Encoder threads per camera. Frame threading trades total CPU for
+    #: wall-clock, which is the wrong way round here: on a Pi 5 at 1014x760 a
+    #: single thread costs 0.50 of a core against 0.55 for two and 0.63 for
+    #: four, and one thread still finishes a frame in half its 33 ms slot.
+    #: Raise it only if the encoder starts dropping frames.
+    threads: int = 1
     #: Captures buffered per camera before frames are dropped rather than
     #: stalling the camera's loop.
     queue_size: int = 64
