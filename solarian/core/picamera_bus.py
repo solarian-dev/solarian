@@ -60,8 +60,6 @@ class PiCameraBus(SensorBus):
         super().__init__(port, components, calibration)
         self.picam2 = None
         self.components = components
-        self._optical_remap = None
-        self._optical_remap_loaded = False
         self.capture_timeout_s = _CAPTURE_TIMEOUT_S
         self.ae_settle_s = _AE_SETTLE_S
         self.reconnect_settle_s = _RECONNECT_SETTLE_S
@@ -104,6 +102,9 @@ class PiCameraBus(SensorBus):
         return Picamera2
 
     def _open(self, *, settle: float) -> None:
+        from solarian.core.optical_remap import use_one_opencv_thread
+
+        use_one_opencv_thread()
         camera_num = self._camera_num()
         Picamera2 = self._picamera2_class()
         cfg = self._cfg()
@@ -136,11 +137,6 @@ class PiCameraBus(SensorBus):
             )
         self.picam2.configure(config)
         self.picam2.start()
-        if not self._optical_remap_loaded:
-            from solarian.core.optical_remap import load_bus_remap
-
-            self._optical_remap = load_bus_remap(cfg)
-            self._optical_remap_loaded = True
         if settle > 0:
             time.sleep(settle)
 
@@ -270,7 +266,7 @@ class PiCameraBus(SensorBus):
 
         from solarian.core.optical_remap import finish_camera_frame
 
-        processed = finish_camera_frame(processed, cfg, self._optical_remap)
+        processed = finish_camera_frame(processed, cfg)
 
         if not isinstance(processed, np.ndarray):
             raise TypeError(f"Expected numpy.ndarray, got {type(processed)}")

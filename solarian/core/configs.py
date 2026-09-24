@@ -98,9 +98,17 @@ class SensorConfig(ComponentConfig):
     resize_width: int | None
     resize_height: int | None
     #: Path to a GoPro optical-remap JSON from ``solarian calibrate-umi-camera``.
-    #: Applied after color/rotation and before ``resize_*``. Relative paths are
-    #: resolved against the project / conf directory.
+    #: Relative paths are resolved against the project / conf directory. The
+    #: warp is *not* applied on the capture path: a policy needs GoPro optics,
+    #: and nothing else does, so whoever needs it applies it to the frames it
+    #: reads. See :func:`solarian.core.optical_remap.load_policy_remap`.
     optical_remap: str | None = None
+    #: Size of the remapped GoPro plane, for the consumers that build it. Unset
+    #: uses the plane the calibration was solved on, which is four times the
+    #: pixels a 224 policy crop can use. Only the aspect ratio reaches the
+    #: policy, so this is purely how much detail to carry into the crop.
+    remap_width: int | None = None
+    remap_height: int | None = None
     #: Resolution the recorded archive stream is captured at, before the
     #: optical remap and before the ``resize_*`` the observation path applies.
     #: Unset archives at the sensor's own ``width`` / ``height``. Lowering it

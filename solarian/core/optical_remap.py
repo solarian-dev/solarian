@@ -1,6 +1,7 @@
 """Warp a third-party fisheye camera into GoPro Hero 10 + Max Lens Mod space.
 
-Production entry point: :func:`load_aligner` + :func:`apply_optical_remap`.
+Production entry point: :func:`load_policy_remap`, applied by whoever needs
+GoPro optics rather than by the camera that produced the frame.
 The saved JSON embeds both cameras' UMI-schema intrinsics so it is portable.
 """
 
@@ -174,6 +175,53 @@ class Aligner:
         valid_mask = valid.reshape(h, w)
         return map_x, map_y, valid_mask
 
+    def resize_output(self, width: int, height: int) -> None:
+        """Rebuild the sampling grid for a smaller GoPro plane.
+
+        The cost of a warp is one output pixel at a time, so the plane
+        the policy actually reads is the one worth computing. Scaling
+        the intrinsics and rebuilding is exact; shrinking the finished
+        grid would interpolate between source coordinates instead.
+        """
+        width, height = int(width), int(height)
+        if (width, height) == self.out_size:
+            return
+        sx = width / self.out_size[0]
+        sy = height / self.out_size[1]
+        # Pixel units: fx, cx scale with width, fy, cy with height. The
+        # distortion coefficients are dimensionless and do not.
+        self.Kg = self.Kg.copy()
+        self.Kg[0, :] *= sx
+        self.Kg[1, :] *= sy
+        self.out_size = (width, height)
+        self.map1, self.map2, self.valid = self._build_maps()
+
+    def mask_output(self, mask: np.ndarray) -> None:
+        """Point rejected output pixels outside the source image.
+
+        ``remap`` writes ``borderValue`` wherever a map lands out of
+        bounds, which is the same black the coverage mask wants. Doing
+        it here costs nothing per frame; doing it afterwards is a
+        boolean-indexed write over the whole image on every capture.
+        """
+        reject = ~np.asarray(mask, dtype=bool)
+        self.map1[reject] = -1.0
+        self.map2[reject] = -1.0
+        self.valid = self.valid & ~reject
+
+    def compile_maps(self) -> None:
+        """Convert the grid to the fixed-point pair ``remap`` runs on.
+
+        Given float maps, ``remap`` derives this representation on every
+        call. Its 1/32-pixel quantisation is far below the calibration
+        error already baked into the map.
+        """
+        if self.map1.dtype != np.float32:
+            return
+        import cv2
+
+        self.map1, self.map2 = cv2.convertMaps(self.map1, self.map2, cv2.CV_16SC2)
+
     def warp(self, img: np.ndarray) -> np.ndarray:
         import cv2
 
@@ -181,7 +229,8 @@ class Aligner:
             img,
             self.map1,
             self.map2,
-            interpolation=cv2.INTER_AREA,
+            # remap does not implement INTER_AREA; it substitutes this.
+            interpolation=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=(0, 0, 0),
         )
@@ -272,9 +321,10 @@ def apply_optical_remap(
                 interpolation=cv2.INTER_NEAREST,
             ).astype(bool)
         keep = keep & cov
-    out = warped.copy()
-    out[~keep] = 0
-    return out
+    # ``remap`` already allocated this array. Blanking in place avoids a
+    # second full-frame copy on every capture.
+    warped[~keep] = 0
+    return warped
 
 
 def approximate_fov_deg(intr: dict) -> tuple[float, float]:
@@ -541,16 +591,14 @@ def peek_remap_out_size(path: str, conf_dir: Optional[Path] = None) -> tuple[int
     return GOPRO_OUT_SIZE
 
 
-def camera_output_hw(cfg, conf_dir: Optional[Path] = None) -> tuple[int, int]:
-    """``(height, width)`` of frames emitted by a camera bus after remap/resize."""
+def camera_output_hw(cfg) -> tuple[int, int]:
+    """``(height, width)`` of frames a camera bus publishes.
+
+    The optical remap runs where the frames are consumed, not here, so it
+    has no say in this size.
+    """
     if cfg.resize_width is not None and cfg.resize_height is not None:
         return int(cfg.resize_height), int(cfg.resize_width)
-    if getattr(cfg, "optical_remap", None):
-        try:
-            w, h = peek_remap_out_size(str(cfg.optical_remap), conf_dir)
-            return h, w
-        except FileNotFoundError:
-            return GOPRO_OUT_SIZE[1], GOPRO_OUT_SIZE[0]
     if cfg.rotation in (90, -90):
         return int(cfg.width), int(cfg.height)
     return int(cfg.height), int(cfg.width)
@@ -586,25 +634,89 @@ class OpticalRemap:
         self.path = resolve_remap_path(remap_path, conf_dir)
         self.aligner = load_aligner(str(self.path), camera_wh)
         self.coverage = load_coverage_mask(out_size=self.aligner.out_size)
+        self._bake()
+
+    def _bake(self) -> None:
+        """Fold everything constant into the grid, once."""
+        self.aligner.mask_output(self.coverage)
+        self.aligner.compile_maps()
 
     def apply(self, frame: np.ndarray) -> np.ndarray:
-        return apply_optical_remap(frame, self.aligner, self.coverage)
+        return self.aligner.warp(frame)
+
+    def fit_output(self, width: int, height: int) -> None:
+        """Warp straight to the observation size.
+
+        The shipped grid is the 1920x1080 GoPro plane. Warping to it and
+        then resizing throws away three quarters of the pixels the warp
+        just wrote, so build the grid at the size the policy and the
+        preview actually read.
+        """
+        width, height = int(width), int(height)
+        if (width, height) == self.aligner.out_size:
+            return
+        self.aligner.resize_output(width, height)
+        self.coverage = load_coverage_mask(out_size=(width, height))
+        self._bake()
 
 
-def load_bus_remap(cfg) -> Optional[OpticalRemap]:
-    path = getattr(cfg, "optical_remap", None)
-    if not path:
-        return None
-    conf_dir = Path(os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf")))
-    return OpticalRemap(str(path), conf_dir)
+_opencv_threads_limited = False
 
 
-def finish_camera_frame(processed: np.ndarray, cfg, remap: Optional[OpticalRemap]):
-    """Optical remap (native res) then optional resize. Input/output match bus color."""
+def use_one_opencv_thread() -> None:
+    """Keep a remap on one core.
+
+    OpenCV's default pool uses every core for a single ``remap``. On a
+    Pi that is the whole machine, and a camera loop that finishes a
+    frame sooner just schedules the next burst more often.
+    """
+    global _opencv_threads_limited
+    if _opencv_threads_limited:
+        return
     import cv2
 
-    if remap is not None:
-        processed = remap.apply(processed)
+    cv2.setNumThreads(1)
+    _opencv_threads_limited = True
+
+
+def load_policy_remap(
+    remap_path: Optional[str],
+    camera_wh: tuple[int, int],
+    out_wh: Optional[tuple[int, int]] = None,
+    conf_dir: Optional[Path] = None,
+) -> Optional[OpticalRemap]:
+    """Build the warp for a consumer that needs GoPro optics.
+
+    Not the capture path. A camera runs at sensor rate for everyone, while
+    only a policy needs its frames in the plane it was trained on, and it
+    reads roughly one frame in thirty. Warping where the frames are
+    consumed is the difference between the two rates.
+
+    Args:
+        camera_wh: Size of the frames this will be given. Not the sensor
+            size — the observation carries a downscaled capture and the
+            archive a different one again. The maps sample the source, so
+            they have to be built for the source they will get.
+        out_wh: GoPro plane to produce. ``None`` uses the plane the
+            calibration was solved on.
+    """
+    if not remap_path:
+        return None
+    use_one_opencv_thread()
+    if conf_dir is None:
+        conf_dir = Path(os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf")))
+    remap = OpticalRemap(
+        str(remap_path), conf_dir, camera_wh=(int(camera_wh[0]), int(camera_wh[1]))
+    )
+    if out_wh is not None:
+        remap.fit_output(int(out_wh[0]), int(out_wh[1]))
+    return remap
+
+
+def finish_camera_frame(processed: np.ndarray, cfg):
+    """Downscale a capture to the size the observation carries."""
+    import cv2
+
     if cfg.resize_width is not None and cfg.resize_height is not None:
         if processed.shape[0] != cfg.resize_height or processed.shape[1] != cfg.resize_width:
             processed = cv2.resize(

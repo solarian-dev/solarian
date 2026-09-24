@@ -28,26 +28,24 @@ def suppress_atexit_summary():
 
 
 def profile(func):
+    # Resolved once: getfullargspec costs more than the body of a hot
+    # function like get_observation, and only ``verbose`` ever reads it.
+    arg_names = inspect.getfullargspec(func).args
+    name = func.__name__
+
     @wraps(func)
     def wrapper(*args, **kwargs):
-        start_time = time.time_ns()
+        start_time = time.perf_counter_ns()
         result = func(*args, **kwargs)
-        end_time = time.time_ns()
-        elapsed = (end_time - start_time)*1e-6
-        
-        # Store elapsed time
-        func_stats[func.__name__].append(elapsed)
+        elapsed = (time.perf_counter_ns() - start_time) * 1e-6
 
-        # Get argument names and values
-        arg_names = inspect.getfullargspec(func).args
-        arg_values = args[:len(arg_names)]
-        args_list = [f"{name}={value}" for name, value in zip(arg_names, arg_values)]
-        kwargs_list = [f"{k}={v}" for k, v in kwargs.items()]
-        all_args = args_list + kwargs_list
-        arg_str = ", ".join(all_args)
+        func_stats[name].append(elapsed)
 
         if verbose:
-            print(f"Function '{func.__name__}'({arg_str}) took {elapsed:.6f} ms.")
+            args_list = [f"{n}={v}" for n, v in zip(arg_names, args)]
+            kwargs_list = [f"{k}={v}" for k, v in kwargs.items()]
+            arg_str = ", ".join(args_list + kwargs_list)
+            print(f"Function '{name}'({arg_str}) took {elapsed:.6f} ms.")
 
         return result
     return wrapper

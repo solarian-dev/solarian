@@ -26,6 +26,7 @@ from solarian.core.recording.schema import build_schema
 from solarian.core.recording.session import CameraMeta, read_manifest
 from solarian.core.recording.timeline import frame_index_for, repeats_for
 from solarian.core.recording.video_writer import VideoWriter
+from solarian.core.robot import Robot
 
 ARCHIVE_SHAPE = (48, 64, 3)
 FPS = 10.0
@@ -336,11 +337,11 @@ def test_the_archive_decodes_to_the_frame_count_the_metadata_claims(
 def test_an_episode_seals_while_the_camera_is_still_feeding_the_encoder(
     recorder, schema_classes, clock
 ):
-    """The camera never stops, so the encoder cannot wait for an empty queue.
+    """The encoder stops at the stop timestamp, not when the queue runs dry.
 
-    A bus pushes captures whether or not an episode is open. If the encoder
-    stopped only when it ran out of frames, an encoder even slightly slower
-    than the camera would never stop at all.
+    ``write_frame`` itself does not look at the episode. A producer that
+    keeps pushing must not hold the seal open until the timeout. The camera
+    bus stops calling it once the episode is no longer accepting.
     """
     session, sink = recorder
     obs_cls, action_cls = schema_classes
@@ -637,6 +638,52 @@ def _camera_cfg(**overrides):
     return cfg
 
 
+def test_a_closed_episode_does_not_resize_or_queue_the_capture():
+    """Between takes the archive resize is pure waste: nothing will encode it."""
+    bus = _FakeCameraBus(port="cam0", components={})
+    captured = []
+    bus.archive_sinks["camera"] = SimpleNamespace(
+        accepting=False,
+        write_frame=lambda frame, ts: captured.append((frame.shape, ts)),
+    )
+
+    stamp = bus.archive_capture(
+        "camera",
+        np.zeros((1520, 2028, 3), np.uint8),
+        _camera_cfg(archive_width=1332, archive_height=1000),
+    )
+
+    assert captured == []
+    assert bus.capture_timestamps["camera"] == stamp
+
+
+def test_an_open_episode_still_queues_the_downscaled_frame():
+    bus = _FakeCameraBus(port="cam0", components={})
+    captured = []
+    bus.archive_sinks["camera"] = SimpleNamespace(
+        accepting=True,
+        write_frame=lambda frame, ts: captured.append(frame.shape),
+    )
+
+    bus.archive_capture(
+        "camera",
+        np.zeros((1520, 2028, 3), np.uint8),
+        _camera_cfg(archive_width=1332, archive_height=1000),
+    )
+
+    assert captured == [(1000, 1332, 3)]
+
+
+def test_the_archive_is_not_fed_between_episodes(recorder):
+    session, sink = recorder
+
+    assert sink.accepting is False
+    session.start_episode()
+    assert sink.accepting is True
+    session.end_episode()
+    assert sink.accepting is False
+
+
 def test_the_archive_keeps_the_frame_the_sensor_produced():
     """Unset archive_* records the capture, not what the policy is fed."""
     bus = _FakeCameraBus(port="cam0", components={})
@@ -691,6 +738,125 @@ def test_receive_latency_is_subtracted_from_the_capture_stamp():
     stamp = bus.archive_capture("camera", np.zeros((8, 8, 3), np.uint8), _camera_cfg())
 
     assert stamp <= before - 0.25 + 1e-3
+
+
+# --- observation sender: JPEG a frame once ---------------------------------
+
+
+class _CountingBuffer:
+    def __init__(self, sample):
+        self._sample = sample
+        self.count = 0
+        self.gets = 0
+
+    def push(self):
+        self.count += 1
+
+    def get(self):
+        self.gets += 1
+        return self._sample
+
+
+class _ArmSample:
+    def to_dict(self):
+        return {
+            "shoulder": {"value": 1.0, "timestamp": 0.0},
+            "shoulder_temp": {"value": 41.0, "timestamp": 0.0},
+        }
+
+
+class _CamSample:
+    def to_dict(self):
+        return {
+            "image": {
+                "value": np.zeros(ARCHIVE_SHAPE, dtype=np.uint8),
+                "timestamp": 0.0,
+            }
+        }
+
+
+class _DeltaRobot(Robot):
+    """The observation filter only: no zmq, no shared memory, no modules."""
+
+    def __init__(self):
+        self.observation_buffers = {}
+        self._last_obs_count = {}
+        self.recorder = None
+        self._record_request = 0
+        self._last_recording_sent = None
+        self.skills_status_buffer = None
+        self._skill_status_sent = 0
+        self._last_preview_image_s = 0.0
+
+    def control_loop(self):
+        pass
+
+    def disconnect(self):
+        pass
+
+
+@pytest.fixture
+def delta_robot():
+    Robot._instance = None
+    robot = _DeltaRobot()
+    yield robot
+    Robot._instance = None
+
+
+def test_an_unchanged_camera_frame_is_not_read_again(schema_classes, delta_robot):
+    """The sender wakes at 200 Hz; the camera publishes at 30. Re-reading
+    copies and JPEG-encodes the same 960x540 frame."""
+    arm = _CountingBuffer(_ArmSample())
+    cam = _CountingBuffer(_CamSample())
+    delta_robot.observation_buffers = {"arm": arm, "cam": cam}
+    arm.push()
+    cam.push()
+
+    first = delta_robot.get_observation()
+    assert first["arm"] is not None and first["cam"] is not None
+    assert arm.gets == 1 and cam.gets == 1
+
+    second = delta_robot.get_observation()
+    assert second.is_empty()
+    assert arm.gets == 1 and cam.gets == 1
+
+    arm.push()
+    third = delta_robot.get_observation()
+    assert third["arm"] is not None and third["cam"] is None
+    assert arm.gets == 2 and cam.gets == 1
+
+
+def test_an_unchanged_observation_is_not_sent_again(delta_robot):
+    empty = Observation({})
+    assert delta_robot._should_send_observation(empty) is True
+
+    delta_robot._last_recording_sent = delta_robot._recording_snapshot()
+    assert delta_robot._should_send_observation(empty) is False
+
+    delta_robot._record_request = 1
+    assert delta_robot._should_send_observation(empty) is True
+
+    delta_robot._last_recording_sent = delta_robot._recording_snapshot()
+    delta_robot.skills_status_buffer = SimpleNamespace(count=1)
+    assert delta_robot._should_send_observation(empty) is True
+
+
+def test_preview_images_are_not_sent_faster_than_15hz(schema_classes, delta_robot):
+    """The episode table still sees every capture; the JPEG path does not."""
+    obs = _observation(schema_classes[0], t=0.0, shoulder=1.0, with_image=True)
+
+    first = delta_robot._preview_observation(obs)
+    assert first["cam"] is not None and first["arm"] is not None
+
+    second = delta_robot._preview_observation(obs)
+    assert second["cam"] is None and second["arm"] is not None
+
+
+def test_a_module_that_advanced_is_still_sent(schema_classes, delta_robot):
+    delta_robot._last_recording_sent = delta_robot._recording_snapshot()
+    obs = _observation(schema_classes[0], t=0.0, shoulder=1.0, with_image=False)
+
+    assert delta_robot._should_send_observation(obs) is True
 
 
 # --- asking the robot for a boundary ---------------------------------------

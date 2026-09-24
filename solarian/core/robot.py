@@ -42,6 +42,14 @@ logger = logging.getLogger("robot")
 # at control-loop start races that handshake, so the check is on every recv.
 _MAX_COMMAND_AGE_S = 1.0
 
+# The Mac preview is the only consumer of the JPEG. Skills on the robot read
+# the observation buffer, so the wire does not have to carry every capture.
+_PREVIEW_IMAGE_PERIOD_S = 1.0 / 15.0
+
+# How often the control loop asks whether a module died or the link dropped.
+# Both are judged in seconds, so checking at 20 Hz is already generous.
+_SUPERVISION_PERIOD_S = 0.05
+
 
 class RobotSchemaError(Exception):
     """Raised when a robot module has no matching entry in the
@@ -108,6 +116,31 @@ class _ModulesDescriptor:
             if isinstance(val, Module):
                 ns[name] = val
         return ns
+
+
+def _is_image(value) -> bool:
+    return getattr(value, "ndim", None) == 3
+
+
+def _has_image(observation: Observation) -> bool:
+    for _, module_obs in observation.items():
+        for _, field in module_obs.items():
+            if _is_image(field.value):
+                return True
+    return False
+
+
+def _without_images(observation: Observation) -> Observation:
+    data = {}
+    for name, module_obs in observation.items():
+        fields = {}
+        for field_name, field in module_obs.items():
+            if _is_image(field.value):
+                continue
+            fields[field_name] = field.to_dict()
+        if fields:
+            data[name] = fields
+    return Observation(data)
 
 
 class Robot(EventHost, ABC):
@@ -235,6 +268,17 @@ class Robot(EventHost, ABC):
         self._module_map = ModuleMap()
         self._bus_servers: list[BusServer] = []
         self.observation_buffers = dict[str, ObservationBuffer]()
+        #: Last buffer count included in an observation. ``get_observation``
+        #: skips a module whose count has not moved, so a 30 Hz camera frame
+        #: is not JPEG-encoded on every 5 ms wake of the sender.
+        self._last_obs_count: dict[str, int] = {}
+        #: Recording tuple last successfully sent. ``None`` until the first
+        #: message, so the controller hears the initial state.
+        self._last_recording_sent: tuple[bool, bool, int, int] | None = None
+        #: Skill-status records included in the last successful send.
+        self._skill_status_sent = 0
+        #: Last time a camera image was put on the wire. Monotonic.
+        self._last_preview_image_s = 0.0
         self.action_queues = {}
 
         # IMPORTANT: Store the manager so it doesn't get garbage collected
@@ -501,18 +545,23 @@ class Robot(EventHost, ABC):
         # the robot received it; this is. Sent even with recording disabled,
         # because "the robot heard you and is not recording" is the answer a
         # controller retrying a boundary needs.
+        enabled, active, episode, request = self._recording_snapshot()
         msg.data["recording"] = {
-            "enabled": self.recorder is not None,
-            "active": self.recorder is not None and self.recorder.is_recording,
-            "episode": self.recorder.episode_count if self.recorder else 0,
-            "request": self._record_request,
+            "enabled": enabled,
+            "active": active,
+            "episode": episode,
+            "request": request,
         }
+        sent_recording = (enabled, active, episode, request)
 
         # Forward any pending skill status transitions to the controller so
         # that the think process can react to them.  ``drain`` advances a
-        # local cursor so records are only sent once even though this
-        # method runs at ~200 Hz from ``_observation_sender``.
+        # local cursor so records are only sent once. The count is taken
+        # before the drain: a record that lands during the send stays
+        # pending for the next one.
+        skill_seen = self._skill_status_sent
         if self.skills_status_buffer is not None:
+            skill_seen = self.skills_status_buffer.count
             records = self.skills_status_buffer.drain()
             if records:
                 msg.data["skill_status"] = [
@@ -527,6 +576,8 @@ class Robot(EventHost, ABC):
         payload = msg.serialize()
         StatusBoard.set("Obs payload (KB)", round(len(payload) / 1024.0, 1))
         self.state_socket.send(payload)
+        self._last_recording_sent = sent_recording
+        self._skill_status_sent = skill_seen
     
     def _check_module_health(self):
         """Raise if any module process or bus server has crashed."""
@@ -594,13 +645,60 @@ class Robot(EventHost, ABC):
                 # Before the send, which compresses the observation in place.
                 # This is also the event the episode table is keyed on:
                 # get_observation returns exactly the modules that advanced.
+                # The row keeps every capture; the preview below may drop
+                # the image so the Pi is not JPEG-encoding at camera rate.
                 if self.recorder is not None:
                     self.recorder.write_row(observation)
-                self.send_observation(observation)
-                StatusBoard.set("Observation", observation)
+                preview = self._preview_observation(observation)
+                if self._should_send_observation(preview):
+                    self.send_observation(preview)
+                    if not preview.is_empty():
+                        StatusBoard.set("Observation", preview)
             except Exception as e:
                 logger.exception(f"Observation sender error: {e}")
             time.sleep(0.005)
+
+    def _recording_snapshot(self) -> tuple[bool, bool, int, int]:
+        recorder = self.recorder
+        return (
+            recorder is not None,
+            recorder is not None and recorder.is_recording,
+            recorder.episode_count if recorder else 0,
+            self._record_request,
+        )
+
+    def _should_send_observation(self, observation: Observation) -> bool:
+        """False when this wake would repeat a message the controller has.
+
+        Joint state still goes out, because those modules advance at their
+        own rate. An empty observation is sent only when recording state or
+        skill status changed: the controller merges by module name, so a
+        message with no camera keeps the previous frame.
+        """
+        if not observation.is_empty():
+            return True
+        if self._recording_snapshot() != self._last_recording_sent:
+            return True
+        skill_count = (
+            self.skills_status_buffer.count
+            if self.skills_status_buffer is not None
+            else self._skill_status_sent
+        )
+        return skill_count != self._skill_status_sent
+
+    def _preview_observation(self, observation: Observation) -> Observation:
+        """Drop camera images when the preview already has a recent one.
+
+        Joint fields are unchanged. An image-only wake then sends nothing,
+        and the controller keeps the frame it already decoded.
+        """
+        if observation.is_empty() or not _has_image(observation):
+            return observation
+        now = time.monotonic()
+        if now - self._last_preview_image_s >= _PREVIEW_IMAGE_PERIOD_S:
+            self._last_preview_image_s = now
+            return observation
+        return _without_images(observation)
 
     def control_loop(self):
         logger.info("Control loop started")
@@ -627,10 +725,19 @@ class Robot(EventHost, ABC):
         poller = zmq.Poller()
         poller.register(self.action_socket, zmq.POLLIN)
 
+        next_supervision = 0.0
         while self.running:
-            self._check_module_health()
-            self._check_action_link()
-            self._reap_stopping_skills()
+            # This loop turns over ~1000 times a second so an action is
+            # picked up the moment it lands. Health and link checks answer
+            # questions measured in seconds, and each one polls a pipe per
+            # module, so running them every turn is thousands of syscalls a
+            # second buying nothing.
+            now = time.monotonic()
+            if now >= next_supervision:
+                next_supervision = now + _SUPERVISION_PERIOD_S
+                self._check_module_health()
+                self._check_action_link()
+                self._reap_stopping_skills()
             self.update()
 
             # Same shape as the controller's tick: drain first so handlers run
@@ -954,6 +1061,11 @@ class Robot(EventHost, ABC):
                     if sensor_cfg.resize_width is not None
                     else None
                 ),
+                remap_size=(
+                    (sensor_cfg.remap_width, sensor_cfg.remap_height)
+                    if sensor_cfg.remap_width is not None
+                    else None
+                ),
             )
 
         root = Path(cfg.root)
@@ -1160,18 +1272,15 @@ class Robot(EventHost, ABC):
         """
         obs_data = {}
         for module_name, obs_buffer in self.observation_buffers.items():
-            if obs_buffer.count == 0:
+            # Count first. A sample that lands after this read is sent on
+            # the next call; storing the count from after ``get`` would
+            # skip it.
+            count = obs_buffer.count
+            if count == 0 or count == self._last_obs_count.get(module_name):
                 continue
-            module_obs = obs_buffer.get().to_dict()
-            obs_data[module_name] = module_obs
+            obs_data[module_name] = obs_buffer.get().to_dict()
+            self._last_obs_count[module_name] = count
         return Observation(obs_data)
-
-        # for module_name, obs_buffer in self.observation_buffers.items():
-        #     if obs_buffer.count == 0:
-        #         continue
-        #     module_obs = obs_buffer.get()
-        #     self.last_observation[module_name] = module_obs
-        # return self.last_observation
 
     @profile
     def process_action(self, action: Action):

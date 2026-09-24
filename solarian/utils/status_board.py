@@ -24,6 +24,11 @@ from rich.console import RenderableType
 from datetime import datetime
 from solarian.utils.log_buffer import LogBuffer, get_log_queue, remove_fallback_handlers
 
+#: Seconds between redraws. Rich rebuilds and re-measures the whole table
+#: every refresh, which on a Raspberry Pi costs a noticeable slice of a core
+#: that the control loops want. Nobody reads a status table faster than this.
+_REFRESH_S = 0.25
+
 
 
 def format_floats(obj, fmt="{:.3f}"):
@@ -220,6 +225,25 @@ def _render_raw_action_panel(
     return Panel(inner, title=title, border_style="magenta")
 
 
+def _uncompress_fields_for_display(module) -> None:
+    """Decode what the board will actually print, and nothing else.
+
+    An image only ever renders as its shape or its payload size, so
+    decoding one here buys a string the board already knows. On a Pi
+    that JPEG decode, at the refresh rate, costs more than the rest of
+    the table put together.
+    """
+    for _, field in module.items():
+        if field.compression_codec == "jpeg":
+            continue
+        field.uncompress()
+
+
+def _uncompress_for_display(container) -> None:
+    for _, module in container.items():
+        _uncompress_fields_for_display(module)
+
+
 def render_action_or_observation(
     action: Action | Observation,
     *,
@@ -234,7 +258,7 @@ def render_action_or_observation(
     from solarian.core.action import Action, ActionType
     from solarian.core.observation import Observation
 
-    action.uncompress()
+    _uncompress_for_display(action)
     if isinstance(action, Action):
         action_dict = action.to_dict()
         action_type = action_dict.get("action_type")
@@ -289,7 +313,7 @@ def render_module_obs(
     max_rows: int = 6,
     name: Optional[str] = None,
 ) -> RenderableType:
-    module_obs.uncompress()
+    _uncompress_fields_for_display(module_obs)
     payload = module_obs.to_dict()
     title = name or type(module_obs).__name__
     return _render_observation_panel(title, payload, max_rows=max_rows)
@@ -301,7 +325,7 @@ def render_module_action(
     max_rows: int = 6,
     name: Optional[str] = None,
 ) -> RenderableType:
-    module_action.uncompress()
+    _uncompress_fields_for_display(module_action)
     payload = module_action.to_dict()
     title = name or type(module_action).__name__
     return _render_action_panel(title, payload, max_rows=max_rows)
@@ -319,7 +343,7 @@ def value_str(value):
                 return str(value)
         return f"<numpy.ndarray> shape={value.shape}"
     elif isinstance(value, bytes):
-        return "<bytes>"
+        return f"<compressed {len(value) / 1024:.1f} KB>"
     elif isinstance(value, (float, np.floating)):
         return f"{value:.2f}"
     elif type(value) == list:
@@ -557,7 +581,7 @@ class StatusBoard:
                         live.console.print(self._log_buf.format_record(rec))
                     live.update(self.render())
                     live.refresh()
-                    time.sleep(0.05)
+                    time.sleep(_REFRESH_S)
                 # Final drain + render so the last snapshot is fully up-to-date
                 # before Live.__exit__ prints it permanently.
                 self._drain_queues()

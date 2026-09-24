@@ -334,20 +334,22 @@ def _frame_processor(camera: dict):
     """
     import cv2
 
-    from solarian.core.optical_remap import OpticalRemap
+    from solarian.core.optical_remap import load_policy_remap
 
     archive_wh = (int(camera["width"]), int(camera["height"]))
     resize = camera.get("observation_resize")
-    remap_path = camera.get("optical_remap")
 
-    optical = (
-        OpticalRemap(remap_path, camera_wh=archive_wh) if remap_path else None
+    optical = load_policy_remap(
+        camera.get("optical_remap"), archive_wh, out_wh=_remap_wh(camera)
     )
 
     def process(frame: np.ndarray) -> np.ndarray:
         if optical is not None:
+            # Warps straight to the target plane, so nothing to resize after.
             frame = optical.apply(frame)
-        if resize:
+        elif resize:
+            # No calibration to honour, so the observation was the capture
+            # downscaled, and that is what the export should reproduce.
             width, height = int(resize[0]), int(resize[1])
             if frame.shape[:2] != (height, width):
                 frame = cv2.resize(
@@ -356,6 +358,16 @@ def _frame_processor(camera: dict):
         return np.ascontiguousarray(frame)
 
     return process
+
+
+def _remap_wh(camera: dict) -> tuple[int, int] | None:
+    """GoPro plane to warp into; ``None`` for the one the calibration used.
+
+    Datasets recorded before the observation went pre-remap carry the plane
+    under ``observation_resize``, which back then was applied after the warp.
+    """
+    size = camera.get("remap_size") or camera.get("observation_resize")
+    return (int(size[0]), int(size[1])) if size else None
 
 
 # -- metadata ----------------------------------------------------------------
@@ -426,14 +438,17 @@ def _info(
 def _exported_frame_hw(camera: dict, remap: bool) -> tuple[int, int]:
     if not remap:
         return int(camera["height"]), int(camera["width"])
-    resize = camera.get("observation_resize")
-    if resize:
-        return int(resize[1]), int(resize[0])
     if camera.get("optical_remap"):
+        wh = _remap_wh(camera)
+        if wh:
+            return wh[1], wh[0]
         from solarian.core.optical_remap import peek_remap_out_size
 
         width, height = peek_remap_out_size(camera["optical_remap"])
         return height, width
+    resize = camera.get("observation_resize")
+    if resize:
+        return int(resize[1]), int(resize[0])
     return int(camera["height"]), int(camera["width"])
 
 

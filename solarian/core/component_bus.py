@@ -55,7 +55,10 @@ class ComponentBus(abc.ABC):
         self.capture_timestamps[name] = captured_at
 
         sink = self.archive_sinks.get(name)
-        if sink is not None:
+        # A sink with no ``accepting`` flag is always fed. The real encoder
+        # sets the flag only while an episode is open, so the archive
+        # resize and the shared-memory copy do not run between takes.
+        if sink is not None and getattr(sink, "accepting", True):
             sink.write_frame(archive_frame(frame, cfg), captured_at)
         return captured_at
 

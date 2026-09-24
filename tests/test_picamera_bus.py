@@ -105,8 +105,10 @@ def fake_picamera2(monkeypatch):
     return FakePicamera2
 
 
-def _bus() -> PiCameraBus:
-    bus = PiCameraBus(port="0", components={"camera": SimpleNamespace(cfg=_cfg())})
+def _bus(**cfg_overrides) -> PiCameraBus:
+    bus = PiCameraBus(
+        port="0", components={"camera": SimpleNamespace(cfg=_cfg(**cfg_overrides))}
+    )
     bus.ae_settle_s = 0.0
     bus.reconnect_settle_s = 0.0
     bus.reconnect_min_delay_s = 0.0
@@ -176,20 +178,18 @@ def test_reconnects_after_capture_timeout(fake_picamera2):
     assert len(fake_picamera2.instances) == 2
 
 
-def test_keeps_optical_remap_across_reconnect(fake_picamera2, monkeypatch):
-    loads = {"n": 0}
+def test_a_configured_remap_does_not_warp_the_capture(fake_picamera2):
+    """The camera runs for everyone; only a policy wants GoPro optics.
 
-    def fake_load(_cfg):
-        loads["n"] += 1
-        return None
-
-    monkeypatch.setattr("solarian.core.optical_remap.load_bus_remap", fake_load)
-    bus = _bus()
+    A path that does not exist cannot be loaded, so a bus that still warped
+    would fail here rather than quietly cost a warp per frame.
+    """
+    bus = _bus(optical_remap="conf/calibrations/nothing_here.json")
     bus.connect()
-    assert loads["n"] == 1
-    fake_picamera2.fail_captures = 1
-    bus.read(ImageData, ["camera"])
-    assert loads["n"] == 1
+
+    out = bus.read(ImageData, ["camera"])
+
+    assert out["camera"].shape == (6, 8, 3)
 
 
 def test_capture_falls_back_when_wait_timeout_unsupported(fake_picamera2):

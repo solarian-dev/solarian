@@ -91,7 +91,11 @@ class CameraMeta:
     #: The archive is stored before ``cv2.remap``, so the calibration stays a
     #: separate artifact and a later recalibration re-derives past datasets.
     optical_remap: str | None = None
+    #: What the robot published as the observation: the capture, downscaled.
     observation_resize: tuple[int, int] | None = None
+    #: GoPro plane the export should warp into. Independent of the two above:
+    #: the observation is pre-remap and the archive is a third resolution.
+    remap_size: tuple[int, int] | None = None
 
 
 @dataclass

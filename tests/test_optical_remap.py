@@ -29,6 +29,14 @@ from solarian.core.optical_remap import (
     shipped_gopro_intrinsics_path,
 )
 
+CAL_DIR = (
+    Path(__file__).resolve().parents[1]
+    / "projects"
+    / "so106"
+    / "conf"
+    / "calibrations"
+)
+
 # tests/ -> solarian repo; sibling UMI checkout lives next to it.
 CAM_COMPARE = (
     Path(__file__).resolve().parents[1].parent
@@ -92,6 +100,61 @@ def test_identity_aligner_roundtrip_same_intrinsics():
     assert warped[int(cy), int(cx)].min() > 200
 
 
+def _smooth_frame(h=1080, w=1920):
+    """A gradient, so bilinear differences stay readable as a mean error."""
+    yy, xx = np.mgrid[0:h, 0:w]
+    return np.stack([xx / 16, yy / 16, (xx + yy) / 32], axis=-1).astype(np.uint8)
+
+
+def test_the_grid_is_built_at_the_size_the_warp_outputs():
+    """Warp cost is one output pixel at a time, so the plane size is the knob."""
+    intr = load_shipped_gopro_intrinsics()
+    aligner = identity_aligner(intr, intr)
+    cx, cy = int(intr["K"][0, 2]), int(intr["K"][1, 2])
+    aligner.resize_output(960, 540)
+
+    assert aligner.out_size == (960, 540)
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    frame[cy - 40 : cy + 40, cx - 40 : cx + 40] = 255
+    out = aligner.warp(frame)
+
+    assert out.shape == (540, 960, 3)
+    # Identity optics at half scale put the block at half the coordinates.
+    assert out[cy // 2, cx // 2].min() > 200
+
+
+def test_masked_output_pixels_come_back_black():
+    intr = load_shipped_gopro_intrinsics()
+    aligner = identity_aligner(intr, intr)
+    mask = np.zeros((1080, 1920), dtype=bool)
+    mask[100:300, 100:300] = True
+    aligner.mask_output(mask)
+
+    out = aligner.warp(np.full((1080, 1920, 3), 255, dtype=np.uint8))
+
+    assert out[200, 200].min() > 200
+    assert out[700, 700].max() == 0
+
+
+def test_baking_the_mask_into_the_grid_keeps_the_same_image():
+    """The per-frame blanking it replaces must not have been doing anything else."""
+    intr = load_shipped_gopro_intrinsics()
+    frame = _smooth_frame()
+    coverage = load_coverage_mask()
+
+    reference = apply_optical_remap(frame, identity_aligner(intr, intr), coverage)
+
+    baked = identity_aligner(intr, intr)
+    baked.mask_output(coverage)
+    baked.compile_maps()
+    out = baked.warp(frame)
+
+    assert out.shape == reference.shape
+    assert np.array_equal(out == 0, reference == 0)
+    # Fixed point samples on a 1/32-pixel grid.
+    assert np.abs(out.astype(int) - reference.astype(int)).mean() < 1.0
+
+
 def test_save_load_embeds_intrinsics(tmp_path):
     gopro = load_shipped_gopro_intrinsics()
     aligner = identity_aligner(gopro, gopro)
@@ -133,25 +196,63 @@ def test_camera_config_optical_remap_optional():
     assert (h, w) == (360, 640)
 
 
-def test_finish_camera_frame_identity_then_16_9_resize():
-    gopro = load_shipped_gopro_intrinsics()
-    aligner = identity_aligner(gopro, gopro)
-    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
-    frame[500:580, 900:1020] = (0, 0, 255)
-    warped = apply_optical_remap(frame, aligner, load_coverage_mask())
-    assert warped.shape[:2] == (1080, 1920)
+def test_finish_camera_frame_only_downscales():
+    """The capture path carries no calibration, so this is a resize and no more."""
 
     class _Cfg:
         resize_width = 640
         resize_height = 360
-        optical_remap = None
+        optical_remap = "conf/calibrations/right_wrist_camera_gopro_remap.json"
 
-    class _Remap:
-        def apply(self, img):
-            return warped
+    frame = np.zeros((1520, 2028, 3), dtype=np.uint8)
+    frame[500:580, 900:1020] = (0, 0, 255)
 
-    out = finish_camera_frame(frame, _Cfg(), _Remap())
+    out = finish_camera_frame(frame, _Cfg())
+
     assert out.shape == (360, 640, 3)
+
+
+def test_warping_a_downscaled_capture_samples_where_the_full_one_did():
+    """The observation went pre-remap; the plane the policy reads must not move.
+
+    The bus used to warp the full capture. Now it downscales and the policy
+    warps that, so the maps have to point at the same scene — scaled — or
+    the checkpoint is quietly being shown a different camera.
+    """
+    remap = str(CAL_DIR / "right_wrist_camera_gopro_remap.json")
+    full = load_aligner(remap, (2028, 1520))
+    half = load_aligner(remap, (1014, 760))
+    full.resize_output(960, 540)
+    half.resize_output(960, 540)
+
+    both = full.valid & half.valid
+    assert both.mean() > 0.5
+    off_x = np.abs(half.map1[both] - full.map1[both] / 2.0)
+    off_y = np.abs(half.map2[both] - full.map2[both] / 2.0)
+
+    # Half a source pixel: intrinsics rescale on pixel indices rather than
+    # centres, and the same convention already governs the archive export.
+    assert max(off_x.max(), off_y.max()) < 0.5
+
+
+def test_a_configured_camera_publishes_its_capture_size():
+    """``optical_remap`` no longer has a say: the bus does not apply it."""
+    cam = SensorConfig(
+        port="0",
+        fps=30,
+        width=2028,
+        height=1520,
+        rotation=0,
+        channels=3,
+        color_mode="rgb",
+        video_format="MJPG",
+        resize_width=1014,
+        resize_height=760,
+        optical_remap="conf/calibrations/right_wrist_camera_gopro_remap.json",
+        remap_width=960,
+        remap_height=540,
+    )
+    assert camera_output_hw(cam) == (760, 1014)
 
 
 def test_approximate_fov_positive():

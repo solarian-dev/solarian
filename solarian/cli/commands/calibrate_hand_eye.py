@@ -83,7 +83,7 @@ from solarian.core.arm_module import _LATCH_JUMP_TICKS
 from solarian.core.camera import Camera
 from solarian.core.data import ImageData
 from solarian.core.fisheye import load_intrinsics
-from solarian.core.optical_remap import resolve_remap_path
+from solarian.core.optical_remap import load_policy_remap, resolve_remap_path
 from solarian.core.pose import rotvec_to_quat
 
 # UMI's ``scripts_slam_pipeline/06_generate_dataset_plan.py`` freezes the
@@ -481,6 +481,17 @@ def _shell_line() -> str | None:
     return raw.strip() if raw else None
 
 
+def _read_frame(camera, sensor_name, warp):
+    """One frame, in the optics this measurement is being made in.
+
+    The capture path does not warp any more. A homography remap is not a
+    rotation, so it cannot be carried in ``tx_cam2policy`` and the tag has
+    to be found in the warped frame -- which means warping it here.
+    """
+    frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name]["value"]
+    return frame if warp is None else warp.apply(frame)
+
+
 def _measure(
     arm,
     camera,
@@ -492,6 +503,7 @@ def _measure(
     color_mode,
     gate_wh,
     tx_cam2policy,
+    warp,
 ):
     """One sample, waiting out an arm that has not finished settling.
 
@@ -517,6 +529,7 @@ def _measure(
             color_mode,
             gate_wh,
             tx_cam2policy,
+            warp,
         )
         if sample is not None or not settling:
             return sample, reason
@@ -537,6 +550,7 @@ def _measure_once(
     color_mode,
     gate_wh,
     tx_cam2policy,
+    warp,
 ):
     """One attempt, as ``(sample, reason, settling)``.
 
@@ -568,7 +582,7 @@ def _measure_once(
     pose_before = arm.read_pose()
     detections, seen = [], []
     for _ in range(_FRAMES_PER_SAMPLE):
-        frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name]["value"]
+        frame = _read_frame(camera, sensor_name, warp)
         corners, seen = _detect(
             cv2.cvtColor(_opencv_bgr(frame, color_mode), cv2.COLOR_BGR2GRAY),
             detector,
@@ -664,6 +678,7 @@ def _collect(
     color_mode,
     tx_cam2policy,
     n_samples,
+    warp,
     first_pose=1,
 ):
     """Pair arm poses with tag detections, three confirmations per pose.
@@ -770,9 +785,7 @@ def _collect(
 
             confirmed = not preview
             if preview:
-                frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name][
-                    "value"
-                ]
+                frame = _read_frame(camera, sensor_name, warp)
                 full = _opencv_bgr(frame, color_mode)
                 corners, seen = _detect(
                     cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), detector, tag_id, gate_wh
@@ -918,6 +931,7 @@ def _collect(
                 color_mode,
                 gate_wh,
                 tx_cam2policy,
+                warp,
             )
             if sample is None:
                 print(f"  nothing recorded: {reason}.")
@@ -1639,18 +1653,12 @@ class CalibrateHandEyeCommand(BaseCommand):
         schema, tx_cam2policy, on_raw = optics
 
         # Corner precision scales with focal length in pixels, and resize_* is
-        # set to the 640x360 the policy wants, where the GoPro model is fx~141
+        # set to the size the policy wants, where the GoPro model is fx~141
         # and a quarter-pixel of corner noise is already 0.1 deg. Dropping the
         # resize leaves the full frame, three times that. The bus reads these
         # two fields per frame, so clearing them is enough.
         sensor_cfg.resize_width = None
         sensor_cfg.resize_height = None
-        if on_raw:
-            # Read at connect by load_bus_remap, so clearing it here -- before
-            # module_running opens the camera -- is what stops the warp. The
-            # rotation it would have applied is carried in tx_cam2policy
-            # instead, where it costs no resolution.
-            sensor_cfg.optical_remap = None
 
         with module_running(
             camera,
@@ -1673,6 +1681,19 @@ class CalibrateHandEyeCommand(BaseCommand):
             # resolution than the image they are used on would not fail, it
             # would quietly return a plausible and wrong answer.
             frame = camera.read_sensors(ImageData, [sensor_name])[sensor_name]["value"]
+            # A rotation remap is carried in tx_cam2policy instead, where it
+            # costs no resolution. Anything else has to be measured warped.
+            warp = (
+                None
+                if on_raw
+                else load_policy_remap(
+                    sensor_cfg.optical_remap,
+                    (frame.shape[1], frame.shape[0]),
+                    conf_dir=conf_dir,
+                )
+            )
+            if warp is not None:
+                frame = warp.apply(frame)
             frame_wh = (frame.shape[1], frame.shape[0])
             intr = load_intrinsics(schema, frame_wh)
             print(
@@ -1701,6 +1722,7 @@ class CalibrateHandEyeCommand(BaseCommand):
                     color_mode,
                     tx_cam2policy,
                     n_samples,
+                    warp,
                 )
                 rounds = 0
                 first = None
@@ -1794,6 +1816,7 @@ class CalibrateHandEyeCommand(BaseCommand):
                             color_mode,
                             tx_cam2policy,
                             add,
+                            warp,
                             first_pose=len(samples) + 1,
                         )
                     if not extra:

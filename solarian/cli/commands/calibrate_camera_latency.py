@@ -250,7 +250,7 @@ def _run_capture(
     )
     if preview:
         print(
-            "Camera window is the remapped observation the decoder sees, not "
+            "Camera window is the observation the decoder sees, not "
             "rpicam-hello. Fill it with the QR. Press q to stop."
         )
 

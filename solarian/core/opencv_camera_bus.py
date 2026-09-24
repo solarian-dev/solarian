@@ -54,7 +54,6 @@ class OpenCVCameraBus(SensorBus):
         super().__init__(port, components, calibration)
         self.capture = None
         self.components = components
-        self._optical_remap = None
 
     @property
     def is_connected(self) -> bool:
@@ -63,6 +62,9 @@ class OpenCVCameraBus(SensorBus):
     def connect(self):
         import cv2
 
+        from solarian.core.optical_remap import use_one_opencv_thread
+
+        use_one_opencv_thread()
         # logger.info(f"OpenCVCameraBus connecting {self.components.keys()} on port {self.port}")
         cfg: CameraConfig = next(iter(self.components.values())).cfg  # type: ignore[assignment]
         # logger.info(f"Config: {cfg}, class: {type(cfg)}")
@@ -97,16 +99,12 @@ class OpenCVCameraBus(SensorBus):
         fps = self.capture.get(cv2.CAP_PROP_FPS)
         width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        from solarian.core.optical_remap import load_bus_remap
-
-        self._optical_remap = load_bus_remap(cfg)
         # logger.info(f"Camera opened: port={self.port}, {width}x{height} @ {fps:.1f} fps")
 
     def disconnect(self):
         if self.capture is not None:
             self.capture.release()
             self.capture = None
-            self._optical_remap = None
 
     def read(self, data_type: type[Data], component_names: list[str], normalize: bool = True) -> Dict[str, Any]:
         import cv2
@@ -144,7 +142,7 @@ class OpenCVCameraBus(SensorBus):
 
         from solarian.core.optical_remap import finish_camera_frame
 
-        processed = finish_camera_frame(processed, cfg, self._optical_remap)
+        processed = finish_camera_frame(processed, cfg)
 
         if not isinstance(processed, np.ndarray):
             raise TypeError(f"Expected numpy.ndarray, got {type(processed)}")

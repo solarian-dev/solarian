@@ -790,7 +790,7 @@ def test_measure_waits_out_an_arm_that_has_not_settled(monkeypatch):
         return {"ok": True}, None, False
 
     monkeypatch.setattr(mod, "_measure_once", flaky)
-    sample, reason = mod._measure(*[None] * 10)
+    sample, reason = mod._measure(*[None] * 11)
     assert sample == {"ok": True} and reason is None
     assert calls["n"] == 3, "it should have waited, not given up"
 
@@ -800,7 +800,7 @@ def test_measure_waits_out_an_arm_that_has_not_settled(monkeypatch):
     monkeypatch.setattr(
         mod, "_measure_once", lambda *_a, **_k: (None, "no tag in view", False)
     )
-    sample, reason = mod._measure(*[None] * 10)
+    sample, reason = mod._measure(*[None] * 11)
     assert sample is None and reason == "no tag in view"
 
 
@@ -1181,6 +1181,7 @@ def _run_collect(
         "bgr",
         np.eye(4),
         n_samples,
+        None,
         first_pose,
     )
     return arm, cam, samples, prompts
@@ -1395,6 +1396,7 @@ def test_collect_refuses_a_tag_that_only_shows_up_in_some_frames(monkeypatch):
         "bgr",
         (640, 360),
         np.eye(4),
+        None,
     )
 
     assert sample is None
@@ -1431,8 +1433,8 @@ def test_measure_reports_the_pose_in_policy_axes(monkeypatch):
         (640, 360),
     )
     poses = [_pose(0.0, 0.0)]
-    plain, _ = mod._measure(_FakeArm(poses), _FakeCam(99), *args, np.eye(4))
-    turned, _ = mod._measure(_FakeArm(poses), _FakeCam(99), *args, turn)
+    plain, _ = mod._measure(_FakeArm(poses), _FakeCam(99), *args, np.eye(4), None)
+    turned, _ = mod._measure(_FakeArm(poses), _FakeCam(99), *args, turn, None)
 
     assert np.allclose(plain["tx_world2cam"][:3, 3], [0.1, 0.2, 0.3])
     # A quarter turn about z takes (x, y) to (-y, x).

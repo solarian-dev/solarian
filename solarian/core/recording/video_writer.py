@@ -1,16 +1,15 @@
 """One H.264 encoder process per camera.
 
-The camera bus pushes every captured frame here and never waits: a full queue
-drops the frame rather than stalling capture, which is the only acceptable
-failure mode when the producer is a sensor feeding a control loop. Episode
-boundaries arrive on a separate queue, so the camera side holds no episode
-state — the encoder owns the constant-rate grid and decides which slot each
-capture lands in.
+The camera bus pushes a frame only while an episode is accepting, and never
+waits: a full queue drops the frame rather than stalling capture, which is
+the only acceptable failure mode when the producer is a sensor feeding a
+control loop. Episode boundaries arrive on a separate queue. The encoder
+owns the constant-rate grid and decides which slot each capture lands in.
 
-Because the camera feeds this queue whether or not an episode is open, an
-episode ends at a *timestamp*, never at the queue running dry: a queue fed at
-30 fps and drained at 29 never runs dry, and an encoder waiting for that would
-encode past the end of the take until something killed it.
+An episode ends at a timestamp. Once stop is asked the camera stops pushing;
+the encoder drains what is already queued and finishes when the queue is
+empty or a capture is newer than the stop time. Waiting for a dry queue
+while the camera was still feeding would encode past the end of the take.
 
 Adapted from UMI's ``umi/real_world/video_recorder.py``.
 """
@@ -55,21 +54,27 @@ class ArchiveSink:
 
     Separate from :class:`VideoWriter` because the bus lives in the camera
     module's process: this object crosses that process boundary, and a started
-    ``mp.Process`` cannot. It holds shared memory and a counter, both of which
-    can.
+    ``mp.Process`` cannot. It holds shared memory, a counter, and the
+    accepting flag, all of which can.
     """
 
-    def __init__(self, frames: SharedMemoryQueue, dropped):
+    def __init__(self, frames: SharedMemoryQueue, dropped, accepting):
         self._frames = frames
         self._dropped = dropped
+        #: Shared with the robot process. False between episodes, so the
+        #: camera bus can skip the archive resize until a take is open.
+        self._accepting = accepting
+
+    @property
+    def accepting(self) -> bool:
+        return bool(self._accepting.value)
 
     def write_frame(self, img: np.ndarray, frame_time: float) -> None:
         """Hand one capture to the encoder, or drop it.
 
-        Called on every capture whether or not an episode is open; the encoder
-        discards frames outside one. Dropping rather than blocking is
-        deliberate — the alternative is a camera that stalls its module's loop
-        because an encoder fell behind.
+        The bus calls this only while :attr:`accepting` is set. Dropping
+        rather than blocking is deliberate — the alternative is a camera
+        that stalls its module's loop because an encoder fell behind.
         """
         try:
             self._frames.put({"img": img, "frame_time": float(frame_time)})
@@ -136,6 +141,9 @@ class VideoWriter(mp.Process):
         #: Captures lost to a full queue. Shared because only the producer can
         #: see them happen and only the consumer reports them.
         self._dropped = mp.Value("i", 0)
+        #: The camera process reads this; the robot process sets it around
+        #: episode boundaries. Starts closed so idle captures are not resized.
+        self._accepting = mp.Value("b", False)
 
     # -- control side, runs in the robot process ----------------------------
 
@@ -156,11 +164,15 @@ class VideoWriter(mp.Process):
         self.start()
         if not self._ready.wait(timeout=30.0):
             logger.warning("%s did not report ready; frames may be lost", self.name)
-        return ArchiveSink(self._frames, self._dropped)
+        return ArchiveSink(self._frames, self._dropped, self._accepting)
 
     def start_episode(self, video_path: str, start_time: float) -> None:
         with self._dropped.get_lock():
             self._dropped.value = 0
+        # Before the command, so a capture that lands during the handoff is
+        # queued rather than resized away. Frames older than start_time are
+        # skipped by the encoder.
+        self._accepting.value = True
         self._commands.put((int(_Command.START), str(video_path), float(start_time)))
 
     def end_episode(self, stop_time: float) -> EpisodeVideoStats | None:
@@ -173,6 +185,9 @@ class VideoWriter(mp.Process):
         Blocks until the encoder has flushed: an episode is not safe to seal,
         transfer or upload until its video file is complete.
         """
+        # Stop the resize before the command. Frames already queued still
+        # encode; the encoder then sees an empty queue with stop_time set.
+        self._accepting.value = False
         self._commands.put((int(_Command.STOP), "", float(stop_time)))
         try:
             return self._sealed.get(timeout=_SEAL_TIMEOUT_S)
@@ -190,6 +205,7 @@ class VideoWriter(mp.Process):
         # Stop time 0: every capture is newer, so an episode still open is cut
         # at once rather than drained. Shutting down is not the path that cares
         # about the tail — recorder.close() seals properly before it gets here.
+        self._accepting.value = False
         self._commands.put((int(_Command.SHUTDOWN), "", 0.0))
         self.join(timeout=15.0)
         if self.is_alive():
