@@ -3,15 +3,11 @@ from __future__ import annotations
 import abc
 from typing import Any, Dict, Mapping, TYPE_CHECKING
 
-from solarian.core.clock_sync import synced_time
 from solarian.core.data import Data
 from solarian.core.calibration import MotorCalibration
 
 if TYPE_CHECKING:
-    import numpy as np
-
     from solarian.core.component import Component
-    from solarian.core.recording.video_writer import ArchiveSink
 
 class ComponentBus(abc.ABC):
     """
@@ -28,39 +24,6 @@ class ComponentBus(abc.ABC):
     def __init__(self, port: str, components: Mapping[str, Component], calibration=None):
         self.port = port
         self.components = components
-        #: Where archive frames go, by component name. Empty unless the robot
-        #: wired an encoder to this bus, which it only does for cameras.
-        self.archive_sinks: Dict[str, "ArchiveSink"] = {}
-        #: When each component's most recent sample was taken. The module reads
-        #: this instead of stamping on return, so the observation and the
-        #: archive carry the same instant.
-        self.capture_timestamps: Dict[str, float] = {}
-        #: Known delay between the physical sample and this bus seeing it.
-        self.capture_latency: float = 0.0
-
-    def archive_capture(self, name: str, frame: "np.ndarray", cfg) -> float:
-        """Send *frame* to the archive encoder and return its capture stamp.
-
-        A camera bus calls this between rotation and the optical remap. The
-        remap is a calibration artifact rather than data: kept out of the
-        archive, a later recalibration re-derives every dataset already
-        recorded; baked in, it could never be undone.
-
-        The stamp returned is also the one the observation must carry. The
-        encoder and the recorder each place the frame on the episode's grid by
-        computing from it independently, and they can only agree because there
-        is exactly one of it.
-        """
-        captured_at = synced_time() - self.capture_latency
-        self.capture_timestamps[name] = captured_at
-
-        sink = self.archive_sinks.get(name)
-        # A sink with no ``accepting`` flag is always fed. The real encoder
-        # sets the flag only while an episode is open, so the archive
-        # resize and the shared-memory copy do not run between takes.
-        if sink is not None and getattr(sink, "accepting", True):
-            sink.write_frame(archive_frame(frame, cfg), captured_at)
-        return captured_at
 
     @property
     @abc.abstractmethod
@@ -136,25 +99,3 @@ class ComponentBus(abc.ABC):
     def setup_component(self, component_name: str, configs: Dict[str, Any]):
         """Setup a component on this bus. Override if supported."""
         raise NotImplementedError(f"{type(self).__name__} does not support setup_component")
-
-
-def archive_frame(frame: "np.ndarray", cfg) -> "np.ndarray":
-    """Downscale a capture to the archive resolution, if one is configured.
-
-    Unset archives at whatever resolution the sensor produced. This is the
-    knob for encoder CPU on a Raspberry Pi, and it deliberately does not touch
-    the sensor mode: selecting a smaller mode would crop the field of view and
-    invalidate the camera's calibration.
-    """
-    if cfg.archive_width is None or cfg.archive_height is None:
-        return frame
-    if frame.shape[:2] == (int(cfg.archive_height), int(cfg.archive_width)):
-        return frame
-
-    import cv2
-
-    return cv2.resize(
-        frame,
-        (int(cfg.archive_width), int(cfg.archive_height)),
-        interpolation=cv2.INTER_AREA,
-    )

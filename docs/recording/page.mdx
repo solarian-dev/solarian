@@ -72,11 +72,22 @@ recording:
   enabled: true
   root: datasets
   crf: 20        # near-transparent; survives a later re-encode
-  keyint: 30     # short GOPs buy cheap random access at training time
+  keyint: 120    # frames between keyframes; a quality/size/CPU dial
   preset: veryfast
+  x264_options:  # applied over the preset
+    x264-params: subme=0:me=dia
   threads: 1     # per camera, out of the cores the control loop also wants
+  queue_size: 256  # captures the encoder may fall behind by
   max_session_gb: 64.0
 ```
+
+`keyint` is not about random access, whatever the usual advice says: nothing seeks an archive, because the export decodes each one start to finish. It is a quality dial. Every keyframe is a fresh anchor that the frames after it drift away from, so shortening the gap raises quality at a fixed `crf` — on wrist-camera footage, 30 holds about 4 dB more luma PSNR than 120. It also bounds what a killed episode loses, since `frag_keyframe` starts a fragment at each keyframe. Both are paid for in size and a little CPU, keyframes being the bulky and expensive ones. Going from 30 to 120 gave back a tenth of the encode and a third of the file for that 4 dB, which is worth it while the archive stays well clear of the `crf 23` the export re-encodes to.
+
+`x264_options` goes straight to libx264, over the top of whatever `preset` chose. Reach for it before reaching for a faster preset: a preset moves a dozen settings at once, and usually only one of them is paying for itself. Here that one is motion estimation. `subme=0:me=dia` coarsens the search for an eighth of the encode cost, 0.1 dB, and no extra bytes — `crf` spends bits to the same quality whichever search found the match, and this scene gains nothing from the finer one. Dropping to `superfast` saves the same CPU and doubles the file.
+
+`queue_size` is worth more thought than it looks. An encoder's cost tracks how much the scene is moving — on a Pi 5 the bitrate of a take and the rate the robot samples its own signals correlate at about −0.95 — so a busy stretch puts it over budget for a few seconds at a time. The encoder therefore runs at a lower scheduler priority than the camera and the control loop: it is the only consumer that can afford to wait, because it has a queue, whereas a frame the camera never captured is gone. The queue is the room it has to fall behind in and catch up afterwards, and it costs `width * height * 3` bytes a slot — at 1014x760 that is 2.3 MB, so 256 slots is 8 seconds of slack for 590 MB.
+
+Coverage — the fraction of grid slots backed by a distinct capture — is as much a statement about the clock as about the camera. Each slot keeps the first capture that lands in it and discards the rest, so what matters is not only that a frame arrived but that it is dated correctly. Date it on arrival and the scheduler's jitter decides: on a loaded Pi 5 the gap between consecutive arrival stamps ranged from 12 to 50 ms against a 33 ms interval, putting 18% of captures into a slot already taken and costing that much coverage while the camera had missed nothing at all. Where the hardware timestamps its own frames the bus uses that instead, which is exact and evenly spaced; libcamera reports `SensorTimestamp`, and with it the same test records every frame. `receive_latency` remains the fallback for cameras that cannot say, and being a constant it can correct the average delay but never the jitter.
 
 Recording is on by default, because a teleop session that was not recorded cannot be recovered and the cost of an mp4 nobody wanted is a deletion. `max_session_gb` is the counterweight: on-by-default without a cap fills an SD card.
 

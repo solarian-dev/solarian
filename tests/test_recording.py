@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from multiprocessing.managers import SharedMemoryManager
@@ -19,7 +20,8 @@ from solarian.core.controller_gui import ControllerGUI
 from solarian.core.data import ImageData, PosData, TemperatureData
 from solarian.core.event import Event, EventType
 from solarian.core.observation import ModuleObs, Observation, SensorField
-from solarian.core.sensor_bus import SensorBus
+from solarian.core.actuator_bus import ActuatorBus
+from solarian.core.camera_bus import ArchivesFrames, CameraBus
 from solarian.core.recording.export import export_lerobot
 from solarian.core.recording.recorder import SessionRecorder
 from solarian.core.recording.schema import build_schema
@@ -616,7 +618,7 @@ def test_an_unsealed_episode_is_not_exported(tmp_path, recorder, schema_classes,
 # --- the archive tap on the camera bus --------------------------------------
 
 
-class _FakeCameraBus(SensorBus):
+class _FakeCameraBus(CameraBus):
     """A camera bus with the hardware taken out, to exercise the archive tap."""
 
     is_connected = True
@@ -632,10 +634,23 @@ class _FakeCameraBus(SensorBus):
 
 
 def _camera_cfg(**overrides):
-    cfg = SimpleNamespace(archive_width=None, archive_height=None)
+    cfg = SimpleNamespace(
+        archive_width=None,
+        archive_height=None,
+        resize_width=None,
+        resize_height=None,
+        color_mode="bgr",
+    )
     for key, value in overrides.items():
         setattr(cfg, key, value)
     return cfg
+
+
+def test_a_servo_bus_is_not_asked_where_its_video_goes():
+    """The archive tap belongs to cameras. Servo buses share the base class."""
+    assert not issubclass(ActuatorBus, ArchivesFrames)
+    assert issubclass(CameraBus, ArchivesFrames)
+    assert not hasattr(ActuatorBus, "archive_sinks")
 
 
 def test_a_closed_episode_does_not_resize_or_queue_the_capture():
@@ -743,6 +758,82 @@ def test_the_encoder_does_not_thread_by_default():
     assert VideoWriter(name="cam", fps=FPS, shape=ARCHIVE_SHAPE).threads == 1
 
 
+def test_the_encoder_yields_to_the_rest_of_the_robot():
+    """It buffers seconds of captures; a frame the camera misses is gone.
+
+    So when the board runs out of cores the encoder is the one that should
+    wait, and it makes the time back once the motion stops.
+    """
+    with SharedMemoryManager() as shm_manager:
+        writer = VideoWriter(name="cam", fps=FPS, shape=ARCHIVE_SHAPE)
+        writer.open(shm_manager)
+        encoder = os.getpriority(os.PRIO_PROCESS, writer.pid)
+        writer.close()
+
+    assert encoder > os.getpriority(os.PRIO_PROCESS, os.getpid())
+
+
+class _SealRobot(Robot):
+    """The episode-boundary handlers only: no zmq, no modules, no encoders."""
+
+    def __init__(self, seal):
+        self.recorder = SimpleNamespace(
+            end_episode=seal,
+            drop_episode=seal,
+            open_session=lambda name: None,
+            start_episode=lambda task=None, skill=None: 0,
+        )
+        self._seal_thread = None
+        self._record_request = 0
+
+    def control_loop(self):
+        pass
+
+    def disconnect(self):
+        pass
+
+
+def test_sealing_an_episode_does_not_block_the_control_loop():
+    """A seal drains the encoder backlog, which the queue depth makes seconds.
+
+    Held on the control loop that is seconds of an arm that stops answering,
+    right as the operator finishes a take.
+    """
+    sealing, release = threading.Event(), threading.Event()
+
+    def seal(*args, **kwargs):
+        sealing.set()
+        release.wait(10.0)
+
+    Robot._instance = None
+    robot = _SealRobot(seal)
+    try:
+        started_at = time.monotonic()
+        robot.stop_recording(SimpleNamespace(data={"request": 1}), 0.0)
+        returned_in = time.monotonic() - started_at
+
+        assert sealing.wait(2.0), "the seal never started"
+        assert returned_in < 0.5, f"stop_recording blocked for {returned_in:.2f}s"
+
+        # An encoder holds one episode at a time, so the next take has to wait
+        # even though the operator does not.
+        opened = threading.Event()
+        threading.Thread(
+            target=lambda: (
+                robot.start_recording(SimpleNamespace(data={"request": 2}), 0.0),
+                opened.set(),
+            ),
+            daemon=True,
+        ).start()
+        assert not opened.wait(0.3), "a take opened while the last was still sealing"
+
+        release.set()
+        assert opened.wait(5.0), "the next take never opened"
+    finally:
+        release.set()
+        Robot._instance = None
+
+
 def test_the_archive_is_not_fed_between_episodes(recorder):
     session, sink = recorder
 
@@ -796,6 +887,84 @@ def test_the_observation_and_the_archive_name_the_same_instant():
     )
 
     assert stamps == [returned] == [bus.capture_timestamps["camera"]]
+
+
+def test_the_archive_and_the_observation_share_one_downscale():
+    """Two resizes of one capture to one size is the camera loop's worst waste."""
+    bus = _FakeCameraBus(port="cam0", components={})
+    captured = []
+    bus.archive_sinks["camera"] = SimpleNamespace(
+        write_frame=lambda frame, ts: captured.append(frame)
+    )
+    cfg = _camera_cfg(
+        archive_width=1014,
+        archive_height=760,
+        resize_width=1014,
+        resize_height=760,
+    )
+
+    observation = bus.archive_and_finish(
+        "camera", np.zeros((1520, 2028, 3), np.uint8), cfg
+    )
+
+    assert observation.shape == (760, 1014, 3)
+    assert captured[0] is observation
+
+
+def test_the_colour_swap_survives_being_moved_after_the_downscale():
+    """The saving is only free because the two commute. Hold them to it."""
+    import cv2
+
+    bus = _FakeCameraBus(port="cam0", components={})
+    bus.archive_sinks["camera"] = SimpleNamespace(write_frame=lambda frame, ts: None)
+    cfg = _camera_cfg(
+        archive_width=64,
+        archive_height=48,
+        resize_width=64,
+        resize_height=48,
+        color_mode="rgb",
+    )
+    frame = np.random.default_rng(0).integers(0, 255, (96, 128, 3), dtype=np.uint8)
+
+    was = cv2.resize(
+        cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), (64, 48), interpolation=cv2.INTER_AREA
+    )
+
+    assert np.array_equal(bus.archive_and_finish("camera", frame, cfg), was)
+
+
+def test_an_archive_larger_than_the_observation_still_comes_off_the_capture():
+    """Sharing one downscale is only sound while both want the same size."""
+    bus = _FakeCameraBus(port="cam0", components={})
+    captured = []
+    bus.archive_sinks["camera"] = SimpleNamespace(
+        write_frame=lambda frame, ts: captured.append(frame.shape)
+    )
+    cfg = _camera_cfg(
+        archive_width=1014,
+        archive_height=760,
+        resize_width=224,
+        resize_height=224,
+    )
+
+    observation = bus.archive_and_finish(
+        "camera", np.zeros((1520, 2028, 3), np.uint8), cfg
+    )
+
+    assert captured == [(760, 1014, 3)]
+    assert observation.shape == (224, 224, 3)
+
+
+def test_an_age_the_hardware_measured_beats_the_one_config_guessed():
+    """A constant cannot track a delay that varies by half a frame interval."""
+    bus = _FakeCameraBus(port="cam0", components={})
+    bus.capture_latency = 0.25
+    bus.measured_capture_age = 0.04
+
+    before = synced_time()
+    stamp = bus.archive_capture("camera", np.zeros((8, 8, 3), np.uint8), _camera_cfg())
+
+    assert stamp == pytest.approx(before - 0.04, abs=1e-2)
 
 
 def test_receive_latency_is_subtracted_from_the_capture_stamp():

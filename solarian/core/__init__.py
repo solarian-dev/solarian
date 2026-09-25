@@ -13,6 +13,9 @@ from .calibration import MotorCalibration
 # core/camera.py
 from .camera import Camera
 
+# core/camera_bus.py
+from .camera_bus import CameraBus, ColorMode
+
 # core/component.py
 from .component import Component
 

@@ -22,9 +22,9 @@ class SensorBus(ComponentBus):
         class MySensor(Sensor):
             bus_class = MySensorBus
 
-    A camera bus additionally calls
-    :meth:`~solarian.core.component_bus.ComponentBus.archive_capture` on every
-    frame, so the episode archive is taken from the sensor's own output rather
-    than from whatever survives the trip to a controller.
+    Sensors that produce frames want :class:`~solarian.core.camera_bus.CameraBus`
+    instead, which adds the archive tap: the episode's video is then taken from
+    the sensor's own output rather than from whatever survives the trip to a
+    controller.
     """
     pass

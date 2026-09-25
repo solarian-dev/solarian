@@ -6,7 +6,7 @@ from enum import Enum
 
 import numpy as np
 
-from solarian.core.sensor_bus import SensorBus
+from solarian.core.camera_bus import CameraBus, ColorMode
 from solarian.core.component import Component
 from solarian.core.configs import CameraConfig
 from solarian.core.data import Data, ImageData
@@ -37,12 +37,7 @@ class Rotation(int, Enum):
     ROTATE_270 = -90
 
 
-class ColorMode(str, Enum):
-    RGB = "rgb"
-    BGR = "bgr"
-
-
-class OpenCVCameraBus(SensorBus):
+class OpenCVCameraBus(CameraBus):
     """
     Sensor bus for OpenCV cameras.
 
@@ -127,9 +122,6 @@ class OpenCVCameraBus(SensorBus):
         cfg: CameraConfig = next(iter(self.components.values())).cfg  # type: ignore[assignment]
         processed = frame
 
-        if cfg.color_mode == ColorMode.RGB.value:
-            processed = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
-
         if cfg.rotation == Rotation.ROTATE_90.value:
             processed = cv2.rotate(processed, cv2.ROTATE_90_CLOCKWISE)
         elif cfg.rotation == Rotation.ROTATE_180.value:
@@ -138,11 +130,7 @@ class OpenCVCameraBus(SensorBus):
             processed = cv2.rotate(processed, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
         camera_name = next(iter(self.components.keys()))
-        self.archive_capture(camera_name, processed, cfg)
-
-        from solarian.core.optical_remap import finish_camera_frame
-
-        processed = finish_camera_frame(processed, cfg)
+        processed = self.archive_and_finish(camera_name, processed, cfg)
 
         if not isinstance(processed, np.ndarray):
             raise TypeError(f"Expected numpy.ndarray, got {type(processed)}")

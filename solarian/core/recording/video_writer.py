@@ -19,6 +19,7 @@ from __future__ import annotations
 import enum
 import logging
 import multiprocessing as mp
+import os
 import time
 from dataclasses import dataclass
 from fractions import Fraction
@@ -36,6 +37,13 @@ logger = logging.getLogger(__name__)
 #: How long ``end_episode`` waits for the encoder to drain its backlog and close
 #: the mux. Generous because the flush encodes everything still queued.
 _SEAL_TIMEOUT_S = 30.0
+
+#: How far the encoder is pushed down the scheduler's queue. It is the only
+#: consumer on the machine that can afford to wait — it buffers whole seconds
+#: of captures, while a frame the camera misses is gone for good — so under
+#: contention it should be the one that yields, not the camera or the control
+#: loop. It makes the time back between motion bursts and between episodes.
+_ENCODER_NICE = 10
 
 #: How often to check, mid-episode, whether the encoder is shedding frames. An
 #: encoder that cannot keep up is a broken take, and the operator has to hear
@@ -119,6 +127,7 @@ class VideoWriter(mp.Process):
         keyint: int = 30,
         preset: str = "veryfast",
         threads: int = 1,
+        x264_options: dict[str, str] | None = None,
         input_pix_fmt: str = "rgb24",
         output_pix_fmt: str = "yuv420p",
         buffer_size: int = 64,
@@ -135,6 +144,7 @@ class VideoWriter(mp.Process):
         self.keyint = int(keyint)
         self.preset = preset
         self.threads = int(threads)
+        self.x264_options = dict(x264_options or {})
         self.input_pix_fmt = input_pix_fmt
         self.output_pix_fmt = output_pix_fmt
         self.buffer_size = int(buffer_size)
@@ -220,6 +230,7 @@ class VideoWriter(mp.Process):
     # -- encoder side, runs in its own process ------------------------------
 
     def run(self) -> None:
+        os.nice(_ENCODER_NICE)
         # Reused across every frame: at archive resolution a fresh buffer per
         # capture is hundreds of MB/s of allocation churn.
         scratch = {
@@ -298,8 +309,15 @@ class VideoWriter(mp.Process):
             except Empty:
                 if stop_time is not None:
                     break
-                # Poll well inside a frame interval so the backlog stays short.
-                time.sleep(0.1 / self.fps)
+                # Half a frame interval. Both queues are polled rather than
+                # waited on, so this interval is the encoder's idle cost:
+                # measured on a Pi 5, spinning at a tenth of an interval burnt
+                # 0.07 of a core producing nothing, which is most of what the
+                # encoder was short of during a motion burst. Sleeping longer
+                # cannot cost throughput — a queue with anything in it never
+                # reaches here — it only delays the pickup of a frame that
+                # nothing is waiting for.
+                time.sleep(0.5 / self.fps)
                 continue
 
             frame_time = float(scratch["frame_time"])
@@ -403,12 +421,13 @@ class VideoWriter(mp.Process):
             # wall-clock at the cost of total CPU, and on a board shared with
             # a control loop the frame interval is already met without it.
             stream.codec_context.thread_count = self.threads
-            # A short GOP costs a few percent of size and buys cheap random
-            # access, which is all training-time frame sampling ever does.
+            # x264_options last: the preset is a set of defaults, and a knob
+            # named here is meant to override the one the preset chose.
             stream.options = {
                 "crf": str(self.crf),
                 "preset": self.preset,
                 "g": str(self.keyint),
+                **self.x264_options,
             }
             return container, stream
         except Exception:

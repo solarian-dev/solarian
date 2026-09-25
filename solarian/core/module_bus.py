@@ -1,6 +1,7 @@
 from typing import Any, Dict
 
 from solarian.core.component import Component
+from solarian.core.camera_bus import ArchivesFrames
 from solarian.core.component_bus import ComponentBus
 from solarian.core.data import Data
 
@@ -22,8 +23,9 @@ class ModuleBus():
         # (hardware/joint) bus -- e.g. to add Cartesian IK control. Signature:
         # (port, inner_bus, joint_components, cartesian_components) -> ComponentBus
         self.port_bus_wrapper = None
-        # Handed down to every port's bus at connect: which components archive
-        # their frames, and the delay to subtract from a capture stamp.
+        # Handed down at connect to the ports that are cameras: which
+        # components archive their frames, and the delay to subtract from a
+        # capture stamp.
         self.archive_sinks: Dict[str, Any] = {}
         self.capture_latency: float = 0.0
         #: When each component last sampled, as reported by the buses on the
@@ -76,12 +78,15 @@ class ModuleBus():
                 # logger.info(f"Connecting {inner_bus.__class__.__name__} on port {port}")
                 inner_bus.connect()
 
-            inner_bus.capture_latency = self.capture_latency
-            inner_bus.archive_sinks = {
-                name: sink
-                for name, sink in self.archive_sinks.items()
-                if name in components
-            }
+            # Only cameras carry an archive; a servo bus has no such attribute
+            # to set, and should not be given one.
+            if isinstance(inner_bus, ArchivesFrames):
+                inner_bus.capture_latency = self.capture_latency
+                inner_bus.archive_sinks = {
+                    name: sink
+                    for name, sink in self.archive_sinks.items()
+                    if name in components
+                }
 
             # Optionally wrap the inner bus (e.g. add Cartesian IK control).
             if cartesian_components and self.port_bus_wrapper is not None:
@@ -117,7 +122,8 @@ class ModuleBus():
             if names_bus:
                 data = component_bus.read(data_type, names_bus, normalize=normalize)
                 result.update(data)
-                self.capture_timestamps.update(component_bus.capture_timestamps)
+                if isinstance(component_bus, ArchivesFrames):
+                    self.capture_timestamps.update(component_bus.capture_timestamps)
         return result
 
     def configure(self, params: dict[str, int], component_names: list[str]):

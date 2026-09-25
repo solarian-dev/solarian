@@ -81,8 +81,14 @@ Defined in [`solarian/core/component_bus.py`](https://github.com/solarian-dev/so
 ComponentBus (abstract)
 ├── ActuatorBus  — adds write/calibration/torque control
 ├── SensorBus    — adds sensor-specific read paths
-└── (plugin)     — UR5Bus, DynamixelBus, FeetechBus, CameraBus, …
+│   └── CameraBus — adds the archive tap: every frame read is also encoded
+└── (plugin)     — UR5Bus, DynamixelBus, FeetechBus, …
 ```
+
+Whatever a bus reads is the archive's only source, so anything camera-shaped —
+where the frame is sent, when it was captured, which channel order it carries —
+lives on `CameraBus` and nowhere above it. A servo bus should have no opinion
+on any of it.
 
 ### The bus contract
 

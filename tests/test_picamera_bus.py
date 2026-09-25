@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import types
 from types import SimpleNamespace
 
@@ -10,7 +11,7 @@ import numpy as np
 import pytest
 
 from solarian.core.data import ImageData, PosData
-from solarian.core.picamera_bus import PiCameraBus
+from solarian.core.picamera_bus import _SENSOR_CLOCK, PiCameraBus
 from solarian.core.picamera_module import PiCameraConfig
 
 
@@ -26,6 +27,8 @@ def _cfg(**overrides):
         video_format="MJPG",
         resize_width=None,
         resize_height=None,
+        archive_width=None,
+        archive_height=None,
         optical_remap=None,
         exposure_value=None,
         brightness=None,
@@ -44,6 +47,7 @@ class FakePicamera2:
     empty_frames = 0
     reject_wait_timeout = False
     capture_exc_type: type[BaseException] = RuntimeError
+    sensor_timestamp: int | None = None
 
     def __init__(self, camera_num=0):
         type(self).instances.append(self)
@@ -57,6 +61,9 @@ class FakePicamera2:
         self.captures = 0
         self.config = None
         self.last_wait = None
+        #: Requests handed out and not yet given back. The buffer pool is
+        #: small, so a leak here is a stalled camera a few frames later.
+        self.outstanding = 0
 
     def create_video_configuration(self, main=None, controls=None, buffer_count=None):
         return {"main": main, "controls": controls, "buffer_count": buffer_count}
@@ -76,7 +83,7 @@ class FakePicamera2:
     def cancel_all_and_flush(self):
         self.cancelled = True
 
-    def capture_array(self, name="main", wait=None):
+    def capture_request(self, wait=None):
         self.last_wait = wait
         if type(self).reject_wait_timeout and wait not in (None, True, False):
             raise TypeError("wait must be bool or None")
@@ -87,7 +94,27 @@ class FakePicamera2:
             type(self).empty_frames -= 1
             return None
         self.captures += 1
+        self.outstanding += 1
+        return FakeRequest(self, type(self).sensor_timestamp)
+
+
+class FakeRequest:
+    def __init__(self, camera, sensor_timestamp):
+        self.camera = camera
+        self.sensor_timestamp = sensor_timestamp
+        self.released = False
+
+    def make_array(self, name="main"):
         return np.zeros((6, 8, 3), dtype=np.uint8)
+
+    def get_metadata(self):
+        if self.sensor_timestamp is None:
+            return {}
+        return {"SensorTimestamp": self.sensor_timestamp}
+
+    def release(self):
+        self.released = True
+        self.camera.outstanding -= 1
 
 
 @pytest.fixture
@@ -98,6 +125,7 @@ def fake_picamera2(monkeypatch):
     FakePicamera2.empty_frames = 0
     FakePicamera2.reject_wait_timeout = False
     FakePicamera2.capture_exc_type = RuntimeError
+    FakePicamera2.sensor_timestamp = None
     mod = types.ModuleType("picamera2")
     mod.Picamera2 = FakePicamera2
     monkeypatch.setitem(sys.modules, "picamera2", mod)
@@ -126,6 +154,59 @@ def test_read_returns_frame(fake_picamera2):
     assert fake_picamera2.instances[0].captures == 1
     assert fake_picamera2.instances[0].last_wait == bus.capture_timeout_s
     assert fake_picamera2.instances[0].config["buffer_count"] == 6
+
+
+def test_the_sensors_own_timestamp_dates_the_capture(fake_picamera2):
+    """A stamp taken on arrival jitters with the scheduler; this one does not."""
+    bus = _bus()
+    bus.connect()
+    fake_picamera2.sensor_timestamp = int(
+        (time.clock_gettime(_SENSOR_CLOCK) - 0.040) * 1e9
+    )
+
+    bus.read(ImageData, ["camera"])
+
+    assert bus.measured_capture_age == pytest.approx(0.040, abs=5e-3)
+
+
+def test_a_camera_that_does_not_date_its_frames_falls_back(fake_picamera2):
+    """Without a sensor stamp the configured latency is all there is."""
+    bus = _bus()
+    bus.connect()
+    fake_picamera2.sensor_timestamp = None
+
+    bus.read(ImageData, ["camera"])
+
+    assert bus.measured_capture_age is None
+
+
+def test_every_capture_hands_its_buffer_back(fake_picamera2):
+    """The pool is a handful of frames deep; one leak stalls the pipeline."""
+    bus = _bus()
+    bus.connect()
+
+    for _ in range(8):
+        bus.read(ImageData, ["camera"])
+
+    assert fake_picamera2.instances[0].outstanding == 0
+
+
+def test_a_buffer_is_handed_back_even_when_the_frame_is_unusable(
+    fake_picamera2, monkeypatch
+):
+    """The failure path is the one that leaks, being the one nobody runs."""
+    bus = _bus()
+    bus.connect()
+    camera = fake_picamera2.instances[0]
+
+    def explode(self, name="main"):
+        raise RuntimeError("mapping failed")
+
+    monkeypatch.setattr(FakeRequest, "make_array", explode)
+    with pytest.raises(RuntimeError, match="mapping failed"):
+        bus._capture_frame()
+
+    assert camera.outstanding == 0
 
 
 def test_rejects_non_image_data(fake_picamera2):

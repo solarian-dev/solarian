@@ -21,6 +21,7 @@ from multiprocessing import Process, Event, Queue as MpQueue
 from multiprocessing.connection import Connection, Pipe, wait as conn_wait
 from typing import Any, Dict, cast, TYPE_CHECKING
 
+from solarian.core.camera_bus import ArchivesFrames
 from solarian.core.component_bus import ComponentBus
 from solarian.core.data import Data
 
@@ -143,12 +144,16 @@ class BusServer(Process):
 # Client (drop-in replacement for a ComponentBus)
 # ======================================================================
 
-class BusClient(ComponentBus):
+class BusClient(ArchivesFrames, ComponentBus):
     """``ComponentBus`` proxy that forwards every operation to a
     ``BusServer`` over a ``multiprocessing.Pipe``.
 
     From the module's perspective this behaves identically to a direct
     ``FeetechBus`` (or any other ``ComponentBus``).
+
+    Archives frames as well, because the port it proxies may be a camera's:
+    the bus doing the capture is then in another process, and this is the
+    nearest point to it that the recorder can reach.
     """
 
     def __init__(

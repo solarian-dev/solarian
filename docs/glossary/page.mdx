@@ -136,13 +136,17 @@ When two modules share a hardware port, the [Robot](/docs/robots) starts a `BusS
 
 An [Observation](/docs/observations) field whose value is *computed* from other fields by a `Processor`. Declares its `inputs`, `processor`, `output`, and where it runs (`DataComputer.SERVER/ROBOT/CONTROLLER`).
 
+### `CameraBus`
+
+A [`SensorBus`](#sensorbus) whose reads are frames. Adds the archive tap — every frame read is also handed to the episode encoder, stamped with when the sensor exposed it. Base class for `OpenCVCameraBus` and `PiCameraBus`. See [Recording](/docs/recording).
+
 ### Component
 
 The smallest addressable unit of hardware: an [Actuator](#actuator), a [Sensor](#sensor), or a [Servo](#servo). Defined in [Core](/docs/core).
 
 ### `ComponentBus`
 
-The abstract base for buses. Subclasses: `ActuatorBus`, `SensorBus`, plus per-vendor implementations (`UR5Bus`, `DynamixelBus`, …).
+The abstract base for buses. Subclasses: `ActuatorBus`, `SensorBus` (and below it [`CameraBus`](#camerabus)), plus per-vendor implementations (`UR5Bus`, `DynamixelBus`, …).
 
 ### Controller
 
@@ -230,7 +234,7 @@ The machinery that actually schedules a [Module](/docs/modules) or [Skill](/docs
 
 ### `SensorBus`
 
-A [`ComponentBus`](/docs/core) subclass for sensors.
+A [`ComponentBus`](/docs/core) subclass for sensors. Sensors that produce frames use [`CameraBus`](#camerabus) below it.
 
 ### `SensorField`
 

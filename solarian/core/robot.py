@@ -251,6 +251,9 @@ class Robot(EventHost, ABC):
         #: Built by :meth:`_open_recorder` just before the modules fork.
         #: ``None`` when recording is disabled.
         self.recorder = None
+        #: The episode currently being sealed, if any. Sealing is slow and
+        #: runs off the control loop; see :meth:`_seal_off_the_control_loop`.
+        self._seal_thread: threading.Thread | None = None
         #: Id of the last episode boundary acted on, echoed back with the
         #: observation. Every hop of the action link is CONFLATE, so a
         #: RECORD_START the controller sent may never arrive; this is how it
@@ -1043,6 +1046,7 @@ class Robot(EventHost, ABC):
                 keyint=cfg.keyint,
                 preset=cfg.preset,
                 threads=cfg.threads,
+                x264_options=cfg.x264_options,
                 input_pix_fmt="bgr24" if sensor_cfg.color_mode == "bgr" else "rgb24",
                 buffer_size=cfg.queue_size,
             )
@@ -1119,6 +1123,10 @@ class Robot(EventHost, ABC):
         if self.recorder is None:
             logger.warning("Recording is disabled on this robot; ignoring RECORD_START")
             return True
+        # An encoder holds one episode at a time, so a take cannot open until
+        # the previous one is closed. Usually already true by the time the
+        # operator presses r again.
+        self._await_seal()
         session = action.data.get("session")
         if session:
             self.recorder.open_session(session)
@@ -1131,15 +1139,38 @@ class Robot(EventHost, ABC):
     def stop_recording(self, action, t_now: float) -> bool:
         self._record_request = int(action.data.get("request", 0))
         if self.recorder is not None:
-            self.recorder.end_episode()
+            self._seal_off_the_control_loop(self.recorder.end_episode)
         return True
 
     @action_handler(ActionType.RECORD_DROP)
     def drop_recording(self, action, t_now: float) -> bool:
         self._record_request = int(action.data.get("request", 0))
         if self.recorder is not None:
-            self.recorder.drop_episode()
+            self._seal_off_the_control_loop(self.recorder.drop_episode)
         return True
+
+    def _seal_off_the_control_loop(self, seal) -> None:
+        """Finish an episode on a thread of its own.
+
+        Sealing blocks until every encoder has drained its backlog and closed
+        its mux. The backlog is deliberately deep — that is what lets the
+        encoder fall behind during a burst of motion instead of dropping
+        captures — so on the control loop it would be seconds of frozen arm,
+        and the deeper the queue the longer the freeze. Recording itself stops
+        immediately either way: the recorder clears its flag before any of the
+        blocking work.
+        """
+        self._await_seal()
+        self._seal_thread = threading.Thread(
+            target=seal, name="EpisodeSeal", daemon=True
+        )
+        self._seal_thread.start()
+
+    def _await_seal(self) -> None:
+        """Block until the episode being sealed, if any, is on disk."""
+        if self._seal_thread is not None:
+            self._seal_thread.join()
+            self._seal_thread = None
 
     def initialize(self):
         # if not self.is_connected():
@@ -1230,7 +1261,9 @@ class Robot(EventHost, ABC):
 
         self.running = False
         # Before the modules go: an episode still open has to be sealed while
-        # its encoders are alive, or its mp4 is left without a footer.
+        # its encoders are alive, or its mp4 is left without a footer. That
+        # includes one a background seal has not finished with yet.
+        self._await_seal()
         if self.recorder is not None:
             self.recorder.close()
             self.recorder = None

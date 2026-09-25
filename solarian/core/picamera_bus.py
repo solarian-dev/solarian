@@ -7,7 +7,7 @@ from enum import Enum
 
 import numpy as np
 
-from solarian.core.sensor_bus import SensorBus
+from solarian.core.camera_bus import CameraBus, ColorMode
 from solarian.core.configs import PiCameraSensorConfig
 from solarian.core.data import Data, ImageData
 
@@ -26,10 +26,10 @@ class Rotation(int, Enum):
     ROTATE_270 = -90
 
 
-class ColorMode(str, Enum):
-    RGB = "rgb"
-    BGR = "bgr"
-
+#: The clock libcamera stamps SensorTimestamp on. Only Linux has BOOTTIME;
+#: elsewhere this module is imported but never run against real hardware, and
+#: on a board that does not suspend the two clocks agree anyway.
+_SENSOR_CLOCK = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
 
 # CSI cameras (IMX477 HQ especially) drop frames or stall on ribbon/power
 # glitches. libcamera's dequeue watchdog is ~1s; after that capture_array
@@ -43,7 +43,7 @@ _CLOSE_TIMEOUT_S = 2.0
 _BUFFER_COUNT = 6
 
 
-class PiCameraBus(SensorBus):
+class PiCameraBus(CameraBus):
     """Sensor bus for Raspberry Pi CSI cameras via picamera2.
 
     ``port`` is the libcamera CSI index (``"0"`` = cam0, ``"1"`` = cam1),
@@ -179,16 +179,38 @@ class PiCameraBus(SensorBus):
             )
 
     def _capture_frame(self):
+        """Return one frame, and record how old it is from the sensor's clock.
+
+        Taken as a request rather than an array so the metadata comes with it.
+        libcamera stamps SensorTimestamp when the frame's first row was
+        exposed, on CLOCK_BOOTTIME, which is the one number here that owes
+        nothing to when this process happened to be scheduled.
+
+        The request holds a DMA buffer out of a small pool, so it is released
+        on every path; leaking one starves the pipeline within a few frames.
+        """
         if self.picam2 is None:
             raise RuntimeError("Camera not connected")
         timeout = self.capture_timeout_s
         try:
-            frame = self.picam2.capture_array("main", wait=timeout)
+            request = self.picam2.capture_request(wait=timeout)
         except TypeError:
             # Older picamera2: wait is bool/None only.
-            frame = self.picam2.capture_array("main")
+            request = self.picam2.capture_request()
+        if request is None:
+            raise RuntimeError("Could not read frame from camera")
+        try:
+            frame = request.make_array("main")
+            sensor_ts = request.get_metadata().get("SensorTimestamp")
+        finally:
+            request.release()
         if frame is None:
             raise RuntimeError("Could not read frame from camera")
+        self.measured_capture_age = (
+            None
+            if sensor_ts is None
+            else time.clock_gettime(_SENSOR_CLOCK) - sensor_ts / 1e9
+        )
         return frame
 
     def _reconnect(self, reason: BaseException | str) -> None:
@@ -251,9 +273,6 @@ class PiCameraBus(SensorBus):
 
         cfg = self._cfg()
 
-        if cfg.color_mode == ColorMode.RGB.value:
-            processed = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
-
         if cfg.rotation == Rotation.ROTATE_90.value:
             processed = cv2.rotate(processed, cv2.ROTATE_90_CLOCKWISE)
         elif cfg.rotation == Rotation.ROTATE_180.value:
@@ -262,11 +281,7 @@ class PiCameraBus(SensorBus):
             processed = cv2.rotate(processed, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
         camera_name = next(iter(self.components.keys()))
-        self.archive_capture(camera_name, processed, cfg)
-
-        from solarian.core.optical_remap import finish_camera_frame
-
-        processed = finish_camera_frame(processed, cfg)
+        processed = self.archive_and_finish(camera_name, processed, cfg)
 
         if not isinstance(processed, np.ndarray):
             raise TypeError(f"Expected numpy.ndarray, got {type(processed)}")

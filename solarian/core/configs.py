@@ -315,10 +315,23 @@ class RecordingConfig(BaseModel):
     #: Constant Rate Factor. 18 is near-transparent, 23 is the x264 default;
     #: 20 keeps an archive that survives a later re-encode at policy resolution.
     crf: int = 20
-    #: Keyframe interval. Short GOPs cost a few percent of size and buy the
-    #: cheap random access that training-time frame sampling does all day.
+    #: Keyframe interval, in frames. Not, despite appearances, about random
+    #: access — nothing seeks an archive, the export decodes each one start to
+    #: finish. What a short GOP actually buys is quality, because every
+    #: keyframe is a fresh anchor the following frames drift from: measured on
+    #: wrist-camera footage, 30 holds 4 dB more luma PSNR than 120 at the same
+    #: crf. It also bounds what a killed episode loses, since ``frag_keyframe``
+    #: starts a fragment per keyframe. It is paid for in size and a little CPU,
+    #: keyframes being the bulky, expensive ones.
     keyint: int = 30
     preset: str = "veryfast"
+    #: Raw libx264 knobs, applied over whatever ``preset`` chose. The presets
+    #: move a dozen settings together, which is a blunt way to buy CPU; naming
+    #: the one that matters is cheaper. Motion estimation is that one, and
+    #: ``{"x264-params": "subme=0:me=dia"}`` takes an eighth off the encode for
+    #: 0.1 dB and no extra bits, where dropping the preset to ``superfast``
+    #: saves the same CPU and doubles the file.
+    x264_options: dict[str, str] = {}
     #: Encoder threads per camera. Frame threading trades total CPU for
     #: wall-clock, which is the wrong way round here: on a Pi 5 at 1014x760 a
     #: single thread costs 0.50 of a core against 0.55 for two and 0.63 for
@@ -326,7 +339,12 @@ class RecordingConfig(BaseModel):
     #: Raise it only if the encoder starts dropping frames.
     threads: int = 1
     #: Captures buffered per camera before frames are dropped rather than
-    #: stalling the camera's loop.
+    #: stalling the camera's loop. This is the encoder's licence to fall
+    #: behind: scene motion drives its cost, so a burst of it puts the encoder
+    #: over budget for a few seconds, and a queue deep enough to cover the
+    #: burst turns dropped captures into a backlog it clears afterwards. Costs
+    #: ``width * height * 3`` bytes a slot, so the useful depth is a question
+    #: of how much RAM the board has and how long a take runs.
     queue_size: int = 64
     #: Stop recording once the session reaches this size.
     max_session_gb: float | None = 64.0
