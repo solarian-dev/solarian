@@ -90,46 +90,38 @@ solarian calibrate
 
 Interactive bring-up for one module. Four steps on an IK arm: **Step 1: Joint limits**, **Step 2: Home position** (match the static model-q=0 sim), **Step 3: Sim mapping** (highlighted joint, Y/N), **Output**. The live mirror then stays open with on-screen nrm / rad numbers so you can check the mapping. Answer ENTER / Y / N in the sim window. Grippers stop after Step 1 plus one physical closed pose. See [Calibration](/docs/modules/calibration).
 
-### `calibrate-arm-latency`
+### `calibrate-arm`
 
 ```bash
-solarian calibrate-arm-latency [axis=z] [amplitude=0.02] [freq=1.25]
+solarian calibrate-arm [axis=z] [amplitude=0.02] [freq=1.25] [poses=3] [distance=0.06]
 ```
 
-Measures one of the two latencies a UMI skill needs for an `ArmModule`. You pick the arm (auto-selected when there is only one) and a mode:
+Measures the three numbers that describe an `ArmModule` in time, and writes each into the arm's module yaml as it goes. You pick the arm (auto-selected when there is only one) and a mode:
 
-- **action** — sweep a Cartesian sinusoid on one axis, record the measured pose, and recover the command-to-motion delay by cross-correlation. Prints `arm_action_latency` and shows alignment plots. Refuses to run if the sinusoid's peak velocity would exceed the module's `max_speed`, which would measure the speed limit instead of the pipeline.
-- **obs** — time a few hundred pose reads and report the mean, which is `arm_obs_latency`.
+- **all** — the three below, in order.
+- **speed** — short moves at rising speeds from several poses → `max_speed[0]`.
+- **action** — sweep a Cartesian sinusoid on one axis, record the measured pose, and recover the command-to-motion delay by cross-correlation → `action_latency`. Shows alignment plots.
+- **obs** — time a few hundred pose reads and report the mean → `receive_latency`.
 
-Action mode records where the arm started, then walks you through placing it by hand: take hold, Enter to release torque, position it, Enter to lock it there, let go, Enter to record. It then verifies the model can travel the full amplitude both ways from that pose and aborts naming the joint in the way, because an out-of-reach sweep comes back clipped and the clip is what gets measured. Afterwards the arm returns to the safe pose you chose and then to where it was when the command started, including when the run aborts partway. See [Latency & Synchronization](/docs/latency) for what each number corrects and why.
+The order in `all` is the point of merging them. The sinusoid's peak velocity has to stay inside `max_speed`, because `PoseTrajectoryInterpolator` stretches any waypoint it cannot reach in time and a stretched sweep measures the speed limit rather than the pipeline — so the speed is measured first and the sweep is sized from the result. Run `all` on new hardware; the individual modes are for re-measuring one number later.
 
-### `calibrate-arm-speed`
+A figure that is not a measurement is not written: a speed the arm never fell behind is only a lower bound, and a negative latency means the sweep did not track.
+
+Speed mode free-drives the arm to each pose in turn, through take-hold / release-torque / lock / let-go prompts. At the first direction it ramps the commanded speed until the measured motion stops keeping up, then checks whether every other pose and axis direction can hold that same speed, lowering it whenever one cannot. Between directions the arm drives back to the pose you chose rather than reversing the offset it just made, so a move that fell short does not shift where the next one begins. What it reports is the slowest sample, since the Jacobian means a single global limit is only safe if it is the minimum over the region the arm works in. Directions without room for the full test distance are skipped rather than measured short. The moves deliberately run above the configured limit — that is the only way to see past it — with a ceiling of four times the configured value.
+
+Action mode asks for one more placement, then verifies the model can travel the full amplitude both ways from that pose and aborts naming the joint in the way, because an out-of-reach sweep comes back clipped and the clip is what gets measured. The arm returns to where it was when the command started, including when the run aborts partway. See [Latency & Synchronization](/docs/latency) for what each number corrects and why.
+
+### `calibrate-gripper`
 
 ```bash
-solarian calibrate-arm-speed [poses=3] [distance=0.06]
+solarian calibrate-gripper [amplitude=8] [freq=1.25]
 ```
 
-Measures the Cartesian translation speed the arm actually sustains, which is `max_speed[0]` in the arm's module yaml. Run this **before** `calibrate-arm-latency`, which sizes its sweep against that limit.
+The same four modes for any `GripperModule` (UMI `calibrate_gripper_latency`, plus the speed ramp UMI had no equivalent for), writing `max_speed`, `action_latency` and `receive_latency` into the gripper's module yaml.
 
-You free-drive the arm to each pose in turn, through the same take-hold / release-torque / lock / let-go prompts as `calibrate-arm-latency`. At the first direction it ramps the commanded speed until the measured motion stops keeping up, then checks whether every other pose and axis direction can hold that same speed, lowering it whenever one cannot. Between directions the arm drives back to the pose you chose rather than reversing the offset it just made, so a move that fell short does not shift where the next one begins. What it reports is the slowest sample, since the Jacobian means a single global limit is only safe if it is the minimum over the region the arm works in. Directions without room for the full test distance are skipped rather than measured short. The arm returns to its original pose when the command ends.
+The gripper's speed is a genuine hardware constant: one prismatic degree of freedom, no Jacobian, so a single measurement holds everywhere. It strokes between the ends of travel (staying a tenth clear of the hard stops) at rising speed and reports the rate the jaws hold, along with whether the configured value was optimistic, pessimistic, or fair.
 
-The moves deliberately run above the configured limit — that is the only way to see past it — with a ceiling of four times the configured value.
-
-### `calibrate-gripper-speed`
-
-```bash
-solarian calibrate-gripper-speed
-```
-
-The same idea for the jaws, filling `max_speed` in the gripper's module yaml. This one is a genuine hardware constant: one prismatic degree of freedom, no Jacobian, so a single measurement holds everywhere. It strokes between the ends of travel (staying a tenth clear of the hard stops) at rising speed and reports the rate the jaws hold, along with whether the configured value is optimistic, pessimistic, or fair.
-
-### `calibrate-gripper-latency`
-
-```bash
-solarian calibrate-gripper-latency
-```
-
-The same two modes for any `GripperModule` (UMI `calibrate_gripper_latency`): a sinusoid across the configured aperture range for `gripper_action_latency`, or read timing for `gripper_obs_latency`. The two are **not** the same number and correct in opposite directions — see [Latency & Synchronization](/docs/latency).
+Getting this order wrong is not hypothetical. UMI swept the full stroke at about 1 Hz, which peaks at 300 mm/s — fine for the WSG50 they ran, twice what a 150 mm/s gripper can follow. Run that sweep against the smaller gripper and every waypoint is stretched, the jaws crawl, and the cross-correlation returns a lag with no physical meaning. The sweep now sizes itself from `max_speed` and refuses an explicit `amplitude`/`freq` pair that would exceed it.
 
 ### `calibrate-gripper-ranges`
 
@@ -149,7 +141,7 @@ solarian calibrate-camera-latency role=display [monitor_hz=60] [qr_size=720]
 solarian calibrate-camera-latency role=capture monitor_hz=60 [n_frames=120] [plot=true]
 ```
 
-Measures `camera_obs_latency` with UMI's QR-timestamp method: one role fills a screen with a QR code encoding the instant it was drawn, the other films it and subtracts. `monitor_hz` is required on `capture`, where display refresh enters the arithmetic, and optional on `display`, where it only paces the redraw. Both roles sync to the relay clock, so the screen and the camera can be on different machines — which is the better setup, though both can share one machine if the robot has a screen. See [Latency & Synchronization](/docs/latency).
+Measures the camera's `receive_latency` with UMI's QR-timestamp method, and writes it to the camera module's yaml: one role fills a screen with a QR code encoding the instant it was drawn, the other films it and subtracts. `monitor_hz` is required on `capture`, where display refresh enters the arithmetic, and optional on `display`, where it only paces the redraw. Both roles sync to the relay clock, so the screen and the camera can be on different machines — which is the better setup, though both can share one machine if the robot has a screen. See [Latency & Synchronization](/docs/latency).
 
 All four `calibrate-*` commands above talk to the module in-process (same as `solarian calibrate`), not through the robot's action queues. Run them on the machine the device is wired to, with `run-robot` stopped — the only exception is `calibrate-camera-latency role=display`, which just draws on a screen and belongs on the machine with the monitor. See [Latency & Synchronization](/docs/latency).
 

@@ -15,6 +15,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 
 import numpy as np
+from omegaconf import OmegaConf
 
 from solarian.core.module import Module
 from solarian.utils import get_class
@@ -23,6 +24,42 @@ from solarian.utils.precise_sleep import precise_wait
 # Servos need a moment to take up the slack after torque re-engages, before the
 # pose a calibration is built around is read.
 SETTLE_S = 0.5
+
+
+def cfg_float(cfg, key: str, default: float) -> float:
+    """A numeric command override, or *default* when it was not given."""
+    val = OmegaConf.select(cfg, key)
+    return default if val is None else float(val)
+
+
+def configured_speed(module: Module) -> float:
+    """The speed limit this module's interpolator enforces.
+
+    ``max_speed`` is a list on an arm (translation, rotation) and a scalar on a
+    gripper; only the first entry is a linear speed either way.
+    """
+    max_speed = module.cfg.max_speed
+    if isinstance(max_speed, (int, float)):
+        return float(max_speed)
+    return float(max_speed[0])
+
+
+def save_module_field(module: Module, key: str, value) -> None:
+    """Write one measurement to the module's yaml, and to the live config.
+
+    The live config matters within a single run: the latency sweep sizes its
+    amplitude off ``max_speed``, so a speed measured a minute ago has to be the
+    one in force by the time the sweep is planned.
+    """
+    from solarian.core.module_yaml import patch_top_level_value
+
+    setattr(module.cfg, key, value)
+    yaml_path = module._module_yaml_path()
+    if yaml_path is None:
+        print(f"  {key}: {value} — kept in memory, {module.name} has no yaml")
+        return
+    patch_top_level_value(yaml_path, key, value)
+    print(f"  wrote {key}: {value} to {yaml_path}")
 
 
 def _opencv_bgr(frame, color_mode: str) -> np.ndarray:
@@ -311,18 +348,19 @@ def measure_read_latency(
     return durations
 
 
-def report_read_latency(durations: np.ndarray, config_key: str) -> None:
+def report_read_latency(durations: np.ndarray) -> float:
+    """Print the read-duration spread and return the mean, in seconds."""
     print(
         f"\nRead duration over {durations.size} samples: "
         f"mean {durations.mean() * 1e3:.3f} ms, "
         f"std {durations.std() * 1e3:.3f} ms, "
         f"p95 {np.percentile(durations, 95) * 1e3:.3f} ms"
     )
-    print(f"\n  {config_key}: {durations.mean():.6f}")
     print(
         "Observation latency moves a timestamp backwards: the reading was true "
         "before we stamped it."
     )
+    return float(durations.mean())
 
 
 def plot_latency(

@@ -389,9 +389,9 @@ class Module(ABC):
         )
 
     def _module_yaml_path(self) -> str | None:
-        conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
-        path = os.path.join(conf_path, f"{self.name}.yaml")
-        return path if os.path.isfile(path) else None
+        from solarian.core.module_yaml import module_yaml_path
+
+        return module_yaml_path(self.name)
 
     def is_calibrated(self) -> bool:
         if self.calibration is None:

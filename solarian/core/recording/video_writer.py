@@ -20,6 +20,7 @@ import enum
 import logging
 import multiprocessing as mp
 import os
+import signal
 import time
 from dataclasses import dataclass
 from fractions import Fraction
@@ -230,7 +231,26 @@ class VideoWriter(mp.Process):
     # -- encoder side, runs in its own process ------------------------------
 
     def run(self) -> None:
+        # Ctrl+C reaches this process too, and an encoder that acts on it
+        # abandons a mux mid-episode — the mp4 loses its tail for a stop the
+        # operator asked for politely. Episodes end on the command queue.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         os.nice(_ENCODER_NICE)
+        # Nice yields CPU time and nothing else. A thread left to roam arrives
+        # cold on whichever core it lands on and leaves that core's cache
+        # dirty behind it, and on this board what pays for that is the camera
+        # module or the policy. One core is twice the half it measures at, and
+        # the queue is how it makes back anything it still loses. Left alone
+        # below three cores, where taking one away would cost the control path
+        # more than the migrations do. Set before anything else starts, so the
+        # encoder's own threads inherit it.
+        if hasattr(os, "sched_setaffinity"):
+            cores = sorted(os.sched_getaffinity(0))
+            if len(cores) >= 3:
+                os.sched_setaffinity(0, {cores[-1]})
+                logger.info(
+                    "%s confined to core %d of %d", self.name, cores[-1], len(cores)
+                )
         # Reused across every frame: at archive resolution a fresh buffer per
         # capture is hundreds of MB/s of allocation churn.
         scratch = {

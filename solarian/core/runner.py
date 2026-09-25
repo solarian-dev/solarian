@@ -19,6 +19,7 @@ is a process, a thread, or ticked inline by its host.
 from __future__ import annotations
 
 import logging
+import signal
 import threading
 import time
 import traceback as _tb
@@ -131,6 +132,13 @@ class Runner(ABC):
         """Setup, loop at the target frequency, tear down. Runs in the worker."""
         target = self.target
         exit_reason = WorkerExit.COMPLETED
+        if self.crosses_process_boundary:
+            # Ctrl+C reaches every process in the terminal's foreground group,
+            # so a worker that acts on it unwinds from inside a device read
+            # while the parent is still shutting things down in order, and
+            # prints a traceback for a stop that was asked for. The parent's
+            # stop event is the only shutdown this worker answers to.
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
         try:
             target.worker_setup(self.crosses_process_boundary)
 

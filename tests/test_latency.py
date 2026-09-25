@@ -19,8 +19,8 @@ def test_get_latency_recovers_known_delay():
 
 
 def test_get_latency_recovers_the_same_delay_on_every_pose_axis():
-    """`calibrate-arm-latency` sweeps one axis of a 6-D pose at a time; each
-    axis must report the arm's delay whatever its amplitude or phase.
+    """`calibrate-arm` sweeps one axis of a 6-D pose at a time; each axis must
+    report the arm's delay whatever its amplitude or phase.
 
     Sweep parameters match that command's defaults: 1.25 Hz over 10 s. A lower
     frequency widens the correlation peak enough to bias the estimate (~18 ms

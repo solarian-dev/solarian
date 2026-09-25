@@ -38,6 +38,32 @@ def _field_line_re(name: str) -> re.Pattern[str]:
     return re.compile(rf"^(\s*){re.escape(name)}\s*:\s*[^\n#]*")
 
 
+def module_yaml_path(module_name: str) -> Optional[str]:
+    """``conf/<module_name>.yaml``, or ``None`` when the project has no such file."""
+    conf_path = os.environ.get(
+        "SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf")
+    )
+    path = os.path.join(conf_path, f"{module_name}.yaml")
+    return path if os.path.isfile(path) else None
+
+
+def read_module_field(module_name: str, key: str, default: float) -> float:
+    """One top-level numeric field from a module's yaml.
+
+    For readers outside the module's own process — a skill runs in its own and
+    never holds the object. Only the named key is selected, so interpolations
+    elsewhere in the file (``${deployment.*}``) are never resolved and no
+    deployment tree has to be composed to read one number.
+    """
+    from omegaconf import OmegaConf
+
+    path = module_yaml_path(module_name)
+    if path is None:
+        return default
+    value = OmegaConf.select(OmegaConf.load(path), key)
+    return default if value is None else float(value)
+
+
 def discover_actuator_sim_joints(lines: list[str]) -> dict[str, str]:
     """Map actuator key → bare MJCF joint name.
 
@@ -234,6 +260,54 @@ def patch_actuator_fields(
     return updated
 
 
+def patch_top_level_value(yaml_path: str, key: str, value: Any) -> None:
+    """Set a top-level scalar (or flow list) key, preserving comments.
+
+    Only column zero counts as top level, so writing ``max_speed`` cannot land
+    on an actuator that happens to declare one. An existing key keeps its
+    trailing comment; a new one goes in above the hardware map, which is where
+    a reader looks for the module's own settings.
+    """
+    path = os.path.abspath(yaml_path)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Module yaml not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines(keepends=True)
+
+    key_re = re.compile(rf"^{re.escape(key)}\s*:\s*[^\n#]*")
+    # A camera declares sensors and no actuators.
+    hardware_re = re.compile(r"^(actuators|sensors)\s*:")
+    newline = _split_newline(lines[0])[1] if lines else "\n"
+    rendered = f"{key}: {_format_value(value)}"
+
+    for i, raw in enumerate(lines):
+        body, line_newline = _split_newline(raw)
+        if not key_re.match(body):
+            continue
+        # Kept verbatim, spacing included: a trailing comment is usually the
+        # provenance of the number being overwritten.
+        comment = re.match(r"^[^#]*?(\s*#.*)$", body)
+        trailing = comment.group(1) if comment else ""
+        lines[i] = f"{rendered}{trailing}{line_newline or newline}"
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+        return
+
+    block = [f"{rendered}{newline}"]
+    for i, raw in enumerate(lines):
+        if hardware_re.match(_split_newline(raw)[0]):
+            lines[i:i] = block
+            break
+    else:
+        if lines and not lines[-1].endswith(("\n", "\r\n")):
+            lines[-1] = lines[-1] + newline
+        lines.extend(block)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+
 def patch_top_level_mapping(
     yaml_path: str, key: str, values: dict[str, Any]
 ) -> None:
@@ -303,6 +377,8 @@ def _format_value(value: Any) -> str:
         return _format_limit(value)
     if isinstance(value, str):
         return value
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_format_value(v) for v in value) + "]"
     return str(value)
 
 

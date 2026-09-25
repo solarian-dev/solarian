@@ -8,16 +8,26 @@ answer.
 
 from __future__ import annotations
 
+import logging
+import time
 from enum import Enum
 from typing import Dict, TYPE_CHECKING
 
 from solarian.core.clock_sync import synced_time
 from solarian.core.sensor_bus import SensorBus
+from solarian.utils.status_board import StatusBoard
 
 if TYPE_CHECKING:
     import numpy as np
 
     from solarian.core.recording.video_writer import ArchiveSink
+
+logger = logging.getLogger(__name__)
+
+#: How often the capture rate and age reach the StatusBoard. Every capture
+#: would be a queue message per frame per camera, which is the kind of cost
+#: this is meant to detect.
+_HEALTH_PERIOD_S = 1.0
 
 
 class ColorMode(str, Enum):
@@ -46,14 +56,24 @@ class ArchivesFrames:
         #: this instead of stamping on return, so the observation and the
         #: archive carry the same instant.
         self.capture_timestamps: Dict[str, float] = {}
-        #: Calibrated delay between the physical sample and this bus seeing it,
-        #: for hardware that cannot say. A constant, and therefore a guess at
-        #: something that varies.
+        #: Calibrated delay this bus cannot measure, added to
+        #: :attr:`measured_capture_age`. Where the hardware dates its own frames
+        #: that leaves only the stages after the sensor; where it does not, this
+        #: carries the whole delay. A constant either way, and therefore a guess
+        #: at something that varies.
         self.capture_latency: float = 0.0
-        #: Age of the capture just read, where the hardware timestamps its own
-        #: frames. Takes precedence over :attr:`capture_latency`, which is the
-        #: same quantity estimated rather than measured.
+        #: Exposure-to-here age of the capture just read, where the hardware
+        #: dates its own frames. Exact and evenly spaced, which is why the
+        #: jitter a constant cannot model belongs in this term.
         self.measured_capture_age: float | None = None
+        #: Ages seen since the last publish, and when that was.
+        self._health_ages: list[float] = []
+        #: Seconds spent handing frames to the encoder over the same window,
+        #: and how many frames that was. Zero frames means no open episode,
+        #: which is not the same as a free encoder.
+        self._health_archive_s = 0.0
+        self._health_archived = 0
+        self._health_at = 0.0
 
     def archive_and_finish(self, name: str, frame: "np.ndarray", cfg):
         """Feed the archive, and return the frame the observation carries.
@@ -106,23 +126,61 @@ class ArchivesFrames:
         slot and leaves the next empty — the second is discarded, the gap is
         filled with a repeat, and the take loses coverage although the camera
         missed nothing. Measured on a loaded Pi 5, stamping on arrival cost
-        18% of captures that way. Hence the preference for an age the hardware
-        measured over one the config guessed.
+        18% of captures that way. Hence the split below: the hardware's own
+        timestamp carries the part of the age that varies, and the configured
+        constant only the fixed remainder the hardware cannot see.
         """
-        age = (
-            self.capture_latency
-            if self.measured_capture_age is None
-            else self.measured_capture_age
-        )
+        # Additive, not alternatives. SensorTimestamp dates the exposure and
+        # leaves the ISP, the transfer and this loop for the constant to cover,
+        # so preferring one over the other drops whichever part it did not
+        # measure -- on a Pi 5 the sensor age is ~40 ms of a ~150 ms pipeline.
+        measured = self.measured_capture_age
+        age = self.capture_latency + (0.0 if measured is None else measured)
         captured_at = synced_time() - age
         self.capture_timestamps[name] = captured_at
+
+        # Published rather than discarded. This age is the one number that
+        # separates a capture path falling behind from a consumer that is,
+        # and the encoder below competes with this loop for the board's
+        # memory bandwidth — so it is the first thing to read when an open
+        # episode costs a policy its grip on the task.
+        self._health_ages.append(age)
+        now = time.monotonic()
+        if now - self._health_at >= _HEALTH_PERIOD_S:
+            if self._health_at:
+                elapsed = now - self._health_at
+                n = len(self._health_ages)
+                line = (
+                    f"{n / elapsed:.1f} Hz, "
+                    f"age {1000.0 * sum(self._health_ages) / n:.0f} ms"
+                )
+                if self._health_archived:
+                    line += (
+                        f", archive {1000.0 * self._health_archive_s / self._health_archived:.1f} ms"
+                    )
+                    # The board keeps only the newest window, and a snapshot
+                    # taken after the episode sealed is the one that survives
+                    # in a scrollback. Logged so the figure outlives the
+                    # window that could produce it.
+                    logger.info("%s capture: %s", name, line)
+                StatusBoard.set(f"{name} capture", line)
+            self._health_at = now
+            self._health_ages.clear()
+            self._health_archive_s = 0.0
+            self._health_archived = 0
 
         sink = self.archive_sinks.get(name)
         # A sink with no ``accepting`` flag is always fed. The real encoder
         # sets the flag only while an episode is open, so the archive
         # resize and the shared-memory copy do not run between takes.
         if sink is not None and getattr(sink, "accepting", True):
+            # Timed because this sits between the capture and the observation
+            # the caller is about to publish, so whatever it costs is added to
+            # the age of every frame a policy reads — not just to the archive.
+            t0 = time.monotonic()
             sink.write_frame(archive_frame(frame, cfg), captured_at)
+            self._health_archive_s += time.monotonic() - t0
+            self._health_archived += 1
         return captured_at
 
 

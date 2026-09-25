@@ -268,6 +268,13 @@ class Robot(EventHost, ABC):
         self._link_lost = False
         set_image_jpeg_quality(getattr(cfg, "img_compression_quality", None))
 
+        #: Cores this process may use before any reservation narrows it, so
+        #: the widening in :meth:`_reserve_encoder_core` has a full set to go
+        #: back to. Empty on platforms with no affinity API (macOS).
+        self._all_cores: list[int] = (
+            sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
+        )
+
         self._module_map = ModuleMap()
         self._bus_servers: list[BusServer] = []
         self.observation_buffers = dict[str, ObservationBuffer]()
@@ -644,6 +651,16 @@ class Robot(EventHost, ABC):
         """
         while self.running:
             try:
+                if self.recorder is not None:
+                    # Before the row, so a command and the sample that
+                    # followed it are stored in that order. Drained even
+                    # between episodes, or the tap fills and the producers
+                    # start warning.
+                    for module_name, queue in self.action_queues.items():
+                        for module_action in queue.drain_tap():
+                            self.recorder.note_module_action(
+                                module_name, module_action
+                            )
                 observation = self.get_observation()
                 # Before the send, which compresses the observation in place.
                 # This is also the event the episode table is keyed on:
@@ -860,6 +877,7 @@ class Robot(EventHost, ABC):
             logger.exception("Could not start skill '%s'", name)
             return True
         logger.info("Started skill '%s' (pid=%s)", name, skill.pid)
+        self._reserve_encoder_core()
         return True
 
     @action_handler(ActionType.STOP_SKILL)
@@ -1099,6 +1117,13 @@ class Robot(EventHost, ABC):
             schema=schema,
         )
 
+        # Every command a module receives passes through its action queue,
+        # whichever process put it there, so that is where they are read back
+        # for the table. Opened here, before anything forks, because a copy of
+        # the queue is how a robot-side skill reaches the module at all.
+        for queue in self.action_queues.values():
+            queue.open_tap(self.shm_manager)
+
     def _archive_shape(self, sensor_cfg) -> tuple[int, int, int]:
         """``(height, width, 3)`` of the frames this camera will archive."""
         if self.is_sim:
@@ -1117,6 +1142,44 @@ class Robot(EventHost, ABC):
             height, width = sensor_cfg.archive_height, sensor_cfg.archive_width
         return int(height), int(width), 3
 
+    def _reserve_encoder_core(self) -> None:
+        """Keep the control path off the core the encoder pins itself to.
+
+        ``VideoWriter.run`` confines itself to the last core, which buys
+        nothing while the scheduler is still free to put the camera module or
+        a policy skill on that same core. Only in force while an episode is
+        open: an idle encoder sits blocked on its queue, and a quarter of the
+        board is too much to pay for a process that is not running.
+
+        Re-applied whenever a skill starts, because a skill launched after
+        the episode opened was forked with the reservation already in place
+        on the parent but is not in ``_local_skills`` at that point.
+        """
+        # Below three cores, taking one away costs the control path more than
+        # the encoder's migrations do. Matches VideoWriter's own threshold.
+        if len(self._all_cores) < 3:
+            return
+        _, recording, _, _ = self._recording_snapshot()
+        cores = set(self._all_cores[:-1] if recording else self._all_cores)
+        pids = [
+            os.getpid(),
+            *(module.pid for module in self.modules.values()),
+            *(skill.pid for skill in self._local_skills.values()),
+            *(srv.pid for srv in self._bus_servers),
+        ]
+        # Affinity is a thread property, and passing a process id moves only
+        # that process's main thread. That is the one that matters in each
+        # case here — the control loop, a module's worker body, a bus
+        # server's read loop — and threads started afterwards inherit it.
+        for pid in pids:
+            if pid is None:
+                continue
+            try:
+                os.sched_setaffinity(pid, cores)
+            except OSError:
+                # Exited between building the list and getting here.
+                continue
+
     @action_handler(ActionType.RECORD_START)
     def start_recording(self, action, t_now: float) -> bool:
         self._record_request = int(action.data.get("request", 0))
@@ -1133,6 +1196,7 @@ class Robot(EventHost, ABC):
         self.recorder.start_episode(
             task=action.data.get("task"), skill=action.data.get("skill")
         )
+        self._reserve_encoder_core()
         return True
 
     @action_handler(ActionType.RECORD_STOP)
@@ -1161,8 +1225,17 @@ class Robot(EventHost, ABC):
         blocking work.
         """
         self._await_seal()
+
+        def seal_then_widen():
+            # The encoder keeps its reserved core until its backlog is on
+            # disk. Lifting the reservation when recording stops rather than
+            # when the encoder goes idle would hand the control path a core
+            # the encoder is still working flat out on.
+            seal()
+            self._reserve_encoder_core()
+
         self._seal_thread = threading.Thread(
-            target=seal, name="EpisodeSeal", daemon=True
+            target=seal_then_widen, name="EpisodeSeal", daemon=True
         )
         self._seal_thread.start()
 
@@ -1324,13 +1397,9 @@ class Robot(EventHost, ABC):
         """
 
         if action.action_type == ActionType.MODULE_ACTION:
-            # Recorded here rather than on the controller: the action path is
-            # conflated end to end, and only the actions that arrived moved
-            # the robot. Training on one that was dropped teaches a mapping
-            # that never happened.
-            if self.recorder is not None:
-                self.recorder.note_action(action)
-            # put module actions into action queues
+            # Not recorded here. The queue below is where these meet the
+            # commands a robot-side skill writes directly, and recording at
+            # the one place both arrive is what keeps the table complete.
             for module_name, module_action in action.items():
                 self.action_queues[module_name].put(module_action)
                 StatusBoard.set(f"{module_name} Action Queue Size", self.action_queues[module_name].qsize())

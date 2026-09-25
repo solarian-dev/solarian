@@ -89,6 +89,8 @@ class FakeRobot(Robot):
         self.skills_status_buffer = None
         self._local_skills = {}
         self._stopping_skills = {}
+        # No cores to reserve: this robot has no encoder.
+        self._all_cores = []
 
     def control_loop(self):
         pass

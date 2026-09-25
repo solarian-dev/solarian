@@ -28,7 +28,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from solarian.core.action import Action, ActionType
+from solarian.core.action import ActionType
 from solarian.core.clock_sync import synced_time
 from solarian.core.observation import Observation
 from solarian.core.recording.schema import (
@@ -64,6 +64,12 @@ _ARROW_BY_DTYPE = {
 #: What an unset column holds, per numpy kind. NaN says "never sampled" for a
 #: float; ``-1`` is the equivalent for a frame index, since 0 is a real frame.
 _UNSET = {"f": math.nan, "i": -1, "b": False}
+
+#: Action types whose fields name an instant in the future rather than this
+#: one. A policy schedules seconds of motion in a single burst, so the value
+#: to record against a row is the waypoint that was due by then, not the last
+#: one the burst happened to contain.
+_SCHEDULED = frozenset({int(ActionType.SCHEDULE_L), int(ActionType.SCHEDULE_J)})
 
 
 class SessionRecorder:
@@ -131,6 +137,8 @@ class SessionRecorder:
         #: Most recent value of every column, so a row is complete even though
         #: only some modules advanced since the previous one.
         self._latest: dict[str, float] = {}
+        #: Scheduled waypoints not yet due, per column, oldest first.
+        self._pending: dict[str, list[tuple[float, float]]] = {}
         self._chunk_rows = 0
         self._total_rows = 0
         self._stats: dict[str, dict] = {}
@@ -204,6 +212,7 @@ class SessionRecorder:
         self._episode_task = task if task is not None else self.task
         self._episode_skill = skill
         self._latest = {}
+        self._pending = {}
         self._chunk_rows = 0
         self._total_rows = 0
         self._stats = {}
@@ -348,26 +357,66 @@ class SessionRecorder:
 
     # -- row assembly --------------------------------------------------------
 
-    def note_action(self, action: Action) -> None:
-        """Remember the action the robot actually received.
+    def note_module_action(self, module_name: str, module_action) -> None:
+        """Remember a command that reached *module_name*.
 
-        The robot's view is the one worth training on: the action path is
-        conflated end to end, so a command the controller sent but the robot
-        never received moved nothing and teaches a mapping that never happened.
+        Taken off the module's action queue rather than the message that
+        carried it, because that queue is the one point every producer
+        converges on: the controller through :meth:`Robot.process_action`,
+        and a skill running on the robot writing into it from its own
+        process. Recorded at the message instead, a policy rollout would be
+        stored with no actions at all.
+
+        The robot's view is also the one worth training on: the action path
+        is conflated end to end, so a command the controller sent but the
+        robot never received moved nothing and teaches a mapping that never
+        happened.
         """
-        if action.action_type != ActionType.MODULE_ACTION:
+        columns = self._act_columns.get(module_name)
+        if columns is None:
             return
+        action_type = int(module_action.action_type)
         with self._lock:
             if not self._recording:
                 return
-            for module_name, module_action in action.items():
-                columns = self._act_columns.get(module_name)
-                if columns is None:
+            if action_type == int(ActionType.CANCEL_TRAJECTORY):
+                # The author of those waypoints is gone and the module has
+                # thrown them away; a table that still plays them out would
+                # describe motion that never happened.
+                for column in columns.values():
+                    self._pending.pop(column, None)
+                return
+            for field_name, data in module_action.items():
+                column = columns.get(field_name)
+                if column is None:
                     continue
-                for field_name, data in module_action.items():
-                    column = columns.get(field_name)
-                    if column is not None:
-                        self._latest[column] = _as_float(data.value)
+                if action_type not in _SCHEDULED:
+                    self._latest[column] = _as_float(data.value)
+                    continue
+                due = float(data.timestamp)
+                waypoints = self._pending.setdefault(column, [])
+                # A new chunk replaces the unused tail of the last one, the
+                # same way the module's interpolator does.
+                while waypoints and waypoints[-1][0] >= due:
+                    waypoints.pop()
+                waypoints.append((due, _as_float(data.value)))
+
+    def _release_due_waypoints(self, now: float) -> None:
+        """Advance each scheduled column to the last waypoint whose time has come.
+
+        Several waypoints can fall inside one row's gap when the table is
+        slower than the schedule; the row records where the trajectory had
+        got to, which is the last of them, not the first.
+        """
+        for column, waypoints in self._pending.items():
+            n_due = 0
+            for due, _ in waypoints:
+                if due > now:
+                    break
+                n_due += 1
+            if n_due:
+                self._latest[column] = waypoints[n_due - 1][1]
+                del waypoints[:n_due]
 
     def write_row(self, observation: Observation) -> None:
         """Append one row for whichever modules just published.
@@ -412,6 +461,7 @@ class SessionRecorder:
                 return
 
             now = synced_time()
+            self._release_due_waypoints(now)
             self._latest["wall_ts"] = now
             self._latest["t"] = now - self._start_ts
 

@@ -213,7 +213,11 @@ class ModuleConfig(BaseModel):
     actuators: dict[str, ActuatorConfig] = {}
     sensors: dict[str, SensorConfig] = {}
 
-    receive_latency: float = 0.0  # latency in seconds for receiving data from sensors
+    #: Seconds between a reading being physically true and this module
+    #: stamping it, subtracted at the point of stamping in
+    #: ``update_observations`` so every consumer sees the corrected instant.
+    #: Measured by ``solarian calibrate-arm`` / ``calibrate-gripper``.
+    receive_latency: float = 0.0
 
     #: What this module does when the robot's action-link watchdog fires. See
     #: :class:`SafeState`.
@@ -231,6 +235,13 @@ class ModuleConfig(BaseModel):
     # # Interpolator settings
     interpolator_type: InterpolatorType = InterpolatorType.JOINT
     max_speed: float | list[float] = 1.0  # max speed for interpolation (single or per-joint)
+    #: Seconds between commanding a motion and the hardware performing it.
+    #: The mirror of :attr:`receive_latency`: that one moves a timestamp
+    #: backwards, this one moves a target time earlier, so a waypoint has to be
+    #: sent ``action_latency`` before it is due. Read by whoever schedules
+    #: waypoints rather than applied here, because the module cannot tell a
+    #: deadline it should anticipate from one it should hit exactly.
+    action_latency: float = 0.0
     #: Adaptive drive horizon bounds (seconds). Used by ``SERVO_*``
     #: (``servoL`` / ``servoJ`` / ``drive_to_waypoint``).
     drive_horizon_min_s: float = 1.0 / 30.0

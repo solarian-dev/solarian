@@ -23,7 +23,9 @@ Two classes are exposed:
 
 from typing import Dict, Any, List, Optional, Union
 from collections import deque
+import logging
 import numbers
+import time
 from multiprocessing.managers import SharedMemoryManager
 
 import msgpack
@@ -31,6 +33,13 @@ import numpy as np
 
 from solarian.utils.shared_memory.shared_memory_queue import SharedMemoryQueue, Empty, Full
 from solarian.core.action import Action, ActionType, ModuleAction
+
+logger = logging.getLogger(__name__)
+
+#: How often a producer may complain that the recorder is not draining its tap.
+#: A full tap is one warning per put otherwise, at the rate the module is
+#: commanded.
+_TAP_WARN_PERIOD_S = 5.0
 
 
 def flatten_dict(d: Dict[str, Any], parent_key: str = '', sep: str = '.') -> Dict[str, Any]:
@@ -188,6 +197,9 @@ class ModuleActionQueue:
     ):
         self.buffer_size = buffer_size
         self.max_params_bytes = int(max_params_bytes)
+        #: Second copy of every put, for the recorder. See :meth:`open_tap`.
+        self._tap: SharedMemoryQueue | None = None
+        self._tap_warn_at = 0.0
 
         if shm_manager is None or example_action is None:
             # No schema to size shared memory from: keep the actions as they
@@ -252,7 +264,42 @@ class ModuleActionQueue:
     def is_local(self) -> bool:
         """Whether this queue is in-process only and cannot cross a fork."""
         return isinstance(self._queue, _LocalActionRing)
-    
+
+    def open_tap(self, shm_manager: SharedMemoryManager) -> None:
+        """Start copying every put into a second queue, for the recorder.
+
+        The module consumes this queue, so nothing else can read it: what a
+        module took is gone before the recorder wakes. A tap is the only way
+        to record commands the robot's own process never handled — a skill
+        running on the robot puts straight in here from its own process,
+        never passing through ``Robot.process_action``.
+
+        This is the one point every producer converges on, whichever side of
+        the link it sits on and whichever process it runs in, so recording
+        here is what makes "every action was recorded" true rather than true
+        of the controller only.
+
+        Must be opened before any producer starts, because a copy of this
+        object is what crosses into their processes.
+        """
+        self._tap = SharedMemoryQueue.create_from_examples(
+            shm_manager=shm_manager,
+            examples=self._template_flat_dict,
+            buffer_size=self.buffer_size,
+        )
+
+    def drain_tap(self) -> List[ModuleAction]:
+        """Every action put since the last drain, oldest first."""
+        if self._tap is None or self._tap.empty():
+            return []
+        rows = self._tap.get_all()
+        n_items = len(rows[next(iter(rows))])
+        return [
+            self._flat_dict_to_action({key: values[i] for key, values in rows.items()})
+            for i in range(n_items)
+        ]
+
+
     def _action_to_flat_dict(self, action: ModuleAction) -> Dict[str, Union[np.ndarray, numbers.Number]]:
         """Convert a ModuleAction to a flattened dictionary.
 
@@ -365,7 +412,26 @@ class ModuleActionQueue:
         if self.is_local:
             self._queue.put(action)
             return
-        self._queue.put(self._action_to_flat_dict(action))
+        # Flattened once and written twice: the encode is the expensive half,
+        # and both queues hold the same schema.
+        flat = self._action_to_flat_dict(action)
+        self._queue.put(flat)
+        if self._tap is None:
+            return
+        try:
+            self._tap.put(flat)
+        except Full:
+            # Nothing is draining, so rows are being written without the
+            # commands that produced them. Never at the module's expense
+            # though: a dropped tap entry is a gap in the dataset, a blocked
+            # put is a gap in the control stream.
+            now = time.monotonic()
+            if now >= self._tap_warn_at:
+                self._tap_warn_at = now + _TAP_WARN_PERIOD_S
+                logger.warning(
+                    "Action tap is full; commands are going unrecorded. The "
+                    "robot's observation thread is not draining it."
+                )
     
     def get(self) -> ModuleAction:
         """

@@ -156,10 +156,8 @@ def _build_command_list() -> str:
         "onshape-export": "Utilities",
         "run-robot": "Robot",
         "calibrate": "Robot",
-        "calibrate-arm-latency": "Robot",
-        "calibrate-arm-speed": "Robot",
-        "calibrate-gripper-speed": "Robot",
-        "calibrate-gripper-latency": "Robot",
+        "calibrate-arm": "Robot",
+        "calibrate-gripper": "Robot",
         "calibrate-gripper-ranges": "Robot",
         "calibrate-camera-latency": "Robot",
         "calibrate-hand-eye": "Robot",
@@ -443,7 +441,14 @@ def main() -> None:
             setup_modules = CommandRegistry.get_setup_modules(subcommand)
             setup(modules=setup_modules)
 
-            cmd.handle(cfg)
+            try:
+                cmd.handle(cfg)
+            except KeyboardInterrupt:
+                # Ctrl+C is how every long-running command is meant to end, and
+                # commands that have shutdown work to do catch it themselves.
+                # One that arrives during that shutdown lands here instead, and
+                # a stack trace is a poor way to report a clean stop.
+                print()
         # except ValueError as e:
         #     # Handle configuration validation errors
         #     print(f"\n{colorama.Fore.RED}{str(e)}{colorama.Style.RESET_ALL}")

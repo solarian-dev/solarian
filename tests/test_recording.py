@@ -231,16 +231,12 @@ def _record_one_episode(session, sink, obs_cls, action_cls, clock, *, n_rows=20)
         with_image = i % 5 == 0
         if with_image:
             sink.write_frame(frame, t)
-        session.note_action(
-            action_cls(
-                action_type=ActionType.MODULE_ACTION,
-                data={
-                    "arm": {
-                        "action_type": int(ActionType.SERVO_J),
-                        "data": {"shoulder": {"value": float(i), "timestamp": t}},
-                    }
-                },
-            )
+        session.note_module_action(
+            "arm",
+            ModuleAction(
+                action_type=ActionType.SERVO_J,
+                data={"shoulder": {"value": float(i), "timestamp": t}},
+            ),
         )
         session.write_row(_observation(obs_cls, t=t, shoulder=float(i),
                                        with_image=with_image))
@@ -300,6 +296,120 @@ def test_the_action_recorded_is_the_one_the_robot_received(recorder, schema_clas
 
     table = pq.read_table(session.paths.episode_dir(0) / "episode.parquet")
     assert table.column("act.arm.shoulder").to_pylist()[:3] == [0.0, 1.0, 2.0]
+
+
+def _schedule(session, start, values, dt=0.1):
+    """Hand the recorder one chunk, a waypoint per module action."""
+    for i, value in enumerate(values):
+        session.note_module_action(
+            "arm",
+            ModuleAction(
+                action_type=ActionType.SCHEDULE_J,
+                data={"shoulder": {"value": float(value), "timestamp": start + i * dt}},
+            ),
+        )
+
+
+def _act_column(session, index=0):
+    table = pq.read_table(session.paths.episode_dir(index) / "episode.parquet")
+    return table.column("act.arm.shoulder").to_pylist()
+
+
+def test_a_scheduled_chunk_is_played_out_rather_than_collapsed(
+    recorder, schema_classes, clock
+):
+    """A policy schedules seconds of motion in one burst.
+
+    Taking the last waypoint of that burst would label every row with a pose
+    the arm will not reach for another second — an action that never
+    belonged to the observation beside it.
+    """
+    session, _ = recorder
+    obs_cls, _ = schema_classes
+    session.start_episode()
+    start = session._start_ts
+    _schedule(session, start, [0.0, 1.0, 2.0, 3.0])
+
+    for t in (start, start + 0.25):
+        clock["now"] = t
+        session.write_row(_observation(obs_cls, t=t, shoulder=9.0, with_image=False))
+    session.end_episode()
+
+    assert _act_column(session) == [0.0, 2.0]
+
+
+def test_a_new_chunk_replaces_the_tail_of_the_one_it_interrupts(
+    recorder, schema_classes, clock
+):
+    """The module's interpolator drops superseded waypoints; so must the table."""
+    session, _ = recorder
+    obs_cls, _ = schema_classes
+    session.start_episode()
+    start = session._start_ts
+    _schedule(session, start, [0.0, 1.0, 2.0, 3.0])
+    _schedule(session, start + 0.15, [99.0])
+
+    clock["now"] = start + 0.35
+    session.write_row(
+        _observation(obs_cls, t=clock["now"], shoulder=9.0, with_image=False)
+    )
+    session.end_episode()
+
+    assert _act_column(session) == [99.0]
+
+
+def test_cancelling_a_trajectory_forgets_the_waypoints_it_threw_away(
+    recorder, schema_classes, clock
+):
+    """A stopped skill leaves seconds of chunk behind that the arm never runs."""
+    session, _ = recorder
+    obs_cls, _ = schema_classes
+    session.start_episode()
+    start = session._start_ts
+    session.note_module_action(
+        "arm",
+        ModuleAction(
+            action_type=ActionType.SERVO_J,
+            data={"shoulder": {"value": 5.0, "timestamp": start}},
+        ),
+    )
+    _schedule(session, start, [0.0, 1.0, 2.0])
+    session.note_module_action(
+        "arm", ModuleAction(action_type=ActionType.CANCEL_TRAJECTORY, data={})
+    )
+
+    clock["now"] = start + 0.5
+    session.write_row(
+        _observation(obs_cls, t=clock["now"], shoulder=9.0, with_image=False)
+    )
+    session.end_episode()
+
+    assert _act_column(session) == [5.0]
+
+
+def test_a_streamed_command_is_recorded_the_moment_it_arrives(
+    recorder, schema_classes, clock
+):
+    """Only SCHEDULE_* names a future instant. Teleop means "now"."""
+    session, _ = recorder
+    obs_cls, _ = schema_classes
+    session.start_episode()
+    start = session._start_ts
+    session.note_module_action(
+        "arm",
+        ModuleAction(
+            action_type=ActionType.MOVE_J,
+            # A MOVE carries no target time, so Data stamps it on construction
+            # — which is a wall clock this test has moved away from.
+            data={"shoulder": {"value": 7.0, "timestamp": start + 10.0}},
+        ),
+    )
+
+    clock["now"] = start
+    session.write_row(_observation(obs_cls, t=start, shoulder=9.0, with_image=False))
+    session.end_episode()
+
+    assert _act_column(session) == [7.0]
 
 
 def test_episode_metadata_reports_quality_without_opening_the_data(
@@ -773,6 +883,100 @@ def test_the_encoder_yields_to_the_rest_of_the_robot():
     assert encoder > os.getpriority(os.PRIO_PROCESS, os.getpid())
 
 
+class _AffinityRobot(Robot):
+    """The episode-boundary handlers on a board with cores worth reserving."""
+
+    def __init__(self, cores):
+        self.recorder = SimpleNamespace(
+            is_recording=False,
+            episode_count=0,
+            end_episode=self._end,
+            drop_episode=self._end,
+            open_session=lambda name: None,
+            start_episode=self._start,
+        )
+        self._seal_thread = None
+        self._record_request = 0
+        self._all_cores = cores
+        self.modules = {"arm": SimpleNamespace(pid=11)}
+        self._local_skills = {"cup": SimpleNamespace(pid=22)}
+        self._bus_servers = [SimpleNamespace(pid=33)]
+
+    def _start(self, task=None, skill=None):
+        self.recorder.is_recording = True
+        return 0
+
+    def _end(self):
+        self.recorder.is_recording = False
+
+    def control_loop(self):
+        pass
+
+    def disconnect(self):
+        pass
+
+
+def _affinity_spy(monkeypatch):
+    seen: dict[int, set[int]] = {}
+    monkeypatch.setattr(
+        os,
+        "sched_setaffinity",
+        lambda pid, mask: seen.__setitem__(pid, set(mask)),
+        raising=False,
+    )
+    return seen
+
+
+def test_an_open_episode_keeps_everything_else_off_the_encoders_core(monkeypatch):
+    """The encoder confines itself to the last core; that only helps if alone.
+
+    Every other process on the board is free to be scheduled there otherwise,
+    and on this hardware the ones that would are the camera module and the
+    policy skill — the two the encoder must not be competing with.
+    """
+    seen = _affinity_spy(monkeypatch)
+    Robot._instance = None
+    robot = _AffinityRobot([0, 1, 2, 3])
+
+    robot.start_recording(SimpleNamespace(data={"request": 1}), 0.0)
+
+    assert seen == {os.getpid(): {0, 1, 2}, 11: {0, 1, 2}, 22: {0, 1, 2}, 33: {0, 1, 2}}
+
+
+def test_the_core_comes_back_once_the_encoder_has_drained(monkeypatch):
+    """An idle encoder must not hold a quarter of the board.
+
+    And it is not idle when recording stops — it is idle when the backlog
+    that recording left behind is on disk, which is what the seal waits for.
+    """
+    seen = _affinity_spy(monkeypatch)
+    Robot._instance = None
+    robot = _AffinityRobot([0, 1, 2, 3])
+    robot.start_recording(SimpleNamespace(data={"request": 1}), 0.0)
+    seen.clear()
+
+    robot.stop_recording(SimpleNamespace(data={"request": 2}), 0.0)
+    robot._await_seal()
+
+    assert seen == {
+        os.getpid(): {0, 1, 2, 3},
+        11: {0, 1, 2, 3},
+        22: {0, 1, 2, 3},
+        33: {0, 1, 2, 3},
+    }
+
+
+def test_a_board_too_small_to_spare_a_core_keeps_all_of_them(monkeypatch):
+    """Below three cores the control path loses more than the encoder gains."""
+    seen = _affinity_spy(monkeypatch)
+    Robot._instance = None
+    robot = _AffinityRobot([0, 1])
+
+    robot.start_recording(SimpleNamespace(data={"request": 1}), 0.0)
+
+    assert seen == {}
+
+
 class _SealRobot(Robot):
     """The episode-boundary handlers only: no zmq, no modules, no encoders."""
 
@@ -785,6 +989,8 @@ class _SealRobot(Robot):
         )
         self._seal_thread = None
         self._record_request = 0
+        # No cores to reserve: this robot has no encoder and no children.
+        self._all_cores = []
 
     def control_loop(self):
         pass
@@ -955,8 +1161,13 @@ def test_an_archive_larger_than_the_observation_still_comes_off_the_capture():
     assert observation.shape == (224, 224, 3)
 
 
-def test_an_age_the_hardware_measured_beats_the_one_config_guessed():
-    """A constant cannot track a delay that varies by half a frame interval."""
+def test_a_measured_age_and_the_configured_one_are_added_not_chosen_between():
+    """They are different stages, so preferring one drops what it never saw.
+
+    The hardware dates the exposure; the constant covers ISP, transfer and
+    publish after it. Taking the larger, or the measured, silently discards the
+    rest -- on a Pi 5 the sensor age is ~40 ms of a ~150 ms pipeline.
+    """
     bus = _FakeCameraBus(port="cam0", components={})
     bus.capture_latency = 0.25
     bus.measured_capture_age = 0.04
@@ -964,7 +1175,7 @@ def test_an_age_the_hardware_measured_beats_the_one_config_guessed():
     before = synced_time()
     stamp = bus.archive_capture("camera", np.zeros((8, 8, 3), np.uint8), _camera_cfg())
 
-    assert stamp == pytest.approx(before - 0.04, abs=1e-2)
+    assert stamp == pytest.approx(before - 0.29, abs=1e-2)
 
 
 def test_receive_latency_is_subtracted_from_the_capture_stamp():

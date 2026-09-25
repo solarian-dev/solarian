@@ -38,6 +38,7 @@ from solarian.cli.commands._calibration import (
     _opencv_bgr,
     module_running,
     pick_module,
+    save_module_field,
 )
 from solarian.core.camera import Camera
 from solarian.core.clock_sync import sync_with_server, synced_time
@@ -257,9 +258,13 @@ def _run_capture(
     try:
         while len(first_recv) < n_frames:
             frame = module.read_sensors(ImageData, [sensor_name])[sensor_name]["value"]
-            # Same stamp Module.update_observations writes, so the number we report
-            # compensates the same quantity the skill subtracts.
-            t_recv = synced_time()
+            # Same stamp Module.update_observations writes, and it is already
+            # backdated by whatever the bus knew -- so what this measures is the
+            # error left in it, and the result corrects the current
+            # receive_latency rather than replacing it.
+            t_recv = module.module_bus.capture_timestamps.get(
+                sensor_name, synced_time() - module.cfg.receive_latency
+            )
             n_read += 1
             last_frame = frame
             t_display = _decode_qr(detectors, frame)
@@ -335,8 +340,8 @@ def _run_capture(
         np.array([r - d for d, r in first_recv.items()]) - l_display - l_hold
     )
     print(
-        "\n=== camera_obs_latency "
-        "(l_camera = t_recv - t_display - l_display - l_hold) ==="
+        "\n=== camera receive_latency residual "
+        "(l_residual = t_stamp - t_display - l_display - l_hold) ==="
     )
     print(f"  frames read:      {n_read}")
     print(f"  frames decoded:   {n_decoded} ({n_decoded / max(n_read, 1):.0%})")
@@ -352,7 +357,6 @@ def _run_capture(
         f"min {latencies.min() * 1000.0:.1f} ms, "
         f"max {latencies.max() * 1000.0:.1f} ms"
     )
-    print(f"\n  camera_obs_latency: {latencies.mean():.4f}")
     if sightings < 1.5:
         print(
             f"\nEach QR was decoded about once ({n_read / max(n_decoded, 1):.0f} "
@@ -361,13 +365,26 @@ def _run_capture(
             "spread above. Decoding faster than the display updates would shrink "
             "the correction and tighten the result."
         )
+    corrected = module.cfg.receive_latency + float(latencies.mean())
+    print(f"  receive_latency:  {module.cfg.receive_latency:.4f} -> {corrected:.4f} s")
     print(
         "\nThis anchors every action timestamp in a UMI chunk, so an over-estimate "
         "backdates the whole chunk and the first waypoints land in the past.\n"
-        "Note: picamera2 exposes capture_metadata()['SensorTimestamp'], the "
-        "exposure instant. Stamping frames with that instead of publish time "
-        "would shrink most of this number."
+        "A residual near zero means the stamp already names the exposure and the "
+        "constant is doing its job; re-run after any change to the capture path."
     )
+    if corrected < 0.0:
+        # The residual may be either sign -- it corrects an over-estimate as
+        # readily as an under-estimate -- but the total cannot be: a frame
+        # cannot be stamped before the screen drew what it shows. So the two
+        # machines disagree about the time, and writing it would backdate every
+        # chunk by a clock error.
+        print(
+            "\nNegative total, which is not physical, so nothing was written. "
+            "Check that both roles are synced to the same relay clock."
+        )
+    else:
+        save_module_field(module, "receive_latency", round(corrected, 4))
 
     if plot:
         from matplotlib import pyplot as plt
@@ -384,12 +401,19 @@ def _run_capture(
 
 @CommandRegistry.register("calibrate-camera-latency", "robot")
 class CalibrateCameraLatencyCommand(BaseCommand):
-    help = "Measure camera_obs_latency by filming a timestamp QR code (UMI method)."
+    help = "Measure the camera's receive_latency by filming a timestamp QR code (UMI method)."
     description = """
     UMI's method: one machine displays a QR code encoding the instant it was drawn,
     the other films that screen, and the gap between the decoded instant and the
     instant the pipeline stamped the frame is the camera's observation latency.
-    Prints camera_obs_latency for the camera module's yaml; nothing is written.
+    Added to the camera module's yaml receive_latency, which the module then
+    subtracts as it stamps every frame.
+
+    It corrects rather than replaces, because the stamp it reads is the one the
+    module publishes and that is already backdated. Where the hardware dates its
+    own frames the constant only has to cover the stages after the sensor, so
+    the honest number is whatever error is left over -- and it converges, since
+    a correctly set constant measures zero.
 
     Two invocations, one per role, because the camera is usually on the robot and
     the screen on a laptop:

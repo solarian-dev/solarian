@@ -1,14 +1,14 @@
 export const metadata = {
   title: 'Latency & Synchronization',
   description:
-    'How UMI-style skills compensate for sensing and actuation delay: the five latency parameters, which direction each one corrects, why the camera is the master clock, and how to measure every value on your own hardware with calibrate-arm-latency, calibrate-gripper-latency and calibrate-camera-latency.',
+    'How UMI-style skills compensate for sensing and actuation delay: the five latency parameters, which direction each one corrects, why the camera is the master clock, and how to measure every value on your own hardware with calibrate-arm, calibrate-gripper and calibrate-camera-latency.',
 }
 
 # Latency & Synchronization
 
 A robot never sees the present. The frame a policy looks at was true a moment ago, and the command it produces will land a moment from now. Latency compensation is how a [Skill](/docs/skills) puts those two moments back in the relationship the policy was trained on. Get the numbers wrong and the robot reaches for where the cup *was*, or arrives where the cup *will be* before it gets there. {{ className: 'lead' }}
 
-This page describes the UMI ([Universal Manipulation Interface](https://umi-gripper.github.io/)) compensation scheme as Solarian implements it, and how to measure every parameter with the `calibrate-*-latency` [commands](/docs/commands).
+This page describes the UMI ([Universal Manipulation Interface](https://umi-gripper.github.io/)) compensation scheme as Solarian implements it, and how to measure every parameter with the `calibrate-arm`, `calibrate-gripper` and `calibrate-camera-latency` [commands](/docs/commands).
 
 ## The problem
 
@@ -23,43 +23,41 @@ Compensation exists to **reproduce the training-time relationship**, not to make
 
 ## The five parameters
 
-A UMI skill config carries one latency per modality per direction. From [`conf/cup_arrange.yaml`](https://github.com/solarian-dev/solarian/blob/main/projects/so106/conf/cup_arrange.yaml):
+Five physical delays: one observation and one action latency for the arm and the gripper, plus the camera's observation latency. Each lives in the yaml of the module it describes, because that is what it is a property of — a command-to-motion delay is set by the module's `frequency` and its servo, and no checkpoint changes it. Two keys carry all five, and they are the same two on every module:
 
 ```yaml
-camera_obs_latency: 0.194
+# conf/right_arm.yaml
+receive_latency: 0.005075
+action_latency: 0.112
+```
 
-arms:
-  - arm_obs_latency: 0.000124
-    arm_action_latency: 0.12
+```yaml
+# conf/right_gripper.yaml
+receive_latency: 0.001073
+action_latency: 0.042
+```
 
-grippers:
-  - gripper_obs_latency: 0.01
-    gripper_action_latency: 0.132
+```yaml
+# conf/right_wrist_camera.yaml
+receive_latency: 0.149
 ```
 
 <Properties>
-  <Property name="camera_obs_latency" type="float (s)">
-    Exposure to the moment <code>update_observations</code> stamps the frame: sensor readout, ISP, transfer, colour conversion, optical remap, publish. The largest and most variable of the five.
+  <Property name="receive_latency" type="float (s)">
+    How long before the stamp the reading was physically true. On a camera that is exposure to publish: sensor readout, ISP, transfer, colour conversion, optical remap — the largest and most variable of the five. On an arm or gripper it is a bus round trip, plus forward kinematics for the arm. Subtracted by the module itself, in <code>update_observations</code>, so every consumer sees the corrected instant.
   </Property>
-  <Property name="arm_obs_latency" type="float (s)">
-    Bus round trip for a joint position read plus forward kinematics. On a Feetech serial bus this is a real read duration, not a poll off a streaming interface.
-  </Property>
-  <Property name="gripper_obs_latency" type="float (s)">
-    Same, for the gripper's aperture read.
-  </Property>
-  <Property name="arm_action_latency" type="float (s)">
-    Waypoint scheduling to the end-effector actually being at the commanded pose: queue hop, interpolator, IK, bus write, servo response.
-  </Property>
-  <Property name="gripper_action_latency" type="float (s)">
-    Same, for the jaws reaching a commanded aperture.
+  <Property name="action_latency" type="float (s)">
+    Waypoint scheduling to the hardware actually being there: queue hop, interpolator, IK, bus write, servo response. Applied by whoever schedules the waypoint, not by the module, because a module cannot tell a deadline it should anticipate from one it should hit exactly. Cameras do not have one.
   </Property>
 </Properties>
+
+UMI carried all five in the eval config instead, next to the checkpoint. Solarian did too until these numbers turned out to be exactly the kind that get copied between rigs: keeping them on the module means a second policy skill inherits the measurement rather than needing its own copy, and the recorder gets the corrected timestamps as well, which a skill-local value could never give it.
 
 **The two kinds correct in opposite directions, and they are not interchangeable.**
 
 An **observation latency** moves a timestamp *backwards*. The value we just read was physically true earlier than the instant we stamped it, so we subtract the delay to recover when it was true.
 
-An **action latency** moves a target time *earlier*. If we want the arm to be somewhere at `t`, we have to ask for it at `t - arm_action_latency` so the pipeline delay is spent before the deadline rather than after it.
+An **action latency** moves a target time *earlier*. If we want the arm to be somewhere at `t`, we have to ask for it at `t - action_latency` so the pipeline delay is spent before the deadline rather than after it.
 
 Conflating them is the single easiest mistake here: they have the same units, similar magnitudes, and the same modality names, but adding one where the other belongs doubles the error instead of cancelling it.
 
@@ -70,13 +68,13 @@ flowchart TD
     subgraph obs [Observation path]
         cap["Sensor read / frame capture"] --> stamp["Module.update_observations<br/>t = synced_time() - cfg.receive_latency"]
         stamp --> buf["ObservationBuffer"]
-        buf --> skill["get_umi_obs<br/>t -= camera/arm/gripper_obs_latency"]
+        buf --> skill["get_umi_obs<br/>stamps already backdated"]
         skill --> align["Resample arm + gripper onto<br/>the camera timestamp grid"]
     end
     align --> infer["Policy inference"]
     infer --> chunk["action_timestamps =<br/>obs_timestamps[-1] + k * dt_execution"]
     subgraph act [Action path]
-        chunk --> comp["exec_actions<br/>target_time -= arm/gripper_action_latency"]
+        chunk --> comp["exec_actions<br/>target_time -= arm/gripper cfg.action_latency"]
         comp --> sched["ArmModule.scheduleL<br/>GripperModule.scheduleJ"]
     end
 ```
@@ -89,12 +87,12 @@ sensor_data[sensor_name]['timestamp'] = synced_time() - self.cfg.receive_latency
 
 `synced_time()` is wall time on the relay server's clock (see [`clock_sync.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/clock_sync.py)), so a camera on a Raspberry Pi and an arm on a laptop produce timestamps that can be subtracted from one another. This matters more than it sounds: without it, an OS clock disagreement of 80 ms is indistinguishable from 80 ms of camera latency, and the compensation would be tuned to absorb a clock error.
 
-The skill then backdates each modality by its own obs latency and resamples everything onto one grid:
+Because the correction happens there, the skill subtracts nothing and only resamples everything onto one grid:
 
 ```python
-cam_ts  = camera_timestamps  - self.camera_obs_latency
-arm_ts  = arm_timestamps     - self.arm_obs_latency
-grip_ts = gripper_timestamps - self.gripper_obs_latency
+cam_ts  = camera_timestamps   # already backdated by the module
+arm_ts  = arm_timestamps
+grip_ts = gripper_timestamps
 
 last_timestamp = float(cam_ts[-1])
 ```
@@ -109,7 +107,7 @@ The camera gets to define "now" for three reasons:
 2. It is the policy's only exteroceptive input. Everything the policy knows about the cup comes from that frame, so the frame's instant is the only one the scene is described at.
 3. Proprioception is cheap to move in time. Joint positions are smooth and densely sampled, so interpolating them to the camera's instant costs almost nothing, whereas interpolating an image would be meaningless.
 
-The consequence is that `camera_obs_latency` is not one parameter among five. It is the anchor the whole chunk hangs from, and an error in it propagates into every action timestamp.
+The consequence is that the camera's `receive_latency` is not one parameter among five. It is the anchor the whole chunk hangs from, and an error in it propagates into every action timestamp.
 
 ## The action path
 
@@ -120,13 +118,13 @@ dt_execution = self.policy_dt * self.execution_speed_scale
 action_timestamps = np.arange(1, len(poses) + 1) * dt_execution + obs_timestamps[-1]
 ```
 
-Note the anchor: `obs_timestamps[-1]`, which *is* the backdated camera timestamp. The chunk is scheduled relative to when the scene was true, not relative to now. That is correct — the policy's k-th action means "`k * dt` after the moment shown in this image" — but it means the whole chunk starts out `camera_obs_latency + inference_time` in the past, and only the waypoints beyond that are still schedulable.
+Note the anchor: `obs_timestamps[-1]`, which *is* the backdated camera timestamp. The chunk is scheduled relative to when the scene was true, not relative to now. That is correct — the policy's k-th action means "`k * dt` after the moment shown in this image" — but it means the whole chunk starts out the camera's `receive_latency` plus the inference time in the past, and only the waypoints beyond that are still schedulable.
 
 Then `exec_actions` applies the action latencies, per modality:
 
 ```python
-arm_target_time  = ts - self.arm_action_latency
-grip_target_time = ts - self.gripper_action_latency
+arm_target_time  = ts - self.arm_action_latency      # right_arm.yaml
+grip_target_time = ts - self.gripper_action_latency  # right_gripper.yaml
 ```
 
 The arm and gripper get **different** target times for the same predicted step, deliberately: the jaws and the end-effector have different pipelines, so hitting the same physical instant requires sending each one at its own lead time.
@@ -139,7 +137,7 @@ Module 'right_arm': clamping late SCHEDULE_L (183.4 ms late)
 
 Those log lines are the symptom to watch for. A clamped waypoint is a step of the trajectory compressed into one control period — the smooth descent the policy planned becomes a jerk.
 
-## Why an over-estimated `camera_obs_latency` breaks grasping
+## Why an over-estimated camera `receive_latency` breaks grasping
 
 Suppose the true camera latency is 40 ms but the config says 194 ms, copied from a UMI rig. Then:
 
@@ -154,7 +152,9 @@ The general rule: **an obs latency that is too large makes the robot act on a st
 
 ## Measuring each value on your hardware
 
-The values shipped in `cup_arrange.yaml` came from UMI's `example/eval_robots_config.yaml`, which describes a UR5 over RTDE, a WSG gripper, and a GoPro through an Elgato HDMI capture card. **They are a placeholder, not a default.** Nothing about a Feetech serial bus and a Pi CSI camera resembles that rig.
+The values Solarian once shipped came from UMI's `example/eval_robots_config.yaml`, which describes a UR5 over RTDE, a WSG gripper, and a GoPro through an Elgato HDMI capture card. **They are a placeholder, not a default.** Nothing about a Feetech serial bus and a Pi CSI camera resembles that rig.
+
+Each command writes its result into `conf/<module>.yaml` as it measures it, so there is nothing to copy by hand. A figure that is not a measurement is not written: a speed the hardware never fell behind is only a lower bound, and a negative latency means the sweep did not track.
 
 ### Where to run these
 
@@ -169,7 +169,7 @@ You *can* run both roles on the robot if it has a screen attached: the display r
 
 The commands search both your `Robot` and your `Controller` class for a matching module, so a gripper mounted on a leader arm is found too. A half that cannot be imported is skipped with a message rather than failing the command — a robot machine is not expected to have controller-side plugins installed, which is exactly what `setup_modules` exists to avoid.
 
-### `camera_obs_latency`
+### The camera's `receive_latency`
 
 ```bash
 # on the machine with a monitor
@@ -199,18 +199,18 @@ Watch the `sightings per QR` figure in the output. When it is comfortably above 
 
 `monitor_hz` is optional on the display role, where it only paces the redraw (default 60). Refreshing faster than the panel presents buys nothing and costs a core. On exit that role also reports its mean encode-and-draw time: the QR is stamped before it is encoded, so that time lands inside whatever the capture side measures. A couple of milliseconds is noise; a large share of the result means the screen is on too slow a machine.
 
-### `arm_action_latency` and `gripper_action_latency`
+### `action_latency` on the arm and the gripper
 
 ```bash
-solarian calibrate-arm-latency          # then pick mode 1 (action)
-solarian calibrate-gripper-latency      # then pick mode 1 (action)
+solarian calibrate-arm          # mode 1 (all), or mode 3 for this alone
+solarian calibrate-gripper      # mode 1 (all), or mode 3 for this alone
 ```
 
 Both work by cross-correlation, ported from UMI's `calibrate_gripper_latency.py`. The module is commanded a sinusoid of timestamped waypoints; the measured position is recorded alongside; [`get_latency`](https://github.com/solarian-dev/solarian/blob/main/solarian/utils/latency.py) resamples both onto a common grid, z-scores them, and finds the lag that maximises correlation. That lag is the end-to-end command-to-motion delay.
 
 The arm version sweeps one Cartesian axis (`axis=z` by default, `amplitude=0.02` metres, `freq=1.25` Hz) and returns to its start afterwards. It refuses to run if the sinusoid's peak velocity `2 * pi * f * amplitude` would exceed the module's `max_speed`: `PoseTrajectoryInterpolator` stretches any waypoint it cannot reach in time, so a too-fast sweep measures the speed limit instead of the pipeline. That check runs before the hardware is opened, so a bad amplitude costs you nothing.
 
-This makes `max_speed` a prerequisite rather than a detail. Measure it first with [`calibrate-arm-speed`](/docs/commands#calibrate-arm-speed) and [`calibrate-gripper-speed`](/docs/commands#calibrate-gripper-speed) — a guessed limit that is too low silently caps every sweep the latency calibration then runs against it. See [Why the speed limit matters](#why-the-speed-limit-matters) below.
+This makes `max_speed` a prerequisite rather than a detail: a guessed limit that is too low silently caps every sweep the latency measurement then runs against it. That ordering is why both commands have an `all` mode — it measures the speed first and sizes the sweep from the result, so the two numbers cannot disagree about the same hardware. See [Why the speed limit matters](#why-the-speed-limit-matters) below.
 
 You choose where the sweep happens. The command records where the arm started, hands it to you, and puts it back at the end:
 
@@ -232,14 +232,14 @@ Do not lower `freq` further than you have to. Cross-correlating a narrowband sig
 
 Both commands drive the module through `scheduleL` / `scheduleJ`, which honor the stamped times rather than collapsing into "drive to the latest target now".
 
-### `arm_obs_latency` and `gripper_obs_latency`
+### `receive_latency` on the arm and the gripper
 
 ```bash
-solarian calibrate-arm-latency          # then pick mode 2 (obs)
-solarian calibrate-gripper-latency      # then pick mode 2 (obs)
+solarian calibrate-arm          # mode 1 (all), or mode 4 for this alone
+solarian calibrate-gripper      # mode 1 (all), or mode 4 for this alone
 ```
 
-There is no cross-correlation to run here, and no external reference to correlate against. `update_observations` stamps `synced_time()` *after* the read returns, so the reading it stamps was physically true roughly one read-duration earlier. Mode 2 times a few hundred reads and reports the mean.
+There is no cross-correlation to run here, and no external reference to correlate against. `update_observations` stamps `synced_time()` *after* the read returns, so the reading it stamps was physically true roughly one read-duration earlier. The obs mode times a few hundred reads and reports the mean. It is the only mode that commands no motion.
 
 Expect single-digit milliseconds for a Feetech serial round trip. UMI's `0.000124` is not a comparable number: their UR5 pulls the latest sample off a 500 Hz RTDE stream, so their "read" is a memory access, not a bus transaction.
 
@@ -262,34 +262,43 @@ The pose is kept exactly; what changes is when it is due. Every guarantee on thi
 
 It also accumulates. `end_time` is `max(last_waypoint_time, curr_time)` where `last_waypoint_time` is the already-stretched value, so a chunk that is systematically too fast does not settle at a fixed offset — each waypoint queues behind the previous stretched one and the arm falls further behind. When the next chunk arrives with timestamps earlier than `last_waypoint_time` the plan resets to `curr_time` and the stretched tail is discarded. Lag, then snap.
 
-Removing the limit does not help, because the hardware's limit exists either way — `max_speed` is only your model of it. Without it the interpolator emits a path the servos cannot track, and the discrepancy moves from something visible in the commanded timestamps to invisible tracking error. Set it below the truth and you manufacture the lag above; set it above and you get silent tracking error. Measure it: [`calibrate-arm-speed`](/docs/commands#calibrate-arm-speed) and [`calibrate-gripper-speed`](/docs/commands#calibrate-gripper-speed).
+Removing the limit does not help, because the hardware's limit exists either way — `max_speed` is only your model of it. Without it the interpolator emits a path the servos cannot track, and the discrepancy moves from something visible in the commanded timestamps to invisible tracking error. Set it below the truth and you manufacture the lag above; set it above and you get silent tracking error. Measure it: [`calibrate-arm`](/docs/commands#calibrate-arm) and [`calibrate-gripper`](/docs/commands#calibrate-gripper).
 
-## `receive_latency` versus `*_obs_latency`
+## Why the module, and not the skill
 
-Two places can correct the same delay:
+Solarian used to carry all five values in the skill config, the way UMI does, on the argument that a latency figure only means something next to the policy it was measured for. That was wrong, and the reason is worth keeping.
 
-- `ModuleConfig.receive_latency`, subtracted at the point of stamping in `update_observations`, and applied to every consumer of that module.
-- The skill's `camera_obs_latency` / `arm_obs_latency` / `gripper_obs_latency`, subtracted inside the skill.
+A command-to-motion delay is set by the module's `frequency` and its servo's response. A read duration is set by the bus. Neither changes when you swap the checkpoint, so "review it when the checkpoint changes" was reviewing the wrong thing — while a second policy skill on the same robot would have needed its own copy of numbers that describe hardware both of them drive.
 
-They compensate the same physical quantity. `receive_latency` defaults to `0.0` and is unset in every so106 module yaml, so nothing is double-counted today — but the overlap is a trap worth stating explicitly.
+There was also a live trap. `ModuleConfig.receive_latency` has always existed and has always been subtracted at the point of stamping; the skill's `*_obs_latency` subtracted the same physical quantity again, further downstream. Both defaulting to something harmless is not the same as them being safe, and the two were one edit away from double-counting. There is now one key for that delay, on the module, and the skill subtracts nothing.
 
-**Keep the correction in one place, and prefer the skill's config** for modules a UMI skill reads. The reason is that a latency figure only means something next to the policy it was measured for: the numbers live beside the checkpoint that assumes them, and are reviewed when the checkpoint changes. Set `receive_latency` only for modules with a genuinely known, consumer-independent transport delay — and if you do, remember to take it back out of the skill's value.
+The dividing line that replaced it: **does the number describe the hardware, or the task?** `receive_latency`, `action_latency` and `max_speed` describe hardware and live on the module. The table height in `height_threshold`, the collision sphere, `execution_speed_scale` — those describe this task and this checkpoint, and stay in the skill config.
+
+One consequence worth stating: because the module applies `receive_latency` at the stamp, the corrected timestamp reaches *every* consumer, including the recorder. Episodes are dated by when a reading was true rather than when it was published, which is what makes them comparable across machines — and a skill-local value could never have done that.
 
 ## What to expect on real hardware
 
-| Parameter | UMI published (UR5 / WSG / GoPro) | Order of magnitude on an SO-106 rig |
+| Module and key | UMI published (UR5 / WSG / GoPro) | Order of magnitude on an SO-106 rig |
 | --- | --- | --- |
-| `camera_obs_latency` | 0.194 | Tens of ms — a CSI sensor is not an HDMI capture card |
-| `arm_obs_latency` | 0.000124 | A few ms — one serial round trip, not an RTDE poll |
-| `gripper_obs_latency` | 0.01 | A few ms — same bus as the arm |
-| `arm_action_latency` | 0.12 | Measure it — depends on module `frequency` and servo response |
-| `gripper_action_latency` | 0.132 | Measure it — typically larger than the arm's, the jaws are slower |
+| camera `receive_latency` | 0.194 | Tens of ms — a CSI sensor is not an HDMI capture card |
+| arm `receive_latency` | 0.000124 | A few ms — one serial round trip, not an RTDE poll |
+| gripper `receive_latency` | 0.01 | A few ms — same bus as the arm |
+| arm `action_latency` | 0.12 | Measure it — depends on module `frequency` and servo response |
+| gripper `action_latency` | 0.132 | Measure it — and measure `max_speed` first, or a sweep the jaws cannot follow reports the speed cap instead |
 
 The third column is a sanity check on your measurement, not a value to copy. Copying is what produced the problem this page exists to prevent.
 
-### A structural fix worth knowing about
+### What the camera's constant actually covers
 
-[`picamera_bus.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/picamera_bus.py) calls `capture_array` and discards the frame metadata, so our frame timestamp is the publish time and `camera_obs_latency` has to absorb the entire pipeline. picamera2 also exposes `capture_metadata()["SensorTimestamp"]` — the exposure instant, in `CLOCK_BOOTTIME` nanoseconds. Stamping frames from that instead would move most of this delay out of a hand-tuned constant and into a measured one, shrinking `camera_obs_latency` toward zero. It is not wired up today.
+[`picamera_bus.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/picamera_bus.py) reads `SensorTimestamp` — the instant the sensor's first row was exposed, in `CLOCK_BOOTTIME` nanoseconds — and publishes it as `measured_capture_age`. That number is exact and evenly spaced, which matters as much for [recording coverage](/docs/recording) as for latency, because a stamp that jitters by half a frame interval puts two captures in one grid slot and leaves the next empty.
+
+It does not cover everything. On a Pi 5 the sensor age reads about 40 ms against a QR-measured pipeline of about 150 ms, so ISP, transfer and publish account for the rest. The camera's `receive_latency` covers that remainder and the bus **adds** the two:
+
+```python
+age = self.capture_latency + (0.0 if measured is None else measured)
+```
+
+Treating them as alternatives instead silently discards whichever part the surviving term did not measure. Because `calibrate-camera-latency` reads the stamp the module publishes rather than the raw clock, what it measures is the error left in that stamp — so it corrects `receive_latency` rather than replacing it, and a correctly set constant measures zero.
 
 ## Verifying the result
 
@@ -301,7 +310,7 @@ After setting measured values, two things should change.
 Scheduled 16 waypoints (16 in the future)
 ```
 
-With correct latencies that count should be the full chunk, or very close. If it reads `(9 in the future)`, the anchor is too far in the past — either `camera_obs_latency` is over-estimated or inference is slower than the lookahead.
+With correct latencies that count should be the full chunk, or very close. If it reads `(9 in the future)`, the anchor is too far in the past — either the camera's `receive_latency` is over-estimated or inference is slower than the lookahead.
 
 And the arm module should stop logging clamped waypoints:
 

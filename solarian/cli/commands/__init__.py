@@ -58,30 +58,16 @@ CommandRegistry.register_lazy(
     setup_modules=("robot", "observation", "action"),
 )
 CommandRegistry.register_lazy(
-    "calibrate-arm-latency",
-    module_path=f"{_pkg}.calibrate_arm_latency",
-    help="Measure arm action latency (Cartesian sinusoid) or observation latency (read timing).",
+    "calibrate-arm",
+    module_path=f"{_pkg}.calibrate_arm",
+    help="Measure the arm's max_speed and its two latencies, into the module yaml.",
     config_name="robot",
     setup_modules=("robot",),
 )
 CommandRegistry.register_lazy(
-    "calibrate-gripper-latency",
-    module_path=f"{_pkg}.calibrate_gripper_latency",
-    help="Measure gripper action latency (sinusoid) or observation latency (read timing).",
-    config_name="robot",
-    setup_modules=("robot",),
-)
-CommandRegistry.register_lazy(
-    "calibrate-arm-speed",
-    module_path=f"{_pkg}.calibrate_arm_speed",
-    help="Measure the Cartesian speed the arm sustains across the workspace, for max_speed.",
-    config_name="robot",
-    setup_modules=("robot",),
-)
-CommandRegistry.register_lazy(
-    "calibrate-gripper-speed",
-    module_path=f"{_pkg}.calibrate_gripper_speed",
-    help="Measure the aperture speed the gripper sustains, for max_speed.",
+    "calibrate-gripper",
+    module_path=f"{_pkg}.calibrate_gripper",
+    help="Measure the gripper's max_speed and its two latencies, into the module yaml.",
     config_name="robot",
     setup_modules=("robot",),
 )
@@ -95,7 +81,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "calibrate-camera-latency",
     module_path=f"{_pkg}.calibrate_camera_latency",
-    help="Measure camera_obs_latency by filming a timestamp QR code (UMI method).",
+    help="Measure the camera's receive_latency by filming a timestamp QR code (UMI method).",
     config_name="robot",
     setup_modules=("robot",),
 )

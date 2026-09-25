@@ -14,6 +14,7 @@ the serial I/O itself (~1-2 ms).
 
 from __future__ import annotations
 
+import signal
 import time
 import logging
 import traceback as _tb
@@ -75,6 +76,10 @@ class BusServer(Process):
     def run(self):
         from solarian.utils import setup_process_logging
 
+        # Ctrl+C reaches this process too, and acting on it would drop the
+        # serial port while modules are still reading through it. The
+        # shutdown sentinel on the connection is the only stop it answers to.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         setup_process_logging(logger_name=None, log_queue=self._log_queue, install_fallback=False)
         bus = None
 

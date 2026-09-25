@@ -190,3 +190,66 @@ def test_params_too_big_for_the_slot_say_so(action_cls):
 
         with pytest.raises(ValueError, match="max_params_bytes"):
             queue.put(action)
+
+
+# --- the recorder's tap ----------------------------------------------------
+
+
+@needs_shared_memory
+def test_the_tap_sees_a_command_the_robot_process_never_handled(action_cls):
+    """A skill on the robot puts straight in here from its own process.
+
+    Recording where the message arrived instead would store a policy
+    rollout with no actions at all.
+    """
+    with SharedMemoryManager() as shm_manager:
+        queue = _shm_queue(shm_manager, action_cls)
+        queue.open_tap(shm_manager)
+
+        queue.put(_waypoint(action_cls, 1.5))
+
+        tapped = queue.drain_tap()
+        assert [a.joint.value for a in tapped] == [pytest.approx(1.5)]
+        # And the module still gets it: a tap is a copy, not a diversion.
+        assert queue.get().joint.value == pytest.approx(1.5)
+
+
+@needs_shared_memory
+def test_draining_the_tap_twice_does_not_record_the_same_command_twice(action_cls):
+    with SharedMemoryManager() as shm_manager:
+        queue = _shm_queue(shm_manager, action_cls)
+        queue.open_tap(shm_manager)
+        queue.put(_waypoint(action_cls, 1.5))
+
+        assert len(queue.drain_tap()) == 1
+        assert queue.drain_tap() == []
+
+
+@needs_shared_memory
+def test_a_queue_with_no_tap_records_nothing_and_still_works(action_cls):
+    """Recording disabled is the default; it must cost the action path nothing."""
+    with SharedMemoryManager() as shm_manager:
+        queue = _shm_queue(shm_manager, action_cls)
+
+        queue.put(_waypoint(action_cls, 1.5))
+
+        assert queue.drain_tap() == []
+        assert queue.get().joint.value == pytest.approx(1.5)
+
+
+@needs_shared_memory
+def test_a_full_tap_never_blocks_the_module(action_cls):
+    """A gap in the dataset is recoverable; a stalled control stream is not."""
+    with SharedMemoryManager() as shm_manager:
+        queue = _shm_queue(shm_manager, action_cls)
+        queue.open_tap(shm_manager)
+
+        for value in range(16):
+            queue.put(_waypoint(action_cls, float(value)))
+            # The module keeps up; the recorder is what stopped draining.
+            queue.get()
+
+        # The tap holds what it can and drops the rest rather than refusing
+        # the put that would have reached the module.
+        assert len(queue.drain_tap()) == 8
+        assert queue.empty()

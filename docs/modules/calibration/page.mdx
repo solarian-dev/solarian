@@ -128,11 +128,13 @@ The MuJoCo `jnt_range` must equal the real hard-stop angles. Continuous joints s
 
 ## Calibrate Latencies
 
-A UMI skill needs observation and action delays measured on **this** hardware. Stop `run-robot`. Full scheme: [Latency & Synchronization](/docs/latency).
+A UMI skill needs observation and action delays measured on **this** hardware. Stop `run-robot`. Each command writes its results into `conf/<module>.yaml`. Full scheme: [Latency & Synchronization](/docs/latency).
 
-1. `solarian calibrate-arm-speed` / `calibrate-gripper-speed` — write `max_speed` first.
-2. `solarian calibrate-arm-latency` / `calibrate-gripper-latency` — mode 1 action, mode 2 obs.
+1. `solarian calibrate-arm` — mode 1 (all): `max_speed`, then `action_latency`, then `receive_latency`.
+2. `solarian calibrate-gripper` — mode 1 (all), same three.
 3. `solarian calibrate-camera-latency` — display role on the monitor machine, capture on the robot.
+
+The speed has to come before the latency, which is why `all` exists: a sinusoid that exceeds `max_speed` is stretched by the interpolator and measures the speed cap instead of the pipeline.
 
 ## See also
 
