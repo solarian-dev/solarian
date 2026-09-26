@@ -24,6 +24,7 @@ from solarian.core.controller import Controller
 from solarian.core.controller_gui import ControllerGUI
 from solarian.core.data import ImageData, PosData, TemperatureData
 from solarian.core.event import Event, EventType
+from solarian.core.gripper_module import GripperModule
 from solarian.core.ik import CartesianIKActuator, MinkIK
 from solarian.core.observation import ModuleObs, Observation, SensorField
 from solarian.core.actuator_bus import ActuatorBus
@@ -272,6 +273,23 @@ def test_a_virtual_pose_axis_is_not_confused_with_a_joint():
         "class": "CartesianIKActuator",
         "kind": "cartesian_axis",
         "axis": "x",
+    }
+
+
+def test_a_grippers_ends_of_travel_come_with_their_unit():
+    """The unit is how a consumer tells the aperture column from the servo's."""
+    gripper = GripperModule.__new__(GripperModule)
+    gripper.actuators = {}
+    gripper.sensors = {}
+    gripper.cfg = SimpleNamespace(
+        aperture_table=None, aperture_closed_mm=2.0, aperture_open_mm=92.0
+    )
+
+    structure = build_structure(_StructureRobot({"gripper": gripper}))
+
+    assert structure["modules"]["gripper"]["aperture"] == {
+        "range": [2.0, 92.0],
+        "unit": "mm",
     }
 
 

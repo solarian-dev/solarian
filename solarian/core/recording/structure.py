@@ -27,6 +27,7 @@ from pathlib import Path
 
 from solarian.core.calibration import MotorNormMode
 from solarian.core.configs import ActuatorConfig
+from solarian.core.gripper_module import APERTURE_UNIT
 from solarian.core.ik.actuator import CARTESIAN_AXES
 from solarian.core.ik.spec import MinkIK
 
@@ -94,10 +95,15 @@ def _module(module) -> dict:
     if kinematics is not None:
         entry["kinematics"] = kinematics
     # Only a gripper has one, and it is what maps a recorded aperture onto a
-    # mesh: the ends of travel the aperture table or endpoints resolved to.
+    # mesh: the ends of travel the aperture table or endpoints resolved to. The
+    # unit comes along because it is how a consumer finds the aperture *column* --
+    # the gripper's other column is the servo's normalized position.
     if module.kind == "gripper":
         low, high = module.scalar_limits()
-        entry["aperture_range"] = [float(low), float(high)]
+        entry["aperture"] = {
+            "range": [float(low), float(high)],
+            "unit": APERTURE_UNIT,
+        }
     return entry
 
 
