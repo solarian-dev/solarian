@@ -18,13 +18,14 @@ class SensorField:
     ``depends_on`` declarations.
     """
 
-    def __init__(self, source: Data, *, mid=None, high=None):
+    def __init__(self, source: Data, *, mid=None, high=None, unit=None):
         self.source = source
         assert source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
         self._path = source.path
         # None = inherit from the Data class (e.g. TemperatureData.mid/high).
         self._mid = mid
         self._high = high
+        self._unit = unit
 
     @property
     def mid(self):
@@ -37,6 +38,24 @@ class SensorField:
         if self._high is not None:
             return self._high
         return getattr(type(self.source), "high", None)
+
+    @property
+    def unit(self) -> str | None:
+        """Physical unit, most specific declaration first.
+
+        The field overrides the component, which overrides the ``Data`` class.
+        A ``PosData`` is metres on a Cartesian axis and normalized travel on a
+        servo, so the component is usually the one that knows.
+        """
+        if self._unit is not None:
+            return self._unit
+        # None when the Data was built standalone rather than declared on a
+        # component, which is how the recording tests construct their fixtures.
+        if self.source.component_class is not None:
+            unit = self.source.component_class.unit_for(self.sensor_name, self.data_name)
+            if unit is not None:
+                return unit
+        return type(self.source).unit
 
     def threshold_level(self, value) -> str | None:
         """``"high"``, ``"mid"``, or ``None`` for a numeric observation value."""
@@ -97,12 +116,25 @@ class CalculatedField:
     """
 
     def __init__(self, *, inputs: list[Data], computer: DataComputer,
-                 processor: type, output: Data, conf: str | None = None):
+                 processor: type, output: Data, conf: str | None = None,
+                 unit: str | None = None):
         self.inputs = inputs
         self.processor = processor
         self.output = output
         self.conf = conf
         self._computer = computer
+        self._unit = unit
+
+    @property
+    def unit(self) -> str | None:
+        """Physical unit of the computed value.
+
+        There is no component to ask — the processor decides what it produces —
+        so this is either declared here or comes from the output ``Data`` class.
+        """
+        if self._unit is not None:
+            return self._unit
+        return type(self.output).unit
 
     @property
     def dtype(self):

@@ -128,9 +128,39 @@ class ActuatorField:
 
     """
 
-    def __init__(self, source: Data):
+    def __init__(self, source: Data, *, unit: str | None = None):
         self.source = source
-    
+        # Captured now, not read later: one ``Data`` descriptor is shared by
+        # every component of its class, and each access rewrites ``path``. Read
+        # lazily, all six Cartesian axes report whichever was touched last.
+        assert source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
+        self._path = source.path
+        # None = inherit from the component, then from the Data class. Set it
+        # where the module converts before writing: a gripper commands
+        # millimetres even though it drives a servo's normalized position.
+        self._unit = unit
+
+    @property
+    def unit(self) -> str | None:
+        """Physical unit: the field, then the component, then the ``Data`` class."""
+        if self._unit is not None:
+            return self._unit
+        if self.source.component_class is not None:
+            unit = self.source.component_class.unit_for(self.actuator_name, self.data_name)
+            if unit is not None:
+                return unit
+        return type(self.source).unit
+
+    # A command and its reading are the same physical quantity, so an action
+    # column warns at the bands its Data class declares.
+    @property
+    def mid(self):
+        return type(self.source).mid
+
+    @property
+    def high(self):
+        return type(self.source).high
+
     @property
     def dtype(self):
         return self.source.dtype
@@ -149,18 +179,15 @@ class ActuatorField:
 
     @property
     def data_name(self):
-        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
-        return self.source.path[2]
+        return self._path[2]
 
     @property
     def actuator_name(self):
-        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
-        return self.source.path[1]
+        return self._path[1]
 
     @property
     def module_name(self):
-        assert self.source.path is not None, "Data.path not set; was the descriptor accessed on its owner?"
-        return self.source.path[0]
+        return self._path[0]
 
     
 # ---------------------------------------------------------------------------

@@ -50,7 +50,9 @@ def schema_classes():
     )
 
     class _ArmObs(ModuleObs):
-        shoulder = SensorField(PosData(path=("arm", "shoulder", "pos")))
+        shoulder = SensorField(
+            PosData(path=("arm", "shoulder", "pos")), mid=(-90.0, 90.0), unit="deg"
+        )
         shoulder_temp = SensorField(TemperatureData(path=("arm", "shoulder", "temp")))
 
     class _CamObs(ModuleObs):
@@ -163,6 +165,31 @@ def test_threshold_bands_survive_into_the_schema_document(schema_classes):
     assert document["obs.arm.shoulder_temp"]["data_class"] == "TemperatureData"
     assert document["obs.arm.shoulder_temp"]["high"] == 60.0
     assert "high" not in document["obs.arm.shoulder"]
+
+
+def test_a_two_sided_band_keeps_both_of_its_sides(schema_classes):
+    """Written as a bare 90.0, a joint's +-90 limit reads as a one-sided >= 90."""
+    document = build_schema().to_json()
+
+    assert document["obs.arm.shoulder"]["mid"] == [-90.0, 90.0]
+
+
+def test_a_command_warns_at_the_same_band_as_its_reading():
+    """The fixture's actions are all PosData, which declares no band."""
+    field = ActuatorField(TemperatureData(path=("arm", "shoulder", "temp")))
+
+    assert (field.mid, field.high) == (50.0, 60.0)
+
+
+def test_every_column_declares_a_unit_even_when_it_has_none(schema_classes):
+    """A null unit is a gap in the project's schema; an absent key hides it."""
+    document = build_schema().to_json()
+
+    assert all("unit" in column for column in document.values())
+    assert document["obs.arm.shoulder"]["unit"] == "deg"
+    assert document["obs.arm.shoulder_temp"]["unit"] == "degC"
+    assert document["wall_ts"]["unit"] == "s"
+    assert document["cam.cam.image.frame_index"]["unit"] is None
 
 
 def test_timestamps_stay_out_of_the_statistics(schema_classes):

@@ -39,3 +39,12 @@ class CartesianIKActuator(Servo):
     uses_motor_calibration = False
 
     pos = PosData()
+
+    @classmethod
+    def unit_for(cls, component_name: str, data_name: str) -> str | None:
+        if data_name != "pos":
+            return super().unit_for(component_name, data_name)
+        axis = CARTESIAN_AXIS_IDS.get(component_name)
+        if axis is None:
+            return None
+        return "m" if axis < 3 else "rad"

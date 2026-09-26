@@ -56,6 +56,16 @@ class Data(BaseModel):
     mid: ClassVar[Union[float, Tuple[float, float], None]] = None
     high: ClassVar[Union[float, Tuple[float, float], None]] = None
 
+    # Physical unit, when the *kind* of data fixes it. Left None where one
+    # class spans several units: a PosData is millimetres on a gripper and
+    # metres on a Cartesian axis, so there the component declares it.
+    unit: ClassVar[str | None] = None
+
+    # The component class that declared this descriptor, filled by
+    # __set_name__. A ClassVar rather than a field so it never reaches the
+    # wire, and None for a Data built standalone rather than as an attribute.
+    component_class: ClassVar[type | None] = None
+
     is_compressed: bool = False
     compression_codec: str | None = None
 
@@ -133,6 +143,10 @@ class Data(BaseModel):
 
     def __set_name__(self, owner, name):
         object.__setattr__(self, 'name', name)
+        # Unlike ``path``, which every access rewrites and so is only valid if
+        # read straight away, this is fixed at class creation. It is what lets a
+        # field ask the component for a unit the Data class cannot know.
+        object.__setattr__(self, 'component_class', owner)
 
     def __get__(self, instance, owner):
         if instance is not None:
@@ -277,6 +291,7 @@ class BoundingBoxData(Data):
 class TimestampData(Data):
     dtype: Type = float
     payload: float = Field(default_factory=time.time, alias="value")
+    unit: ClassVar[str | None] = "s"
 
 
 class TemperatureData(Data):
@@ -284,6 +299,7 @@ class TemperatureData(Data):
 
     dtype: Type = float
     payload: float = Field(default=0.0, alias="value")
+    unit: ClassVar[str | None] = "degC"
     # Feetech over-temp cutout is 70 °C; warn well before that.
     mid: ClassVar[Union[float, Tuple[float, float], None]] = 50.0
     high: ClassVar[Union[float, Tuple[float, float], None]] = 60.0

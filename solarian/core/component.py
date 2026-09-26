@@ -7,6 +7,11 @@ from solarian.core.component_bus import ComponentBus
 class Component(ABC):
     """Base class for components"""
 
+    #: Unit per data-point name, where the component knows what its readings
+    #: mean and the ``Data`` class cannot: a servo's ``pos`` is normalized
+    #: travel, while its ``temperature`` is degrees whatever the servo.
+    units: dict[str, str] = {}
+
     def __set_name__(self, owner, name):
         self.name = name
         # print("Component name:", name)
@@ -18,6 +23,16 @@ class Component(ABC):
         # print("Component owner:", owner)
         object.__setattr__(self, 'parent', instance)
         return self
+
+    @classmethod
+    def unit_for(cls, component_name: str, data_name: str) -> str | None:
+        """Unit of one data point, or ``None`` to defer to the ``Data`` class.
+
+        ``component_name`` is passed because a single class can cover several
+        units across its instances — a :class:`CartesianIKActuator` is metres
+        as ``x`` and radians as ``rx``.
+        """
+        return cls.units.get(data_name)
 
     @classmethod
     def data_names(cls):

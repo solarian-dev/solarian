@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from solarian.core.action import Action
-from solarian.core.data import ImageData
+from solarian.core.data import ImageData, TimestampData
 from solarian.core.observation import Observation
 
 #: Seconds since the episode's start, and the robot's synced wall clock.
@@ -60,6 +60,9 @@ class CameraKey:
         return f"cam.{self.name}.capture_ts"
 
 
+Band = float | tuple[float, float] | None
+
+
 @dataclass(frozen=True)
 class Column:
     """One scalar column of ``episode.parquet``."""
@@ -68,19 +71,25 @@ class Column:
     dtype: str
     data_class: str
     unit: str | None = None
-    #: Warning bands carried over from the ``Data`` class, so a consumer can
-    #: tell 60 °C from 60 mm without a lookup table.
-    mid: float | None = None
-    high: float | None = None
+    #: The component behind this column, so a consumer can tell a Cartesian
+    #: axis from a joint without parsing the column name.
+    component: str | None = None
+    #: Warning bands as declared: a number is one-sided (``value >= band``), a
+    #: pair is two-sided (``value <= lo or value >= hi``). Flattening a pair to
+    #: its upper element would read as a one-sided band and lose the lower one.
+    mid: Band = None
+    high: Band = None
 
     def to_json(self) -> dict:
-        out: dict = {"data_class": self.data_class, "dtype": self.dtype}
-        if self.unit is not None:
-            out["unit"] = self.unit
+        # ``unit`` is always emitted, null included: a column nobody gave a unit
+        # is a gap in the project's schema, and hiding the key hides the gap.
+        out: dict = {"data_class": self.data_class, "dtype": self.dtype, "unit": self.unit}
+        if self.component is not None:
+            out["component"] = self.component
         if self.mid is not None:
-            out["mid"] = self.mid
+            out["mid"] = _band_json(self.mid)
         if self.high is not None:
-            out["high"] = self.high
+            out["high"] = _band_json(self.high)
         return out
 
 
@@ -131,8 +140,15 @@ def _column_dtype(spec) -> str | None:
     return "bool" if spec.dtype is bool else "float32"
 
 
-def _threshold(band) -> float | None:
-    """Flatten a ``Data`` threshold band to one number for the schema document.
+def _band_json(band: Band):
+    """A band as it was declared: a number, or a two-element list."""
+    if isinstance(band, (tuple, list)):
+        return [float(band[0]), float(band[1])]
+    return float(band)
+
+
+def _threshold(band) -> Band:
+    """Normalise a ``Data`` threshold band, keeping both sides of a pair.
 
     ``SensorField`` declares ``mid`` / ``high``; ``CalculatedField`` does not,
     so the attribute is genuinely optional here.
@@ -140,14 +156,19 @@ def _threshold(band) -> float | None:
     if band is None:
         return None
     if isinstance(band, (tuple, list)):
-        return float(band[1])
+        return (float(band[0]), float(band[1]))
     return float(band)
 
 
 def build_schema() -> RecordingSchema:
     """Walk the active ``Observation`` and ``Action`` subclasses."""
     columns: list[Column] = [
-        Column(name=name, dtype="float64", data_class="TimestampData", unit="s")
+        Column(
+            name=name,
+            dtype="float64",
+            data_class="TimestampData",
+            unit=TimestampData.unit,
+        )
         for name in TIME_COLUMNS
     ]
     cameras: list[CameraKey] = []
@@ -167,7 +188,7 @@ def build_schema() -> RecordingSchema:
                 name=f"obs.{module_name}.ts",
                 dtype="float64",
                 data_class="TimestampData",
-                unit="s",
+                unit=TimestampData.unit,
             )
         )
 
@@ -193,7 +214,8 @@ def build_schema() -> RecordingSchema:
                         name=camera.capture_ts_column,
                         dtype="float64",
                         data_class="ImageData",
-                        unit="s",
+                        unit=TimestampData.unit,
+                        component=spec.sensor_name,
                     )
                 )
                 continue
@@ -207,6 +229,9 @@ def build_schema() -> RecordingSchema:
                     name=f"obs.{module_name}.{field_name}",
                     dtype=dtype,
                     data_class=spec.data_class.__name__,
+                    unit=spec.unit,
+                    # A CalculatedField has no component: a processor made it.
+                    component=getattr(spec, "sensor_name", None),
                     mid=_threshold(getattr(spec, "mid", None)),
                     high=_threshold(getattr(spec, "high", None)),
                 )
@@ -229,6 +254,10 @@ def build_schema() -> RecordingSchema:
                     name=f"act.{module_name}.{field_name}",
                     dtype=dtype,
                     data_class=spec.data_class.__name__,
+                    unit=spec.unit,
+                    component=spec.actuator_name,
+                    mid=_threshold(spec.mid),
+                    high=_threshold(spec.high),
                 )
             )
         act_fields.append((module_name, tuple(tabulated)))
