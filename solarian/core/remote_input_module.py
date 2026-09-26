@@ -34,6 +34,8 @@ class RemoteInputModule(Module):
     :class:`~solarian.utils.shared_memory.observation_buffer.ObservationBuffer`.
     """
 
+    kind: str = "input"
+
     execution_mode = ExecutionMode.INLINE
     config_class = RemoteInputConfig
 

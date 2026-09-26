@@ -35,6 +35,8 @@ logger = logging.getLogger("module")
 class ActuatorModule(Module):
     """Module with actuators: torque, calibration sweep, trajectory interpolators."""
 
+    kind: str = "actuator"
+
     def __init__(
         self,
         cfg: ModuleConfig | None = None,

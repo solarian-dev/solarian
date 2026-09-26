@@ -414,7 +414,7 @@ def _info(
 
     return {
         "codebase_version": CODEBASE_VERSION,
-        "robot_type": meta["robot"],
+        "robot_type": meta["robot"]["class"],
         "total_episodes": n_episodes,
         "total_frames": n_frames,
         "total_tasks": n_tasks,

@@ -100,7 +100,10 @@ class CameraMeta:
 
 @dataclass
 class SessionMeta:
-    robot: str
+    #: The robot's expanded structure from
+    #: :func:`~solarian.core.recording.structure.build_structure` -- modules,
+    #: components, IK joint mapping and attachment graph, not just a class name.
+    robot: dict
     schema: RecordingSchema
     cameras: dict[str, CameraMeta]
     video: dict
@@ -122,6 +125,11 @@ class SessionMeta:
             },
             "video": self.video,
             "schema": self.schema.to_json(),
+            # Which fields each module tabulated, in the order the schema walked
+            # them. Computed all along but never written, and it is what groups
+            # columns by module without splitting names on dots.
+            "obs_fields": dict(self.schema.obs_fields),
+            "act_fields": dict(self.schema.act_fields),
         }
         _write_atomic(paths.session_json, json.dumps(payload, indent=2))
 

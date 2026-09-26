@@ -68,6 +68,11 @@ class Module(ABC):
     override these or add new actions.
     """
 
+    #: What this module *is*, for a consumer of a recorded session that knows
+    #: nothing about the class. Declared on the class rather than inferred from
+    #: the MRO so a plugin naming a new kind needs no change in the core.
+    kind: str = "module"
+
     # Override in subclasses to use a custom config class (must extend ModuleConfig)
     config_class: type = ModuleConfig
 

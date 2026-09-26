@@ -20,8 +20,11 @@ from solarian.core.servo import Servo
 from solarian.core.data import PosData
 from solarian.core.ik.bus import IKActuatorBus
 
+#: Pose axes in ``cfg.id`` order, which is also the pose vector's order.
+CARTESIAN_AXES = ("x", "y", "z", "rx", "ry", "rz")
+
 #: Pose-axis index from the class attribute name when yaml omits ``id``.
-CARTESIAN_AXIS_IDS = {"x": 0, "y": 1, "z": 2, "rx": 3, "ry": 4, "rz": 5}
+CARTESIAN_AXIS_IDS = {name: index for index, name in enumerate(CARTESIAN_AXES)}
 
 
 class CartesianIKActuator(Servo):
@@ -32,6 +35,8 @@ class CartesianIKActuator(Servo):
     attribute name (x..rz), ``mode`` is ``raw``, and they share the hardware
     servos' port.
     """
+
+    kind: str = "cartesian_axis"
 
     #: Placeholder only -- the real bus is the module's IKActuatorBus.
     bus_class = IKActuatorBus

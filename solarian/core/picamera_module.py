@@ -24,6 +24,8 @@ class PiCameraConfig(ModuleConfig):
 class PiCameraModule(Module):
     """Raspberry Pi CSI camera module (picamera2)."""
 
+    kind: str = "camera"
+
     config_class = PiCameraConfig
 
     camera = PiCamera()

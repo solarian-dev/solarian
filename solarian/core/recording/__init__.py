@@ -20,6 +20,7 @@ from solarian.core.recording.session import (
     append_manifest,
     read_manifest,
 )
+from solarian.core.recording.structure import build_structure
 from solarian.core.recording.timeline import frame_index_for
 from solarian.core.recording.video_writer import ArchiveSink, VideoWriter
 
@@ -36,6 +37,7 @@ __all__ = [
     "VideoWriter",
     "append_manifest",
     "build_schema",
+    "build_structure",
     "export_lerobot",
     "frame_index_for",
     "read_manifest",

@@ -5,4 +5,4 @@ from solarian.core.sensor import Sensor
 
 
 class Camera(Sensor):
-    pass
+    kind: str = "camera"

@@ -18,6 +18,8 @@ class OpenCVCameraModule(Module):
     OpenCV camera module.
     """
 
+    kind: str = "camera"
+
     config_class = OpenCVCameraConfig
     
     camera = OpenCVCamera()

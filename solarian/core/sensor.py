@@ -3,7 +3,9 @@ from solarian.core.data import ImageData
 import numpy as np
 
 class Sensor(Component):
-    
+
+    kind: str = "sensor"
+
     @classmethod
     def validate_obs(cls, data: dict):
         for data_name, data_value in data.items():

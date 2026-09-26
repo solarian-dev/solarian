@@ -62,6 +62,8 @@ def _max_wrapped_abs(delta: np.ndarray, spans: np.ndarray) -> float:
 class ArmModule(ActuatorModule):
     """Actuator module with IK, Cartesian interpolators, and UR-style moves."""
 
+    kind: str = "arm"
+
     # Optional IK backend spec (``MinkIK(...)``), a ``.build()`` object, or a
     # ready :class:`DifferentialIKBackend`. Required when Cartesian actuators
     # are declared.

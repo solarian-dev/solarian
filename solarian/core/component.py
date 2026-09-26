@@ -7,6 +7,11 @@ from solarian.core.component_bus import ComponentBus
 class Component(ABC):
     """Base class for components"""
 
+    #: What this component *is*, for a consumer of a recorded session that
+    #: knows nothing about the class. Declared on the class rather than
+    #: inferred from the MRO so a plugin naming a new kind needs no change here.
+    kind: str = "component"
+
     #: Unit per data-point name, where the component knows what its readings
     #: mean and the ``Data`` class cannot: a servo's ``pos`` is normalized
     #: travel, while its ``temperature`` is degrees whatever the servo.

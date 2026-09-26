@@ -15,6 +15,8 @@ class Actuator(Component):
         wrist_roll = FeetechServo(model="sts3215", is_continuous=True)
     """
 
+    kind: str = "actuator"
+
     cfg: ActuatorConfig | None
     default_model: str | None = None
     default_mode: str | None = None

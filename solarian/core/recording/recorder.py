@@ -82,7 +82,7 @@ class SessionRecorder:
         session: str,
         fps: float,
         writers: dict[str, VideoWriter],
-        robot_name: str,
+        robot: dict,
         cameras: dict,
         video_options: dict,
         task: str | None = None,
@@ -96,7 +96,7 @@ class SessionRecorder:
         self.max_session_bytes = max_session_bytes
 
         self._root = Path(root)
-        self._robot_name = robot_name
+        self._robot = robot
         self._cameras = cameras
         self._video_options = video_options
 
@@ -175,7 +175,7 @@ class SessionRecorder:
         self._over_budget = False
 
         SessionMeta(
-            robot=self._robot_name,
+            robot=self._robot,
             schema=self.schema,
             cameras=self._cameras,
             video=self._video_options,

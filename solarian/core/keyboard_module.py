@@ -57,6 +57,8 @@ def _get_pynput_keyboard():
 class KeyboardModule(Module):
     """Emits KEY_DOWN / KEY_UP and publishes the set of currently held keys."""
 
+    kind: str = "input"
+
     execution_mode = ExecutionMode.INLINE
 
     events = (EventType.KEY_DOWN, EventType.KEY_UP)

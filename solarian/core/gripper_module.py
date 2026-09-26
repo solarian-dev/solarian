@@ -58,6 +58,8 @@ class GripperConfig(ModuleConfig):
 class GripperModule(ActuatorModule):
     """Actuator module with a 1-D interpolator over finger aperture (mm)."""
 
+    kind: str = "gripper"
+
     config_class = GripperConfig
 
     # Name of the actuator driven by the scalar interpolator. Defaults to the

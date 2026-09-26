@@ -7,18 +7,24 @@ import os
 import threading
 import time
 from multiprocessing.managers import SharedMemoryManager
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
+import solarian.core.recording.structure
+
 from solarian.core.action import Action, ActionType, ActuatorField, ModuleAction
+from solarian.core.arm_module import ArmModule
 from solarian.core.clock_sync import synced_time
+from solarian.core.configs import ActuatorConfig
 from solarian.core.controller import Controller
 from solarian.core.controller_gui import ControllerGUI
 from solarian.core.data import ImageData, PosData, TemperatureData
 from solarian.core.event import Event, EventType
+from solarian.core.ik import CartesianIKActuator, MinkIK
 from solarian.core.observation import ModuleObs, Observation, SensorField
 from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.camera_bus import ArchivesFrames, CameraBus
@@ -26,9 +32,12 @@ from solarian.core.recording.export import export_lerobot
 from solarian.core.recording.recorder import SessionRecorder
 from solarian.core.recording.schema import build_schema
 from solarian.core.recording.session import CameraMeta, read_manifest
+from solarian.core.recording.structure import build_structure
 from solarian.core.recording.timeline import frame_index_for, repeats_for
 from solarian.core.recording.video_writer import VideoWriter
 from solarian.core.robot import Robot
+from solarian.core.servo import Servo
+from solarian.sim import ModuleAttachment, SceneConfig
 
 ARCHIVE_SHAPE = (48, 64, 3)
 FPS = 10.0
@@ -201,6 +210,99 @@ def test_timestamps_stay_out_of_the_statistics(schema_classes):
     )
 
 
+# --- the robot's structure -------------------------------------------------
+
+
+class _StructureRobot:
+    """Only what ``build_structure`` reads, so no config loading is needed."""
+
+    is_sim = False
+    scene = SceneConfig(
+        attachments=[
+            ModuleAttachment(module="arm", mjcf="so106.xml", prefix="right/")
+        ]
+    )
+
+    def __init__(self, modules):
+        self.modules = modules
+
+
+def _structure_arm(mjcf="so106.xml"):
+    class _Arm(ArmModule):
+        ik_backend = MinkIK(
+            mjcf=mjcf, joints={"shoulder_pan": "shoulder_pan"}, frame="flange"
+        )
+
+    arm = _Arm.__new__(_Arm)
+    arm.actuators = {
+        "shoulder_pan": Servo(
+            ActuatorConfig(
+                port="/dev/null",
+                model="sts3250",
+                mode="range_m100_100",
+                sim_joint="right/shoulder_pan",
+                sim_range_min=-2.2,
+                sim_range_max=2.1,
+            )
+        ),
+        "x": CartesianIKActuator(ActuatorConfig(port="/dev/null", id=0, mode="raw")),
+    }
+    arm.sensors = dict(arm.actuators)
+    return arm
+
+
+def test_a_column_can_be_traced_back_to_the_joint_that_produced_it():
+    """Column names alone make a viewer guess which robot it is looking at."""
+    structure = build_structure(_StructureRobot({"arm": _structure_arm()}))
+
+    arm = structure["modules"]["arm"]
+    assert arm["kind"] == "arm"
+    assert arm["components"]["shoulder_pan"]["normalization"] == {
+        "mode": "range_m100_100",
+        "range": [-100.0, 100.0],
+        "joint": "right/shoulder_pan",
+        "joint_range": [-2.2, 2.1],
+    }
+
+
+def test_a_virtual_pose_axis_is_not_confused_with_a_joint():
+    structure = build_structure(_StructureRobot({"arm": _structure_arm()}))
+
+    assert structure["modules"]["arm"]["components"]["x"] == {
+        "class": "CartesianIKActuator",
+        "kind": "cartesian_axis",
+        "axis": "x",
+    }
+
+
+def test_the_structure_says_which_frame_a_recorded_pose_is_in():
+    """mink resolves the TCP against the uncomposed arm, not the scene world."""
+    structure = build_structure(_StructureRobot({"arm": _structure_arm()}))
+
+    kinematics = structure["modules"]["arm"]["kinematics"]
+    assert kinematics["joints"] == {"shoulder_pan": "shoulder_pan"}
+    assert kinematics["pose_frame"] == "arm_mjcf_base"
+
+
+def test_the_attachment_graph_survives_but_the_viewer_flags_do_not():
+    structure = build_structure(_StructureRobot({"arm": _structure_arm()}))
+
+    assert structure["scene"]["attachments"][0]["prefix"] == "right/"
+    assert "show_frames" not in structure["scene"]
+
+
+def test_an_asset_is_named_portably_rather_than_by_local_path():
+    """A plugin's absolute path names a directory on the recording machine only."""
+    installed = Path(solarian.core.recording.structure.__file__).parent / "arm.xml"
+    arm = _structure_arm(mjcf=str(installed))
+
+    structure = build_structure(_StructureRobot({"arm": arm}))
+
+    assert structure["modules"]["arm"]["kinematics"]["mjcf"] == (
+        "solarian/core/recording/arm.xml"
+    )
+
+
 # --- a sealed episode ------------------------------------------------------
 
 
@@ -232,7 +334,7 @@ def recorder(tmp_path, schema_classes, clock):
             session="testing",
             fps=FPS,
             writers={"cam.image": writer},
-            robot_name="TestRobot",
+            robot={"class": "TestRobot", "modules": {}},
             cameras={
                 "cam.image": CameraMeta(
                     width=ARCHIVE_SHAPE[1],
@@ -560,9 +662,10 @@ def test_session_metadata_is_written_once_at_session_start(recorder):
 
     document = json.loads(session.paths.session_json.read_text())
 
-    assert document["robot"] == "TestRobot"
+    assert document["robot"]["class"] == "TestRobot"
     assert document["fps"] == FPS
     assert "obs.arm.shoulder" in document["schema"]
+    assert document["obs_fields"]["arm"] == ["shoulder", "shoulder_temp"]
 
 
 def test_a_dropped_episode_leaves_nothing_behind(recorder, schema_classes):

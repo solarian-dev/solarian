@@ -1042,6 +1042,7 @@ class Robot(EventHost, ABC):
             SessionRecorder,
             VideoWriter,
             build_schema,
+            build_structure,
         )
 
         schema = build_schema()
@@ -1102,7 +1103,7 @@ class Robot(EventHost, ABC):
             session=self.__class__.__name__,
             fps=fps,
             writers=writers,
-            robot_name=self.__class__.__name__,
+            robot=build_structure(self),
             cameras=cameras,
             video_options={
                 "codec": cfg.codec,
