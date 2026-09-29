@@ -81,6 +81,33 @@ def test_help_of_a_config_free_command_hides_the_conf_flags():
     assert "<project_name>" in text
 
 
+def test_plugin_command_declares_its_own_section_and_config():
+    """A plugin command is grouped and excused from Hydra by its class, not manage.py."""
+    from solarian.cli.base import BaseCommand
+    from solarian.cli.manage import _build_command_list, _uses_config
+
+    @CommandRegistry.register("widget-ping")
+    class WidgetPing(BaseCommand):
+        help = "Ping a widget."
+        category = "Widgets"
+        uses_config = False
+
+        def handle(self, cfg):
+            return None
+
+    try:
+        assert "widget-ping" not in NO_HYDRA_COMMANDS
+        assert CommandRegistry.get_category("widget-ping") == "Widgets"
+        assert _uses_config("widget-ping") is False
+        listing = _build_command_list()
+        assert "Widgets:" in listing
+        assert "widget-ping" in listing
+        assert "Ping a widget." in listing
+    finally:
+        CommandRegistry._commands.pop("widget-ping", None)
+        CommandRegistry._config_names.pop("widget-ping", None)
+
+
 def test_overrides_are_listed_with_their_help():
     text = _render("calibrate-umi-camera")
     assert "config overrides (key=value)" in text

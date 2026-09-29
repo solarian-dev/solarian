@@ -79,6 +79,10 @@ class CommandRegistry:
         return sorted(set(cls._commands.keys()) | set(cls._lazy_commands.keys()))
 
     @classmethod
+    def is_registered(cls, name: str) -> bool:
+        return name in cls._commands or name in cls._lazy_commands
+
+    @classmethod
     def get_command_help(cls, name: str) -> str:
         """Return help text without importing the module."""
         if name in cls._lazy_commands:
@@ -86,6 +90,22 @@ class CommandRegistry:
         if name in cls._commands:
             return getattr(cls._commands[name], 'help', '')
         return ''
+
+    @classmethod
+    def get_category(cls, name: str) -> str:
+        """Section heading declared by a loaded command, or "" when it has none."""
+        command_cls = cls._commands.get(name)
+        if command_cls is None:
+            return ""
+        return getattr(command_cls, "category", "") or ""
+
+    @classmethod
+    def uses_config(cls, name: str) -> bool:
+        """Whether a loaded command reads project yaml. Unloaded commands do."""
+        command_cls = cls._commands.get(name)
+        if command_cls is None:
+            return True
+        return bool(getattr(command_cls, "uses_config", True))
 
     @classmethod
     def get_setup_modules(cls, name: str) -> Optional[tuple]:
@@ -120,6 +140,13 @@ class BaseCommand(ABC):
 
     #: Example invocations, one command line each.
     examples: tuple = ()
+
+    #: Heading under which ``solarian --help`` lists this command. Empty means
+    #: the built-in grouping applies.
+    category = ""
+
+    #: When False, the command runs without a project config or settings.py.
+    uses_config = True
 
     
     def get_config_class(self) -> Optional[Type[Any]]:

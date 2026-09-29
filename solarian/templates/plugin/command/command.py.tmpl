@@ -11,6 +11,10 @@ from solarian.cli import BaseCommand, CommandRegistry
 @CommandRegistry.register("${plugin_name}-command")
 class ${class_prefix}Command(BaseCommand):
     help = "A custom command provided by the ${dist_name} plugin."
+    # Shown under this heading in `solarian --help`. Set uses_config = False
+    # when the command does not read a project yaml or settings.py.
+    category = "Utilities"
+    uses_config = True
 
     def handle(self, cfg) -> None:
         args = self._parse_args()

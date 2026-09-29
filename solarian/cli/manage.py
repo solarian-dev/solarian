@@ -68,14 +68,10 @@ def _find_settings_path(cwd: Path | None = None) -> str:
 #: Entry-point group that plugins use to advertise extra CLI commands.
 COMMAND_ENTRY_POINT_GROUP = "solarian.commands"
 
-#: Plugin commands that operate directly on hardware and therefore must run
-#: without Hydra config or project ``settings.py`` discovery.
-PLUGIN_NO_HYDRA_COMMANDS = {"feetech-set-id", "feetech-inspect"}
-
-#: Commands that take no Hydra config and need no project ``settings.py``:
-#: scaffolding that runs before a project exists, and tools that talk straight
-#: to a device. The global ``--conf`` / ``--deployment`` flags do nothing for
-#: them, so their help leaves those out.
+#: Built-in commands that take no Hydra config and need no project
+#: ``settings.py``. Plugin commands declare this on the class instead
+#: (``uses_config = False``). The global ``--conf`` / ``--deployment`` flags
+#: do nothing for these, so their help leaves those out.
 NO_HYDRA_COMMANDS = {
     "add-module",
     "create-project",
@@ -87,7 +83,14 @@ NO_HYDRA_COMMANDS = {
     "export-dataset",
     "keygen",
     "calibrate-servo",
-} | PLUGIN_NO_HYDRA_COMMANDS
+}
+
+
+def _uses_config(name: str) -> bool:
+    """Project yaml applies unless the command is a built-in exception or says otherwise."""
+    if name in NO_HYDRA_COMMANDS:
+        return False
+    return CommandRegistry.uses_config(name)
 
 
 def _get_version() -> str:
@@ -115,17 +118,29 @@ def _iter_entry_points(group: str):
 
 
 def _register_plugin_commands() -> None:
-    """Register commands advertised by installed plugins (lazy — no imports)."""
+    """Import plugin commands so their classes can declare category and config use.
+
+    The module is imported, not merely named. ``category`` and ``uses_config``
+    live on the command class; a new plugin command does not edit this file.
+    """
+    import importlib
+
     for ep in _iter_entry_points(COMMAND_ENTRY_POINT_GROUP):
-        try:
-            module_path = ep.value.split(":", 1)[0]
-        except Exception:  # noqa: BLE001 - a malformed entry point must not crash the CLI
+        module_path, _, attr = ep.value.partition(":")
+        if not module_path:
             continue
-        CommandRegistry.register_lazy(
-            ep.name,
-            module_path=module_path,
-            help=f"{ep.name} (provided by plugin)",
-        )
+        try:
+            module = importlib.import_module(module_path)
+        except Exception as exc:  # noqa: BLE001 - one bad plugin must not hide the others
+            print(f"warning: could not load plugin command {ep.name}: {exc}", file=sys.stderr)
+            continue
+        if CommandRegistry.is_registered(ep.name):
+            continue
+        command_cls = getattr(module, attr, None) if attr else None
+        if command_cls is None:
+            print(f"warning: plugin command {ep.name} does not define {attr or 'a class'}", file=sys.stderr)
+            continue
+        CommandRegistry.register(ep.name)(command_cls)
 
 
 class SolarianHelpFormatter(argparse.RawDescriptionHelpFormatter):
@@ -134,7 +149,11 @@ class SolarianHelpFormatter(argparse.RawDescriptionHelpFormatter):
 
 
 def _build_command_list() -> str:
-    """Build a formatted string listing all available commands (without importing them)."""
+    """Build a formatted string listing all available commands.
+
+    Built-in commands are grouped from the map below. A plugin command that
+    has been imported contributes the ``category`` declared on its class.
+    """
     all_names = CommandRegistry.get_all_command_names()
     if not all_names:
         return "  (no commands registered)"
@@ -179,14 +198,13 @@ def _build_command_list() -> str:
         "detect-device": "Utilities",
         "list-cameras": "Utilities",
         "shell": "Utilities",
-        "feetech-set-id": "Robot",
-        "feetech-inspect": "Robot",
     }
 
     for name in all_names:
         help_text = CommandRegistry.get_command_help(name)
-        category = category_map.get(name, "Utilities")
-        categories[category].append((name, help_text))
+        # A loaded plugin command names its own section. Built-ins use the map.
+        category = CommandRegistry.get_category(name) or category_map.get(name, "Utilities")
+        categories.setdefault(category, []).append((name, help_text))
 
     lines = []
     for category, cmds in categories.items():
@@ -254,7 +272,7 @@ def main() -> None:
                 sys.argv[1],
                 CommandRegistry.get_command(sys.argv[1]),
                 config_name=CommandRegistry.get_config_name(sys.argv[1]),
-                uses_config=sys.argv[1] not in NO_HYDRA_COMMANDS,
+                uses_config=_uses_config(sys.argv[1]),
             ),
             end="",
         )
@@ -363,7 +381,7 @@ def main() -> None:
     subcommand = args.subcommand
 
     # Resolve settings.py location (skip for commands that don't need it)
-    if subcommand not in NO_HYDRA_COMMANDS:
+    if _uses_config(subcommand):
         if args.settings:
             settings_path = str(Path(os.getcwd()) / args.settings)
         else:
@@ -392,7 +410,7 @@ def main() -> None:
         print(f"Unknown command: {subcommand}")
         sys.exit(1)
     
-    if subcommand in NO_HYDRA_COMMANDS:
+    if not _uses_config(subcommand):
         # For commands that don't need Hydra, just call handle with empty config
         try:
             cmd.handle(OmegaConf.create({}))
