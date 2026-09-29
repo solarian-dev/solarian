@@ -149,7 +149,7 @@ umi-slim = "solarian_umi_slim.module:UmiSlimModule"
 
 ### Bundle a default config
 
-Ship a `conf.yaml` next to the module so [`add-module`](/docs/using-plugins#hardware-modules-add-module) can seed the user's project. Keep the module's tunables here:
+Ship a `conf.yaml` next to the module so [`solarian install`](/docs/using-plugins#install-a-plugin) can seed `conf/<short-name>.yaml`. A plugin that wants a different filename (a skill's `conf/move.yaml`) ships that file under `templates/` instead. Keep the module's tunables here:
 
 ```yaml
 # solarian_umi_slim/conf.yaml
@@ -261,7 +261,7 @@ python -m build
 twine upload dist/*
 ```
 
-Users then install with `pip install solarian-<name>` — or `solarian add-module <name> <attr>` for hardware modules.
+Users then install with `solarian install solarian-<name>`.
 
 ## See also
 

@@ -23,7 +23,7 @@ class CreateProjectCommand(BaseCommand):
     each command composes (robot, controller, server, record, replay, train) and
     a pyproject.toml where module plugins are added as dependencies.
 
-    Add hardware to the new project with `solarian add-module`.
+    Add a plugin to the new project with `solarian install`.
     """
     usage = "<project_name> [--force]"
     options = {

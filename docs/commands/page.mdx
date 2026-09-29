@@ -57,17 +57,20 @@ solarian create-project <project_name> [--force]
 
 Scaffolds a new project. Prefer the standalone `create-solarian <name>` script — it's the same code, but works before a Solarian project exists in the current directory.
 
-### `add-module`
+### `install`
 
 ```bash
-solarian add-module <plugin_name> <attr_name>
+solarian install <package-or-path>
 ```
 
-Installs a hardware plugin (`solarian-<plugin_name>`) and copies the plugin's bundled `conf.yaml` to `conf/<attr_name>.yaml`. The `attr_name` must match the attribute you'll use on your `Robot` subclass — see [Project Configs](/docs/project-configs).
+Installs a plugin into the current Python environment, adds it to the project's `pyproject.toml`, and copies its config template into `conf/` when that file is not already there. A name is resolved on PyPI first (`ur5` installs `solarian-ur5`). If PyPI has no such project, the command looks in the current directory and then in `plugins/`. A path installs that directory editable and skips PyPI.
+
+`templates/<file>.yaml` is copied to `conf/<file>.yaml`. A module that only ships `conf.yaml` is copied to `conf/<short-name>.yaml`, and the attribute on your `Robot` has to match that filename. See [Using Plugins](/docs/using-plugins) and [Project Configs](/docs/project-configs).
 
 ```bash
-solarian add-module ur5 arm
-solarian add-module feetech gripper
+solarian install solarian-move-skill
+solarian install plugins/solarian-umi-slim
+solarian install ur5
 ```
 
 ## Robot commands

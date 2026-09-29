@@ -73,7 +73,7 @@ COMMAND_ENTRY_POINT_GROUP = "solarian.commands"
 #: (``uses_config = False``). The global ``--conf`` / ``--deployment`` flags
 #: do nothing for these, so their help leaves those out.
 NO_HYDRA_COMMANDS = {
-    "add-module",
+    "install",
     "create-project",
     "create-plugin",
     "list-cameras",
@@ -171,7 +171,7 @@ def _build_command_list() -> str:
     category_map = {
         "create-project": "Project",
         "create-plugin": "Project",
-        "add-module": "Project",
+        "install": "Project",
         "onshape-export": "Utilities",
         "run-robot": "Robot",
         "calibrate": "Robot",
@@ -281,16 +281,12 @@ def main() -> None:
     # Handle positional arguments for specific commands
     args, remaining = parser.parse_known_args()
     
-    # For add-module command, extract positional arguments
-    if args.subcommand == "add-module":
-        if len(remaining) < 2:
-            parser.error("add-module requires module_name and module_id arguments")
-        module_name = remaining[0]
-        module_id = remaining[1]
-        overrides = remaining[2:] if len(remaining) > 2 else []
-        # Store positional args in environment for the command to access
-        os.environ["SOLARIAN_ADD_MODULE_NAME"] = module_name
-        os.environ["SOLARIAN_ADD_MODULE_ID"] = module_id
+    if args.subcommand == "install":
+        positionals = [a for a in remaining if not a.startswith("-")]
+        if len(positionals) < 1:
+            parser.error("install requires a package name or a local path")
+        os.environ["SOLARIAN_INSTALL_TARGET"] = positionals[0]
+        overrides = []
     elif args.subcommand == "onshape-export":
         oe_parser = argparse.ArgumentParser(prog="solarian onshape-export")
         oe_parser.add_argument("assembly_dir", help="Directory containing the assembly config.json.")

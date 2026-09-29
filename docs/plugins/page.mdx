@@ -20,7 +20,7 @@ A Solarian plugin is a normal, `pip`-installable Python package that follows two
 Beyond that, it just provides one or more Solarian classes — an `Actuator`, a `Bus`, a `Module`, a `Robot`, a `Skill`, a policy `Trainer`/`PolicyServer`, or a CLI command — and (optionally) advertises them through **entry points** so Solarian can discover them automatically.
 
 <Note>
-  There is no mandatory "register me" call. Direct imports always work: `from solarian_feetech.actuator import FeetechServo`. Entry points are what make a plugin *discoverable* — so `solarian add-module`, the `AIController`, and `solarian train` can find your classes by name without the user importing anything.
+  There is no mandatory "register me" call. Direct imports always work: `from solarian_feetech.actuator import FeetechServo`. Entry points are what make a plugin *discoverable* — so `solarian install`, the `AIController`, and `solarian train` can find your classes by name without the user importing anything.
 </Note>
 
 ## Kinds of plugins
@@ -56,7 +56,7 @@ Discovery is powered by standard Python entry points read via `importlib.metadat
 | --- | --- | --- |
 | Actuator | `solarian.actuators`, `solarian.actuator_buses` | config `type:` resolution |
 | Sensor | `solarian.sensors`, `solarian.sensor_buses` | config `type:` resolution |
-| Module | `solarian.modules` | `solarian add-module` |
+| Module | `solarian.modules` | `solarian install` |
 | Robot | `solarian.robots` | project wiring |
 | Skill | `solarian.skills` | `AIController` |
 | Policy | `solarian.trainers` (+ `solarian.skills`) | `solarian train`, `run-policy` |
@@ -64,36 +64,8 @@ Discovery is powered by standard Python entry points read via `importlib.metadat
 
 ## Available plugins
 
-Browse every published listing — official and community — in the [Plugin Directory](/plugins). You can also [submit a plugin](/plugins/submit) for review.
+Browse every published listing — official and community — in the [Plugin Directory](/plugins). The ones to start with are on [Core Plugins](/docs/core-plugins). You can also [submit a plugin](/plugins/submit) for review.
 
-The Solarian organization ships these reference plugins (under [`plugins/`](https://github.com/solarian-dev/solarian/tree/main/plugins) in the monorepo):
-
-<Properties>
-  <Property name="solarian-ur5">
-    Universal Robots UR5 arm — joint- and Cartesian-space actuators plus a complete <code>UR5ArmModule</code>.
-  </Property>
-  <Property name="solarian-dynamixel">
-    Dynamixel servos (XL330, XM430, …) and the <code>DynamixelBus</code>.
-  </Property>
-  <Property name="solarian-feetech">
-    Feetech servos (STS3215, SCS, …), the <code>FeetechBus</code>, and a <code>feetech-set-id</code> command.
-  </Property>
-  <Property name="solarian-koch / solarian-so100">
-    Arm modules built on Feetech servos.
-  </Property>
-  <Property name="solarian-lekiwi">
-    Lekiwi mobile-base module.
-  </Property>
-  <Property name="solarian-umi-gripper / solarian-umi-slim">
-    UMI gripper modules (the slim variant ships its own MuJoCo model for simulation).
-  </Property>
-  <Property name="solarian-skill-cup-arrange">
-    A UMI diffusion-policy skill, auto-discovered via <code>solarian.skills</code>.
-  </Property>
-  <Property name="solarian-policy-diffusion / solarian-policy-lerobot">
-    Policy plugins that train and serve models the skills call.
-  </Property>
-</Properties>
 
 ## See also
 

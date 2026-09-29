@@ -26,9 +26,10 @@ CommandRegistry.register_lazy(
     help="Create a new Solarian project with the specified name",
 )
 CommandRegistry.register_lazy(
-    "add-module",
-    module_path=f"{_pkg}.add_module",
-    help="Install a module plugin and copy its default configuration to the project",
+    "install",
+    module_path=f"{_pkg}.install",
+    help="Install a plugin into this environment and project",
+    setup_modules=(),
 )
 CommandRegistry.register_lazy(
     "create-plugin",

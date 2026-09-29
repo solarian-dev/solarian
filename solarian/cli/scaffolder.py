@@ -155,6 +155,6 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print("Next steps:")
     print(f"  cd {project_name}")
     print(f"  pip install -e .          # Install your project as a package")
-    print(f"  solarian add-module <plugin> <module_id>   # Add a module plugin")
+    print(f"  solarian install <plugin>          # Install a plugin")
     print(f"  solarian run-robot        # Run the robot")
     print()
