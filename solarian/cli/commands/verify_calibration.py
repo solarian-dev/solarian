@@ -13,6 +13,7 @@ from solarian.cli import BaseCommand, CommandRegistry
 
 @CommandRegistry.register("verify-calibration", "robot")
 class VerifyCalibrationCommand(BaseCommand):
+    category = "Robot"
     help = "Verify calibration spans against the IK model, then live-mirror the arm."
     description = """
     Converts each calibrated joint span to radians and compares it with the MuJoCo

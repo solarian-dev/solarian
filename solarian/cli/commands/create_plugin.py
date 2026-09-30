@@ -13,7 +13,7 @@ Examples:
     solarian create-plugin module feetech      # adds a module to the same plugin
 """
 
-import os
+import argparse
 import sys
 
 from omegaconf import DictConfig
@@ -23,6 +23,8 @@ from solarian.cli import BaseCommand, CommandRegistry
 
 @CommandRegistry.register('create-plugin')
 class CreatePluginCommand(BaseCommand):
+    category = "Project"
+    uses_config = False
     help = 'Scaffold a new Solarian plugin (or add a component type to an existing one)'
     description = """
     Writes plugins/solarian-<name>/ with the source layout and a pyproject.toml
@@ -44,6 +46,17 @@ class CreatePluginCommand(BaseCommand):
         "solarian create-plugin module feetech    # second component, same plugin",
     )
 
+    def parse_args(self, argv: list[str]) -> list[str]:
+        parser = argparse.ArgumentParser(prog="solarian create-plugin")
+        parser.add_argument("plugin_type", help="Component to scaffold.")
+        parser.add_argument("plugin_name", help="Plugin name without the solarian- prefix.")
+        parser.add_argument("--force", action="store_true", help="Overwrite files that already exist.")
+        ns = parser.parse_args(argv)
+        self.plugin_type = ns.plugin_type
+        self.plugin_name = ns.plugin_name
+        self.force = ns.force
+        return []
+
     def handle(self, cfg: DictConfig) -> None:
         from solarian.cli.plugin_scaffolder import (
             ALLOWED_TYPES,
@@ -51,9 +64,9 @@ class CreatePluginCommand(BaseCommand):
             _print_plugin_success,
         )
 
-        plugin_type = os.environ.get("SOLARIAN_CREATE_PLUGIN_TYPE")
-        plugin_name = os.environ.get("SOLARIAN_CREATE_PLUGIN_NAME")
-        force = os.environ.get("SOLARIAN_CREATE_PLUGIN_FORCE", "").lower() == "true"
+        plugin_type = self.plugin_type
+        plugin_name = self.plugin_name
+        force = self.force
 
         if not plugin_type or not plugin_name:
             print("Error: plugin type and name are required")

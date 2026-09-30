@@ -8,6 +8,7 @@ Install a plugin into the current environment and project.
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import os
 import re
@@ -212,8 +213,9 @@ def pip_install(package: str, local_path: Path | None) -> None:
 
 @CommandRegistry.register("install")
 class InstallCommand(BaseCommand):
-    help = "Install a plugin into this environment and project"
+    category = "Project"
     uses_config = False
+    help = "Install a plugin into this environment and project"
     description = """
     Installs a Solarian plugin into the current Python environment and adds it
     to this project's pyproject.toml.
@@ -239,8 +241,15 @@ class InstallCommand(BaseCommand):
         "solarian install ur5",
     )
 
+    def parse_args(self, argv: list[str]) -> list[str]:
+        parser = argparse.ArgumentParser(prog="solarian install")
+        parser.add_argument("target", help="Package name or a local path.")
+        ns = parser.parse_args(argv)
+        self.target = ns.target
+        return []
+
     def handle(self, cfg: DictConfig) -> None:
-        arg = os.environ.get("SOLARIAN_INSTALL_TARGET")
+        arg = self.target
         if not arg:
             raise InstallError(
                 "Usage: solarian install <package-or-path>\n"

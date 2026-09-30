@@ -600,6 +600,8 @@ def open_camera_preview(cam: dict) -> None:
 
 @CommandRegistry.register("list-cameras")
 class ListCamerasCommand(BaseCommand):
+    category = "Utilities"
+    uses_config = False
     help = "Detect connected cameras and optionally open a live preview."
     description = """
     Enumerates every camera backend available on this machine (USB/UVC, the Pi's

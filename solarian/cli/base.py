@@ -10,6 +10,9 @@ class _LazyCommand(NamedTuple):
     help: str
     config_name: Optional[str]
     setup_modules: Optional[tuple] = None
+    #: Help-section heading. Repeated from the command class so ``solarian
+    #: --help`` can group commands without importing their modules.
+    category: str = ""
 
 
 class CommandRegistry:
@@ -29,19 +32,25 @@ class CommandRegistry:
     @classmethod
     def register_lazy(cls, name: str, *, module_path: str,
                       help: str = "", config_name: str = None,
-                      setup_modules: Optional[tuple] = None):
+                      setup_modules: Optional[tuple] = None,
+                      category: str = ""):
         """Register a command by metadata only — no import happens until the command is run.
 
         ``setup_modules`` controls which project-level modules (robot,
         observation, action, controller, server) are imported during
         ``setup()``.  *None* means all modules (backward-compatible
         default); an empty tuple means none.
+
+        ``category`` is the help-section heading declared on the command
+        class. It is repeated here so the command list can group commands
+        without importing the module.
         """
         cls._lazy_commands[name] = _LazyCommand(
             module_path=module_path,
             help=help,
             config_name=config_name,
             setup_modules=setup_modules,
+            category=category,
         )
         cls._config_names[name] = config_name
 
@@ -93,11 +102,20 @@ class CommandRegistry:
 
     @classmethod
     def get_category(cls, name: str) -> str:
-        """Section heading declared by a loaded command, or "" when it has none."""
+        """Section heading declared by the command.
+
+        A loaded class wins. Otherwise the lazy record is used, so the command
+        list can group a built-in before its module is imported.
+        """
         command_cls = cls._commands.get(name)
-        if command_cls is None:
-            return ""
-        return getattr(command_cls, "category", "") or ""
+        if command_cls is not None:
+            category = getattr(command_cls, "category", "") or ""
+            if category:
+                return category
+        lazy = cls._lazy_commands.get(name)
+        if lazy is not None and lazy.category:
+            return lazy.category
+        return ""
 
     @classmethod
     def uses_config(cls, name: str) -> bool:
@@ -141,12 +159,22 @@ class BaseCommand(ABC):
     #: Example invocations, one command line each.
     examples: tuple = ()
 
-    #: Heading under which ``solarian --help`` lists this command. Empty means
-    #: the built-in grouping applies.
+    #: Heading under which ``solarian --help`` lists this command. Empty falls
+    #: back to Utilities. Repeated on ``register_lazy`` so the command list
+    #: can group this command without importing the module.
     category = ""
 
     #: When False, the command runs without a project config or settings.py.
     uses_config = True
+
+    def parse_args(self, argv: list[str]) -> list[str]:
+        """Parse this command's own argv and return leftover Hydra overrides.
+
+        The default treats every token as a Hydra ``key=value`` override. A
+        command with positionals or flags overrides this, stores what it
+        parsed on itself, and returns an empty list.
+        """
+        return list(argv)
 
     
     def get_config_class(self) -> Optional[Type[Any]]:

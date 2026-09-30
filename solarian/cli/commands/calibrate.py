@@ -24,6 +24,7 @@ def _has_ik(module_cls) -> bool:
 
 @CommandRegistry.register("calibrate", "robot")
 class CalibrateCommand(BaseCommand):
+    category = "Robot"
     help = "Calibrate a module: hard-stop sweep, then IK alignment for arms."
     description = """
     Lists the modules the project's Robot and Controller declare, then calibrates

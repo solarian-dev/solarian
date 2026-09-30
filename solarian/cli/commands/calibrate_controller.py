@@ -8,6 +8,7 @@ from solarian.utils import get_class
 
 @CommandRegistry.register('calibrate-controller', 'controller')
 class CalibrateControllerCommand(BaseCommand):
+    category = "Controller"
     help = "Calibrate the operator-side hardware (leader arm, pedals, ...)"
     description = """
     Connects the project's Controller and runs its calibrate() hook, so the

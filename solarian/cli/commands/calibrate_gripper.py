@@ -240,6 +240,7 @@ def _run_obs_latency(module: GripperModule) -> None:
 
 @CommandRegistry.register("calibrate-gripper", "robot")
 class CalibrateGripperCommand(BaseCommand):
+    category = "Robot"
     help = "Measure the gripper's max_speed and its two latencies, into the module yaml."
     description = """
     Pick a gripper module, then a mode:

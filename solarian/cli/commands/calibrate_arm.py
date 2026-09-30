@@ -336,6 +336,7 @@ def _run_obs_latency(module: ArmModule) -> None:
 
 @CommandRegistry.register("calibrate-arm", "robot")
 class CalibrateArmCommand(BaseCommand):
+    category = "Robot"
     help = "Measure the arm's max_speed and its two latencies, into the module yaml."
     description = """
     Pick an arm module, then a mode:

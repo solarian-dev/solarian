@@ -7,6 +7,7 @@ from solarian.utils import get_class
 
 @CommandRegistry.register('write-controller-calibration', 'controller')
 class WriteControllerCalibrationCommand(BaseCommand):
+    category = "Controller"
     help = "Write the calibration in the controller's yamls onto its hardware"
     description = """
     Pushes the calibration already in the controller's module yamls onto the

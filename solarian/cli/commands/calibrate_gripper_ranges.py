@@ -123,6 +123,7 @@ def _build_table(measured: list[tuple[float, float]]) -> ApertureTable | None:
 
 @CommandRegistry.register("calibrate-gripper-ranges", "robot")
 class CalibrateGripperRangesCommand(BaseCommand):
+    category = "Robot"
     help = "Sweep the gripper and record the aperture curve against a ruler."
     description = """
     Steps the servo through its normalized range and stops at each step for you to

@@ -68,29 +68,16 @@ def _find_settings_path(cwd: Path | None = None) -> str:
 #: Entry-point group that plugins use to advertise extra CLI commands.
 COMMAND_ENTRY_POINT_GROUP = "solarian.commands"
 
-#: Built-in commands that take no Hydra config and need no project
-#: ``settings.py``. Plugin commands declare this on the class instead
-#: (``uses_config = False``). The global ``--conf`` / ``--deployment`` flags
-#: do nothing for these, so their help leaves those out.
-NO_HYDRA_COMMANDS = {
-    "install",
-    "create-project",
-    "create-plugin",
-    "list-cameras",
-    "detect-device",
-    "run-policy",
-    "onshape-export",
-    "export-dataset",
-    "keygen",
-    "calibrate-servo",
-}
-
-
-def _uses_config(name: str) -> bool:
-    """Project yaml applies unless the command is a built-in exception or says otherwise."""
-    if name in NO_HYDRA_COMMANDS:
-        return False
-    return CommandRegistry.uses_config(name)
+#: Help-section order. A heading a plugin declares that is not in this list
+#: is appended after these.
+_CATEGORY_ORDER = (
+    "Project",
+    "Robot",
+    "Controller",
+    "Recording & Replay",
+    "Training & Data",
+    "Utilities",
+)
 
 
 def _get_version() -> str:
@@ -151,65 +138,25 @@ class SolarianHelpFormatter(argparse.RawDescriptionHelpFormatter):
 def _build_command_list() -> str:
     """Build a formatted string listing all available commands.
 
-    Built-in commands are grouped from the map below. A plugin command that
-    has been imported contributes the ``category`` declared on its class.
+    Each command names its section via ``category`` (on the class, or on the
+    lazy registration when the module has not been imported yet).
     """
     all_names = CommandRegistry.get_all_command_names()
     if not all_names:
         return "  (no commands registered)"
 
-    # Group commands by category
-    categories = {
-        "Project": [],
-        "Robot": [],
-        "Controller": [],
-        "Recording & Replay": [],
-        "Training & Data": [],
-        "Utilities": [],
-    }
-
-    category_map = {
-        "create-project": "Project",
-        "create-plugin": "Project",
-        "install": "Project",
-        "onshape-export": "Utilities",
-        "run-robot": "Robot",
-        "calibrate": "Robot",
-        "calibrate-arm": "Robot",
-        "calibrate-gripper": "Robot",
-        "calibrate-gripper-ranges": "Robot",
-        "calibrate-camera-latency": "Robot",
-        "calibrate-hand-eye": "Robot",
-        "setup-module": "Robot",
-        "calibrate-servo": "Robot",
-        "write-robot-calibration": "Robot",
-        "verify-calibration": "Robot",
-        "derive-model-limits": "Robot",
-        "run-controller": "Controller",
-        "calibrate-controller": "Controller",
-        "calibrate-umi-camera": "Controller",
-        "write-controller-calibration": "Controller",
-        "run-policy": "Controller",
-        "run-server": "Controller",
-        "record": "Recording & Replay",
-        "replay": "Recording & Replay",
-        "export-dataset": "Training & Data",
-        "train": "Training & Data",
-        "detect-device": "Utilities",
-        "list-cameras": "Utilities",
-        "shell": "Utilities",
-    }
-
+    grouped: dict[str, list[tuple[str, str]]] = {}
     for name in all_names:
         help_text = CommandRegistry.get_command_help(name)
-        # A loaded plugin command names its own section. Built-ins use the map.
-        category = CommandRegistry.get_category(name) or category_map.get(name, "Utilities")
-        categories.setdefault(category, []).append((name, help_text))
+        category = CommandRegistry.get_category(name) or "Utilities"
+        grouped.setdefault(category, []).append((name, help_text))
+
+    ordered = [category for category in _CATEGORY_ORDER if category in grouped]
+    ordered += [category for category in grouped if category not in _CATEGORY_ORDER]
 
     lines = []
-    for category, cmds in categories.items():
-        if not cmds:
-            continue
+    for category in ordered:
+        cmds = grouped[category]
         lines.append(f"  {category}:")
         max_name_len = max(len(name) for name, _ in cmds)
         for name, help_text in cmds:
@@ -267,111 +214,31 @@ def main() -> None:
     # `solarian <command> --help` describes that command. Answered before
     # argparse sees the flag, which would otherwise print the root help.
     if sys.argv[1] in available_commands and {"-h", "--help"}.intersection(sys.argv[2:]):
+        # Loading the command is what makes uses_config readable: it lives on
+        # the class, and built-ins are registered by name until then.
+        help_cmd = CommandRegistry.get_command(sys.argv[1])
         print(
             format_command_help(
                 sys.argv[1],
-                CommandRegistry.get_command(sys.argv[1]),
+                help_cmd,
                 config_name=CommandRegistry.get_config_name(sys.argv[1]),
-                uses_config=_uses_config(sys.argv[1]),
+                uses_config=CommandRegistry.uses_config(sys.argv[1]),
             ),
             end="",
         )
         sys.exit(0)
 
-    # Handle positional arguments for specific commands
     args, remaining = parser.parse_known_args()
-    
-    if args.subcommand == "install":
-        positionals = [a for a in remaining if not a.startswith("-")]
-        if len(positionals) < 1:
-            parser.error("install requires a package name or a local path")
-        os.environ["SOLARIAN_INSTALL_TARGET"] = positionals[0]
-        overrides = []
-    elif args.subcommand == "onshape-export":
-        oe_parser = argparse.ArgumentParser(prog="solarian onshape-export")
-        oe_parser.add_argument("assembly_dir", help="Directory containing the assembly config.json.")
-        oe_parser.add_argument("--clean-only", action="store_true",
-                               help="Re-run only the clean stage on a previous raw export (no network).")
-        oe_parser.add_argument("--keys-file", default=None,
-                               help="File with ONSHAPE_ACCESS_KEY/ONSHAPE_SECRET_KEY (default: onshape_keys.txt).")
-        oe_parser.add_argument("--update-yaml", default=None, metavar="PATH",
-                               help="After export, sync MJCF joint ranges into this module conf "
-                                    "(sim_range_min/max) and config.json joint_properties.limits.")
-        oe_args = oe_parser.parse_args(remaining)
-        os.environ["SOLARIAN_ONSHAPE_EXPORT_DIR"] = oe_args.assembly_dir
-        if oe_args.clean_only:
-            os.environ["SOLARIAN_ONSHAPE_EXPORT_CLEAN_ONLY"] = "true"
-        if oe_args.keys_file:
-            os.environ["SOLARIAN_ONSHAPE_EXPORT_KEYS_FILE"] = oe_args.keys_file
-        if oe_args.update_yaml:
-            os.environ["SOLARIAN_ONSHAPE_EXPORT_UPDATE_YAML"] = oe_args.update_yaml
-        overrides = []
-    elif args.subcommand == "export-dataset":
-        ed_parser = argparse.ArgumentParser(prog="solarian export-dataset")
-        ed_parser.add_argument("session_dir", help="Recorded session to convert.")
-        ed_parser.add_argument("output_dir", nargs="?", default=None,
-                               help="Where to write (default: <session_dir>/export/lerobot).")
-        ed_parser.add_argument("--fps", default=None,
-                               help="Rate to resample onto (default: the session's video grid).")
-        ed_parser.add_argument("--episodes", default=None, metavar="A,B,C",
-                               help="Only these episode indices (default: all sealed ones).")
-        ed_parser.add_argument("--no-remap", action="store_true",
-                               help="Keep the archive geometry instead of producing policy frames.")
-        ed_parser.add_argument("--overwrite", action="store_true",
-                               help="Replace the output directory if it exists.")
-        ed_args = ed_parser.parse_args(remaining)
-        os.environ["SOLARIAN_EXPORT_SESSION"] = ed_args.session_dir
-        if ed_args.output_dir:
-            os.environ["SOLARIAN_EXPORT_OUT"] = ed_args.output_dir
-        if ed_args.fps:
-            os.environ["SOLARIAN_EXPORT_FPS"] = ed_args.fps
-        if ed_args.episodes:
-            os.environ["SOLARIAN_EXPORT_EPISODES"] = ed_args.episodes
-        if ed_args.no_remap:
-            os.environ["SOLARIAN_EXPORT_NO_REMAP"] = "true"
-        if ed_args.overwrite:
-            os.environ["SOLARIAN_EXPORT_OVERWRITE"] = "true"
-        overrides = []
-    elif args.subcommand == "create-project":
-        if len(remaining) < 1:
-            parser.error("create-project requires a project name argument")
-        os.environ["SOLARIAN_CREATE_PROJECT_NAME"] = remaining[0]
-        if "--force" in remaining:
-            os.environ["SOLARIAN_CREATE_PROJECT_FORCE"] = "true"
-        overrides = []
-    elif args.subcommand == "create-plugin":
-        positionals = [a for a in remaining if not a.startswith("-")]
-        if len(positionals) < 2:
-            parser.error("create-plugin requires a type and a name argument")
-        os.environ["SOLARIAN_CREATE_PLUGIN_TYPE"] = positionals[0]
-        os.environ["SOLARIAN_CREATE_PLUGIN_NAME"] = positionals[1]
-        if "--force" in remaining:
-            os.environ["SOLARIAN_CREATE_PLUGIN_FORCE"] = "true"
-        overrides = []
-    elif args.subcommand == "run-policy":
-        rp_parser = argparse.ArgumentParser(prog="solarian run-policy")
-        rp_parser.add_argument("skill", help="Name of the skill whose policy server to run.")
-        rp_parser.add_argument("--config", default=None,
-                               help="Skill yaml (a conf filename or a path). "
-                                    "UMISkill reads policy_server from this file "
-                                    "instead of conf/umi.yaml.")
-        rp_parser.add_argument("--checkpoint", "-c", default=None,
-                               help="Checkpoint path (overrides the skill's configured checkpoint).")
-        rp_parser.add_argument("--host", default=None, help="Host to bind the server to.")
-        rp_parser.add_argument("--port", default=None, help="Port to bind the server to.")
-        rp_args = rp_parser.parse_args(remaining)
-        os.environ["SOLARIAN_RUN_POLICY_SKILL"] = rp_args.skill
-        if rp_args.config:
-            os.environ["SOLARIAN_RUN_POLICY_CONFIG"] = rp_args.config
-        if rp_args.checkpoint:
-            os.environ["SOLARIAN_RUN_POLICY_CHECKPOINT"] = rp_args.checkpoint
-        if rp_args.host:
-            os.environ["SOLARIAN_RUN_POLICY_HOST"] = rp_args.host
-        if rp_args.port:
-            os.environ["SOLARIAN_RUN_POLICY_PORT"] = rp_args.port
-        overrides = []
-    else:
-        overrides = remaining
+
+    try:
+        cmd = CommandRegistry.get_command(args.subcommand)
+    except KeyError:
+        print(f"Unknown command: {args.subcommand}")
+        sys.exit(1)
+
+    # Leftover tokens are Hydra overrides. A command that parses its own argv
+    # returns an empty list.
+    overrides = cmd.parse_args(remaining)
 
     if '/' in args.conf:
         CONF_PATH = args.conf.split("/")[0]
@@ -383,7 +250,7 @@ def main() -> None:
     subcommand = args.subcommand
 
     # Resolve settings.py location (skip for commands that don't need it)
-    if _uses_config(subcommand):
+    if CommandRegistry.uses_config(subcommand):
         if args.settings:
             settings_path = str(Path(os.getcwd()) / args.settings)
         else:
@@ -406,13 +273,7 @@ def main() -> None:
         os.environ["SOLARIAN_DEPLOYMENT"] = args.deployment
 
     colorama.init()  # Initialize colorama for colored terminal output
-    try:
-        cmd = CommandRegistry.get_command(subcommand)
-    except KeyError:
-        print(f"Unknown command: {subcommand}")
-        sys.exit(1)
-    
-    if not _uses_config(subcommand):
+    if not CommandRegistry.uses_config(subcommand):
         # For commands that don't need Hydra, just call handle with empty config
         try:
             cmd.handle(OmegaConf.create({}))

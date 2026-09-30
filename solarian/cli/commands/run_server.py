@@ -10,6 +10,7 @@ from solarian.utils import get_class, StatusBoard, setup_process_logging
 
 @CommandRegistry.register('run-server', 'server')
 class RunServerCommand(BaseCommand):
+    category = "Controller"
     help = "Run the relay server the robot and the controller connect through"
     description = """
     Runs the relay the robot and the controller both dial into: it forwards

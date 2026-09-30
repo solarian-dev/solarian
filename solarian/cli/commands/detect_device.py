@@ -8,6 +8,8 @@ from solarian.utils import get_class
 
 @CommandRegistry.register('detect-device')
 class DetectDeviceCommand(BaseCommand):
+    category = "Utilities"
+    uses_config = False
     help = "Detect a serial device by plugging it in (prints port and name)"
     description = """
     Lists the serial ports before and after you plug a device in, and names the

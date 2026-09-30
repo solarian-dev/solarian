@@ -5,9 +5,8 @@ Scaffolds a new Solarian project directory with all necessary template files,
 including a pyproject.toml where module plugins can be added as dependencies.
 """
 
-import os
+import argparse
 import sys
-from pathlib import Path
 
 from omegaconf import DictConfig
 
@@ -16,6 +15,8 @@ from solarian.cli import BaseCommand, CommandRegistry
 
 @CommandRegistry.register('create-project')
 class CreateProjectCommand(BaseCommand):
+    category = "Project"
+    uses_config = False
     help = 'Create a new Solarian project with the specified name'
     description = """
     Scaffolds a project directory in the current working directory: a Robot and a
@@ -36,9 +37,18 @@ class CreateProjectCommand(BaseCommand):
         "solarian create-project my_robot --force",
     )
 
+    def parse_args(self, argv: list[str]) -> list[str]:
+        parser = argparse.ArgumentParser(prog="solarian create-project")
+        parser.add_argument("project_name", help="Directory and Python package to create.")
+        parser.add_argument("--force", action="store_true", help="Overwrite files that already exist.")
+        ns = parser.parse_args(argv)
+        self.project_name = ns.project_name
+        self.force = ns.force
+        return []
+
     def handle(self, cfg: DictConfig) -> None:
-        project_name = os.environ.get("SOLARIAN_CREATE_PROJECT_NAME")
-        force = os.environ.get("SOLARIAN_CREATE_PROJECT_FORCE", "").lower() == "true"
+        project_name = self.project_name
+        force = self.force
 
         if not project_name:
             print("Error: project name is required")

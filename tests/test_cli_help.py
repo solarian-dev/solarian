@@ -9,17 +9,17 @@ import pytest
 import solarian.cli.commands  # noqa: F401 - registers the built-in commands
 from solarian.cli.base import CommandRegistry
 from solarian.cli.help import WIDTH, format_command_help
-from solarian.cli.manage import NO_HYDRA_COMMANDS
 
 COMMANDS = sorted(CommandRegistry.get_all_command_names())
 
 
 def _render(name: str) -> str:
+    cmd = CommandRegistry.get_command(name)
     return format_command_help(
         name,
-        CommandRegistry.get_command(name),
+        cmd,
         config_name=CommandRegistry.get_config_name(name),
-        uses_config=name not in NO_HYDRA_COMMANDS,
+        uses_config=CommandRegistry.uses_config(name),
     )
 
 
@@ -81,10 +81,20 @@ def test_help_of_a_config_free_command_hides_the_conf_flags():
     assert "<project_name>" in text
 
 
+@pytest.mark.parametrize("name", COMMANDS)
+def test_category_matches_the_lazy_record(name):
+    """Help groups an unloaded command from register_lazy, which must match the class."""
+    cmd = CommandRegistry.get_command(name)
+    lazy = CommandRegistry._lazy_commands[name]
+    assert cmd.category
+    assert lazy.category == cmd.category
+    assert CommandRegistry.get_category(name) == cmd.category
+
+
 def test_plugin_command_declares_its_own_section_and_config():
     """A plugin command is grouped and excused from Hydra by its class, not manage.py."""
     from solarian.cli.base import BaseCommand
-    from solarian.cli.manage import _build_command_list, _uses_config
+    from solarian.cli.manage import _build_command_list
 
     @CommandRegistry.register("widget-ping")
     class WidgetPing(BaseCommand):
@@ -96,9 +106,8 @@ def test_plugin_command_declares_its_own_section_and_config():
             return None
 
     try:
-        assert "widget-ping" not in NO_HYDRA_COMMANDS
         assert CommandRegistry.get_category("widget-ping") == "Widgets"
-        assert _uses_config("widget-ping") is False
+        assert CommandRegistry.uses_config("widget-ping") is False
         listing = _build_command_list()
         assert "Widgets:" in listing
         assert "widget-ping" in listing
@@ -106,6 +115,70 @@ def test_plugin_command_declares_its_own_section_and_config():
     finally:
         CommandRegistry._commands.pop("widget-ping", None)
         CommandRegistry._config_names.pop("widget-ping", None)
+
+
+def test_commands_with_their_own_argv_store_it_on_the_command():
+    cases = {
+        "install": (["solarian-move-skill"], {"target": "solarian-move-skill"}),
+        "create-project": (
+            ["my_robot", "--force"],
+            {"project_name": "my_robot", "force": True},
+        ),
+        "create-plugin": (
+            ["actuator", "feetech"],
+            {"plugin_type": "actuator", "plugin_name": "feetech", "force": False},
+        ),
+        "onshape-export": (
+            ["assets/arm", "--clean-only", "--keys-file", "keys.txt"],
+            {"assembly_dir": "assets/arm", "clean_only": True, "keys_file": "keys.txt"},
+        ),
+        "export-dataset": (
+            [
+                "datasets/session", "out/ds", "--fps", "30",
+                "--episodes", "0,1", "--no-remap", "--overwrite",
+            ],
+            {
+                "session_dir": "datasets/session",
+                "output_dir": "out/ds",
+                "fps": "30",
+                "episodes": "0,1",
+                "no_remap": True,
+                "overwrite": True,
+            },
+        ),
+        "run-policy": (
+            [
+                "umi", "--config", "cup.yaml", "--checkpoint", "cup.ckpt",
+                "--host", "0.0.0.0", "--port", "8001",
+            ],
+            {
+                "skill": "umi",
+                "config": "cup.yaml",
+                "checkpoint": "cup.ckpt",
+                "host": "0.0.0.0",
+                "port": "8001",
+            },
+        ),
+    }
+    for name, (argv, expected) in cases.items():
+        cmd = CommandRegistry.get_command(name)
+        assert cmd.parse_args(argv) == []
+        for attr, value in expected.items():
+            assert getattr(cmd, attr) == value, f"{name}.{attr}"
+
+
+def test_a_hydra_command_forwards_its_overrides():
+    cmd = CommandRegistry.get_command("run-robot")
+    assert cmd.parse_args(["fps=60", "connection.ip=10.0.0.2"]) == [
+        "fps=60",
+        "connection.ip=10.0.0.2",
+    ]
+
+
+def test_install_requires_a_target():
+    cmd = CommandRegistry.get_command("install")
+    with pytest.raises(SystemExit):
+        cmd.parse_args([])
 
 
 def test_overrides_are_listed_with_their_help():

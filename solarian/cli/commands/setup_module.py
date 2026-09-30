@@ -18,6 +18,7 @@ def _collect_modules_from_class(cls) -> dict[str, type]:
 
 @CommandRegistry.register('setup-module', 'robot')
 class SetupModuleCommand(BaseCommand):
+    category = "Robot"
     help = "Run a module's one-off device setup (actuator IDs, baud rates, modes)"
     description = """
     Lists the modules the project's Robot and Controller declare, connects the one

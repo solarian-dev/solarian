@@ -24,23 +24,27 @@ CommandRegistry.register_lazy(
     "create-project",
     module_path=f"{_pkg}.create_project",
     help="Create a new Solarian project with the specified name",
+    category="Project",
 )
 CommandRegistry.register_lazy(
     "install",
     module_path=f"{_pkg}.install",
     help="Install a plugin into this environment and project",
     setup_modules=(),
+    category="Project",
 )
 CommandRegistry.register_lazy(
     "create-plugin",
     module_path=f"{_pkg}.create_plugin",
     help="Scaffold a new Solarian plugin (or add a component type to an existing one)",
+    category="Project",
 )
 CommandRegistry.register_lazy(
     "onshape-export",
     module_path=f"{_pkg}.onshape_export",
     help="Export an Onshape assembly into an attachable MuJoCo sim model",
     setup_modules=(),
+    category="Utilities",
 )
 
 # ── Robot commands ───────────────────────────────────────────────────
@@ -50,6 +54,7 @@ CommandRegistry.register_lazy(
     help="Run the robot: connect its modules and join the relay a controller drives it through",
     config_name="robot",
     setup_modules=("robot", "observation", "action"),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "calibrate",
@@ -57,6 +62,7 @@ CommandRegistry.register_lazy(
     help="Calibrate a module: hard-stop sweep, then IK alignment for arms.",
     config_name="robot",
     setup_modules=("robot", "observation", "action"),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "calibrate-arm",
@@ -64,6 +70,7 @@ CommandRegistry.register_lazy(
     help="Measure the arm's max_speed and its two latencies, into the module yaml.",
     config_name="robot",
     setup_modules=("robot",),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "calibrate-gripper",
@@ -71,6 +78,7 @@ CommandRegistry.register_lazy(
     help="Measure the gripper's max_speed and its two latencies, into the module yaml.",
     config_name="robot",
     setup_modules=("robot",),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "calibrate-gripper-ranges",
@@ -78,6 +86,7 @@ CommandRegistry.register_lazy(
     help="Sweep the gripper and record the aperture curve against a ruler.",
     config_name="robot",
     setup_modules=("robot",),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "calibrate-camera-latency",
@@ -85,6 +94,7 @@ CommandRegistry.register_lazy(
     help="Measure the camera's receive_latency by filming a timestamp QR code (UMI method).",
     config_name="robot",
     setup_modules=("robot",),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "calibrate-hand-eye",
@@ -92,6 +102,7 @@ CommandRegistry.register_lazy(
     help="Measure camera-to-fingertip (robot-world hand-eye) against what a UMI policy assumes.",
     config_name="robot",
     setup_modules=("robot",),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "setup-module",
@@ -99,6 +110,7 @@ CommandRegistry.register_lazy(
     help="Run a module's one-off device setup (actuator IDs, baud rates, modes)",
     config_name="robot",
     setup_modules=("robot",),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "calibrate-servo",
@@ -106,6 +118,7 @@ CommandRegistry.register_lazy(
     help="Prepare a servo for use: set its ID, reset registers, and centre its range.",
     config_name=None,
     setup_modules=(),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "write-robot-calibration",
@@ -113,6 +126,7 @@ CommandRegistry.register_lazy(
     help="Write the calibration in the robot's yamls onto its hardware",
     config_name="robot",
     setup_modules=("robot",),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "verify-calibration",
@@ -120,6 +134,7 @@ CommandRegistry.register_lazy(
     help="Verify calibration spans against the IK model, then live-mirror the arm.",
     config_name="robot",
     setup_modules=("robot", "observation", "action"),
+    category="Robot",
 )
 CommandRegistry.register_lazy(
     "derive-model-limits",
@@ -127,6 +142,7 @@ CommandRegistry.register_lazy(
     help="Derive MJCF joint ranges (radians) from the real arm's mechanical limits.",
     config_name="robot",
     setup_modules=("robot",),
+    category="Robot",
 )
 
 # ── Controller commands ──────────────────────────────────────────────
@@ -136,6 +152,7 @@ CommandRegistry.register_lazy(
     help="Teleop client: drive the robot through the relay",
     config_name="controller",
     setup_modules=("controller", "observation", "action"),
+    category="Controller",
 )
 CommandRegistry.register_lazy(
     "calibrate-controller",
@@ -143,6 +160,7 @@ CommandRegistry.register_lazy(
     help="Calibrate the operator-side hardware (leader arm, pedals, ...)",
     config_name="controller",
     setup_modules=("controller",),
+    category="Controller",
 )
 CommandRegistry.register_lazy(
     "calibrate-umi-camera",
@@ -150,6 +168,7 @@ CommandRegistry.register_lazy(
     help="Calibrate a connected camera onto GoPro Hero 10 + Max Lens Mod optics and overlay vs UMI gold.",
     config_name="controller",
     setup_modules=(),
+    category="Controller",
 )
 CommandRegistry.register_lazy(
     "write-controller-calibration",
@@ -157,6 +176,7 @@ CommandRegistry.register_lazy(
     help="Write the calibration in the controller's yamls onto its hardware",
     config_name="controller",
     setup_modules=("controller",),
+    category="Controller",
 )
 CommandRegistry.register_lazy(
     "run-policy",
@@ -164,6 +184,7 @@ CommandRegistry.register_lazy(
     help="Run the policy server associated with a skill",
     config_name=None,
     setup_modules=(),
+    category="Controller",
 )
 CommandRegistry.register_lazy(
     "run-server",
@@ -171,6 +192,7 @@ CommandRegistry.register_lazy(
     help="Run the relay server the robot and the controller connect through",
     config_name="server",
     setup_modules=("server",),
+    category="Controller",
 )
 
 # ── Recording & Replay commands ──────────────────────────────────────
@@ -180,6 +202,7 @@ CommandRegistry.register_lazy(
     help="Teleoperate and record a training dataset, episode by episode",
     config_name="record",
     setup_modules=("robot", "observation", "action", "controller"),
+    category="Recording & Replay",
 )
 CommandRegistry.register_lazy(
     "replay",
@@ -187,6 +210,7 @@ CommandRegistry.register_lazy(
     help="Replay a recorded dataset's actions back onto the robot",
     config_name="replay",
     setup_modules=("robot", "observation", "action", "controller"),
+    category="Recording & Replay",
 )
 
 # ── Training & Data commands ─────────────────────────────────────────
@@ -195,6 +219,7 @@ CommandRegistry.register_lazy(
     module_path=f"{_pkg}.export_dataset",
     help="Convert a recorded session into a LeRobot dataset",
     setup_modules=(),
+    category="Training & Data",
 )
 CommandRegistry.register_lazy(
     "train",
@@ -202,6 +227,7 @@ CommandRegistry.register_lazy(
     help="Train a policy via an installed policy trainer plugin.",
     config_name="train",
     setup_modules=(),
+    category="Training & Data",
 )
 # ── Utility commands ─────────────────────────────────────────────────
 CommandRegistry.register_lazy(
@@ -210,6 +236,7 @@ CommandRegistry.register_lazy(
     help="Sync Solarian wall-clock offset to the relay server (does not change OS time).",
     config_name="server",
     setup_modules=(),
+    category="Utilities",
 )
 CommandRegistry.register_lazy(
     "keygen",
@@ -217,19 +244,23 @@ CommandRegistry.register_lazy(
     help="Generate CurveZMQ keypairs for the relay, the robot and the controller.",
     config_name=None,
     setup_modules=(),
+    category="Utilities",
 )
 CommandRegistry.register_lazy(
     "detect-device",
     module_path=f"{_pkg}.detect_device",
     help="Detect a serial device by plugging it in (prints port and name)",
+    category="Utilities",
 )
 CommandRegistry.register_lazy(
     "list-cameras",
     module_path=f"{_pkg}.list_cameras",
     help="Detect connected cameras and optionally open a live preview.",
+    category="Utilities",
 )
 CommandRegistry.register_lazy(
     "shell",
     module_path=f"{_pkg}.shell",
     help="Open an interactive Python shell with project settings loaded.",
+    category="Utilities",
 )

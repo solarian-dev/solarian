@@ -151,7 +151,6 @@ def test_install_from_a_local_path_seeds_config_and_the_dependency(tmp_path, mon
         "[project]\nname = 'demo'\ndependencies = [\n]\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("SOLARIAN_INSTALL_TARGET", "plugins/solarian-move-skill")
     monkeypatch.setenv("SOLARIAN_PROJECT_PATH", str(tmp_path))
 
     def reject_pypi(_name):
@@ -166,7 +165,9 @@ def test_install_from_a_local_path_seeds_config_and_the_dependency(tmp_path, mon
         lambda package, local_path: installed.append((package, local_path)),
     )
 
-    InstallCommand().handle(None)
+    cmd = InstallCommand()
+    cmd.parse_args(["plugins/solarian-move-skill"])
+    cmd.handle(None)
 
     assert installed == [("solarian-move-skill", plugin.resolve())]
     assert (tmp_path / "conf" / "move.yaml").read_text(encoding="utf-8") == "frequency: 10\n"

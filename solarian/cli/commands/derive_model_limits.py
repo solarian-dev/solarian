@@ -15,6 +15,7 @@ from solarian.cli import BaseCommand, CommandRegistry
 
 @CommandRegistry.register("derive-model-limits", "robot")
 class DeriveModelLimitsCommand(BaseCommand):
+    category = "Robot"
     help = "Derive MJCF joint ranges (radians) from the real arm's mechanical limits."
     description = """
     Reads the arm's real hard-stop range, converts encoder counts to radians with

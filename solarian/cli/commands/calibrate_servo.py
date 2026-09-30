@@ -53,6 +53,8 @@ def select(kind: str, options: list, label=str):
 
 @CommandRegistry.register("calibrate-servo")
 class CalibrateServoCommand(BaseCommand):
+    category = "Robot"
+    uses_config = False
     help = "Prepare a servo for use: set its ID, reset registers, and centre its range."
     description = """
     Walks brand -> port -> servo, then sets the servo's ID, resets the registers

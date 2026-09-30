@@ -27,6 +27,7 @@ from solarian.core.ai.system1.trainer_registry import (
 
 @CommandRegistry.register('train', 'train')
 class TrainCommand(BaseCommand):
+    category = "Training & Data"
     help = 'Train a policy via an installed policy trainer plugin.'
     description = """
     Reads the policy key from conf/train.yaml, resolves the matching trainer plugin

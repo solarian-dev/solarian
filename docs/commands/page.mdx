@@ -324,6 +324,7 @@ class MyCommandConfig(BaseModel):
 
 @CommandRegistry.register('my-command')
 class MyCommand(BaseCommand):
+    category = "Robot"
     help = "Run the my-command demo."
 
     def get_config_class(self):
@@ -333,7 +334,11 @@ class MyCommand(BaseCommand):
         print(f"Running {cfg.target} at speed {cfg.speed}")
 ```
 
-To make the command discoverable without forcing an import on every CLI startup, register it lazily:
+`category` is the heading `solarian --help` lists the command under. Set `uses_config = False` when the command does not read a project yaml (no `settings.py`, and the global `--conf` / `--deployment` flags are hidden from its help).
+
+A command that takes positionals or flags implements `parse_args`. It stores what it parsed on `self`, returns `[]`, and `handle` reads those attributes. The default returns the argv unchanged, and Hydra composes those tokens as `key=value` overrides.
+
+To make the command discoverable without forcing an import on every CLI startup, register it lazily. Repeat `help` and `category` here: the command list is built from this record, so it can group commands without importing the module.
 
 ```python
 CommandRegistry.register_lazy(
@@ -342,6 +347,7 @@ CommandRegistry.register_lazy(
     help="Run the my-command demo.",
     config_name="my_command",          # picks conf/my_command.yaml
     setup_modules=("robot",),          # which project modules to auto-import
+    category="Robot",
 )
 ```
 

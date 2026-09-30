@@ -14,6 +14,7 @@ from solarian.core import Action
 
 @CommandRegistry.register('replay', 'replay')
 class ReplayCommand(BaseCommand):
+    category = "Recording & Replay"
     help = "Replay a recorded dataset's actions back onto the robot"
     description = """
     Prints what a recorded LeRobot dataset contains, then feeds its recorded actions

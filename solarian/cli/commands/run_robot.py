@@ -8,6 +8,7 @@ from solarian.utils import get_class, StatusBoard, setup_process_logging
 # run-robot is the subcommand, robot is the config name
 @CommandRegistry.register('run-robot', 'robot')
 class RunRobotCommand(BaseCommand):
+    category = "Robot"
     help = "Run the robot: connect its modules and join the relay a controller drives it through"
     description = """
     Builds the project's Robot class, connects every module it declares, and joins

@@ -9,6 +9,7 @@ from solarian.utils import get_class, StatusBoard, setup_process_logging
 
 @CommandRegistry.register('run-controller', 'controller')
 class RunTeleopCommand(BaseCommand):
+    category = "Controller"
     help = "Teleop client: drive the robot through the relay"
     description = """
     Builds the project's Controller class, connects its modules (leader arm,

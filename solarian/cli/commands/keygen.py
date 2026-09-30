@@ -10,6 +10,8 @@ from solarian.core.curve import generate_keypair
 
 @CommandRegistry.register("keygen", None)
 class KeygenCommand(BaseCommand):
+    category = "Utilities"
+    uses_config = False
     help = "Generate CurveZMQ keypairs for the relay, the robot and the controller."
     description = """
     Prints three fresh keypairs and the yaml blocks that use them: the relay's

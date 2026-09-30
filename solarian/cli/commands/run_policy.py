@@ -18,7 +18,7 @@ Examples::
     solarian run-policy umi --config cup_arrange.yaml --checkpoint data/models/cup.ckpt --port 8001
 """
 
-import os
+import argparse
 import subprocess
 import sys
 
@@ -29,6 +29,8 @@ from solarian.cli import BaseCommand, CommandRegistry
 
 @CommandRegistry.register('run-policy')
 class RunPolicyCommand(BaseCommand):
+    category = "Controller"
+    uses_config = False
     help = 'Run the policy server associated with a skill'
     description = """
     Looks up the named skill, reads the policy server module it declares and the
@@ -54,8 +56,27 @@ class RunPolicyCommand(BaseCommand):
         "solarian run-policy umi --config cup_arrange.yaml --checkpoint data/models/cup.ckpt --port 8001",
     )
 
+    def parse_args(self, argv: list[str]) -> list[str]:
+        parser = argparse.ArgumentParser(prog="solarian run-policy")
+        parser.add_argument("skill", help="Name of the skill whose policy server to run.")
+        parser.add_argument("--config", default=None,
+                            help="Skill yaml (a conf filename or a path). "
+                                 "UMISkill reads policy_server from this file "
+                                 "instead of conf/umi.yaml.")
+        parser.add_argument("--checkpoint", "-c", default=None,
+                            help="Checkpoint path (overrides the skill's configured checkpoint).")
+        parser.add_argument("--host", default=None, help="Host to bind the server to.")
+        parser.add_argument("--port", default=None, help="Port to bind the server to.")
+        ns = parser.parse_args(argv)
+        self.skill = ns.skill
+        self.config = ns.config
+        self.checkpoint = ns.checkpoint
+        self.host = ns.host
+        self.port = ns.port
+        return []
+
     def handle(self, cfg: DictConfig) -> None:
-        skill_name = os.environ.get("SOLARIAN_RUN_POLICY_SKILL")
+        skill_name = self.skill
         if not skill_name:
             print("Error: a skill name is required")
             print(
@@ -78,10 +99,10 @@ class RunPolicyCommand(BaseCommand):
         if not getattr(skill_cls, "config_name", None):
             skill_cls.config_name = skill_name
 
-        checkpoint = os.environ.get("SOLARIAN_RUN_POLICY_CHECKPOINT")
-        host = os.environ.get("SOLARIAN_RUN_POLICY_HOST")
-        port = os.environ.get("SOLARIAN_RUN_POLICY_PORT")
-        config = os.environ.get("SOLARIAN_RUN_POLICY_CONFIG")
+        checkpoint = self.checkpoint
+        host = self.host
+        port = self.port
+        config = self.config
 
         try:
             spec = skill_cls.get_policy_server_spec(

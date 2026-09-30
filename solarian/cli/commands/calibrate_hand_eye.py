@@ -1592,6 +1592,7 @@ def _write_failed_record(
 
 @CommandRegistry.register("calibrate-hand-eye", "robot")
 class CalibrateHandEyeCommand(BaseCommand):
+    category = "Robot"
     help = "Measure camera-to-fingertip (robot-world hand-eye) against what a UMI policy assumes."
     description = """
     Solves the robot-world hand-eye problem from poses of UMI's table marker: where

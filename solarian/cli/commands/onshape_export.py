@@ -33,6 +33,7 @@ Examples:
     solarian onshape-export assets/umi_slim_gripper_description --clean-only
 """
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -88,6 +89,8 @@ def _ensure_credentials(keys_file: str | None) -> None:
 
 @CommandRegistry.register("onshape-export")
 class OnshapeExportCommand(BaseCommand):
+    category = "Utilities"
+    uses_config = False
     help = "Export an Onshape assembly into an attachable MuJoCo sim model"
     description = """
     Pulls the assembly named by the directory's config.json, then cleans the raw
@@ -116,8 +119,25 @@ class OnshapeExportCommand(BaseCommand):
         "solarian onshape-export assets/umi_slim_gripper_description --clean-only",
     )
 
+    def parse_args(self, argv: list[str]) -> list[str]:
+        parser = argparse.ArgumentParser(prog="solarian onshape-export")
+        parser.add_argument("assembly_dir", help="Directory containing the assembly config.json.")
+        parser.add_argument("--clean-only", action="store_true",
+                            help="Re-run only the clean stage on a previous raw export (no network).")
+        parser.add_argument("--keys-file", default=None,
+                            help="File with ONSHAPE_ACCESS_KEY/ONSHAPE_SECRET_KEY (default: onshape_keys.txt).")
+        parser.add_argument("--update-yaml", default=None, metavar="PATH",
+                            help="After export, sync MJCF joint ranges into this module conf "
+                                 "(sim_range_min/max) and config.json joint_properties.limits.")
+        ns = parser.parse_args(argv)
+        self.assembly_dir = ns.assembly_dir
+        self.clean_only = ns.clean_only
+        self.keys_file = ns.keys_file
+        self.update_yaml = ns.update_yaml
+        return []
+
     def handle(self, cfg: DictConfig) -> None:
-        assembly_dir = os.environ.get("SOLARIAN_ONSHAPE_EXPORT_DIR")
+        assembly_dir = self.assembly_dir
         if not assembly_dir:
             print("Error: onshape-export requires an assembly directory argument")
             print(
@@ -126,9 +146,9 @@ class OnshapeExportCommand(BaseCommand):
             )
             sys.exit(1)
 
-        clean_only = os.environ.get("SOLARIAN_ONSHAPE_EXPORT_CLEAN_ONLY") == "true"
-        keys_file = os.environ.get("SOLARIAN_ONSHAPE_EXPORT_KEYS_FILE") or None
-        update_yaml = os.environ.get("SOLARIAN_ONSHAPE_EXPORT_UPDATE_YAML") or None
+        clean_only = self.clean_only
+        keys_file = self.keys_file or None
+        update_yaml = self.update_yaml or None
 
         assembly_path = Path(assembly_dir)
         if not assembly_path.is_dir():

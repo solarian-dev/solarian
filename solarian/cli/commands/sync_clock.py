@@ -13,6 +13,7 @@ from solarian.core.configs import ServerConfig
 
 @CommandRegistry.register("sync-clock", "server")
 class SyncClockCommand(BaseCommand):
+    category = "Utilities"
     help = "Sync Solarian wall-clock offset to the relay server (does not change OS time)."
     description = """
     Takes 12 timing samples against the relay's clock-sync port and reports the

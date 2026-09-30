@@ -14,6 +14,7 @@ from solarian.cli import BaseCommand, CommandRegistry
 
 @CommandRegistry.register('shell', None)
 class ShellCommand(BaseCommand):
+    category = "Utilities"
     help = 'Open an interactive Python shell with project settings loaded.'
     description = """
     Starts IPython (or the stdlib console when IPython is not installed) with the

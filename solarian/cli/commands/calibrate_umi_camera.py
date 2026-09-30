@@ -668,6 +668,7 @@ def _run_overlay(
 
 @CommandRegistry.register("calibrate-umi-camera", "controller")
 class CalibrateUmiCameraCommand(BaseCommand):
+    category = "Controller"
     help = (
         "Calibrate a connected camera onto GoPro Hero 10 + Max Lens Mod optics "
         "and overlay vs UMI gold."

@@ -7,6 +7,7 @@ from solarian.utils import get_class
 
 @CommandRegistry.register('write-robot-calibration', 'robot')
 class WriteRobotCalibrationCommand(BaseCommand):
+    category = "Robot"
     help = "Write the calibration in the robot's yamls onto its hardware"
     description = """
     Pushes the calibration already in the robot's module yamls onto the hardware,

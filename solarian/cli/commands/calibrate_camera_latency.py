@@ -401,6 +401,7 @@ def _run_capture(
 
 @CommandRegistry.register("calibrate-camera-latency", "robot")
 class CalibrateCameraLatencyCommand(BaseCommand):
+    category = "Robot"
     help = "Measure the camera's receive_latency by filming a timestamp QR code (UMI method)."
     description = """
     UMI's method: one machine displays a QR code encoding the instant it was drawn,

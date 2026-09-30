@@ -234,11 +234,14 @@ from solarian.cli.base import BaseCommand, CommandRegistry
 
 @CommandRegistry.register('feetech-set-id')
 class SetIdCommand(BaseCommand):
+    category = "Utilities"
     help = "Assign an ID to a Feetech servo."
 
     def handle(self, cfg: DictConfig) -> None:
         ...
 ```
+
+`category` is the heading `solarian --help` groups the command under. Set `uses_config = False` when it needs no project yaml. Override `parse_args` to accept positionals or flags: store the parsed values on `self` and read them from `handle`. The default forwards every token to Hydra as a `key=value` override.
 
 ```toml
 [project.entry-points."solarian.commands"]
