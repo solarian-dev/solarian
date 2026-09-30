@@ -5,7 +5,7 @@ Skill plugins advertise their :class:`Skill` subclasses under the
 ``solarian.skills`` entry-point group, e.g. in a plugin's ``pyproject.toml``::
 
     [project.entry-points."solarian.skills"]
-    cup_arrange = "solarian_skill_cup_arrange.skill:CupArrangeSkill"
+    umi = "solarian_umi_skill.skill:UMISkill"
 
 Installing such a package makes the skill discoverable by an
 :class:`~solarian.core.ai.ai_controller.AIController` without editing any

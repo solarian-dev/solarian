@@ -50,22 +50,27 @@ solarian install plugins/solarian-umi-slim
 
 ```python
 from solarian_move_skill import MoveSkill
+from solarian_umi_skill import UMISkill
 
 MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"})
+UMISkill(params={"config": "cup_arrange.yaml"})
 ```
 
-`pose` is any name under `poses:` in `conf/move.yaml`, which `solarian install solarian-move-skill` creates from the plugin's template when the file is not already there.
+`pose` is any name under `poses:` in `conf/move.yaml`, which `solarian install solarian-move-skill` creates from the plugin's template when the file is not already there. `config` is a yaml in `conf/`. `solarian install solarian-umi-skill` copies `templates/umi.yaml` to `conf/umi.yaml`; copy that file for each policy.
 
 Class-attribute skills you declare on your controller take priority over a discovered skill of the same name, so you can still override one by declaring it explicitly.
 
-Point a skill at its checkpoint and policy server through your project's `conf/<skill>.yaml` (the config name is a class attribute on the skill):
+`UMISkill` reads the checkpoint and the rest of its parameters from the file you passed. `arm`, `gripper`, and `camera` live in that file too:
 
 ```yaml
-# conf/cup_arrange.yaml — overrides the plugin's bundled defaults
+# conf/cup_arrange.yaml — one UMI policy
 policy_server_url: http://localhost:8001
 policy_server:
   managed: false
   checkpoint: data/models/cup_wild_vit_l_1img.ckpt
+arm: right_arm
+gripper: right_gripper
+camera: right_wrist_camera
 ```
 
 ## Policy plugins: train & serve
@@ -77,7 +82,7 @@ pip install "solarian-policy-diffusion[serve]"   # torch, etc. for inference
 # or [train] to train, [modal] for cloud training
 
 # serve the checkpoint a skill drives (resolves the skill's config)
-solarian run-policy cup_arrange
+solarian run-policy umi --config cup_arrange.yaml
 
 # or launch the server directly
 solarian-diffusion-policy --input <checkpoint.ckpt> --port 8001

@@ -351,12 +351,18 @@ def main() -> None:
     elif args.subcommand == "run-policy":
         rp_parser = argparse.ArgumentParser(prog="solarian run-policy")
         rp_parser.add_argument("skill", help="Name of the skill whose policy server to run.")
+        rp_parser.add_argument("--config", default=None,
+                               help="Skill yaml (a conf filename or a path). "
+                                    "UMISkill reads policy_server from this file "
+                                    "instead of conf/umi.yaml.")
         rp_parser.add_argument("--checkpoint", "-c", default=None,
                                help="Checkpoint path (overrides the skill's configured checkpoint).")
         rp_parser.add_argument("--host", default=None, help="Host to bind the server to.")
         rp_parser.add_argument("--port", default=None, help="Port to bind the server to.")
         rp_args = rp_parser.parse_args(remaining)
         os.environ["SOLARIAN_RUN_POLICY_SKILL"] = rp_args.skill
+        if rp_args.config:
+            os.environ["SOLARIAN_RUN_POLICY_CONFIG"] = rp_args.config
         if rp_args.checkpoint:
             os.environ["SOLARIAN_RUN_POLICY_CHECKPOINT"] = rp_args.checkpoint
         if rp_args.host:

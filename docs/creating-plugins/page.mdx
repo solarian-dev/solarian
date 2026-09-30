@@ -201,11 +201,11 @@ The bus implements `read(ImageData, [...])` by grabbing a frame from V4L2 / AVFo
 
 An AI plugin usually comes in two halves (they can be separate packages):
 
-- A **skill plugin** — the behavior. `solarian-skill-cup-arrange` ships a `CupArrangeSkill` that only *calls* a policy over HTTP:
+- A **skill plugin** — the behavior. `solarian-umi-skill` ships a `UMISkill` that only *calls* a policy over HTTP. The yaml in `params["config"]` says which checkpoint and which modules:
 
 ```toml
 [project.entry-points."solarian.skills"]
-cup_arrange = "solarian_skill_cup_arrange.skill:CupArrangeSkill"
+umi = "solarian_umi_skill.skill:UMISkill"
 ```
 
 - A **policy plugin** — the trainable model. `solarian-policy-diffusion` ships a `Trainer` (for `solarian train`) and a `PolicyServer`, with heavy ML deps kept behind optional extras so merely *discovering* the plugin doesn't pull in PyTorch:

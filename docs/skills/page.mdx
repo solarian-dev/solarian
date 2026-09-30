@@ -174,7 +174,7 @@ from solarian.core.execution import ExecutionMode, ExecutionPlace
 class TeleopSkill(Skill):
     execution_mode = ExecutionMode.INLINE
 
-class CupArrangeSkill(Skill):
+class UMISkill(Skill):
     execution_place = ExecutionPlace.ROBOT
 ```
 
@@ -237,7 +237,7 @@ Skills resolve their config by deep-merging two layers, with the project layer
 winning:
 
 1. **Bundled defaults** — a `conf.yaml` shipped next to the skill module. A skill living in a project rather than a plugin usually skips this and keeps its defaults as class attributes, since sibling skills in one package cannot each own a file of that name.
-2. **Project override** — `conf/<config_name>.yaml` in your project, where `config_name` is a class attribute on the skill (for a plugin, its `solarian.skills` entry-point name, e.g. `cup_arrange`).
+2. **Project override** — `conf/<config_name>.yaml` in your project, where `config_name` is a class attribute on the skill (for a plugin, its `solarian.skills` entry-point name, e.g. `move`).
 
 At launch, individual `params` keys override both. This keeps project-specific
 values — most importantly the **policy checkpoint path** — in your project's
@@ -245,7 +245,14 @@ values — most importantly the **policy checkpoint path** — in your project's
 needs and inherits the rest:
 
 ```yaml
-# <your-project>/conf/cup_arrange.yaml — overrides plugin defaults
+# <your-project>/conf/move.yaml — overrides plugin defaults
+frequency: 10
+```
+
+`UMISkill` is the exception: the yaml you pass as `params["config"]` is the whole config, not a thin override. `solarian install solarian-umi-skill` copies `templates/umi.yaml` to `conf/umi.yaml`; copy that file per policy.
+
+```yaml
+# <your-project>/conf/cup_arrange.yaml
 policy_server_url: http://localhost:8001
 policy_server:
   managed: false
@@ -254,9 +261,15 @@ policy_server:
   port: 8001
 ```
 
-The same merged config backs `solarian run-policy <skill>`, so the launcher
-reuses the project's checkpoint. A skill that declares a `policy_server_module`
-but has no checkpoint (in any layer, and none passed on the CLI) errors clearly.
+```python
+UMISkill(params={"config": "cup_arrange.yaml"})
+```
+
+The same config backs `solarian run-policy <skill>`, so the launcher reuses
+the project's checkpoint. `--config <file>` reads a different yaml, which is
+how `solarian run-policy umi --config cup_arrange.yaml` picks one policy.
+A skill that declares a `policy_server_module` but has no checkpoint (in the
+file, and none passed on the CLI) errors clearly.
 
 Nothing about this is specific to policies. Any value an operator wants to tune
 per robot belongs here rather than on the controller, which is how
@@ -303,11 +316,11 @@ to via `policy_server_url`.
 
 ### Example plugin
 
-`plugins/solarian-skill-cup-arrange` is a complete reference *skill* plugin: it ships a `CupArrangeSkill` (a UMI diffusion-policy skill), auto-discovered through its `solarian.skills` entry point. Point it at your checkpoint in `conf/cup_arrange.yaml`, then run its policy server (hosted by the `solarian-policy-diffusion` policy plugin):
+`plugins/solarian-umi-skill` is a complete reference *skill* plugin: it ships `UMISkill`, auto-discovered through its `solarian.skills` entry point (`umi`). Copy `conf/umi.yaml` per policy and start the skill with that filename, then run its policy server (hosted by the `solarian-policy-diffusion` policy plugin):
 
 ```bash
 # reuses the checkpoint from conf/cup_arrange.yaml
-solarian run-policy cup_arrange
+solarian run-policy umi --config cup_arrange.yaml
 # or launch directly:
 solarian-diffusion-policy --input <checkpoint.ckpt> --port 8001
 ```

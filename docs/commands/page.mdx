@@ -221,10 +221,10 @@ Writes the calibration values from YAML into the controller hardware.
 ### `run-policy`
 
 ```bash
-solarian run-policy <skill_name> [--checkpoint PATH] [--host HOST] [--port PORT]
+solarian run-policy <skill_name> [--config FILE] [--checkpoint PATH] [--host HOST] [--port PORT]
 ```
 
-Runs the [`PolicyServer`](/docs/servers) associated with a skill. The skill declares its server via the `policy_server_module` class attribute and the checkpoint location in its bundled config (`policy_server.checkpoint`); this command resolves both and launches the server (overridable with `--checkpoint`/`--host`/`--port`). For example, `solarian run-policy cup_arrange` starts the diffusion policy server that `solarian-skill-cup-arrange` drives. See [Training](/docs/training) and [Skills](/docs/skills).
+Runs the [`PolicyServer`](/docs/servers) associated with a skill. The skill declares its server via the `policy_server_module` class attribute and the checkpoint location in its config (`policy_server.checkpoint`); this command resolves both and launches the server (overridable with `--checkpoint`/`--host`/`--port`). `--config` is a filename in `conf/` or a path, and replaces the skill's default config file. For example, `solarian run-policy umi --config cup_arrange.yaml` starts the diffusion policy server that `solarian-umi-skill` drives. See [Training](/docs/training) and [Skills](/docs/skills).
 
 ### `run-server`
 

@@ -160,7 +160,7 @@ class Skill(ABC):
     #: in the active project.  ``None`` means "no project override"; skills that
     #: want project-owned config (e.g. the policy checkpoint path) should set
     #: this to their stable skill name — typically the ``solarian.skills``
-    #: entry-point name (e.g. ``"cup_arrange"``).
+    #: entry-point name (e.g. ``"umi"``).
     config_name: Optional[str] = None
 
     def __init__(
@@ -373,6 +373,7 @@ class Skill(ABC):
         checkpoint: Optional[str] = None,
         host: Optional[str] = None,
         port: Optional[int] = None,
+        config: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Describe how to launch this skill's policy server.
 
@@ -381,20 +382,41 @@ class Skill(ABC):
         ``module``, ``checkpoint``, ``host``, ``port`` and ``managed``.
 
         The checkpoint is resolved from the merged config (project-level
-        ``conf/<config_name>.yaml`` overriding the bundled ``policy_server.checkpoint``);
-        explicit arguments here take precedence.  A missing checkpoint is an error.
+        ``conf/<config_name>.yaml`` overriding the bundled ``policy_server.checkpoint``).
+        ``config`` is a filename in ``conf/`` or a path, and replaces that
+        merge. Explicit checkpoint/host/port arguments take precedence. A
+        missing checkpoint is an error.
         """
         if not cls.policy_server_module:
             return None
 
-        server_cfg = (cls.load_config().get("policy_server") or {})
+        if config:
+            from pathlib import Path
+
+            import yaml
+
+            from solarian.utils.configs import resolve_with_deployment
+
+            path = Path(config)
+            if not path.is_absolute() and len(path.parts) == 1:
+                path = cls._project_conf_dir() / path
+            if not path.is_file():
+                raise ValueError(f"Skill config not found: {path}")
+            with open(path, "r") as f:
+                loaded = resolve_with_deployment(yaml.safe_load(f) or {})
+            server_cfg = loaded.get("policy_server") or {}
+            project_file = str(path)
+        else:
+            server_cfg = (cls.load_config().get("policy_server") or {})
+            project_file = (
+                f"conf/{cls.config_name}.yaml" if cls.config_name else "conf/<skill>.yaml"
+            )
         checkpoint = checkpoint or server_cfg.get("checkpoint")
         if not checkpoint:
-            project_file = f"conf/{cls.config_name}.yaml" if cls.config_name else "conf/<skill>.yaml"
             raise ValueError(
                 f"{cls.__name__} declares a policy server "
                 f"({cls.policy_server_module!r}) but no checkpoint is defined. "
-                f"Set 'policy_server.checkpoint' in the project's {project_file} "
+                f"Set 'policy_server.checkpoint' in {project_file} "
                 f"(or the skill's bundled {cls.config_filename}), or pass an explicit checkpoint."
             )
         host = host or server_cfg.get("host", "127.0.0.1")

@@ -10,12 +10,12 @@ attribute and the checkpoint location in its bundled config
 
 Usage::
 
-    solarian run-policy <skill_name> [--checkpoint PATH] [--host HOST] [--port PORT]
+    solarian run-policy <skill_name> [--config FILE] [--checkpoint PATH] [--host HOST] [--port PORT]
 
 Examples::
 
-    solarian run-policy cup_arrange
-    solarian run-policy cup_arrange --checkpoint data/models/cup.ckpt --port 8001
+    solarian run-policy umi --config cup_arrange.yaml
+    solarian run-policy umi --config cup_arrange.yaml --checkpoint data/models/cup.ckpt --port 8001
 """
 
 import os
@@ -38,18 +38,20 @@ class RunPolicyCommand(BaseCommand):
     Run it on the machine that holds the checkpoint and the GPU, which is often not
     the robot. The flags override what the skill's config says.
     """
-    usage = "<skill_name> [--checkpoint PATH] [--host HOST] [--port PORT]"
+    usage = "<skill_name> [--config FILE] [--checkpoint PATH] [--host HOST] [--port PORT]"
     options = {
         "<skill_name>": "Skill whose policy server to run; unknown names print the "
                         "installed skills.",
+        "--config FILE": "Yaml to read the checkpoint from (a filename in conf/ or a "
+                         "path). UMISkill defaults to conf/umi.yaml.",
         "--checkpoint PATH": "Checkpoint to serve, overriding the skill's configured "
                              "one.",
         "--host HOST": "Address to bind (default: the skill's config).",
         "--port PORT": "Port to bind (default: the skill's config).",
     }
     examples = (
-        "solarian run-policy cup_arrange",
-        "solarian run-policy cup_arrange --checkpoint data/models/cup.ckpt --port 8001",
+        "solarian run-policy umi --config cup_arrange.yaml",
+        "solarian run-policy umi --config cup_arrange.yaml --checkpoint data/models/cup.ckpt --port 8001",
     )
 
     def handle(self, cfg: DictConfig) -> None:
@@ -58,7 +60,7 @@ class RunPolicyCommand(BaseCommand):
             print("Error: a skill name is required")
             print(
                 "Usage: solarian run-policy <skill_name> "
-                "[--checkpoint PATH] [--host HOST] [--port PORT]"
+                "[--config FILE] [--checkpoint PATH] [--host HOST] [--port PORT]"
             )
             sys.exit(1)
 
@@ -79,10 +81,11 @@ class RunPolicyCommand(BaseCommand):
         checkpoint = os.environ.get("SOLARIAN_RUN_POLICY_CHECKPOINT")
         host = os.environ.get("SOLARIAN_RUN_POLICY_HOST")
         port = os.environ.get("SOLARIAN_RUN_POLICY_PORT")
+        config = os.environ.get("SOLARIAN_RUN_POLICY_CONFIG")
 
         try:
             spec = skill_cls.get_policy_server_spec(
-                checkpoint=checkpoint, host=host, port=port
+                checkpoint=checkpoint, host=host, port=port, config=config
             )
         except Exception as e:  # noqa: BLE001 - surface config errors cleanly
             print(f"Error: {e}")

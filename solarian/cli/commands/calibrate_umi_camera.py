@@ -57,8 +57,22 @@ def _as_bool(val) -> bool:
     return str(val).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _load_skill_cfg():
-    path = _conf_dir() / "cup_arrange.yaml"
+def _skill_config_path(cfg) -> Path:
+    """``config=`` names the UMI yaml; otherwise the installed ``conf/umi.yaml``."""
+    raw = _cfg_get(cfg, "config")
+    name = str(raw).strip() if raw else "umi.yaml"
+    if name.lower() in {"", "null", "none"}:
+        name = "umi.yaml"
+    if not name.endswith((".yaml", ".yml")):
+        name = f"{name}.yaml"
+    path = Path(name)
+    if path.is_absolute() or len(path.parts) > 1:
+        return path
+    return _conf_dir() / path
+
+
+def _load_skill_cfg(cfg=None):
+    path = _skill_config_path(cfg)
     if not path.is_file():
         return OmegaConf.create({})
     return OmegaConf.load(str(path))
@@ -91,7 +105,11 @@ def _camera_yaml_path(cfg, skill_cfg) -> Path:
     if raw:
         p = Path(str(raw))
         return p if p.is_absolute() else _conf_dir() / p
-    cam_module = str(skill_cfg.get("modules", {}).get("camera", "right_wrist_camera"))
+    cam_module = skill_cfg.get("camera")
+    if not cam_module:
+        modules = skill_cfg.get("modules") or {}
+        cam_module = modules.get("camera", "right_wrist_camera")
+    cam_module = str(cam_module)
     return _conf_dir() / f"{cam_module}.yaml"
 
 
@@ -422,19 +440,19 @@ def _run_overlay(
     import cv2
     import numpy as np
 
-    from so106.skills.umi.compare_policy_image import (
+    from solarian_umi_skill.umi.compare_policy_image import (
         CONTACT_SHEET_VIEWS,
         _imwrite_rgb,
         render_contact_sheet,
     )
-    from so106.skills.umi.gripper_align import (
+    from solarian_umi_skill.umi.gripper_align import (
         ALIGN_POLYGONS_NAME,
         compute_align_metrics,
         extract_align_masks,
         load_align_polygons,
         save_align_polygons,
     )
-    from so106.skills.umi.policy_image import PolicyImagePipeline
+    from solarian_umi_skill.umi.policy_image import PolicyImagePipeline
     from solarian.core.optical_remap import OpticalRemap
 
     pipeline = PolicyImagePipeline(
@@ -674,6 +692,9 @@ class CalibrateUmiCameraCommand(BaseCommand):
     outlines, m cycles views, s saves a contact sheet, q quits.
     """
     params = {
+        "config": "UMI skill yaml to read camera and image flags from; a filename "
+                  "in conf/ or a path (default: umi.yaml). so106's cup arrange "
+                  "file is config=cup_arrange.yaml.",
         "gold": "Path to a custom gold policy image; defaults to the UMI image "
                 "shipped with Solarian.",
         "camera_yaml": "Camera config to read the capture size from and write the "
@@ -701,7 +722,7 @@ class CalibrateUmiCameraCommand(BaseCommand):
         )
         from solarian.core.optical_remap import build_remap_from_images
 
-        skill_cfg = _load_skill_cfg()
+        skill_cfg = _load_skill_cfg(cfg)
         camera_yaml = _camera_yaml_path(cfg, skill_cfg)
         capture_wh = _load_camera_capture_size(camera_yaml)
         dump_dir = Path(str(skill_cfg.get("debug_image_path", _DUMP_DEFAULT)))
@@ -717,7 +738,7 @@ class CalibrateUmiCameraCommand(BaseCommand):
         gold_path = None
         try:
             gold_path = _resolve_gold(cfg, skill_cfg)
-            from so106.skills.umi.compare_policy_image import _imread_rgb
+            from solarian_umi_skill.umi.compare_policy_image import _imread_rgb
 
             gold = _imread_rgb(gold_path)
         except FileNotFoundError as exc:
