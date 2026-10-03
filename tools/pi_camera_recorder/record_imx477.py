@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Record SLAM-friendly video from an IMX477 (Arducam / Pi HQ) on a Pi Zero 2 W.
 
-Records the 2028x1520 2x2-binned full-field-of-view sensor mode at 40 fps
-through the hardware MJPEG encoder. The hardware H.264 encoder cannot be used:
-it is limited to 1920 pixels wide, and 2028x1520@40 is also beyond H.264 level
-4.2. MJPEG is the better fit for SLAM anyway: every frame is an independent
-intra frame, so there are no inter-frame motion artifacts.
+Runs the 2028x1520 2x2-binned full-field-of-view sensor mode at 40 fps and
+encodes in hardware with one of:
+
+* ``--codec mjpeg`` (default): full 2028x1520. Every frame is an independent
+  intra frame, so there are no inter-frame motion artifacts.
+* ``--codec h264``: the ISP scales to 1440x1080, which keeps 4:3 and the full
+  field of view. The hardware H.264 encoder stops at about 1920x1080 (level 4.2),
+  so it cannot take 2028x1520. Files are several times smaller.
 
 Auto exposure is kept on but capped: the AGC tuning is rewritten so that the
 shutter never exceeds ``--max-exposure-us`` and any extra exposure needed comes
@@ -15,7 +18,7 @@ consistency between frames.
 
 Each session directory contains:
 
-* ``video.mjpeg``  - raw MJPEG stream, one JPEG per frame
+* ``video.mjpeg`` or ``video.h264`` - raw elementary stream
 * ``frames.csv``   - one row per encoded frame: sensor timestamp, exposure, gain
 * ``session.json`` - settings, camera properties, clock offsets
 
@@ -23,6 +26,7 @@ Usage::
 
     python3 record_imx477.py                     # record until Ctrl-C
     python3 record_imx477.py --duration 60       # 60 seconds
+    python3 record_imx477.py --codec h264 --duration 60
     python3 record_imx477.py --max-exposure-us 2000 --max-gain 12
 
 Requires Raspberry Pi OS (Bookworm or later) with ``python3-picamera2``.
@@ -44,6 +48,12 @@ SENSOR_MODE = (2028, 1520)
 SENSOR_BIT_DEPTH = 12
 SENSOR_MODE_MAX_FPS = 40.0
 MIN_SHUTTER_US = 100
+
+CODECS = {
+    "mjpeg": {"size": SENSOR_MODE, "bitrate": 50e6, "ext": "mjpeg"},
+    "h264": {"size": (1440, 1080), "bitrate": 15e6, "ext": "h264"},
+}
+H264_MAX_BITRATE = 25e6
 
 _SENSOR_CLOCK = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
 
@@ -127,7 +137,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--denoise", choices=["off", "fast", "high_quality"], default="off")
     p.add_argument("--awb-lock-after", type=float, default=2.0,
                    help="seconds of auto white balance before locking colour gains; negative = never lock")
-    p.add_argument("--bitrate", type=float, default=50e6, help="MJPEG bitrate in bits/s")
+    p.add_argument("--codec", choices=sorted(CODECS), default="mjpeg",
+                   help="mjpeg: 2028x1520; h264: scaled to 1440x1080 (hardware limit)")
+    p.add_argument("--bitrate", type=float, default=None,
+                   help="bits/s; default 50e6 for mjpeg, 15e6 for h264")
+    p.add_argument("--iperiod", type=int, default=40,
+                   help="h264 only: frames between keyframes (40 = one per second at 40 fps)")
     p.add_argument("--buffer-count", type=int, default=4,
                    help="camera buffers; the Zero 2 W's 512 MB leaves little CMA")
     p.add_argument("--tuning-file", default="imx477.json", help="libcamera tuning file to start from")
@@ -142,6 +157,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error(f"--shutter-us cannot exceed the frame period ({frame_period_us:.0f} us)")
     if not 0.0 <= args.sharpness <= 16.0:
         p.error("--sharpness must be in [0, 16]")
+    if args.bitrate is None:
+        args.bitrate = CODECS[args.codec]["bitrate"]
+    if args.codec == "h264" and args.bitrate > H264_MAX_BITRATE:
+        p.error(f"--bitrate above {H264_MAX_BITRATE:.0f} is not supported by the Pi H.264 encoder")
+    if args.iperiod < 1:
+        p.error("--iperiod must be >= 1")
     return args
 
 
@@ -169,16 +190,22 @@ def build_controls(args: argparse.Namespace) -> dict:
     return ctrls
 
 
-def make_logging_encoder(bitrate: int, writer: csv.writer, timestamps: list[int]):
-    """An MJPEGEncoder that logs metadata for exactly the frames it encodes.
+def make_logging_encoder(args: argparse.Namespace, writer: csv.writer, timestamps: list[int]):
+    """A hardware encoder that logs metadata for exactly the frames it encodes.
 
     Hooking the encoder (rather than a Picamera2 post_callback) keeps CSV rows
-    aligned one-to-one with JPEGs in the stream even if the encoder skips frames.
+    aligned one-to-one with frames in the stream even if the encoder skips some.
     """
-    from picamera2.encoders import MJPEGEncoder
+    from picamera2.encoders import H264Encoder, MJPEGEncoder
 
-    hook = "_encode" if hasattr(MJPEGEncoder, "_encode") else "encode"
-    parent = getattr(MJPEGEncoder, hook)
+    if args.codec == "h264":
+        # repeat=True puts SPS/PPS before every keyframe so playback can start at any of them.
+        base, kwargs = H264Encoder, {"bitrate": int(args.bitrate), "repeat": True, "iperiod": args.iperiod}
+    else:
+        base, kwargs = MJPEGEncoder, {"bitrate": int(args.bitrate)}
+
+    hook = "_encode" if hasattr(base, "_encode") else "encode"
+    parent = getattr(base, hook)
     counter = [0]
 
     def logged(self, stream, request):
@@ -199,12 +226,12 @@ def make_logging_encoder(bitrate: int, writer: csv.writer, timestamps: list[int]
             timestamps.append(int(ts))
         return parent(self, stream, request)
 
-    cls = type("LoggingMJPEGEncoder", (MJPEGEncoder,), {hook: logged})
-    return cls(bitrate=int(bitrate))
+    cls = type(f"Logging{base.__name__}", (base,), {hook: logged})
+    return cls(**kwargs)
 
 
 def configure_camera(picam2, args: argparse.Namespace):
-    main = {"size": SENSOR_MODE, "format": "YUV420"}
+    main = {"size": CODECS[args.codec]["size"], "format": "YUV420"}
     common = dict(main=main, controls=build_controls(args), buffer_count=args.buffer_count,
                   encode="main", display=None)
     try:
@@ -248,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     picam2 = Picamera2(camera_num=args.camera, tuning=tuning)
     config = configure_camera(picam2, args)
 
-    session = args.output / datetime.now().strftime("%Y%m%d_%H%M%S")
+    session = args.output / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{args.codec}"
     session.mkdir(parents=True, exist_ok=False)
 
     stop = threading.Event()
@@ -260,17 +287,21 @@ def main(argv: list[str] | None = None) -> int:
     writer = csv.writer(csv_file)
     writer.writerow(["frame", "sensor_timestamp_ns", "exposure_us", "analogue_gain",
                      "digital_gain", "lux", "colour_temperature_k", "focus_fom"])
-    encoder = make_logging_encoder(args.bitrate, writer, timestamps)
+    encoder = make_logging_encoder(args, writer, timestamps)
+    out_size = CODECS[args.codec]["size"]
+    video_path = session / f"video.{CODECS[args.codec]['ext']}"
 
     realtime_ns = time.time_ns()
     sensor_clock_ns = time.clock_gettime_ns(_SENSOR_CLOCK)
     session_info = {
         "camera_model": picam2.camera_properties.get("Model"),
         "camera_properties": {k: str(v) for k, v in picam2.camera_properties.items()},
-        "resolution": list(SENSOR_MODE),
+        "sensor_mode": list(SENSOR_MODE),
+        "resolution": list(out_size),
         "fps": args.fps,
-        "codec": "mjpeg",
+        "codec": args.codec,
         "bitrate": args.bitrate,
+        "iperiod": args.iperiod if args.codec == "h264" else None,
         "max_exposure_us": args.max_exposure_us,
         "max_gain": args.max_gain,
         "shutter_us": args.shutter_us,
@@ -285,7 +316,8 @@ def main(argv: list[str] | None = None) -> int:
         "started_at": datetime.now().isoformat(),
     }
 
-    print(f"Recording {SENSOR_MODE[0]}x{SENSOR_MODE[1]} @ {args.fps:g} fps MJPEG to {session}")
+    print(f"Recording {out_size[0]}x{out_size[1]} @ {args.fps:g} fps {args.codec.upper()} "
+          f"at {args.bitrate / 1e6:g} Mbit/s to {session}")
     if args.shutter_us is None:
         print(f"Auto exposure capped at {args.max_exposure_us} us, gain <= {args.max_gain:g}")
     else:
@@ -293,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
 
     awb_thread = None
     try:
-        picam2.start_recording(encoder, FileOutput(str(session / "video.mjpeg")))
+        picam2.start_recording(encoder, FileOutput(str(video_path)))
         if args.awb_lock_after >= 0:
             awb_thread = threading.Thread(target=lock_awb_later, args=(picam2, args.awb_lock_after, stop),
                                           daemon=True)
@@ -313,13 +345,18 @@ def main(argv: list[str] | None = None) -> int:
         csv_file.close()
 
     stats = frame_stats(timestamps, args.fps)
+    stats["file_bytes"] = video_path.stat().st_size if video_path.exists() else 0
+    duration_s = stats["frames"] / stats["measured_fps"] if stats["measured_fps"] else None
+    stats["actual_mbit_per_s"] = stats["file_bytes"] * 8 / duration_s / 1e6 if duration_s else None
     session_info["stats"] = stats
     session_info["stopped_at"] = datetime.now().isoformat()
     (session / "session.json").write_text(json.dumps(session_info, indent=2))
 
     fps_txt = f"{stats['measured_fps']:.2f}" if stats["measured_fps"] else "n/a"
-    print(f"{stats['frames']} frames, measured {fps_txt} fps, {stats['dropped_frames']} dropped")
-    print(f"Mux without re-encoding: ffmpeg -framerate {args.fps:g} -i {session / 'video.mjpeg'} "
+    rate_txt = f"{stats['actual_mbit_per_s']:.1f} Mbit/s" if stats["actual_mbit_per_s"] else "n/a"
+    print(f"{stats['frames']} frames, measured {fps_txt} fps, {stats['dropped_frames']} dropped, "
+          f"{stats['file_bytes'] / 1e6:.1f} MB ({rate_txt})")
+    print(f"Mux without re-encoding: ffmpeg -framerate {args.fps:g} -i {video_path} "
           f"-c copy {session / 'video.mkv'}")
     return 0
 

@@ -73,3 +73,19 @@ def test_args_reject_exposure_longer_than_frame():
         rec.parse_args(["--fps", "60"])
     args = rec.parse_args([])
     assert args.fps == 40.0 and args.max_exposure_us == 4000
+
+
+def test_args_codec_defaults():
+    assert rec.parse_args([]).codec == "mjpeg"
+    assert rec.parse_args([]).bitrate == 50e6
+    h264 = rec.parse_args(["--codec", "h264"])
+    assert h264.bitrate == 15e6
+    assert rec.CODECS["h264"]["size"] == (1440, 1080)
+    assert rec.parse_args(["--codec", "h264", "--bitrate", "20e6"]).bitrate == 20e6
+
+
+def test_args_reject_h264_over_encoder_limits():
+    with pytest.raises(SystemExit):
+        rec.parse_args(["--codec", "h264", "--bitrate", "40e6"])
+    with pytest.raises(SystemExit):
+        rec.parse_args(["--codec", "h264", "--iperiod", "0"])
