@@ -28,6 +28,12 @@ class PygameUI:
             on_release=lambda key: commands.append(
                 UICommand(UICommandType.KEY_UP, {"key": key})
             ),
+            on_click=lambda label, point, button: commands.append(
+                UICommand(
+                    UICommandType.CLICK,
+                    {"label": label, "point": point, "button": button},
+                )
+            ),
         )
         if quit_requested:
             commands.append(UICommand(UICommandType.QUIT))
@@ -36,7 +42,7 @@ class PygameUI:
     def render(self, snapshot: UISnapshot) -> None:
         self._gui.render(
             sections=snapshot.sections,
-            images=[(image.label, image.data) for image in snapshot.images],
+            images=[(image.label, image.data, image.bboxes) for image in snapshot.images],
             key_help=snapshot.key_help,
             status=snapshot.status,
             fps=snapshot.fps,

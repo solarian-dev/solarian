@@ -11,7 +11,7 @@ packages only installed on the controller machine).
 Convention:
   - Robot-side commands  → ("robot", "observation", "action")
   - Controller-side cmds → ("controller",)
-  - Server-side cmds     → ("server",)
+  - Server-side cmds     → ("robot", "observation", "action", "server")
   - Utility / data cmds  → ()   (no project modules needed)
   - None                 → all modules (backward-compatible default)
 """
@@ -187,11 +187,21 @@ CommandRegistry.register_lazy(
     category="Controller",
 )
 CommandRegistry.register_lazy(
+    "run-service",
+    module_path=f"{_pkg}.run_service",
+    help="Run the server of an installed service plugin (e.g. a bbox tracker)",
+    config_name=None,
+    setup_modules=(),
+    category="Controller",
+)
+CommandRegistry.register_lazy(
     "run-server",
     module_path=f"{_pkg}.run_server",
     help="Run the relay server the robot and the controller connect through",
     config_name="server",
-    setup_modules=("server",),
+    # The schema modules too: server-computed fields and server-hosted skills
+    # are declared there.
+    setup_modules=("robot", "observation", "action", "server"),
     category="Controller",
 )
 

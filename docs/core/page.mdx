@@ -184,8 +184,8 @@ Every `Data` carries:
   <Property name="ImageData" type="np.ndarray">
     HxWxC uint8 image. Compresses to JPEG on the wire (requires <code>opencv-python</code>).
   </Property>
-  <Property name="BoundingBoxData" type="(x1, y1, x2, y2)">
-    Axis-aligned bounding box.
+  <Property name="BoundingBoxData" type="np.ndarray">
+    Axis-aligned box <code>(x0, y0, x1, y1)</code> in source-image pixels, int32 of shape <code>(4,)</code>. All zeros means no box.
   </Property>
   <Property name="TimestampData" type="float">
     Wall-clock timestamp.
@@ -225,21 +225,20 @@ class IMUSensor(Sensor):
 
 `IMUSensor.imu` becomes the `Data` reference you bind to a `SensorField` in your `ModuleObs`.
 
-### `DataComputer`
+### `ExecutionPlace` for processors
 
-Used by [`CalculatedField`](/docs/observations) to choose where a processor runs:
+[`CalculatedField`](/docs/observations) uses the same `ExecutionPlace` as [skills](/docs/skills#where-the-skill-runs-executionplace-and-executionmode) to choose where its processor runs:
 
 <Properties>
-  <Property name="DataComputer.SERVER" type="0">
-    Run on the relay server (typical for vision models that need a beefy machine).
+  <Property name="ExecutionPlace.SERVER" type="server">
+    Run on the relay server (typical for vision models that need a beefy machine). Robots never see the field.
   </Property>
-  <Property name="DataComputer.ROBOT" type="1">
-    Run on the robot itself (typical for low-latency processing of high-rate sensor data).
-  </Property>
-  <Property name="DataComputer.CONTROLLER" type="2">
-    Run on the controller (rare; used when the controller has hardware the others don't).
+  <Property name="ExecutionPlace.ROBOT" type="robot">
+    Run on the robot itself, in the owning module's process (typical for low-latency processing of high-rate sensor data). The relay and controllers receive the result.
   </Property>
 </Properties>
+
+No host builds `CONTROLLER` processors.
 
 ## Putting it all together
 

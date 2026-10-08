@@ -89,11 +89,12 @@ ArmObs.get_sensor_fields_spec()
 
 ## Calculated fields
 
-Some observation fields aren't direct sensor reads — they're *computed* from other fields. A `CalculatedField` declares the inputs, the processor that produces the output, and *where* the processor runs (`DataComputer.SERVER`, `DataComputer.ROBOT`, or `DataComputer.CONTROLLER`).
+Some observation fields aren't direct sensor reads — they're *computed* from other fields. A `CalculatedField` declares the inputs, the processor that produces the output, and *where* the processor runs: `ExecutionPlace.SERVER` or `ExecutionPlace.ROBOT`, the same enum that places skills.
 
 ```python
 from solarian.core.observation import CalculatedField
-from solarian.core.data import DataComputer, BoundingBoxData
+from solarian.core.data import BoundingBoxData
+from solarian.core.execution import ExecutionPlace
 from myproject.processors import BBoxProcessor
 
 class CameraObs(ModuleObs):
@@ -101,13 +102,13 @@ class CameraObs(ModuleObs):
     bbox = CalculatedField(
         inputs=[MyRobot.gripper_camera.sensor.rgb_image],
         processor=BBoxProcessor,
-        computer=DataComputer.SERVER,
+        execution_place=ExecutionPlace.SERVER,
         output=BoundingBoxData(),
         conf="conf/bbox.yaml",
     )
 ```
 
-At startup, the chosen node calls `Observation.create_processors(computer)` to instantiate every processor whose `computer` matches its role. Processors run inline as observations stream through, so by the time the controller sees the message, `obs.gripper_camera.bbox` is already populated.
+Leave out `execution_place=` to read it from an `execution_place:` key in the conf instead, so a [deployment](/docs/project-configs#deployments) can move the processor between hosts. At startup, each host calls `Observation.create_processors(place)` to instantiate every processor whose `execution_place` is its own. Processors run inline as observations stream through, so by the time the controller sees the message, `obs.gripper_camera.bbox` is already populated.
 
 See [Server](/docs/servers) for the relay-side processor lifecycle.
 

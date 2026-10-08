@@ -27,6 +27,8 @@ class ActionType:
     MOVE_J           = 11
     SERVO_L          = 12
     SERVO_J          = 13
+    START_SERVICE    = 17
+    STOP_SERVICE     = 18
     CUSTOM_START     = 100
 ```
 
@@ -45,6 +47,9 @@ class ActionType:
   </Property>
   <Property name="STOP_SKILL" type="int = 5">
     The counterpart to <code>START_SKILL</code>, carrying just the name.
+  </Property>
+  <Property name="START_SERVICE / STOP_SERVICE" type="int = 17 / 18">
+    Start or stop the processor behind a calculated field, carrying <code>{'{"module": name, "field": name, "params": {...}}'}</code>. The relay applies it when it computes that field and forwards it to the robot otherwise; the robot hands it to the owning module. Sent by <code>Controller.start_service</code> / <code>stop_service</code>; see <a href="/docs/services">Services</a>.
   </Property>
   <Property name="CUSTOM_START" type="int = 100">
     The first integer reserved for user-defined action types. Anything <code>&gt;= 100</code> is yours.

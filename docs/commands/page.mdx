@@ -226,6 +226,14 @@ solarian run-policy <skill_name> [--config FILE] [--checkpoint PATH] [--host HOS
 
 Runs the [`PolicyServer`](/docs/servers) associated with a skill. The skill declares its server via the `policy_server_module` class attribute and the checkpoint location in its config (`policy_server.checkpoint`); this command resolves both and launches the server (overridable with `--checkpoint`/`--host`/`--port`). `--config` is a filename in `conf/` or a path, and replaces the skill's default config file. For example, `solarian run-policy umi --config cup_arrange.yaml` starts the diffusion policy server that `solarian-umi-skill` drives. See [Training](/docs/training) and [Skills](/docs/skills).
 
+### `run-service`
+
+```bash
+solarian run-service <service_name> [--host HOST] [--port PORT] [server args...]
+```
+
+Runs the HTTP server of an installed [service](/docs/services) plugin, such as `sam2-tracker`, on the machine with the GPU. `--port` defaults to the service's own default (8765), and every other argument goes to the plugin's server, so `solarian run-service sam2-tracker --model small --checkpoint-dir ~/sam2` picks the SAM 2 model and downloads that checkpoint into the directory when it is missing. An unknown name lists the installed services.
+
 ### `run-server`
 
 ```bash
@@ -264,13 +272,21 @@ solarian export-dataset datasets/cup_stacking__2026-09-22T19-04-11
 
 Turns a recorded session — archive mp4s plus one parquet per episode, all at native rates — into a LeRobot v2.1 dataset: every signal resampled onto one grid, every frame warped through the camera's optical remap and downscaled to the observation resolution. The session is never modified, so recalibrate a camera or change your mind about the rate and export again from the same recording. `--fps`, `--episodes A,B,C`, `--no-remap` and `--overwrite` cover the rest. See [Recording](/docs/recording).
 
+### `umi-slam`
+
+```bash
+solarian umi-slam datasets/cup_session
+```
+
+Turns a directory of GoPro or Lumi collector MP4s into `dataset.zarr.zip` for UMI training. This is not a `solarian record` session. ORB-SLAM3 runs in Docker image `chicheng/orb_slam3:latest` and GoPro IMU extraction in `chicheng/openicc:latest`. If an image is not already on this machine, the command asks before downloading it. The copied pipeline is from [Universal Manipulation Interface](https://github.com/real-stanford/universal_manipulation_interface) (MIT). Point `dataset_path` in `conf/train-<task>.yaml` at the zarr it writes. See [Training](/docs/training).
+
 ### `train`
 
 ```bash
-solarian train
+solarian train --conf conf/train-cup-arrange
 ```
 
-Trains a policy from a recorded dataset using the configuration in `conf/train.yaml`. Supports ACT and diffusion policies (`model.type=act` or `model.type=diffusion`) and optional Weights & Biases logging.
+Trains the policy named by `policy:` in that yaml. With no `--conf`, the command reads `conf/train.yaml`. A trainer plugin seeds `conf/train-<name>.yaml` on install; copy that file per task. For UMI (`policy: umi`), each copy writes `models/<job_name>/checkpoints/latest.ckpt`, and the same `UMISkill` loads that checkpoint from the matching skill yaml. See [Training](/docs/training).
 
 ## Utility commands
 

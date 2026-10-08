@@ -123,6 +123,9 @@ Skills receive the same batch as their `control_step`'s `events` argument, so a 
   <Property name="BUTTON_UP" type="3">
     A pointing-device or controller button came up.
   </Property>
+  <Property name="CLICK" type="4">
+    A displayed observation image was clicked, emitted by the controller's <code>MouseModule</code>. <code>data</code> carries <code>point</code> (image pixels, mapped back from the display scaling), <code>module</code> and <code>field</code> (which image), and <code>button</code>. See <a href="/docs/services">Services</a> for using it to seed a tracker.
+  </Property>
 </Properties>
 
 Projects and plugins subclass to add their own, starting at 100:

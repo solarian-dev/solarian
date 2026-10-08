@@ -1384,6 +1384,7 @@ class _DeltaRobot(Robot):
         self.skills_status_buffer = None
         self._skill_status_sent = 0
         self._last_preview_image_s = 0.0
+        self.cfg = SimpleNamespace(preview_image_hz=30.0)
 
     def control_loop(self):
         pass
@@ -1438,7 +1439,7 @@ def test_an_unchanged_observation_is_not_sent_again(delta_robot):
     assert delta_robot._should_send_observation(empty) is True
 
 
-def test_preview_images_are_not_sent_faster_than_15hz(schema_classes, delta_robot):
+def test_preview_images_are_not_sent_faster_than_preview_image_hz(schema_classes, delta_robot):
     """The episode table still sees every capture; the JPEG path does not."""
     obs = _observation(schema_classes[0], t=0.0, shoulder=1.0, with_image=True)
 
@@ -1447,6 +1448,10 @@ def test_preview_images_are_not_sent_faster_than_15hz(schema_classes, delta_robo
 
     second = delta_robot._preview_observation(obs)
     assert second["cam"] is None and second["arm"] is not None
+
+    delta_robot._last_preview_image_s -= 1.0 / 30.0
+    third = delta_robot._preview_observation(obs)
+    assert third["cam"] is not None, "one period later the next frame goes out"
 
 
 def test_a_module_that_advanced_is_still_sent(schema_classes, delta_robot):
@@ -1469,7 +1474,7 @@ class _RecordingCtrl(Controller):
 
 
 def test_a_boundary_is_resent_until_the_robot_echoes_it():
-    """Every hop of the action link is CONFLATE, so one ask is not a boundary."""
+    """The controller's action socket is CONFLATE, so one ask is not a boundary."""
     ctrl = _RecordingCtrl()
     ctrl.start_recording()
 

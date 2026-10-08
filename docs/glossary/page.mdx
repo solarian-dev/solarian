@@ -134,7 +134,7 @@ When two modules share a hardware port, the [Robot](/docs/robots) starts a `BusS
 
 ### `CalculatedField`
 
-An [Observation](/docs/observations) field whose value is *computed* from other fields by a `Processor`. Declares its `inputs`, `processor`, `output`, and where it runs (`DataComputer.SERVER/ROBOT/CONTROLLER`).
+An [Observation](/docs/observations) field whose value is *computed* from other fields by a `Processor`. Declares its `inputs`, `processor`, `output`, and where it runs (`ExecutionPlace.SERVER` or `ROBOT`).
 
 ### `CameraBus`
 
@@ -160,9 +160,9 @@ Pydantic model for `conf/controller.yaml` (`fps`, `tps`, `system2_*`, `policy_pa
 
 The Pydantic-typed wrapper around every value flowing through Solarian. Subclasses include `PosData`, `SpeedData`, `ImageData`, `BoundingBoxData`, `TimestampData`. See [Core](/docs/core).
 
-### `DataComputer`
+### `ExecutionPlace`
 
-Enum (`SERVER`, `ROBOT`, `CONTROLLER`) used by `CalculatedField` to choose where a processor runs.
+Enum (`CONTROLLER`, `ROBOT`, `SERVER`) naming which runtime owns a skill, and which host runs a `CalculatedField`'s processor.
 
 ### Event
 

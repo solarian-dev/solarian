@@ -1,5 +1,6 @@
 import numpy as np
-from .data import Data, ImageData, DataComputer, threshold_level as _threshold_level
+from .data import Data, ImageData, threshold_level as _threshold_level
+from .execution import ExecutionPlace
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +100,7 @@ class CalculatedField:
     Schema declaration for a computed observation field.
 
     Declares *what* to compute (Processor subclass), *where* it runs
-    (computer), and *what* it depends on (inputs).
+    (execution_place), and *what* it depends on (inputs).
 
     ``processor`` must be a ``Processor`` subclass (the class, not an
     instance).  The component that owns the computation instantiates it
@@ -109,20 +110,25 @@ class CalculatedField:
         bbox = CalculatedField(
             inputs=[MyRobot.camera.sensor.rgb_image],
             processor=BBoxProcessor,
-            computer=DataComputer.SERVER,
+            execution_place=ExecutionPlace.SERVER,
             output=BoundingBoxData(),
             conf='conf/bbox.yaml',
         )
     """
 
-    def __init__(self, *, inputs: list[Data], computer: DataComputer,
-                 processor: type, output: Data, conf: str | None = None,
+    def __init__(self, *, inputs: list[Data], processor: type, output: Data,
+                 execution_place: ExecutionPlace | None = None, conf: str | None = None,
                  unit: str | None = None):
+        if execution_place is None and conf is None:
+            raise ValueError(
+                "CalculatedField needs an execution_place, or a conf whose "
+                "`execution_place:` key names one"
+            )
         self.inputs = inputs
         self.processor = processor
         self.output = output
         self.conf = conf
-        self._computer = computer
+        self._execution_place = execution_place
         self._unit = unit
 
     @property
@@ -145,8 +151,21 @@ class CalculatedField:
         return self.output.shape
 
     @property
-    def computer(self):
-        return self._computer
+    def execution_place(self) -> ExecutionPlace:
+        """Where this field is computed.
+
+        Declared here, or read from the conf's ``execution_place:`` key
+        (``server`` / ``robot`` / ``controller``) so a deployment can move
+        the computation without editing the schema.
+        """
+        if self._execution_place is None:
+            from solarian.perception.processor import load_processor_conf
+
+            name = load_processor_conf(self.conf).get("execution_place")
+            if name is None:
+                raise ValueError(f"{self.conf} has no `execution_place:` key")
+            self._execution_place = ExecutionPlace(str(name).lower())
+        return self._execution_place
 
     @property
     def value(self):
@@ -254,6 +273,9 @@ class ModuleObs:
     def __getitem__(self, name):
         return self._fields[name]
 
+    def get(self, name, default=None):
+        return self._fields.get(name, default)
+
     def __setitem__(self, name, value):
         self._fields[name] = value
 
@@ -306,8 +328,8 @@ class ModuleObs:
 
 
     @classmethod
-    def create_processors(cls, computer: DataComputer) -> dict:
-        """Instantiate processors for all CalculatedFields matching *computer*.
+    def create_processors(cls, execution_place: ExecutionPlace) -> dict:
+        """Instantiate processors for all CalculatedFields placed at *execution_place*.
 
         Each processor class declared in a ``CalculatedField`` is
         instantiated with the field's ``inputs``, ``output``, and
@@ -318,7 +340,7 @@ class ModuleObs:
         """
         result = {}
         for field_name, cf in cls.get_calculated_fields_spec().items():
-            if cf.computer != computer:
+            if cf.execution_place is not execution_place:
                 continue
             result[field_name] = cf.processor(
                 inputs=cf.inputs,
@@ -483,8 +505,8 @@ class Observation:
         
 
     @classmethod
-    def create_processors(cls, computer: DataComputer) -> dict:
-        """Instantiate processors for all CalculatedFields matching *computer*.
+    def create_processors(cls, execution_place: ExecutionPlace) -> dict:
+        """Instantiate processors for all CalculatedFields placed at *execution_place*.
 
         Walks every ``ModuleObs`` and delegates to
         ``ModuleObs.create_processors()``.
@@ -495,6 +517,6 @@ class Observation:
         cls = cls._resolve_class()
         result = {}
         for module_name, module_obs in cls.get_module_obs_spec().items():
-            for field_name, proc in type(module_obs).create_processors(computer).items():
+            for field_name, proc in type(module_obs).create_processors(execution_place).items():
                 result[(module_name, field_name)] = proc
         return result

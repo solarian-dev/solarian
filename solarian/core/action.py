@@ -44,6 +44,11 @@ class ActionType:
     RECORD_STOP = 15
     #: Seal and delete: the operator is re-recording a bad take.
     RECORD_DROP = 16
+    #: Start / stop the processor behind a calculated field, e.g. point a
+    #: tracker at what the operator clicked. ``data`` is ``{"module",
+    #: "field", "params"}``; whichever host computes the field handles it.
+    START_SERVICE = 17
+    STOP_SERVICE = 18
     CUSTOM_START = 100
 
     def __init__(self, value: int = 0):

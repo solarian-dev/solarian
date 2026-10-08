@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Server',
   description:
-    'The RelayServer is the middle node in Solarian. It forwards actions from controllers to robots and observations back, and can run server-side observation processors.',
+    'The RelayServer is the middle node in Solarian. It forwards actions from controllers to robots and observations back, and can run server-side observation processors and skills.',
 }
 
 # Server
@@ -10,8 +10,8 @@ The **RelayServer** is the middle node in Solarian's three-node architecture. It
 
 - Receiving [Actions](/docs/actions) from controllers and forwarding them to the robot.
 - Receiving [Observations](/docs/observations) from the robot and forwarding them to all subscribed controllers.
-- Optionally running **server-side observation processors** — `CalculatedField`s with `computer=DataComputer.SERVER` (e.g. tracking, depth estimation) that augment observations *before* they reach the controller.
-- Handling lightweight side-channel events from controllers, like click points and stop-tracking signals.
+- Optionally running **server-side observation processors** — `CalculatedField`s with `execution_place=ExecutionPlace.SERVER` (e.g. tracking, depth estimation) that augment observations *before* they reach the controller.
+- Applying `START_SERVICE` / `STOP_SERVICE` for the fields it computes, and running skills whose `execution_place` is `SERVER`.
 
 Defined in [`solarian/core/server.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/server.py).
 
@@ -78,7 +78,7 @@ The relay binds to `tcp://*:<port>` on all four ports. The robot and controllers
   </Property>
 </Properties>
 
-All four sockets use `ZMQ_CONFLATE=1`, which keeps only the most recent message in the queue. Robot control prefers freshness over backlog: if a controller pauses for a tick, the next observation it receives is the latest one, not a stale one.
+The relay's sockets are not `ZMQ_CONFLATE`. Each observation message carries only the modules that advanced since the last one, and a server-hosted skill can send several actions per tick, so keeping only the newest message would drop data. Instead each hop has a small high-water mark (64 messages toward and from the robot, 8 toward each controller): a slow reader loses the oldest messages rather than building an unbounded backlog. The controller's own action socket is still `CONFLATE`, so a stalled relay never blocks the controller's loop.
 
 ## Configuration
 
@@ -87,7 +87,9 @@ Default `conf/server.yaml`:
 ```yaml
 connection: ${deployment.connection}
 
-img_compression_quality: 70
+img_compression_quality: 90
+# Run skills whose START_SKILL names execution_place "server" on the relay.
+host_skills: true
 ```
 
 `conf/robot.yaml` and `conf/controller.yaml` say the same thing, so all three roles read one `connection` block from the active [deployment](/docs/project-configs#deployments) at `conf/deployment/localhost.yaml`:
@@ -114,33 +116,41 @@ All three nodes need to agree on the same four port numbers and the same relay I
 
 ## Server-side observation processors
 
-[`CalculatedField`](/docs/observations) declarations on your `Observation`/`ModuleObs` schema can specify *where* they run via `computer=DataComputer.SERVER`. When the relay starts, it instantiates one processor per such field via `Observation.create_processors(DataComputer.SERVER)` and runs them in the state-relay loop:
+[`CalculatedField`](/docs/observations) declarations on your `Observation`/`ModuleObs` schema can specify *where* they run via `execution_place=ExecutionPlace.SERVER`, or leave it out and set an `execution_place:` key in the field's conf, so a deployment can move it without editing the schema. When the relay starts, it instantiates one processor per server field via `Observation.create_processors(ExecutionPlace.SERVER)` and runs them in the state-relay loop:
 
 ```python
-from solarian.core.observation import CalculatedField, ModuleObs
-from solarian.core.data import DataComputer, BoundingBoxData
+from solarian.core.observation import CalculatedField, ModuleObs, SensorField
+from solarian.core.data import BoundingBoxData
+from solarian_sam2_tracker import Sam2BboxProcessor
 
 class CameraObs(ModuleObs):
-    rgb = SensorField(MyRobot.cam.sensor.rgb_image)
+    image = SensorField(MyRobot.cam.camera.rgb_image)
     bbox = CalculatedField(
-        inputs=[MyRobot.cam.sensor.rgb_image],
-        processor=BBoxProcessor,
-        computer=DataComputer.SERVER,    # runs on the relay, not the robot
+        inputs=[MyRobot.cam.camera.rgb_image],
+        processor=Sam2BboxProcessor,
         output=BoundingBoxData(),
-        conf="conf/bbox.yaml",
+        conf="conf/bbox_tracker.yaml",   # execution_place: server
     )
 ```
 
-The processor receives every incoming observation, computes its output, and the relay merges the result back into the message before it goes out to controllers. This is how Solarian keeps heavy CV workloads off the robot while still exposing them as first-class observation fields.
+The processor receives every incoming observation and computes its output. The relay patches only the computed fields into the message before it goes out to controllers, so the robot's JPEGs are forwarded as they arrived. This is how Solarian keeps heavy CV workloads off the robot while still exposing them as first-class observation fields.
 
-## Side-channel events
+## Starting and stopping services
 
-Controllers can also send lightweight non-action messages through the action socket. The relay recognizes two of them and dispatches `on_event(...)` calls to every server-side processor:
+A processor that needs a command to begin, such as a tracker that needs a target, is started by field name from the controller:
 
-- `click` — used by tracking processors to seed a track from a UI click. The relay also stamps the next outgoing observation with a matching `click_ack`.
-- `stop_tracking` — tells trackers to release.
+```python
+self.start_service("right_wrist_camera", "bbox", point=(320, 240))
+self.stop_service("right_wrist_camera", "bbox")
+```
 
-You generally don't interact with these directly; they're used by the controller's display loop and bounding-box overlays.
+These send `START_SERVICE` / `STOP_SERVICE` actions. The relay applies one itself when it computes that field and forwards it to the robot otherwise, so the call is the same wherever the field runs. See [Services](/docs/services).
+
+## Server-hosted skills
+
+A skill whose `execution_place` is `SERVER` runs on the relay rather than the robot. The controller's `START_SKILL` names the place; the relay intercepts it, runs the skill against the observations it relays (including the fields it computes), and sends the skill's actions to the robot with the controller's. Its status rows reach the controller the same way a robot skill's do. Set `host_skills: false` to forward every `START_SKILL` to the robot instead.
+
+Running a skill on the relay keeps it beside the server-side processors it reads; running it on the robot avoids the relay hop for every action. Which is faster depends on the link, so the placement is configuration: see [Skills](/docs/skills#where-the-skill-runs-executionplace-and-executionmode).
 
 ## Running the server
 
@@ -156,5 +166,5 @@ The relay binds the four ports and starts the action-relay and state-relay threa
 
 - [Robots](/docs/robots) — the node connecting to the action-sender and state-receiver ports.
 - [Controllers](/docs/controllers) — the node connecting to the action-receiver and state-sender ports.
-- [Observations](/docs/observations) — including <code>CalculatedField</code> with <code>DataComputer.SERVER</code>.
+- [Observations](/docs/observations) — including <code>CalculatedField</code> with <code>ExecutionPlace.SERVER</code>.
 - [Project Configs](/docs/project-configs) — how deployments supply the connection block to all three roles.

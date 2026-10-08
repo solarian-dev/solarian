@@ -50,6 +50,29 @@ _HIGH = (240, 80, 80)
 #: keys) is still dropped.
 _NAMED_KEYS = frozenset({"space", "delete", "backspace"})
 LEVEL_COLORS = {"mid": _WARN, "high": _HIGH}
+_BBOX = (90, 220, 130)
+
+
+def display_to_image(
+    pos: tuple[int, int],
+    rect: tuple[int, int, int, int],
+    image_size: tuple[int, int],
+) -> tuple[int, int] | None:
+    """Map a window position to pixels of the image drawn at *rect*.
+
+    *rect* is ``(x, y, width, height)`` of the scaled image on screen and
+    *image_size* its ``(width, height)`` as captured. ``None`` when *pos* is
+    outside the image.
+    """
+    mx, my = pos
+    bx, by, dw, dh = rect
+    if not (bx <= mx < bx + dw and by <= my < by + dh):
+        return None
+    iw, ih = image_size
+    return (
+        min(iw - 1, int((mx - bx) * iw / dw)),
+        min(ih - 1, int((my - by) * ih / dh)),
+    )
 
 
 class ControllerGUI:
@@ -81,24 +104,38 @@ class ControllerGUI:
         self._line_h = self.font.get_linesize()
         self._held: set[str] = set()
         self._surface_cache: dict[tuple, object] = {}
+        #: ``(label, screen rect, (width, height) as captured)`` of every image
+        #: drawn by the last :meth:`render`, so a click maps back to pixels.
+        self._image_rects: list[tuple[str, tuple[int, int, int, int], tuple[int, int]]] = []
 
     # -- event handling ----------------------------------------------------
     def poll(
         self,
         on_press: Optional[Callable[[str], None]] = None,
         on_release: Optional[Callable[[str], None]] = None,
+        on_click: Optional[Callable[[str, tuple[int, int], int], None]] = None,
     ) -> bool:
         """Drain the event queue.
 
         Routes key-down / key-up events to *on_press* / *on_release* and tracks
-        the held-key set. Returns ``True`` if the user asked to quit (window
-        closed or ``Esc``).
+        the held-key set. A mouse button pressed over a camera image calls
+        *on_click* with the image's label, the point in image pixels and the
+        button. Returns ``True`` if the user asked to quit (window closed or
+        ``Esc``).
         """
         pygame = self._pygame
         quit_requested = False
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 quit_requested = True
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if on_click is None:
+                    continue
+                for label, rect, image_size in self._image_rects:
+                    point = display_to_image(event.pos, rect, image_size)
+                    if point is not None:
+                        on_click(label, point, event.button)
+                        break
             elif event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_ESCAPE,):
                     quit_requested = True
@@ -136,7 +173,7 @@ class ControllerGUI:
         self,
         *,
         sections: Sequence[tuple[str, Sequence[tuple[str, str]]]],
-        images: Sequence[tuple[str, np.ndarray]],
+        images: Sequence[tuple[str, np.ndarray, Sequence]],
         key_help: Sequence[tuple[str, str]],
         status: str = "",
         fps: Optional[float] = None,
@@ -145,7 +182,8 @@ class ControllerGUI:
 
         Args:
             sections: ``(title, [(field, value), ...])`` dashboard panels.
-            images: ``(label, rgb_array)`` camera frames (HxWx3, uint8, RGB).
+            images: ``(label, rgb_array, bboxes)`` camera frames (HxWx3,
+                uint8, RGB), each with its pixel ``(x0, y0, x1, y1)`` boxes.
             key_help: ``(keys, description)`` rows for the bindings panel;
                 individual keys (split on ``/`` and spaces) that are currently
                 held are highlighted.
@@ -266,21 +304,27 @@ class ControllerGUI:
         rows = (n + cols - 1) // cols
         cell_w = width // cols
         cell_h = height // rows
-        for i, (label, img) in enumerate(images):
+        self._image_rects = []
+        for i, (label, img, bboxes) in enumerate(images):
             c = i % cols
             r = i // cols
             cx = x + c * cell_w
             cy = y + r * cell_h
-            self._blit_image(img, cx, cy + self._line_h, cell_w - 6, cell_h - self._line_h - 6)
+            drawn = self._blit_image(
+                img, bboxes, cx, cy + self._line_h, cell_w - 6, cell_h - self._line_h - 6
+            )
+            if drawn is not None:
+                self._image_rects.append((label, *drawn))
             self._blit_text(label, cx + 2, cy, _TITLE)
 
-    def _blit_image(self, img: np.ndarray, x, y, max_w, max_h):
+    def _blit_image(self, img: np.ndarray, bboxes, x, y, max_w, max_h):
+        """Draw *img* scaled into the box; returns ``(rect, (iw, ih))`` or None."""
         pygame = self._pygame
         if img is None or max_w <= 0 or max_h <= 0:
-            return
+            return None
         arr = np.asarray(img)
         if arr.ndim != 3 or arr.shape[2] != 3:
-            return
+            return None
         if arr.dtype != np.uint8:
             arr = np.clip(arr, 0, 255).astype(np.uint8)
         ih, iw = arr.shape[:2]
@@ -291,6 +335,22 @@ class ControllerGUI:
         if (dw, dh) != (iw, ih):
             surf = pygame.transform.smoothscale(surf, (dw, dh))
         self.screen.blit(surf, (x, y))
+        for bbox in bboxes:
+            x0, y0, x1, y1 = (int(v) for v in bbox[:4])
+            if x0 == y0 == x1 == y1 == 0:
+                continue
+            pygame.draw.rect(
+                self.screen,
+                _BBOX,
+                pygame.Rect(
+                    x + int(x0 * dw / iw),
+                    y + int(y0 * dh / ih),
+                    max(1, int((x1 - x0) * dw / iw)),
+                    max(1, int((y1 - y0) * dh / ih)),
+                ),
+                width=2,
+            )
+        return (x, y, dw, dh), (iw, ih)
 
     def _blit_text(self, text, x, y, color, font=None):
         font = font or self.font

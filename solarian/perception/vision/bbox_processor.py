@@ -12,7 +12,8 @@ class BBoxProcessor(Processor):
     so that the same object is followed until explicitly stopped.
 
     Thread-safe: the relay server may call the processor from the state
-    relay thread while ``on_event`` is called from the action relay thread.
+    relay thread while ``start`` / ``stop`` are called from the action relay
+    thread.
 
     The ML model is loaded lazily on first call so that importing the
     observation schema on machines without GPU/ultralytics is free.
@@ -92,25 +93,20 @@ class BBoxProcessor(Processor):
             self._model = YOLO(self.tracking_model_name)
 
     # ------------------------------------------------------------------
-    # External event API
+    # Service API (START_SERVICE / STOP_SERVICE)
     # ------------------------------------------------------------------
 
-    def track_object(self, clicked_point):
+    def start(self, params: dict) -> None:
+        """Track the object at ``params["point"]``, in image pixels."""
         with self._lock:
-            self.clicked_point = clicked_point
+            self.clicked_point = tuple(params["point"])
 
-    def stop_tracking(self):
+    def stop(self) -> None:
         with self._lock:
             self.clicked_point = None
             self.tracked_id = None
             self.tracking_active = False
             self.tracked_box = self.EMPTY_BOX
-
-    def on_event(self, event_name: str, data=None):
-        if event_name == "click":
-            self.track_object(data)
-        elif event_name == "stop_tracking":
-            self.stop_tracking()
 
     # ------------------------------------------------------------------
     # Processor interface

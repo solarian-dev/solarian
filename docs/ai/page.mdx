@@ -15,7 +15,7 @@ Solarian's AI stack sits on top of the standard [Controller](/docs/controllers) 
     A <a href="/docs/controllers">Controller</a> subclass that runs a dual-process cognitive loop. A vision-language model (System 2) decides which behaviors to start or stop; the fast control loop (System 1) merges the actions those behaviors emit and forwards them to the robot. See <a href="/docs/ai_controller">AI Controller</a>.
   </Property>
   <Property name="Skills">
-    Self-contained, restartable behaviors that run in their own process — a diffusion policy, a motion plan, a scripted routine. The AI Controller orchestrates them based on the planner's decisions. See <a href="/docs/skills">AI Skills</a>.
+    Self-contained, restartable behaviors that run in their own process — a diffusion policy, a motion plan, a scripted routine. The AI Controller orchestrates them based on the planner's decisions. See <a href="/docs/skills">Skills</a>.
   </Property>
   <Property name="Policies">
     The trainable models a Skill calls to produce actions (diffusion, ACT, VLAs, classical methods). Policies are trained and served independently of the Skill that consumes them. See <a href="/docs/policies">Policies</a>.
@@ -33,4 +33,4 @@ This split lets the robot be both *smart enough to plan* (slow, may fail, return
 
 - [AI Controller](/docs/ai_controller) — the orchestrator and its dual-process architecture.
 - [Policies](/docs/policies) — training and serving the models Skills call.
-- [AI Skills](/docs/skills) — the unit of behavior the AI Controller runs.
+- [Skills](/docs/skills) — the unit of behavior the AI Controller runs.

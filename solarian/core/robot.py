@@ -42,9 +42,9 @@ logger = logging.getLogger("robot")
 # at control-loop start races that handshake, so the check is on every recv.
 _MAX_COMMAND_AGE_S = 1.0
 
-# The Mac preview is the only consumer of the JPEG. Skills on the robot read
-# the observation buffer, so the wire does not have to carry every capture.
-_PREVIEW_IMAGE_PERIOD_S = 1.0 / 15.0
+# Messages the state socket queues before it starts dropping, when the relay
+# falls behind. A few frames of slack; more would only deliver stale ones.
+_STATE_SNDHWM = 16
 
 # How often the control loop asks whether a module died or the link dropped.
 # Both are judged in seconds, so checking at 20 Hz is already generous.
@@ -131,16 +131,19 @@ def _has_image(observation: Observation) -> bool:
 
 
 def _without_images(observation: Observation) -> Observation:
-    data = {}
-    for name, module_obs in observation.items():
-        fields = {}
-        for field_name, field in module_obs.items():
-            if _is_image(field.value):
-                continue
-            fields[field_name] = field.to_dict()
-        if fields:
-            data[name] = fields
-    return Observation(data)
+    """Drop every module carrying an image, whole.
+
+    Its other fields (a bbox) describe that frame, and receivers replace a
+    module wholesale: a camera module without its image would blank the
+    controller's view and zero-fill the image in a server skill's history.
+    """
+    return Observation(
+        {
+            name: module_obs.to_dict()
+            for name, module_obs in observation.items()
+            if not any(_is_image(field.value) for _, field in module_obs.items())
+        }
+    )
 
 
 class Robot(EventHost, ABC):
@@ -255,9 +258,9 @@ class Robot(EventHost, ABC):
         #: runs off the control loop; see :meth:`_seal_off_the_control_loop`.
         self._seal_thread: threading.Thread | None = None
         #: Id of the last episode boundary acted on, echoed back with the
-        #: observation. Every hop of the action link is CONFLATE, so a
-        #: RECORD_START the controller sent may never arrive; this is how it
-        #: learns the difference and asks again.
+        #: observation. The controller's action socket is CONFLATE, so a
+        #: RECORD_START it sent may never arrive; this is how it learns the
+        #: difference and asks again.
         self._record_request = 0
         self._action_latency = LatencyEma()
         self._obs_compress_latency = LatencyEma()
@@ -499,10 +502,21 @@ class Robot(EventHost, ABC):
             test_socket.close()
 
     @profile
-    def get_action(self) -> Action | None:
-        try:
-            bytes = self.action_socket.recv(zmq.NOBLOCK)
-            msg = Message.deserialize(bytes)
+    def get_actions(self) -> list[Action]:
+        """Every action waiting on the link, oldest first, without blocking.
+
+        The link is lossless, so a chunk the relay sent as several messages
+        arrives as several messages and has to be read as all of them. A
+        message carries the controller's ``action`` and/or a batch of
+        ``actions`` from skills the relay hosts.
+        """
+        actions: list[Action] = []
+        while True:
+            try:
+                raw = self.action_socket.recv(zmq.NOBLOCK)
+            except zmq.Again:
+                return actions
+            msg = Message.deserialize(raw)
 
             latency_ms = latency_ms_from_stamp_ns(msg.controller_timestamp)
             if latency_ms is not None:
@@ -516,23 +530,26 @@ class Robot(EventHost, ABC):
                     latency_ms / 1000.0,
                     _MAX_COMMAND_AGE_S,
                 )
-                return None
+                continue
 
-            # Any fresh message is evidence the link is up, including a
-            # heartbeat carrying no action. This is the only place that can
-            # tell "the controller has nothing to say" from "the controller is
-            # gone", so it is where the watchdog's clock is reset. A command
-            # left over from a previous session is not that evidence.
-            self._last_command_ns = time.monotonic_ns()
+            # Any fresh message from the controller is evidence its link is
+            # up, including a heartbeat carrying no action. A batch the relay
+            # composed on its own is not: a relay-hosted skill keeps sending
+            # after the operator is gone. A command left over from a previous
+            # session is not that evidence either.
+            if "action" in msg.data or "heartbeat" in msg.data:
+                self._last_command_ns = time.monotonic_ns()
 
-            if "action" not in msg.data:
-                return None
-
-            raw_action = msg.data["action"]
-            action = Action(action_type=ActionType(raw_action["action_type"]), data=raw_action["data"])
-            return action
-        except zmq.Again:
-            return None
+            raw_actions = list(msg.data.get("actions", ()))
+            if "action" in msg.data:
+                raw_actions.append(msg.data["action"])
+            for raw_action in raw_actions:
+                actions.append(
+                    Action(
+                        action_type=ActionType(raw_action["action_type"]),
+                        data=raw_action["data"],
+                    )
+                )
 
     @profile
     def send_observation(self, observation: Observation):
@@ -715,7 +732,7 @@ class Robot(EventHost, ABC):
         if observation.is_empty() or not _has_image(observation):
             return observation
         now = time.monotonic()
-        if now - self._last_preview_image_s >= _PREVIEW_IMAGE_PERIOD_S:
+        if now - self._last_preview_image_s >= 1.0 / self.cfg.preview_image_hz:
             self._last_preview_image_s = now
             return observation
         return _without_images(observation)
@@ -723,17 +740,11 @@ class Robot(EventHost, ABC):
     def control_loop(self):
         logger.info("Control loop started")
 
-        # Drop any action that was already sitting in the relay's CONFLATE
-        # buffer when we connected.  Without this, a stale actions from a
-        # previous controller session would be
-        # dispatched as the very first action of the new session, silently
-        # launching skills the operator did not request.
-        drained = 0
-        while True:
-            stale = self.get_action()
-            if stale is None:
-                break
-            drained += 1
+        # Drop any action that was already queued on the link when we
+        # connected.  Without this, a stale action from a previous controller
+        # session would be dispatched as the very first action of the new
+        # session, silently launching skills the operator did not request.
+        drained = len(self.get_actions())
         if drained:
             logger.warning(
                 "Discarded %d stale action(s) at control-loop start", drained
@@ -768,8 +779,7 @@ class Robot(EventHost, ABC):
             self._fan_out_events(events)
 
             if poller.poll(timeout=1):
-                action = self.get_action()
-                if action is not None:
+                for action in self.get_actions():
                     StatusBoard.set("Action", action)
                     self.process_action(action)
             # actions that are generated by a skill running on the robot are pushed to the action queue directly by the skill itself
@@ -885,14 +895,44 @@ class Robot(EventHost, ABC):
         self.stop_skill(str(action.data.get("skill") or ""))
         return True
 
+    @action_handler(ActionType.START_SERVICE)
+    def start_service(self, action, t_now: float) -> bool:
+        return self._route_service_action(action)
+
+    @action_handler(ActionType.STOP_SERVICE)
+    def stop_service(self, action, t_now: float) -> bool:
+        return self._route_service_action(action)
+
+    def _route_service_action(self, action) -> bool:
+        """Hand a service start/stop to the module whose processor computes it.
+
+        Robot-side processors live in their module's process, so the request
+        travels on that module's action queue like any other command.
+        """
+        module_name = str(action.data.get("module") or "")
+        queue = self.action_queues.get(module_name)
+        if queue is None:
+            logger.warning("Service action for unknown module '%s'", module_name)
+            return True
+        queue.put(
+            ModuleAction(
+                action_type=action.action_type,
+                params={
+                    "field": action.data.get("field"),
+                    "params": action.data.get("params") or {},
+                },
+            )
+        )
+        return True
+
     def stop_skill(self, name: str, timeout: float = 5.0) -> None:
         """Ask a robot-side skill to stop; the reaper finishes the job.
 
         Joining here would hold the control loop for as long as the skill's
         last tick takes — a policy skill mid-inference is hundreds of
-        milliseconds — and no action is read meanwhile. On a CONFLATE link
-        that is not a delay but a loss: every command the controller sends
-        during the stall collapses into the last one.
+        milliseconds — and no action is read meanwhile. The relay queues
+        only a bounded backlog toward the robot, so a long stall turns into
+        dropped commands rather than late ones.
         """
         skill = self._local_skills.get(name)
         if skill is None:
@@ -1007,14 +1047,17 @@ class Robot(EventHost, ABC):
         self.context = zmq.Context()
 
         self.action_socket = self.context.socket(zmq.PULL)
-        self.action_socket.setsockopt(zmq.CONFLATE, 1)
         curve.apply_client(self.action_socket, self.cfg.connection, "robot actions")
         self.action_socket.connect(
             f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.action_sender_port}"
         )
 
         self.state_socket = self.context.socket(zmq.PUB)
-        self.state_socket.setsockopt(zmq.CONFLATE, 1)
+        # Not CONFLATE: each message carries only the modules that advanced,
+        # so conflating would let a joint-only message replace one carrying
+        # a camera frame. PUB drops at the high-water mark instead of
+        # blocking, which bounds the backlog when the relay stalls.
+        self.state_socket.setsockopt(zmq.SNDHWM, _STATE_SNDHWM)
         curve.apply_client(self.state_socket, self.cfg.connection, "robot state")
         self.state_socket.connect(
             f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.state_receiver_port}"

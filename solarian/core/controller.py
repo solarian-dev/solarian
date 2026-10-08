@@ -37,6 +37,7 @@ from solarian.core.event import (
 )
 from solarian.core.execution import ExecutionMode, ExecutionPlace
 from solarian.core.keyboard_module import KeyboardModule
+from solarian.core.mouse_module import MouseModule
 from solarian.core.ui import build_ui
 from solarian.core.ui.base import (
     ControllerUI,
@@ -125,6 +126,8 @@ class Controller(EventHost, ABC):
     # Inline, so its events land on the control thread rather than on the OS
     # listener's.
     keyboard = KeyboardModule()
+    # Clicks on displayed camera images, reported by whichever front end runs.
+    mouse = MouseModule()
 
     # Skill classes this controller can run. Only a registry: it is what the
     # think process picks from and what a ``START_SKILL`` name resolves to,
@@ -141,9 +144,6 @@ class Controller(EventHost, ABC):
     def __init__(self, cfg: ControllerConfig):
         self.cfg = cfg
         self.context = zmq.Context()
-        
-        self.clicked_point = None
-        self.clicked_id = None
 
         try:
             import torch
@@ -165,8 +165,10 @@ class Controller(EventHost, ABC):
         self.action_socket.connect(f"tcp://{self.cfg.connection.ip}:{self.cfg.connection.action_receiver_port}")
         
         # Image subscription
+        # Not CONFLATE: each message carries only the modules that advanced,
+        # so keeping only the newest would drop frames behind joint updates.
         self.state_socket = self.context.socket(zmq.SUB)
-        self.state_socket.setsockopt(zmq.CONFLATE, 1)
+        self.state_socket.setsockopt(zmq.RCVHWM, 8)
         self.state_socket.setsockopt(zmq.SUBSCRIBE, b"")
         self.state_socket.setsockopt(zmq.LINGER, 0)
         curve.apply_client(self.state_socket, self.cfg.connection, "controller state")
@@ -451,11 +453,6 @@ class Controller(EventHost, ABC):
                 except Exception as e:
                     logger.warning(f"skill_status_buffer.put failed: {e}")
 
-        if msg.data.get("click_ack", None) and msg.data["click_ack"] == self.clicked_id:
-            logger.info(f"Click acknowledged {self.clicked_id}")
-            self.clicked_id = None
-            self.clicked_point = None
-
     def _observation_age_ms(self, observation: Observation) -> float | None:
         """Age of the newest sensor timestamp in the observation (ms)."""
         newest = None
@@ -481,21 +478,15 @@ class Controller(EventHost, ABC):
         msg = Message()
         msg.controller_timestamp = synced_time_ns()
         msg.data = {"action": action.to_dict()}
-
-        if self.clicked_point is not None:
-            msg.data["click"] = {
-                "point": self.clicked_point,
-                "id": self.clicked_id
-            }
         self._send_message(msg)
 
     def _send_message(self, msg: Message) -> None:
         """Put *msg* on the action socket and note that the link was just used.
 
         Every send goes through here so the heartbeat below can tell real
-        silence from the gap between two messages. The robot's socket is
-        CONFLATE: a heartbeat sent on top of a command it has not read yet
-        would replace it.
+        silence from the gap between two messages. This socket is CONFLATE: a
+        heartbeat sent on top of a command not yet transmitted would replace
+        it.
         """
         self.action_socket.send(msg.serialize())
         self._last_send_ns = time.monotonic_ns()
@@ -513,12 +504,6 @@ class Controller(EventHost, ABC):
         msg = Message()
         msg.controller_timestamp = synced_time_ns()
         msg.data = {"heartbeat": True}
-        self._send_message(msg)
-
-    def send_stop_tracking(self):
-        msg = Message()
-        msg.controller_timestamp = synced_time_ns()
-        msg.data = {"stop_tracking": True}
         self._send_message(msg)
 
     def _put_module_observation(self, module_name: str, module_observation) -> None:
@@ -908,9 +893,13 @@ class Controller(EventHost, ABC):
             case UICommandType.KEY_UP:
                 self.keyboard.on_release(str(data["key"]).lower())
             case UICommandType.CLICK:
+                # ``label`` is the ``module/field`` every UIImage carries.
+                module_name, _, field_name = str(data.get("label") or "").partition("/")
                 point = data.get("point")
-                self.clicked_point = tuple(point) if point else None
-                self.clicked_id = data.get("id")
+                if point and field_name:
+                    self.mouse.on_click(
+                        point, module_name, field_name, int(data.get("button") or 1)
+                    )
             case UICommandType.START_SKILL:
                 self.start_skill_by_name(
                     str(data.get("skill") or ""), data.get("params") or {}
@@ -956,7 +945,6 @@ class Controller(EventHost, ABC):
 
     def control_loop(self):
         try:
-            self.send_stop_tracking()
             while self.running:
                 start_loop_t = time.time_ns()
 
@@ -1261,8 +1249,8 @@ class Controller(EventHost, ABC):
         """Queue an episode boundary and keep asking until the robot echoes it.
 
         An episode boundary is the one action that cannot be dropped: a lost
-        RECORD_STOP leaves the next take appended to this one. Every hop of
-        the link is CONFLATE and the control loop sends at fps, so a boundary
+        RECORD_STOP leaves the next take appended to this one. The action
+        socket is CONFLATE and the control loop sends at fps, so a boundary
         put straight on the socket is very likely to be overwritten before the
         robot reads it. Only the last request matters, so a newer one replaces
         an unconfirmed older one rather than queueing behind it.
@@ -1321,6 +1309,10 @@ class Controller(EventHost, ABC):
                     data={
                         "skill": type(skill).registry_name(),
                         "params": skill.params,
+                        # The relay starts the ones placed on it and passes
+                        # the rest on, so one skill can run on either host
+                        # by configuration alone.
+                        "execution_place": skill.execution_place.value,
                     },
                 )
             )
@@ -1411,7 +1403,7 @@ class Controller(EventHost, ABC):
     def _retry_remote_stops(self) -> None:
         """Keep asking the robot to stop a skill until its status says it did.
 
-        Every hop of the action link is ``ZMQ_CONFLATE``, so one ``STOP_SKILL``
+        The controller's action socket is ``ZMQ_CONFLATE``, so one ``STOP_SKILL``
         can be replaced by whatever the next tick sends — which, when the
         operator preempts a policy with a move, is that move. The
         confirmation travels the same way and can be lost too, hence the
@@ -1439,6 +1431,32 @@ class Controller(EventHost, ABC):
     def stop_all_skills(self) -> None:
         for name in list(self.running_skills):
             self.stop_skill(name)
+
+    # ========= services ============
+    def start_service(self, module: str, field: str, **params) -> None:
+        """Start the processor that computes ``module.field``, with *params*.
+
+        Addressed by field rather than by host: the relay applies it when it
+        computes the field, otherwise it reaches the robot. Which one does is
+        the field's ``execution_place``, so moving a tracker between them is a config
+        change and not a code change.
+        """
+        self._pending_actions.append(
+            Action(
+                action_type=ActionType.START_SERVICE,
+                data={"module": module, "field": field, "params": params},
+            )
+        )
+        logger.info("Starting service %s/%s %s", module, field, params)
+
+    def stop_service(self, module: str, field: str) -> None:
+        self._pending_actions.append(
+            Action(
+                action_type=ActionType.STOP_SERVICE,
+                data={"module": module, "field": field},
+            )
+        )
+        logger.info("Stopping service %s/%s", module, field)
 
     def _ingest_skill_status_records(self, records) -> None:
         """Update remote-running table from robot/server ``skill_status`` rows."""

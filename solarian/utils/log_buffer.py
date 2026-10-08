@@ -4,6 +4,7 @@ import os
 import sys
 import collections
 import queue
+import traceback
 from datetime import datetime
 from typing import Optional
 
@@ -33,13 +34,30 @@ class LogRecord:
 
     @classmethod
     def from_logging_record(cls, record: logging.LogRecord) -> "LogRecord":
+        message = record.getMessage()
+        if record.exc_info and record.exc_info[1] is not None:
+            message = f"{message}: {exception_summary(record.exc_info[1])}"
         return cls(
             timestamp=record.created,
             level=record.levelno,
             name=record.name,
-            message=record.getMessage(),
+            message=message,
             pid=record.process or os.getpid(),
         )
+
+
+def exception_summary(exc: BaseException) -> str:
+    """``Type: message (file:line in func)`` of the frame that raised.
+
+    The panel has one line per record, so a ``logger.exception`` keeps the
+    part of its traceback that usually names the bug.
+    """
+    text = f"{type(exc).__name__}: {exc}"
+    tb = traceback.extract_tb(exc.__traceback__)
+    if tb:
+        frame = tb[-1]
+        text += f" ({os.path.basename(frame.filename)}:{frame.lineno} in {frame.name})"
+    return text
 
 
 class LogBuffer:

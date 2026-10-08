@@ -6,7 +6,7 @@ export const metadata = {
 
 # Skills
 
-A **Skill** is a self-contained, restartable behavior that the [AI Controller](/docs/ai_controller) can launch in response to a high-level decision. A skill is "open the gripper", "track the red cup", "run a diffusion policy", or "navigate to waypoint X". Each runs at its own rate, reads the observations and events its host wires up for it, and returns actions. {{ className: 'lead' }}
+A **Skill** is a self-contained, restartable behavior that the [Controller](/docs/controllers) can launch in response to a high-level decision. A skill is "open the gripper", "track the red cup", "run a diffusion policy", or "navigate to waypoint X". Each runs at its own rate, reads the observations and events its host wires up for it, and returns actions. {{ className: 'lead' }}
 
 Defined in [`solarian/core/ai/system1/skill.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/system1/skill.py).
 
@@ -160,7 +160,7 @@ Where a skill lives and how it is scheduled are two independent axes.
     The skill lives on the robot runtime. The controller does *not* launch it locally — instead it sends a <code>START_SKILL</code> action naming the skill and its params. The robot's generic handler looks the name up and starts it on its side.
   </Property>
   <Property name="ExecutionPlace.SERVER" type="server">
-    Same dispatch as <code>ROBOT</code> but semantically the skill runs on the relay server.
+    The controller sends the same <code>START_SKILL</code>, naming the place, and the relay runs the skill itself. It reads the observations the relay forwards, including fields computed on the relay, and its actions go to the robot with the controller's. Robot-side observations arrive at the robot's camera preview rate (<code>preview_image_hz</code> in <code>conf/robot.yaml</code>), not at full capture rate.
   </Property>
 </Properties>
 
@@ -179,6 +179,15 @@ class UMISkill(Skill):
 ```
 
 A caller can still override either per instance — `MoveSkill(params={"pose": "home", "arm": "right_arm"}, execution_mode=ExecutionMode.INLINE)` — for the case where the same behaviour is worth scheduling differently in a test or on a small host.
+
+A config-driven skill such as `UMISkill` also reads `execution_place` from its yaml, so a deployment key can move it without code changes:
+
+```yaml
+# conf/umi_pnp.yaml
+execution_place: ${deployment.pnp_execution_place}
+```
+
+That is how to compare the two placements for one policy: run the same task with a deployment that sets `server` and one that sets `robot`. A skill that reads a calculated field must run where that field is computed or downstream of it. The relay sees robot-computed fields, but the robot never sees relay-computed ones.
 
 ## How the think process selects skills
 

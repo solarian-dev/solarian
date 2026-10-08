@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pickle
 
-from solarian.core.data import DataComputer, PosData
+from solarian.core.data import PosData
+from solarian.core.execution import ExecutionPlace
 from solarian.core.observation import CalculatedField, ModuleObs, SensorField
 from solarian.perception.processor import Processor, field_name_for_input
 
@@ -22,7 +23,7 @@ def _make_obs_cls():
         doubled = CalculatedField(
             inputs=[src],
             processor=_DoubleProcessor,
-            computer=DataComputer.ROBOT,
+            execution_place=ExecutionPlace.ROBOT,
             output=PosData(),
         )
 
@@ -49,7 +50,7 @@ def test_processor_resolves_inputs_after_pickle():
     prev = ModuleObs._active_subclass
     try:
         obs_cls, _src = _make_obs_cls()
-        proc = obs_cls.create_processors(DataComputer.ROBOT)["doubled"]
+        proc = obs_cls.create_processors(ExecutionPlace.ROBOT)["doubled"]
         proc = pickle.loads(pickle.dumps(proc))
         assert id(proc.inputs[0]) != id(
             obs_cls.get_sensor_fields_spec()["gripper"].source

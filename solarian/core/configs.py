@@ -365,6 +365,10 @@ class RobotConfig(BaseModel):
     img_compression_quality: int
     connection: ConnectionConfig
     fps: int
+    #: Rate camera frames are put on the wire for the preview and for skills
+    #: and processors hosted off the robot. Robot-side skills read every
+    #: capture from shared memory regardless.
+    preview_image_hz: float = 30.0
     recording: RecordingConfig = RecordingConfig()
     #: Run in MuJoCo simulation. ``None`` (default) defers to the robot class's
     #: ``is_sim`` attribute; set it here (or via ``run-robot sim=true``) to
@@ -453,6 +457,9 @@ class ReplayConfig(ControllerConfig):
 class ServerConfig(BaseModel):
     connection: ConnectionConfig
     img_compression_quality: int
+    #: Run skills whose ``execution_place`` is ``server`` here. Needs the
+    #: project's robot module configs, to size the observation buffers.
+    host_skills: bool = True
     #: CURVE public keys allowed to connect, i.e. this deployment's robot and
     #: controller. Empty means no allowlist: encryption but no authorization, so
     #: anyone holding the relay's public key gets in. A relay on a public address

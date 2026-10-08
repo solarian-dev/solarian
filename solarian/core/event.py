@@ -62,6 +62,11 @@ class EventType:
     # Pointing devices
     BUTTON_DOWN = 2
     BUTTON_UP = 3
+    #: A click on a displayed image. ``data``: ``point`` (``(x, y)`` pixels in
+    #: the image as captured, not as displayed), ``module`` and ``field`` (the
+    #: observation the image came from) and ``button`` (1 left, 2 middle,
+    #: 3 right).
+    CLICK = 4
 
     CUSTOM_START = 100
 

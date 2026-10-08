@@ -144,7 +144,7 @@ def _feetech_gripper_bus(homing_offset: int, reads: dict[str, int] | None = None
     back via the STS/SMS control table.
     """
     from solarian_feetech.bus import FeetechBus
-    from solarian_feetech.lerobot.feetech.tables import STS_SMS_SERIES_CONTROL_TABLE
+    from solarian_feetech.driver.feetech.tables import STS_SMS_SERIES_CONTROL_TABLE
 
     cal = {
         "gripper": MotorCalibration(

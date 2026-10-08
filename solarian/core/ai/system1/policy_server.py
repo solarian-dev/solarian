@@ -57,54 +57,15 @@ Typical plugin usage::
 
 import abc
 import argparse
-import base64
 import logging
 import time
 from typing import Any, Dict, Optional
 
 import numpy as np
 
+from solarian.utils.wire import decode_arrays, to_serializable
+
 logger = logging.getLogger(__name__)
-
-
-def _to_numpy_obs(obs_dict: Dict[str, Any]) -> Dict[str, np.ndarray]:
-    """Convert a JSON-decoded observation dict back into numpy arrays.
-
-    Accepts both the raw-buffer encoding :func:`PolicyClient._serialize_obs`
-    sends and plain nested lists, so anything hand-rolling a request against
-    this endpoint — curl, a notebook, another language — still works.
-    """
-    out: Dict[str, Any] = {}
-    for key, value in obs_dict.items():
-        if isinstance(value, np.ndarray):
-            out[key] = value
-        elif isinstance(value, dict) and "__ndarray__" in value:
-            # Through a bytearray because a buffer over immutable bytes gives
-            # a read-only array, and torch warns on those.
-            buffer = bytearray(base64.b64decode(value["__ndarray__"]))
-            out[key] = np.frombuffer(
-                buffer, dtype=np.dtype(value["dtype"])
-            ).reshape(value["shape"])
-        elif isinstance(value, list):
-            out[key] = np.array(value)
-        else:
-            out[key] = value
-    return out
-
-
-def _to_serializable(value: Any) -> Any:
-    """Recursively turn numpy types into JSON-serialisable Python types."""
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (np.floating,)):
-        return float(value)
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, dict):
-        return {k: _to_serializable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_to_serializable(v) for v in value]
-    return value
 
 
 class PolicyServer(abc.ABC):
@@ -221,13 +182,13 @@ class PolicyServer(abc.ABC):
         async def model_info():
             if not server.loaded:
                 raise HTTPException(status_code=503, detail="Policy not loaded")
-            return _to_serializable(server.model_info)
+            return to_serializable(server.model_info)
 
         @app.get("/shape_meta")
         async def shape_meta():
             if not server.loaded:
                 raise HTTPException(status_code=503, detail="Policy not loaded")
-            return _to_serializable(server.shape_meta)
+            return to_serializable(server.shape_meta)
 
         @app.post("/reset")
         async def reset():
@@ -256,7 +217,7 @@ class PolicyServer(abc.ABC):
                 raise HTTPException(status_code=503, detail="Policy not loaded")
             try:
                 t0 = time.perf_counter()
-                obs_dict = _to_numpy_obs(request.obs_dict)
+                obs_dict = decode_arrays(request.obs_dict)
                 result = server.predict(obs_dict, **(request.kwargs or {}))
                 server_ms = (time.perf_counter() - t0) * 1000.0
                 if not isinstance(result, dict) or "action" not in result:
@@ -268,9 +229,9 @@ class PolicyServer(abc.ABC):
                 if raw_action is None:
                     raw_action = action
                 return {
-                    "action": _to_serializable(action),
-                    "raw_action": _to_serializable(raw_action),
-                    "info": _to_serializable(result.get("info")),
+                    "action": to_serializable(action),
+                    "raw_action": to_serializable(raw_action),
+                    "info": to_serializable(result.get("info")),
                     # The client cannot tell a slow model from a slow link,
                     # and on a small board those call for opposite fixes.
                     "server_ms": server_ms,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 from typing import Any, ClassVar, Optional, Tuple, Type, TYPE_CHECKING, Union
-from enum import Enum
 import numpy as np
 from pydantic import BaseModel, ConfigDict, model_validator, Field
 import time
@@ -23,12 +22,6 @@ def set_image_jpeg_quality(quality: int | None) -> None:
 
 def get_image_jpeg_quality() -> int | None:
     return _image_jpeg_quality
-
-
-class DataComputer(int, Enum):
-    SERVER = 0
-    ROBOT = 1
-    CONTROLLER = 2
 
 
 class Data(BaseModel):
@@ -283,9 +276,18 @@ class ImageData(Data):
 
 
 class BoundingBoxData(Data):
-    dtype: Type = np.uint8
+    """Pixel ``(x0, y0, x1, y1)`` in the source image. All zeros = no box."""
+
+    dtype: Type = np.int32
     shape: Optional[Tuple[int, ...]] = (4,)
-    payload: Tuple[int, int, int, int] = Field(default=(0, 0, 0, 0), alias="value")
+    payload: Optional[np.ndarray] = Field(default=None, alias="value")
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.is_compressed and self.payload is None:
+            self.payload = np.zeros(self.shape, dtype=self.dtype)
+
+    def _coerce_payload(self, value):
+        return np.asarray(value, dtype=self.dtype).reshape(self.shape)
 
 
 class TimestampData(Data):

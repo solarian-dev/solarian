@@ -36,6 +36,19 @@ def field_name_for_input(inp, sensor_fields, calculated_fields) -> str | None:
     return None
 
 
+def load_processor_conf(conf: str):
+    """A processor's yaml with ``${deployment.*}`` resolved for this host.
+
+    Every machine that builds a processor reads the same project conf and
+    deployment, so they all agree on a value such as a service URL or the
+    execution place of a field.
+    """
+    from omegaconf import OmegaConf
+    from solarian.utils.configs import resolve_with_deployment
+
+    return OmegaConf.create(resolve_with_deployment(OmegaConf.load(conf)))
+
+
 class Processor:
     """
     Base class for observation/action processors.
@@ -57,12 +70,7 @@ class Processor:
     def __init__(self, inputs: list["Data"], output: "Data", conf: str | None = None):
         self.inputs = inputs
         self.output = output
-
-        if conf is not None:
-            from omegaconf import OmegaConf
-            self.cfg = OmegaConf.load(conf)
-        else:
-            self.cfg = None
+        self.cfg = load_processor_conf(conf) if conf is not None else None
 
         self._input_field_names: list[str] | None = None
 
@@ -88,9 +96,14 @@ class Processor:
         """
         raise NotImplementedError
 
-    def on_event(self, event_name: str, data=None):
-        """Handle an external event (e.g., user click, stop tracking)."""
-        pass
+    def start(self, params: dict) -> None:
+        """Begin (or restart) computing, e.g. track the object at ``params["point"]``.
+
+        Sent by ``START_SERVICE``. Processors that always compute ignore it.
+        """
+
+    def stop(self) -> None:
+        """Stop computing; the field goes back to its empty value."""
 
     def _resolve_input_fields(self, obs):
         """Build mapping from schema Data refs to field names (once)."""

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import random
-import string
 import time
 
 import cv2
@@ -93,7 +91,7 @@ class OpenCVUI:
         height, width = image.data.shape[:2]
         cv2.namedWindow(image.label, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(image.label, width, height)
-        cv2.setMouseCallback(image.label, self._on_mouse)
+        cv2.setMouseCallback(image.label, self._on_mouse, image.label)
         cv2.moveWindow(
             image.label,
             screen_x + (screen_w - width) // 2,
@@ -101,19 +99,15 @@ class OpenCVUI:
         )
         self._windows.append(image.label)
 
-    def _on_mouse(self, event, x, y, flags, param) -> None:
+    def _on_mouse(self, event, x, y, flags, label) -> None:
+        """``(x, y)`` is already in image pixels: OpenCV undoes the window scaling."""
         if event != cv2.EVENT_LBUTTONDOWN:
             return
-        logger.info("Clicked at (x=%s, y=%s)", x, y)
+        logger.info("Clicked %s at (x=%s, y=%s)", label, x, y)
         self._pending.append(
             UICommand(
                 UICommandType.CLICK,
-                {
-                    "point": (x, y),
-                    "id": "".join(
-                        random.choices(string.ascii_letters + string.digits, k=8)
-                    ),
-                },
+                {"label": label, "point": (x, y), "button": 1},
             )
         )
 

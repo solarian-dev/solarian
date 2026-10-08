@@ -14,14 +14,14 @@ from solarian.core.joint import Joint
 from solarian.core.actuator import Actuator, merge_actuator_config
 from solarian.core.sensor import Sensor
 from solarian.core.servo import Servo
-from solarian.core.data import Data, DataComputer, TimestampData
+from solarian.core.data import Data, TimestampData
 from solarian.core.clock_sync import synced_time, sync_with_server, get_offset
 from solarian.core.module_bus import ModuleBus
 from solarian.core.action import Action, ActionType, ModuleAction, action_handler
 from solarian.core.configs import ModuleConfig
 from solarian.core.observation import Observation, ModuleObs
 from solarian.core.event import Event
-from solarian.core.execution import ExecutionMode, WorkerExit
+from solarian.core.execution import ExecutionMode, ExecutionPlace, WorkerExit
 from solarian.core.runner import Runner, make_runner
 from solarian.utils import manual_profile, profile, setup_process_logging, get_log_queue
 from solarian.utils.shared_memory.shared_memory_queue import Empty
@@ -268,7 +268,7 @@ class Module(ABC):
         module_obs_spec = Observation.get_module_obs_spec()
         if self.name in module_obs_spec:
             self._module_obs_cls = module_obs_spec[self.name].__class__
-            self._robot_processors = self._module_obs_cls.create_processors(DataComputer.ROBOT)
+            self._robot_processors = self._module_obs_cls.create_processors(ExecutionPlace.ROBOT)
         else:
             self._module_obs_cls = None
             self._robot_processors = {}
@@ -712,6 +712,29 @@ class Module(ABC):
             obs[field_name] = proc(obs)
         return obs
 
+    @action_handler(ActionType.START_SERVICE)
+    def start_service(self, action: ModuleAction, t_now: float) -> bool:
+        """Start the processor behind one of this module's calculated fields.
+
+        ``params`` arrived off the wire, hence the ``.get``s.
+        """
+        field = str(action.params.get("field") or "")
+        proc = self._robot_processors.get(field)
+        if proc is None:
+            logger.warning(
+                "Module '%s': no robot-side processor for field '%s'", self.name, field
+            )
+            return True
+        proc.start(dict(action.params.get("params") or {}))
+        return True
+
+    @action_handler(ActionType.STOP_SERVICE)
+    def stop_service(self, action: ModuleAction, t_now: float) -> bool:
+        proc = self._robot_processors.get(str(action.params.get("field") or ""))
+        if proc is not None:
+            proc.stop()
+        return True
+
 
     def update_observations(self):
         """Publish this module's current state into its observation buffer.
@@ -915,7 +938,7 @@ class Module(ABC):
             # schema in this process so CalculatedFields resolve.
             if getattr(self, "_module_obs_cls", None) is not None:
                 self._robot_processors = self._module_obs_cls.create_processors(
-                    DataComputer.ROBOT
+                    ExecutionPlace.ROBOT
                 )
 
             # Device handles inherited from the parent (via fork) are not

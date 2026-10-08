@@ -12,6 +12,7 @@ from solarian.core.controller import Controller
 from solarian.core.event import EventType
 from solarian.core.execution import ExecutionMode
 from solarian.core.keyboard_module import KeyboardModule
+from solarian.core.mouse_module import MouseModule
 from solarian.core.remote_input_module import RemoteInputModule
 from solarian.core.ui.base import UICommand, UICommandType
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
@@ -98,8 +99,6 @@ class InputCtrl(Controller):
         self.modules = {}
         self.observation_buffers = {}
         self.events = {"exit_early": False, "stop_recording": False}
-        self.clicked_point = None
-        self.clicked_id = None
         for name, module in (
             ("keyboard", KeyboardModule(RemoteInputConfig(frequency=60.0), "keyboard")),
             ("leader_arm", _module()),
@@ -109,6 +108,9 @@ class InputCtrl(Controller):
         self.keyboard = self.modules["keyboard"]
         self.keyboard.observation_buffer = ObservationBuffer.local()
         self.keyboard.start()
+        self.mouse = MouseModule(MouseModule.config_class(**MouseModule.default_config), "mouse")
+        self.mouse.observation_buffer = ObservationBuffer.local()
+        self.mouse.start()
 
 
 def test_input_sample_reaches_the_named_module():
@@ -150,10 +152,25 @@ def test_quit_stops_the_loop():
     assert ctrl.handle_ui_command(UICommand(UICommandType.QUIT)) is False
 
 
-def test_a_click_is_forwarded_to_the_robot():
+def test_a_click_on_an_image_becomes_a_mouse_event():
     ctrl = InputCtrl()
     ctrl.handle_ui_command(
-        UICommand(UICommandType.CLICK, {"point": [12, 34], "id": "abc123"})
+        UICommand(
+            UICommandType.CLICK,
+            {"label": "right_wrist_camera/image", "point": [12, 34], "button": 1},
+        )
     )
-    assert ctrl.clicked_point == (12, 34)
-    assert ctrl.clicked_id == "abc123"
+    (event,) = ctrl.mouse.drain_events()
+    assert int(event.type) == int(EventType.CLICK)
+    assert event.data == {
+        "point": (12, 34),
+        "module": "right_wrist_camera",
+        "field": "image",
+        "button": 1,
+    }
+
+
+def test_a_click_off_any_image_is_ignored():
+    ctrl = InputCtrl()
+    ctrl.handle_ui_command(UICommand(UICommandType.CLICK, {"label": "", "point": [1, 2]}))
+    assert ctrl.mouse.drain_events() == []

@@ -25,7 +25,9 @@ class UICommandType(str, Enum):
 
     KEY_DOWN = "key_down"
     KEY_UP = "key_up"
-    #: Point inside a camera frame, for server-side click-to-track.
+    #: Click on a displayed image. ``data``: ``label`` (the UIImage's
+    #: ``module/field``), ``point`` (``(x, y)`` in image pixels) and
+    #: ``button``.
     CLICK = "click"
     START_SKILL = "start_skill"
     STOP_SKILL = "stop_skill"

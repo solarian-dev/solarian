@@ -1,0 +1,117 @@
+export const metadata = {
+  title: 'Services',
+  description:
+    'A service is a model served over HTTP that a calculated observation field calls, such as a click-to-track bounding box. Run it with solarian run-service and start it from the controller.',
+}
+
+# Services
+
+A **service** computes something an observation is enriched with, such as a tracked bounding box or a depth map, on a machine that can afford it. The observation carries the result as an ordinary [`CalculatedField`](/docs/observations), so skills, the recorder and the controller GUI read it like any sensor. {{ className: 'lead' }}
+
+A service plugin ships three pieces:
+
+- a `ServiceServer` subclass, the HTTP server that holds the model, run with `solarian run-service <name>` on the GPU host;
+- a `ServiceProcessor` subclass, which a `CalculatedField` declares and which calls that server;
+- a `Service` class naming both, advertised under the `solarian.services` entry-point group.
+
+```toml
+[project.entry-points."solarian.services"]
+sam2-tracker = "solarian_sam2_tracker.service:Sam2TrackerService"
+```
+
+Defined in [`solarian/services/`](https://github.com/solarian-dev/solarian/blob/main/solarian/services).
+
+## Running a service
+
+```bash
+solarian run-service sam2-tracker --model small --checkpoint-dir ~/sam2/checkpoints
+```
+
+`--host` and `--port` are handled by `run-service` (the port defaults to the service's `default_port`, 8765); every other argument goes to the plugin's server. `sam2-tracker` downloads the chosen SAM 2.1 checkpoint into `--checkpoint-dir` when the file is not already there. A server answers `GET /health` and `GET /info`, plus its own routes.
+
+## Declaring the field
+
+```python
+from solarian.core.data import BoundingBoxData
+from solarian.core.observation import CalculatedField, ModuleObs, SensorField
+from solarian_sam2_tracker import Sam2BboxProcessor
+
+class RightWristCameraObs(ModuleObs):
+    image = SensorField(MyRobot.right_wrist_camera.camera.rgb_image)
+    bbox = CalculatedField(
+        inputs=[MyRobot.right_wrist_camera.camera.rgb_image],
+        processor=Sam2BboxProcessor,
+        output=BoundingBoxData(),
+        conf="conf/bbox_tracker.yaml",
+    )
+```
+
+With no `execution_place=` argument, the field reads where it runs from its conf, so one deployment key moves it between the relay and the robot:
+
+```yaml
+# conf/bbox_tracker.yaml
+execution_place: ${deployment.pnp_execution_place}
+server_url: ${deployment.bbox_tracker_url}
+resize: 224
+```
+
+Every host reads the same conf and deployment, so they always agree on where the field is computed. The keys have no fallback: a deployment that does not set them fails at startup, naming the missing key. A skill that reads the field, such as `UMIPnPSkill`, takes its own `execution_place` from the same key, so the two cannot be placed apart. The host that computes it builds the processor. The others carry the field as zeros until it arrives.
+
+## Starting and stopping
+
+A service that needs a command to begin, such as a tracker that needs a target, does nothing until it is started. The controller starts it by field, with any parameters the processor takes:
+
+```python
+from solarian.core.event import Event, EventType, event_handler
+
+class MyController(Controller):
+    @event_handler(EventType.CLICK)
+    def track_clicked_object(self, event: Event) -> None:
+        if event.data["field"] != "image":
+            return
+        self.start_service(event.data["module"], "bbox", point=event.data["point"])
+```
+
+`start_service` and `stop_service` send `START_SERVICE` / `STOP_SERVICE` actions with `{module, field, params}`. The relay applies them when it computes that field and forwards them to the robot otherwise, where the module that owns the field calls its processor's `start(params)` / `stop()`. A second `start_service` restarts the processor with the new parameters.
+
+`CLICK` events come from the controller GUI's `MouseModule`. `point` is in image pixels, already mapped back from however the frame was scaled for display, and `module` / `field` name the observation the image was.
+
+## Latency
+
+A processor is called inline, once per observation, on the path that forwards it. `ServiceProcessor` therefore never calls the server there. A worker thread takes the newest frame from a one-slot buffer, calls the service, and publishes the result stamped with the timestamp of the frame it was computed from. The field lags the image by one round trip, and the observation stream never slows to the service's rate. While stopped, the field is zeros.
+
+Each processor reports `<label> call (ms)` and `<label> age (ms)` on the StatusBoard. Comparing those between a relay-computed and a robot-computed run shows what each placement costs.
+
+## Writing a service
+
+```python
+from solarian.services import Service, ServiceProcessor, ServiceServer
+
+class MyServer(ServiceServer):
+    title = "my-service"
+
+    def add_routes(self, app):
+        @app.post("/infer")
+        def infer(payload: dict):
+            ...
+
+class MyProcessor(ServiceProcessor):
+    def on_start(self, frame, params):   # first result, or None
+        ...
+    def on_frame(self, frame):           # result for frame, or None to keep the last
+        ...
+    def on_stop(self):
+        ...
+
+class MyService(Service):
+    server_module = "my_plugin.server"   # calls MyServer.main()
+    processor_cls = MyProcessor
+```
+
+`ServiceClient` wraps the HTTP calls, and `solarian.utils.wire` encodes numpy arrays in JSON payloads. `solarian-sam2-tracker` is a complete example.
+
+## See also
+
+- [Server](/docs/servers): how the relay computes server-side fields and hosts skills.
+- [Observations](/docs/observations): `CalculatedField` and `ExecutionPlace`.
+- [Events](/docs/events): `CLICK` and the other controller events.

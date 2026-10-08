@@ -20,7 +20,6 @@ the controller, or on a dedicated GPU box — so ``server_url`` is the only
 thing the skill needs to know about its location.
 """
 
-import base64
 import json
 import logging
 import time
@@ -29,30 +28,9 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import requests
 
+from solarian.utils.wire import encode_arrays
+
 logger = logging.getLogger(__name__)
-
-
-def _serialize_obs(obs_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """Encode an obs dict for the wire; numpy arrays go as raw bytes.
-
-    Nested JSON lists would be ~5x the array's own size in decimal text, and
-    writing them costs the sender more CPU than the model costs the receiver:
-    a 224x224x3 float32 image measured 3.05 MB and 142 ms on a Pi 5, against
-    176 ms for the diffusion policy it was being sent to. ``dtype`` carries
-    byte order, so a little-endian sender and a big-endian receiver agree.
-    """
-    out: Dict[str, Any] = {}
-    for key, value in obs_dict.items():
-        if isinstance(value, np.ndarray):
-            value = np.ascontiguousarray(value)
-            out[key] = {
-                "__ndarray__": base64.b64encode(value.tobytes()).decode("ascii"),
-                "dtype": value.dtype.str,
-                "shape": list(value.shape),
-            }
-        else:
-            out[key] = value
-    return out
 
 
 class PolicyClient:
@@ -156,7 +134,7 @@ class PolicyClient:
         # measurable. On a small board an image serialised to decimal text is
         # not a rounding error against the model it is being sent to.
         t0 = time.perf_counter()
-        body = json.dumps({"obs_dict": _serialize_obs(obs_dict), "kwargs": kwargs})
+        body = json.dumps({"obs_dict": encode_arrays(obs_dict), "kwargs": kwargs})
         t1 = time.perf_counter()
         response = self._http.post(
             f"{self.server_url}/predict",
