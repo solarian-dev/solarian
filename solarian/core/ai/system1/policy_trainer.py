@@ -45,9 +45,9 @@ logger = logging.getLogger(__name__)
 class ModalSpec:
     """Describes the container image a trainer needs to run on Modal.
 
-    The generic :class:`~solarian.core.training.modal_launcher.ModalLauncher`
-    turns this into a ``modal.Image``.  A plugin only declares *what* it
-    needs (apt + pip packages); it never imports ``modal`` itself.
+    The ``solarian-modal`` plugin (``solarian modal-train``) turns this into a
+    ``modal.Image``.  A plugin only declares *what* it needs (apt + pip
+    packages); it never imports ``modal`` itself.
     """
 
     def __init__(
@@ -62,13 +62,12 @@ class ModalSpec:
         self.python_version = python_version
         #: System packages installed with apt (e.g. ``ffmpeg``, ``libgl1``).
         self.apt_packages = list(apt_packages or [])
-        #: Pip requirements (e.g. ``"torch"``, ``"accelerate"``, the plugin
-        #: package itself). ``accelerate`` is added automatically by the
-        #: launcher when multi-GPU is requested.
+        #: Pip requirements (e.g. ``"torch==2.8.0"``). They take precedence
+        #: over the runtime requirements of ``local_python_packages``, which
+        #: the launcher adds, as it does ``accelerate``.
         self.pip_packages = list(pip_packages or [])
-        #: Importable local packages to ship into the image with
-        #: ``Image.add_local_python_source`` (for editable / unpublished
-        #: deps such as a local UMI fork).
+        #: Importable local packages shipped into the image as source, with
+        #: their package data (e.g. ``"solarian"`` and the plugin itself).
         self.local_python_packages = list(local_python_packages or [])
         #: Extra environment variables baked into the image.
         self.env = dict(env or {})

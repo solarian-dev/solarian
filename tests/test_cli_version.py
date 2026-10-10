@@ -6,7 +6,7 @@ import importlib.metadata
 
 import pytest
 
-from solarian.cli.manage import _get_version, main
+from solarian.cli.manage import BANNER, _get_version, main
 
 
 def test_get_version_matches_installed_metadata():
@@ -29,4 +29,4 @@ def test_version_flag_prints_and_exits(flag, monkeypatch, capsys):
         main()
 
     assert exc_info.value.code == 0
-    assert capsys.readouterr().out.strip() == f"solarian {_get_version()}"
+    assert capsys.readouterr().out == f"\n{BANNER}\nsolarian {_get_version()}\n"

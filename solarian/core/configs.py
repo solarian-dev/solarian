@@ -542,26 +542,6 @@ class AdamWOptimizerConfig(TrainOptimizerConfig):
     eps: float = 1e-8
     weight_decay: float = 0.0001
     
-class ModalConfig(ConfigBaseModel):
-    """Cloud-GPU (Modal) orchestration for training.
-
-    Consumed by :class:`solarian.core.training.modal_launcher.ModalLauncher`.
-    The framework builds the container image from the trainer's
-    :meth:`~solarian.core.ai.system1.policy_trainer.PolicyTrainer.modal_spec`
-    and runs the trainer remotely; only orchestration knobs live here.
-    """
-    enabled: bool = False
-    gpu_type: str = "A100-80GB"
-    gpus: int = 1
-    #: Modal volume mounted at ``/data`` for datasets + outputs.
-    volume: str = "solarian-data"
-    #: Names of ``modal.Secret`` objects to attach (e.g. ``["wandb"]``).
-    secrets: list[str] = []
-    timeout: int = 24 * 60 * 60
-    mixed_precision: str = "bf16"
-    app_name: str = "solarian-train"
-
-
 class TrainConfig(ConfigBaseModel):
     """Thin, library-agnostic training config.
 
@@ -592,7 +572,6 @@ class TrainConfig(ConfigBaseModel):
     save_freq: int = 10000
 
     logger: Optional[TrainLoggerConfig] = None
-    modal: ModalConfig = Field(default_factory=ModalConfig)
 
     def to_tags(self) -> list[str]:
         """Generic run tags for logging. Plugins may override to add more."""

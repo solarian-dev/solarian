@@ -5,8 +5,9 @@ The framework does not know how any particular policy is trained.  It reads
 the ``policy`` key from the composed config, resolves the matching
 :class:`~solarian.core.ai.system1.policy_trainer.PolicyTrainer` subclass via
 the ``solarian.trainers`` entry-point group, validates the config with that
-trainer's :meth:`config_class`, and runs it — either locally or, when
-``modal.enabled`` is set, on Modal via the generic launcher.
+trainer's :meth:`config_class`, and runs it on this machine. The
+``solarian-modal`` plugin's ``solarian modal-train`` runs the same config on
+Modal.
 
 Concrete training lives entirely in policy plugins (e.g.
 ``solarian-policy-diffusion``, ``solarian-policy-lerobot``).
@@ -34,16 +35,15 @@ class TrainCommand(BaseCommand):
     (solarian-policy-diffusion, solarian-policy-lerobot, ...), validates the whole
     config against that trainer's schema and runs it.
 
-    Checkpoints land in output_dir, defaulting to models/<job_name>. Set
-    modal.enabled to run the same config on Modal's GPUs instead of this machine.
-    The framework knows nothing about the training itself: everything specific
+    Checkpoints land in output_dir, defaulting to models/<job_name>. To run the
+    same config on Modal's GPUs instead, install solarian-modal and use
+    solarian modal-train. The framework knows nothing about the training itself: everything specific
     lives in the plugin, so the keys the config accepts are the ones that trainer
     declares.
     """
     examples = (
         "solarian train",
         "solarian train policy=diffusion job_name=cup_arrange_v3",
-        "solarian train modal.enabled=true",
     )
 
     def get_config_class(self):
@@ -70,16 +70,6 @@ class TrainCommand(BaseCommand):
             trainer_cls = get_trainer_class(policy)
             train_cfg = trainer_cls.config_class().model_validate(cfg_dict)
 
-            # Cloud path: hand off to the generic Modal launcher, which sets
-            # up the image / volume / GPUs and runs the trainer remotely.
-            modal_cfg = getattr(train_cfg, "modal", None)
-            if modal_cfg is not None and getattr(modal_cfg, "enabled", False):
-                from solarian.core.training.modal_launcher import ModalLauncher
-
-                ModalLauncher(trainer_cls, train_cfg).run()
-                return
-
-            # Local path: resolve an output directory and run in-process.
             if train_cfg.output_dir:
                 output_dir = Path(train_cfg.output_dir).expanduser()
             else:

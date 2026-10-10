@@ -130,7 +130,8 @@ class CommandRegistry:
         """Return the setup_modules declared for *name*, or None (= all)."""
         if name in cls._lazy_commands:
             return cls._lazy_commands[name].setup_modules
-        return None
+        command_cls = cls._commands.get(name)
+        return command_cls.setup_modules if command_cls is not None else None
 
 class BaseCommand(ABC):
     #: One line, listed by ``solarian --help`` and repeated at the top of this
@@ -166,6 +167,11 @@ class BaseCommand(ABC):
 
     #: When False, the command runs without a project config or settings.py.
     uses_config = True
+
+    #: Project modules ``setup()`` imports for this command (see
+    #: ``solarian.cli.commands``); None imports all. Built-ins repeat it on
+    #: ``register_lazy``.
+    setup_modules: Optional[tuple] = None
 
     def parse_args(self, argv: list[str]) -> list[str]:
         """Parse this command's own argv and return leftover Hydra overrides.

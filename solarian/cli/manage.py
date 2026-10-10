@@ -166,11 +166,20 @@ def _build_command_list() -> str:
     return "\n".join(lines)
 
 
+# Only main prints this. A command that printed it again would show it twice.
+BANNER = """\
+█▀▀ █▀█ █   █▀█ █▀█ █ █▀█ █▄ █
+▀▀█ █ █ █   █▀█ █▀▄ █ █▀█ █ ▀█
+▀▀▀ ▀▀▀ ▀▀▀ ▀ ▀ ▀ ▀ ▀ ▀ ▀ ▀  ▀
+"""
+
+
 def main() -> None:
     """
     Given the command-line arguments, figure out which subcommand is being
     run, create a parser appropriate to that command, and run it.
     """
+    print(f"\n{BANNER}")
 
     # Register command metadata (lazy — no heavy imports happen here)
     from ..cli import commands  # noqa: F401

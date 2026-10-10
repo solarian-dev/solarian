@@ -18,9 +18,9 @@ flowchart TD
     cli["solarian train"] --> resolve["read cfg.policy"]
     resolve --> reg["solarian.trainers entry points"]
     reg --> trainer["PolicyTrainer subclass (plugin)"]
-    cli -->|"modal.enabled"| modal["ModalLauncher (generic)"]
-    modal -->|"accelerate launch"| entry["modal_entry → TrainerCls.train()"]
-    cli -->|"local"| trainer
+    cli --> trainer
+    mcli["solarian modal-train (solarian-modal)"] --> resolve
+    mcli -->|"accelerate launch on Modal"| trainer
 ```
 
 ## How `solarian train` works
@@ -32,8 +32,10 @@ The command never imports any ML library. It:
    entry-point group.
 3. Validates the config with that trainer's `config_class()`.
 4. Resolves an `output_dir` (defaults to `$SOLARIAN_PROJECT_PATH/models/<job_name>`).
-5. Runs it — locally (`TrainerCls(cfg, output_dir).train()`) or, when
-   `modal.enabled` is set, on Modal via the generic launcher.
+5. Runs it in this process: `TrainerCls(cfg, output_dir).train()`.
+
+The `solarian-modal` plugin's `solarian modal-train` runs the same config on
+Modal; see [Cloud training](#cloud-training-modal).
 
 ```bash
 solarian train --conf conf/train
@@ -91,8 +93,8 @@ ORB-SLAM3 runs in Docker image `chicheng/orb_slam3:latest` and GoPro IMU
 extraction in `chicheng/openicc:latest`. An image already on the machine is
 used as it is. A missing image is downloaded only after you agree.
 
-Cloud training via `modal.enabled` uses the generic Modal launcher. This trainer
-does not support it yet.
+The trainer declares a `modal_spec()`, so `solarian modal-train` runs these
+configs on Modal too.
 
 ## The `PolicyTrainer` contract
 
@@ -128,8 +130,7 @@ class MyTrainer(PolicyTrainer):
 The framework's `TrainConfig`
 ([`solarian/core/configs.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py))
 only knows common fields — `policy`, `train_dataset`, `val_dataset`,
-`output_dir`, `job_name`, `batch_size`, `steps`, logging and a `modal` block —
-and uses `extra="allow"`, so any plugin-specific keys (model architecture,
+`output_dir`, `job_name`, `batch_size`, `steps` and logging — and uses `extra="allow"`, so any plugin-specific keys (model architecture,
 optimizer, ...) pass through untouched. A plugin's `config_class()` is a
 `TrainConfig` subclass that re-adds and validates those fields.
 
@@ -152,22 +153,28 @@ trainers if the requested one isn't installed.
 
 ## Cloud training (Modal)
 
-Set `modal.enabled: true` (plus `gpu_type`, `gpus`, `volume`, `secrets`) and the
-generic
-[`ModalLauncher`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/training/modal_launcher.py)
-builds a `modal.Image` from the trainer's `modal_spec()`, mounts a volume at
-`/data` for datasets and outputs, and runs the trainer remotely with
-`accelerate launch -m solarian.core.training.modal_entry`. Datasets must already
-live on the volume — reference them with `/data/...` paths.
+Install the `solarian-modal` plugin and call `solarian modal-train` with the
+same config as `solarian train`, plus a `modal:` block:
+
+```bash
+solarian modal-train --conf conf/train-cup-arrange
+```
 
 ```yaml
 modal:
-  enabled: true
   gpu_type: A100-80GB
   gpus: 2
   volume: solarian-data
-  secrets: [wandb]
+  profile: null              # a ~/.modal.toml profile
+  forward_env: [WANDB_API_KEY]
 ```
+
+It builds a `modal.Image` from the trainer's `modal_spec()` and uploads the
+local files the config names to the volume, rewriting their paths. Then it
+spawns a detached job that runs the trainer under `accelerate launch`, with
+checkpoints in `/outputs/<job_name>` on the volume. The command returns once the
+job is spawned, so calling it once per config runs jobs in parallel. The
+plugin's README covers the details.
 
 ## Reference plugins
 
