@@ -81,7 +81,7 @@ class TrainCommand(BaseCommand):
 
             # Local path: resolve an output directory and run in-process.
             if train_cfg.output_dir:
-                output_dir = Path(train_cfg.output_dir)
+                output_dir = Path(train_cfg.output_dir).expanduser()
             else:
                 project_path = os.getenv("SOLARIAN_PROJECT_PATH", os.getcwd())
                 output_dir = Path(project_path) / "models" / train_cfg.job_name
