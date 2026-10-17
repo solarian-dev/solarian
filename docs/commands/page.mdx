@@ -73,6 +73,19 @@ solarian install plugins/solarian-umi-slim
 solarian install ur5
 ```
 
+### `add-op`
+
+```bash
+solarian add-op <name> [--force]
+```
+
+Writes `<package>/dataset_ops/<name>.py`, a dataset op stub copied from the same template as the `drop_short_episodes.py` example every new project gets. Nothing needs registering: each file in `dataset_ops/` is an op, named after the file with `_` turned into `-` (`split_by_success.py` is `split-by-success`), unless its class sets `name`. `--force` overwrites the file. See [Dataset ops](/docs/datasets#dataset-ops).
+
+```bash
+solarian add-op split-by-success
+solarian dataset ops                 # lists it, with source project:so106/dataset_ops/split_by_success.py
+```
+
 ## Robot commands
 
 These commands run on the robot machine. They import the modules listed under <code>setup_modules=("robot", "observation", "action")</code>.
@@ -271,6 +284,17 @@ solarian export-dataset datasets/cup_stacking__2026-09-22T19-04-11
 ```
 
 Turns a recorded session — archive mp4s plus one parquet per episode, all at native rates — into a LeRobot v2.1 dataset: every signal resampled onto one grid, every frame warped through the camera's optical remap and downscaled to the observation resolution. The session is never modified, so recalibrate a camera or change your mind about the rate and export again from the same recording. `--fps`, `--episodes A,B,C`, `--no-remap` and `--overwrite` cover the rest. See [Recording](/docs/recording).
+
+### `dataset`
+
+```bash
+solarian dataset ops [--json]
+solarian dataset new <source> <dir>
+solarian dataset apply <dir>[@VERSION] <op> [--param KEY=VALUE]... [--review | --online]
+solarian dataset log <dir>
+```
+
+Runs [dataset ops](/docs/datasets#dataset-ops) on recorded sessions without changing them. `new` starts a computed dataset over a session; `apply` adds a version made by an op on another version (by default the only leaf, or `@source`). `redo`, `accept`, `close`, `drop`, `export` and `rebuild` cover the rest, and `solarian dataset --help` lists them all. `--project DIR` picks the project whose `dataset_ops/` load, by default the one around the current directory.
 
 ### `umi-slam`
 

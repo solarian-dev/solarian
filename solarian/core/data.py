@@ -290,6 +290,45 @@ class BoundingBoxData(Data):
         return np.asarray(value, dtype=self.dtype).reshape(self.shape)
 
 
+class MaskData(Data):
+    """``(H, W)`` uint8 0/1 segmentation of the source image. All zeros = no target."""
+
+    dtype: Type = np.uint8
+    shape: Optional[Tuple[int, int]] = None
+    payload: Optional[np.ndarray] = Field(default=None, alias="value")
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.is_compressed and self.payload is None and self.shape is not None:
+            self.payload = np.zeros(self.shape, dtype=self.dtype)
+
+    def _coerce_payload(self, value):
+        return np.asarray(value, dtype=self.dtype)
+
+    def _default_codec(self) -> str:
+        return "png"
+
+    def _compress_impl(self, raw: Any) -> bytes:
+        import cv2
+
+        if raw is None:
+            return b""
+        # Lossless and tiny for a binary image; JPEG would blur the edge.
+        ok, buf = cv2.imencode(".png", np.asarray(raw, dtype=np.uint8))
+        if not ok:
+            raise RuntimeError("cv2.imencode('.png', mask) failed")
+        return buf.tobytes()
+
+    def _uncompress_impl(self, b: bytes) -> Any:
+        import cv2
+
+        if not b:
+            return None if self.shape is None else np.zeros(self.shape, dtype=self.dtype)
+        mask = cv2.imdecode(np.frombuffer(b, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        if mask is None:
+            raise RuntimeError("cv2.imdecode() failed for a mask")
+        return mask
+
+
 class TimestampData(Data):
     dtype: Type = float
     payload: float = Field(default_factory=time.time, alias="value")

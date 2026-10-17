@@ -70,10 +70,10 @@ def test_a_cycle_is_reported_instead_of_recursing(conf_dir, monkeypatch):
 
 
 def test_extending_something_that_is_not_there_says_who_asked(conf_dir, monkeypatch):
-    write(conf_dir, "primarykey", {"extends": "lapotp", "connection": {"ip": "relay"}})
-    monkeypatch.setenv("SOLARIAN_DEPLOYMENT", "primarykey")
+    write(conf_dir, "solarian_base", {"extends": "lapotp", "connection": {"ip": "relay"}})
+    monkeypatch.setenv("SOLARIAN_DEPLOYMENT", "solarian_base")
 
-    with pytest.raises(ValueError, match="'primarykey' extends 'lapotp'"):
+    with pytest.raises(ValueError, match="'solarian_base' extends 'lapotp'"):
         configs.load_deployment_config()
 
 

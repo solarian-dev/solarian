@@ -17,7 +17,7 @@ import solarian  # this package, used for locating templates
 
 
 #: Component types that can be scaffolded into a plugin.
-ALLOWED_TYPES = {"actuator", "sensor", "module", "robot", "command", "policy"}
+ALLOWED_TYPES = {"actuator", "sensor", "module", "robot", "command", "policy", "op"}
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,9 @@ COMPONENT_FILES: Dict[str, Tuple[FileSpec, ...]] = {
         FileSpec(Path("policy/policy_server.py.tmpl"), "{package_name}/policy_server.py"),
         FileSpec(Path("policy/skill.py.tmpl"), "{package_name}/skill.py"),
     ),
+    "op": (
+        FileSpec(Path("op/op.py.tmpl"), "{package_name}/op.py"),
+    ),
 }
 
 
@@ -89,6 +92,9 @@ ENTRY_POINTS: Dict[str, List[Tuple[str, str, str]]] = {
     "policy": [
         ("solarian.trainers", "{plugin_name}", "{package_name}.trainer:{class_prefix}Trainer"),
         ("solarian.skills", "{plugin_name}", "{package_name}.skill:{class_prefix}Skill"),
+    ],
+    "op": [
+        ("solarian.dataset_ops", "{plugin_name}", "{package_name}.op:{class_prefix}Op"),
     ],
 }
 

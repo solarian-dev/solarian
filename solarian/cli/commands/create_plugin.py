@@ -36,8 +36,8 @@ class CreatePluginCommand(BaseCommand):
     """
     usage = "<type> <name> [--force]"
     options = {
-        "<type>": "Component to scaffold: actuator, sensor, module, robot, command "
-                  "or policy.",
+        "<type>": "Component to scaffold: actuator, sensor, module, robot, command, "
+                  "policy or op (a dataset op).",
         "<name>": "Plugin name without the solarian- prefix (feetech, ur5, ...).",
         "--force": "Overwrite files that already exist.",
     }

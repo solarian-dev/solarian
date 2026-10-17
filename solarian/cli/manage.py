@@ -179,7 +179,10 @@ def main() -> None:
     Given the command-line arguments, figure out which subcommand is being
     run, create a parser appropriate to that command, and run it.
     """
-    print(f"\n{BANNER}")
+    # Piped stdout is read by a program (a job runner, an agent), which wants
+    # only what the command prints.
+    if sys.stdout.isatty():
+        print(f"\n{BANNER}")
 
     # Register command metadata (lazy — no heavy imports happen here)
     from ..cli import commands  # noqa: F401

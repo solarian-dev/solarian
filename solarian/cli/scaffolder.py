@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,7 @@ PROJECT_FILES: Tuple[FileSpec, ...] = (
     FileSpec(Path("observation.py.tmpl"), Path("{package_name}/observation.py")),
     FileSpec(Path("settings.py.tmpl"), Path("{package_name}/settings.py")),
     FileSpec(Path("example_module.py.tmpl"), Path("{package_name}/modules/example_module.py")),
+    FileSpec(Path("dataset_op.py.tmpl"), Path("{package_name}/dataset_ops/drop_short_episodes.py")),
     # conf/
     
     FileSpec(Path("conf/controller.yaml.tmpl"), Path("conf/controller.yaml")),
@@ -61,6 +63,17 @@ def _write_file(dst: Path, content: str, make_executable: bool = False, force: b
     if make_executable:
         mode = dst.stat().st_mode
         dst.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def op_context(name: str) -> dict:
+    """``drop_short_episodes`` or ``drop-short-episodes`` -> the dataset_op.py.tmpl placeholders."""
+    words = [w for w in re.split(r"[-_\s]+", name.strip()) if w]
+    return {
+        "op_file": "_".join(words),
+        "op_name": "-".join(words),
+        "op_title": " ".join(words).capitalize(),
+        "class_name": "".join(w[:1].upper() + w[1:] for w in words),
+    }
 
 
 def _iter_template_files() -> Iterable[Tuple[Path, str]]:
@@ -105,6 +118,7 @@ def scaffold_project(project_name: str, target_dir: Path | None = None, force: b
         "project_name": project_name,
         "package_name": project_name.replace("-", "_"),
         "project_name_camel": project_name.replace("-", " ").replace("_", " ").title().replace(" ", ""),
+        **op_context("drop_short_episodes"),
     }
 
     for spec, (_, text) in zip(PROJECT_FILES, _iter_template_files()):
@@ -141,7 +155,8 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print(f"  │   ├── controller.py")
     print(f"  │   ├── server.py")
     print(f"  │   ├── action.py")
-    print(f"  │   └── observation.py")
+    print(f"  │   ├── observation.py")
+    print(f"  │   └── dataset_ops/drop_short_episodes.py")
     print(f"  └── conf/")
     print(f"      ├── robot.yaml")
     print(f"      ├── controller.yaml")

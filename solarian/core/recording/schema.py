@@ -133,9 +133,10 @@ def _column_dtype(spec) -> str | None:
     Everything numeric lands in float32: these are sensor readings, and the
     extra mantissa of float64 would store noise. Timestamps are the exception
     and are declared explicitly, because float32 cannot resolve a millisecond
-    inside a Unix epoch.
+    inside a Unix epoch. Arrays (boxes, pictures, masks) are not tabulated;
+    a picture or mask may declare no shape, so its dtype is what marks it.
     """
-    if spec.shape is not None:
+    if spec.shape is not None or spec.dtype not in (bool, int, float):
         return None
     return "bool" if spec.dtype is bool else "float32"
 

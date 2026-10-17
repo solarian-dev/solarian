@@ -28,7 +28,7 @@ class ExportDatasetCommand(BaseCommand):
     Pass --no-remap to keep the archive geometry, which is what a higher-resolution
     experiment or a re-calibration wants.
 
-    The output is what `solarian train` reads and what PrimaryKey ingests.
+    The output is what `solarian train` reads and what Solarian Base ingests.
     """
     usage = (
         "<session_dir> [<output_dir>] [--fps N] [--episodes A,B,C] "

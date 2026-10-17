@@ -1,0 +1,131 @@
+export const metadata = {
+  title: 'Dataset Formats',
+  description:
+    'The three archives Solarian Base opens: a Solarian recording session (.solarian.zip), a LeRobot v2.1 export (.zip), and a UMI replay buffer (.zarr.zip). The format is read from the archive contents.',
+}
+
+# Dataset formats
+
+Solarian Base opens three kinds of dataset. Each is one compressed file, and the format is read from what is inside the archive, so a renamed file is still recognised. {{ className: 'lead' }}
+
+Only the entry names are consulted. A single directory wrapped around the whole tree, which is what an archiver adds when you archive a folder, is ignored. Anything nested further is left as it is.
+
+## Solarian (`.solarian.zip`)
+
+A [recording session](/docs/recording), zipped. This is the dataset the robot wrote: one mp4 per camera at archive resolution, and one parquet of every signal at its own rate.
+
+```bash
+zip -r cup_stacking.solarian.zip datasets/cup_stacking__2026-09-22T19-04-11
+```
+
+```text
+cup_stacking.solarian.zip
+├── session.json
+├── manifest.jsonl
+└── episodes/000000/
+    ├── episode.json
+    ├── episode.parquet
+    └── video/<module>.<field>.mp4
+```
+
+<Properties>
+  <Property name="session.json" type="required">
+    Schema, camera geometry, and the robot structure. Present in every session, including one that was started and never recorded.
+  </Property>
+  <Property name="episodes/&lt;index&gt;/episode.parquet" type="required">
+    The episode table. A session with <code>session.json</code> and no episode parquet is a session that recorded nothing, and is refused.
+  </Property>
+  <Property name="manifest.jsonl" type="ledger">
+    Which episodes sealed. A <code>dropped</code> line is a take the operator threw away.
+  </Property>
+</Properties>
+
+A 7z of the same tree is read the same way. The `.solarian.zip` suffix is the name to give it, so a person can tell it from the other two zips.
+
+Uploading a session skips export. The irreversible choices — a target rate, a policy resolution, a warped image — stay in the session until you decide them with [`solarian export-dataset`](/docs/recording#exporting-a-training-set).
+
+## LeRobot (`.zip`)
+
+A [LeRobot](https://github.com/huggingface/lerobot) v2.1 dataset, which is what `solarian export-dataset` writes and what `solarian train` reads. Row *i* is the state at `i / fps`, and each camera is one mp4 per episode.
+
+```text
+lerobot.zip
+├── meta/info.json
+├── meta/episodes.jsonl
+├── meta/episodes_stats.jsonl
+├── meta/tasks.jsonl
+├── data/chunk-000/episode_000000.parquet
+└── videos/chunk-000/observation.images.<camera>/episode_000000.mp4
+```
+
+`meta/info.json` is the signature. The rest of `meta/` and the chunk directories are what a complete export contains; an archive that has the info file and nothing else is still recognised as LeRobot.
+
+## UMI (`.zarr.zip`)
+
+A [UMI](https://umi-gripper.github.io/) replay buffer: one [Zarr](https://zarr.dev/) store packed into a zip. Episodes are slices of shared arrays, bounded by `meta/episode_ends`, rather than a directory per episode. Frames live in an array, so there are no video files.
+
+```text
+demo.zarr.zip
+├── data/
+│   ├── camera0_rgb
+│   ├── robot0_eef_pos
+│   ├── robot0_eef_rot_axis_angle
+│   └── robot0_gripper_width
+└── meta/
+    └── episode_ends
+```
+
+The store is recognised by its own metadata: a `.zgroup` or `.zarray` (Zarr v2), a `zarr.json` (Zarr v3), or a `meta/episode_ends` array. Camera and pose names vary by collection setup; the ones above are the UMI names Solarian Base looks for first.
+
+## Dataset ops
+
+A recorded session is never edited. Deleting episodes, splitting a pick from its place, mirroring or tracking an object makes a new version, and the versions over one session live in a **computed dataset**: a directory with a `computed.json` that records every op, its params and every per-episode redo, so the dataset can be rebuilt from its source.
+
+```bash
+solarian dataset new data/cups data/cups-curated
+solarian dataset apply data/cups-curated delete-episodes --param 'episodes=[3, 7]'
+solarian dataset apply data/cups-curated drop-short-episodes --param min_frames=60
+solarian dataset log data/cups-curated
+solarian dataset export data/cups-curated cups-curated.solarian.zip
+```
+
+A version is named `<nn>-<op>` and addressed as `data/cups-curated@02-drop-short-episodes`. With `--review` or `--online`, a map or filter op leaves its version open, so each episode can be redone, kept or dropped, and accepted. Ops build only on closed versions. Solarian Base does the same from a computed dataset's page, where the review plays each episode forwards or backwards.
+
+### Writing an op
+
+An op is a file in your project, next to `modules/`:
+
+```text
+myrobot/
+└── myrobot/
+    └── dataset_ops/
+        └── drop_short_episodes.py   # the op drop-short-episodes
+```
+
+Every `<package>/dataset_ops/<name>.py` is an op, named after the file with `_` turned into `-`, unless the class sets `name`. There is nothing to register, and it can import your project's code. `create-solarian` writes `drop_short_episodes.py` as an example, and [`solarian add-op <name>`](/docs/commands#add-op) writes another from the same template:
+
+```python
+from pydantic import BaseModel, Field
+
+from solarian.datasets import DatasetOp, Episode, OpKind
+
+
+class DropShortEpisodesParams(BaseModel):
+    min_frames: int = Field(default=30, ge=1, description="Episodes with fewer rows are dropped.")
+
+
+class DropShortEpisodesOp(DatasetOp):
+    title = "Drop short episodes"
+    description = """
+    Drop the episodes shorter than min_frames: false starts and aborted demos.
+    """
+    kind = OpKind.FILTER
+    Params = DropShortEpisodesParams
+
+    def keep(self, episode: Episode, params: DropShortEpisodesParams) -> bool:
+        return episode.n_rows >= params.min_frames
+```
+
+A `FILTER` keeps or drops whole episodes. A `MAP` implements `map(episode, params, ctx)` and returns `episode.derive(files, **meta)` with only the members it adds or replaces; the rest is read through from the parent version. `EXPAND` writes several outputs, as `split-pick-place` does, and `COMBINE` merges sessions. The `Params` model is the op's form: Solarian Base renders it from its JSON Schema, and `--param` is checked against it.
+
+`solarian dataset ops` lists every op with where it came from: `builtin`, `plugin:<package>` or `project:<path>`. A project op with the name of a built-in or plugin op takes its place. A file that fails to import is listed with its error, and the other ops still load. To share an op across projects, move the file into a plugin and add one `solarian.dataset_ops` entry point; `solarian create-plugin op <name>` scaffolds one.

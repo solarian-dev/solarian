@@ -10,7 +10,7 @@ That makes export cheap to redo and safe to get wrong. Recalibrate the camera
 and re-export; decide the policy wants 60 Hz and re-export. The session does
 not change.
 
-Only LeRobot v2.1 is implemented here. It is what PrimaryKey ingests, and it
+Only LeRobot v2.1 is implemented here. It is what Solarian Base ingests, and it
 is the format every off-the-shelf trainer reads.
 """
 
@@ -37,7 +37,7 @@ from solarian.core.recording.session import (
 logger = logging.getLogger(__name__)
 
 #: LeRobot's on-disk contract version. v3 moved to one file per chunk rather
-#: than one per episode; PrimaryKey and the trainers in use read v2.1.
+#: than one per episode; Solarian Base and the trainers in use read v2.1.
 CODEBASE_VERSION = "v2.1"
 
 #: Episodes per chunk directory. LeRobot's own default, and what every reader

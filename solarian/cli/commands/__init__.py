@@ -40,6 +40,13 @@ CommandRegistry.register_lazy(
     category="Project",
 )
 CommandRegistry.register_lazy(
+    "add-op",
+    module_path=f"{_pkg}.add_op",
+    help="Write a dataset op stub into this project's <package>/dataset_ops/",
+    setup_modules=(),
+    category="Project",
+)
+CommandRegistry.register_lazy(
     "onshape-export",
     module_path=f"{_pkg}.onshape_export",
     help="Export an Onshape assembly into an attachable MuJoCo sim model",
@@ -224,6 +231,13 @@ CommandRegistry.register_lazy(
 )
 
 # ── Training & Data commands ─────────────────────────────────────────
+CommandRegistry.register_lazy(
+    "dataset",
+    module_path=f"{_pkg}.dataset",
+    help="Curate and enrich recorded sessions: delete, split, track, mirror, merge",
+    setup_modules=(),
+    category="Training & Data",
+)
 CommandRegistry.register_lazy(
     "export-dataset",
     module_path=f"{_pkg}.export_dataset",

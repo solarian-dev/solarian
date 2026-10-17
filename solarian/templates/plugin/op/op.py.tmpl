@@ -1,0 +1,44 @@
+"""``${plugin_name}``: a dataset op, advertised under the ``solarian.dataset_ops`` entry point.
+
+Once the plugin is installed, every project lists it with ``solarian dataset
+ops`` and runs it with ``solarian dataset apply <dataset> ${plugin_name}``.
+
+This stub is a MAP op: it gets one episode and returns it with members added
+or replaced (``episode.derive(files, **meta)``), or None to leave it as it is.
+A FILTER implements ``keep``, an EXPAND ``expand`` and a COMBINE ``combine``;
+see solarian.datasets.op.
+"""
+
+from __future__ import annotations
+
+import json
+
+from pydantic import BaseModel, Field
+
+from solarian.datasets import DatasetOp, Episode, EpisodeOut, OpContext, OpKind, Resources
+
+
+class ${class_prefix}Params(BaseModel):
+    camera: str | None = Field(default=None, description="Camera to process (default: the session's first).")
+
+
+class ${class_prefix}Op(DatasetOp):
+    name = "${plugin_name}"
+    title = "${class_prefix}"
+    description = """
+    Describe what the op does to an episode, for a person choosing it in
+    Solarian Base and for an agent planning a pipeline.
+    """
+    kind = OpKind.MAP
+    Params = ${class_prefix}Params
+    resources = Resources(gpu=False)
+    produces = ("${plugin_name}/{camera}.json",)
+
+    def setup(self, params: ${class_prefix}Params, ctx: OpContext) -> None:
+        """Validate the input and load models: once per run, or once per review session."""
+        self.camera = params.camera or ctx.session.cameras[0]
+
+    def map(self, episode: Episode, params: ${class_prefix}Params, ctx: OpContext) -> EpisodeOut | None:
+        result = {"frames": episode.n_rows}
+        return episode.derive({f"${plugin_name}/{self.camera}.json": json.dumps(result).encode()},
+                              **{"${plugin_name}": {self.camera: result}})

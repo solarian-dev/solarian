@@ -148,7 +148,7 @@ A session is not a training set, deliberately. Export is where the irreversible 
 solarian export-dataset datasets/cup_stacking__2026-09-22T19-04-11
 ```
 
-That writes a [LeRobot](https://github.com/huggingface/lerobot) v2.1 dataset, which is what `solarian train` reads and what PrimaryKey ingests:
+That writes a [LeRobot](https://github.com/huggingface/lerobot) v2.1 dataset, which is what `solarian train` reads:
 
 ```text
 lerobot/
@@ -156,6 +156,8 @@ lerobot/
 ├── data/chunk-000/episode_000000.parquet
 └── videos/chunk-000/observation.images.<camera>/episode_000000.mp4
 ```
+
+Solarian Base also opens the session itself, and a UMI replay buffer. See [Dataset formats](/docs/datasets).
 
 Two things happen on the way. Every signal is resampled onto one grid by sample-and-hold, because LeRobot's contract is that row *i* is the state at `i / fps` — and holding the last reported value is the only resampling that cannot invent a reading the robot never produced. And every frame is warped through the camera's optical remap and downscaled to `resize_width`/`resize_height`, which is the step the robot skipped on purpose.
 

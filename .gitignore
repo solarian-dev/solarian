@@ -26,6 +26,7 @@ projects/lekiwi
 projects/so106
 
 plugins
+chats
 
 
 # Ignore WIP
@@ -39,7 +40,7 @@ webrtc
 commands.sh
 .cache
 backups
-datasets
+#datasets
 notes.txt
 
 

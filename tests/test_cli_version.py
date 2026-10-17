@@ -29,4 +29,14 @@ def test_version_flag_prints_and_exits(flag, monkeypatch, capsys):
         main()
 
     assert exc_info.value.code == 0
-    assert capsys.readouterr().out == f"\n{BANNER}\nsolarian {_get_version()}\n"
+    assert capsys.readouterr().out == f"solarian {_get_version()}\n"
+
+
+def test_banner_only_on_a_terminal(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["solarian", "--version"])
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert capsys.readouterr().out.startswith(f"\n{BANNER}")
