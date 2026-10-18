@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Project Configs',
   description:
-    'Solarian uses Hydra to compose YAML configuration. The conf/ folder maps directly to commands and modules: conf/<command>.yaml drives a CLI command and conf/<module>.yaml drives a module attached to your robot.',
+    'Solarian uses Hydra to compose YAML configuration. The conf/ folder is organized by consumer: robot.yaml, controller.yaml and server.yaml at the root, and a folder per kind of config (modules, skills, services, commands, training, calibrations, deployment).',
 }
 
 # Project Configs
@@ -10,30 +10,37 @@ Solarian uses [Hydra](https://hydra.cc/) for configuration. All YAML lives under
 
 ## The `conf/` folder
 
-A scaffolded project's `conf/` looks like this:
+`conf/` is organized by who reads each file. Only the three process configs sit at the root; every other kind of config has a folder, and a plugin's `templates/` mirrors those folders so `solarian install` seeds each file where its consumer looks:
 
 ```text
 conf/
 ├── robot.yaml              # used by `solarian run-robot`
 ├── controller.yaml         # used by `solarian run-controller`
 ├── server.yaml             # used by `solarian run-server`
-├── record.yaml             # used by `solarian record`
-├── replay.yaml             # used by `solarian replay`
-├── train.yaml              # used by `solarian train`
+├── modules/<module>.yaml   # a module, named by the robot's attribute
+├── skills/<skill>.yaml     # a skill's config
+├── services/<service>.yaml # a service or processor config (bbox_tracker)
+├── commands/
+│   ├── record.yaml         # used by `solarian record`
+│   └── replay.yaml         # used by `solarian replay`
+├── training/<run>.yaml     # one complete training run, for `solarian train`
+├── calibrations/           # calibration results; cameras/<serial>.json
 └── deployment/
     └── localhost.yaml      # relay address and device ports for one host layout
 ```
 
-Every CLI subcommand declares a `config_name` in [`solarian/cli/commands/__init__.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/cli/commands/__init__.py). When you run the command, Hydra loads the matching `conf/<config_name>.yaml`.
+A config left at the root of `conf/` is not read: looking for `conf/modules/right_arm.yaml` while `conf/right_arm.yaml` exists stops with `Move conf/right_arm.yaml to conf/modules/right_arm.yaml.`
+
+Every CLI subcommand declares a `config_name` in [`solarian/cli/commands/__init__.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/cli/commands/__init__.py). When you run the command, Hydra loads `conf/<config_name>.yaml`; a name with a folder, such as `commands/record`, is a file in that folder. `--conf conf/<folder>/<name>` loads another file instead.
 
 | Command | Config file |
 |---------|-------------|
 | `run-robot` | `conf/robot.yaml` |
 | `run-controller` | `conf/controller.yaml` |
 | `run-server` | `conf/server.yaml` |
-| `record` | `conf/record.yaml` |
-| `replay` | `conf/replay.yaml` |
-| `train` | `conf/train.yaml` |
+| `record` | `conf/commands/record.yaml` |
+| `replay` | `conf/commands/replay.yaml` |
+| `train` | none: `--conf conf/training/<name>` |
 
 ## What is a config?
 
@@ -70,15 +77,15 @@ Each [Module](/docs/modules) attached to your `Robot` reads its own YAML file un
 
 ```python
 class MyRobot(Robot):
-    arm = ArmModule()              # → conf/arm.yaml
-    gripper = GripperModule()      # → conf/gripper.yaml
-    head_camera = CameraModule()   # → conf/head_camera.yaml
+    arm = ArmModule()              # → conf/modules/arm.yaml
+    gripper = GripperModule()      # → conf/modules/gripper.yaml
+    head_camera = CameraModule()   # → conf/modules/head_camera.yaml
 ```
 
 Each file is parsed against the module's `config_class` (default `ModuleConfig`):
 
 ```yaml
-# conf/arm.yaml
+# conf/modules/arm.yaml
 actuator_port: 10.0.0.92
 frequency: 120
 actuators:
@@ -135,10 +142,10 @@ Every other file in `conf/` reads these through `${deployment.*}`, so moving a r
 # conf/robot.yaml
 connection: ${deployment.connection}
 
-# conf/arm.yaml
+# conf/modules/arm.yaml
 actuator_port: ${deployment.actuator_port_arm}
 
-# conf/wrist_camera.yaml
+# conf/modules/wrist_camera.yaml
 camera_port: ${deployment.camera_port_wrist_camera}
 ```
 
@@ -208,7 +215,7 @@ The CLI splits `dir/name` so the second form maps to `conf/robot_v2.yaml`.
 
 ## Custom command configs
 
-A custom CLI command registered via `CommandRegistry.register_lazy(..., config_name="my_command")` automatically picks up `conf/my_command.yaml`. If the command's `get_config_class()` returns a Pydantic model, the loaded config is validated against it. See [CLI / Authoring a custom command](/docs/commands#authoring-a-custom-command).
+A custom CLI command registered via `CommandRegistry.register_lazy(..., config_name="commands/my_command")` automatically picks up `conf/commands/my_command.yaml`. If the command's `get_config_class()` returns a Pydantic model, the loaded config is validated against it. See [CLI / Authoring a custom command](/docs/commands#authoring-a-custom-command).
 
 ## See also
 

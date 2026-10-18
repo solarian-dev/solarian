@@ -1,0 +1,84 @@
+export const metadata = {
+  title: 'Deployments & Secrets',
+  description:
+    'Deploy a solarian project to Solarian Base from the CLI or a git repository, roll back, and set the encrypted environment variables its jobs run with.',
+}
+
+
+# Deployments & secrets
+
+A deployment is an immutable snapshot of your project's code. Base installs it,
+reads which trainers and train configs it has, and runs training jobs against
+it. Secrets are environment variables Base sets in those jobs. {{ className: 'lead' }}
+
+## Deploy
+
+**From the CLI**, in a linked project:
+
+```bash
+solarian base deploy
+solarian base deploy -m "box pool, fixed lr"   # a message shown with the deployment
+solarian base deploy --no-wait                  # return once the upload is accepted
+solarian base deploy --force                    # build again even if nothing changed
+```
+
+`deploy` uploads the project, waits for Base to build it and prints the build
+log. Deploying an unchanged project reuses its deployment.
+
+**From the web app:** on the project page, **Deployments → Import from git**,
+with the **Repository URL** and a **Branch or tag**, then **Deploy**.
+
+### What is uploaded
+
+Everything in the project except what `.gitignore` and an optional
+`.solarianignore` name, plus `data/`, `models/`, `outputs/`, `wandb/`,
+virtualenvs and `.git/`: datasets and checkpoints live in Base already. A bundle
+over 500 MB fails and names its largest files.
+
+To see what a deployment of the current directory would contain, without
+uploading anything:
+
+```bash
+solarian base manifest            # trainers and train configs it would expose
+solarian base manifest --json
+```
+
+### Current deployment, rollback and redeploy
+
+The newest ready deployment becomes the project's **current** one, which is
+what jobs use unless told otherwise. In **Deployments** on the project page:
+
+- **Details** shows its build log, **Train configs** and **Trainers**;
+- **Make current** rolls back to an older deployment;
+- **Redeploy** builds a deployment again, for example after a failed build.
+
+`solarian base train` deploys first when the code changed; `--no-deploy` uses
+the current deployment as it is.
+
+<Note>
+  A Base deployment is unrelated to `conf/deployment/*.yaml`, the robot's
+  network profile, which these docs call a deployment profile.
+</Note>
+
+## Secrets
+
+**From the CLI:**
+
+```bash
+solarian base env add WANDB_API_KEY       # prompts for the value
+solarian base env add HF_TOKEN "$HF_TOKEN"
+solarian base env ls                      # names only
+solarian base env rm HF_TOKEN
+```
+
+**From the web app:** the **Environment variables** section of the project
+page, with **Key**, **Value**, **Save** and **Remove**.
+
+Values are encrypted at rest and never shown again. Every training job the
+project starts from then on gets them. Names starting with `SOLARIAN_` or
+`MODAL_` are reserved for Base.
+
+## See also
+
+- [Training & Runs](/docs/solarian-base/training) — what jobs run against a deployment.
+- [CLI Reference](/docs/solarian-base/cli) — `deploy`, `manifest` and `env` in full.

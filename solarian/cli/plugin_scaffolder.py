@@ -48,7 +48,7 @@ COMPONENT_FILES: Dict[str, Tuple[FileSpec, ...]] = {
     ),
     "module": (
         FileSpec(Path("module/module.py.tmpl"), "{package_name}/module.py"),
-        FileSpec(Path("module/conf.yaml.tmpl"), "{package_name}/conf.yaml"),
+        FileSpec(Path("module/module.yaml.tmpl"), "{package_name}/templates/modules/{plugin_name}.yaml"),
     ),
     "robot": (
         FileSpec(Path("robot/robot.py.tmpl"), "{package_name}/robot.py"),

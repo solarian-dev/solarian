@@ -1,4 +1,4 @@
-"""Surgical edits to ``conf/<module>.yaml`` that preserve comments."""
+"""Surgical edits to ``conf/modules/<module>.yaml`` that preserve comments."""
 
 from __future__ import annotations
 
@@ -39,12 +39,11 @@ def _field_line_re(name: str) -> re.Pattern[str]:
 
 
 def module_yaml_path(module_name: str) -> Optional[str]:
-    """``conf/<module_name>.yaml``, or ``None`` when the project has no such file."""
-    conf_path = os.environ.get(
-        "SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf")
-    )
-    path = os.path.join(conf_path, f"{module_name}.yaml")
-    return path if os.path.isfile(path) else None
+    """``conf/modules/<module_name>.yaml``, or ``None`` when the project has no such file."""
+    from solarian.core.conf_paths import module_config_path
+
+    path = module_config_path(module_name)
+    return str(path) if path.is_file() else None
 
 
 def read_module_field(module_name: str, key: str, default: float) -> float:

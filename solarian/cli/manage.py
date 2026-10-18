@@ -252,9 +252,11 @@ def main() -> None:
     # returns an empty list.
     overrides = cmd.parse_args(remaining)
 
+    # The first component is the conf directory; the rest names a config in
+    # it, folders included: conf/training/umi_pick composes training/umi_pick.
     if '/' in args.conf:
-        CONF_PATH = args.conf.split("/")[0]
-        CONF_NAME = args.conf.split("/")[1]
+        CONF_PATH, CONF_NAME = args.conf.split("/", 1)
+        CONF_NAME = CONF_NAME.removesuffix(".yaml")
     else:
         CONF_PATH = args.conf
         CONF_NAME = "default"
@@ -299,11 +301,20 @@ def main() -> None:
         else:
             config_name = CONF_NAME
 
+        # Hydra nests a config named training/umi_pick under a training: key.
+        # Composing it from its folder keeps its keys at the top level; the conf
+        # root stays on the search path for defaults such as /controller@_global_.
+        config_dir, searchpath = CONF_PATH, []
+        if config_name is not None and "/" in config_name:
+            folder, config_name = config_name.rsplit("/", 1)
+            config_dir = os.path.join(CONF_PATH, folder)
+            searchpath = [f"hydra.searchpath=['file://{CONF_PATH}']"]
+
         # try:
-        with initialize_config_dir(version_base=None, config_dir=CONF_PATH, job_name='solarian_app'):
+        with initialize_config_dir(version_base=None, config_dir=config_dir, job_name='solarian_app'):
             # Store the current config path for error reporting
             if config_name is not None:
-                config_file = Path(CONF_PATH) / config_name
+                config_file = Path(config_dir) / f"{config_name}.yaml"
                 if config_file.exists():
                     os.environ["SOLARIAN_CURRENT_CONFIG"] = str(config_file.absolute())
                 
@@ -313,22 +324,22 @@ def main() -> None:
             # declares are left alone.
             seeds = []
             if cmd.params:
-                base_cfg = compose(config_name=config_name, overrides=[])
+                base_cfg = compose(config_name=config_name, overrides=searchpath)
                 seeds = [f"+{name}=null" for name in cmd.params if name not in base_cfg]
 
             # Load the config using hydra
-            hydra_cfg = compose(config_name=config_name, overrides=seeds + overrides)
-            
-            # Convert to dict for Pydantic parsing, resolving ${deployment.*}
-            from solarian.utils.configs import resolve_with_deployment
-            cfg_dict = resolve_with_deployment(hydra_cfg)
-            
-            # Parse using the command's config class which now has built-in validation
-            if cmd.get_config_class() is not None:
-                from solarian.utils.configs import parse_with_friendly_errors
-                cfg = parse_with_friendly_errors(cmd.get_config_class(), cfg_dict)
+            hydra_cfg = compose(config_name=config_name, overrides=searchpath + seeds + overrides)
+
+            if not cmd.resolve_config:
+                cfg = hydra_cfg
             else:
-                cfg = OmegaConf.create(cfg_dict)
+                # Convert to dict for Pydantic parsing, resolving ${deployment.*}
+                from solarian.utils.configs import parse_with_friendly_errors, resolve_with_deployment
+                cfg_dict = resolve_with_deployment(hydra_cfg)
+                if cmd.get_config_class() is not None:
+                    cfg = parse_with_friendly_errors(cmd.get_config_class(), cfg_dict)
+                else:
+                    cfg = OmegaConf.create(cfg_dict)
                 
             from solarian.setup import setup
             setup_modules = CommandRegistry.get_setup_modules(subcommand)

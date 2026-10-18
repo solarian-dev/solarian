@@ -12,7 +12,7 @@ from solarian.core import Action
 
 
 
-@CommandRegistry.register('replay', 'replay')
+@CommandRegistry.register('replay', 'commands/replay')
 class ReplayCommand(BaseCommand):
     category = "Recording & Replay"
     help = "Replay a recorded dataset's actions back onto the robot"
@@ -23,7 +23,7 @@ class ReplayCommand(BaseCommand):
 
     The robot and the relay have to be up, and the scene has to start where the
     episode started: the actions are played as recorded, with no feedback.
-    conf/replay.yaml holds repo_id, episodes, reset_time_s and reset_period.
+    conf/commands/replay.yaml holds repo_id, episodes, reset_time_s and reset_period.
     """
     examples = (
         "solarian replay",

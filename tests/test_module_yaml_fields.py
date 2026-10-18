@@ -1,7 +1,7 @@
 """Reading and writing single fields in a module yaml.
 
 ``calibrate-arm`` / ``calibrate-gripper`` write their measurements straight back
-into ``conf/<module>.yaml``, and a skill in another process reads the action
+into ``conf/modules/<module>.yaml``, and a skill in another process reads the action
 latency out of the same file. Both sides go through here, so a module yaml is
 edited by hand and by a calibration in turn and has to survive both.
 """
@@ -32,10 +32,10 @@ actuators:
 @pytest.fixture
 def module_conf(tmp_path, monkeypatch):
     conf = tmp_path / "conf"
-    conf.mkdir()
-    (conf / "right_gripper.yaml").write_text(_YAML)
+    (conf / "modules").mkdir(parents=True)
+    (conf / "modules" / "right_gripper.yaml").write_text(_YAML)
     monkeypatch.setenv("SOLARIAN_CONF_PATH", str(conf))
-    return conf / "right_gripper.yaml"
+    return conf / "modules" / "right_gripper.yaml"
 
 
 def test_an_existing_field_is_replaced_in_place(module_conf):

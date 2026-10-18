@@ -13,12 +13,12 @@ Do this on first hardware bring-up, after replacing a servo, or when travel chan
 ## Before you start
 
 - Prepare each servo with `solarian calibrate-servo` before you mount it: it sets the ID, resets the comms and position registers, and parks the shaft at mid-encoder so you can fit the horn with the mechanism at **mid-travel**. That keeps the `0/4095` encoder seam out of the joint's travel, which is the one thing calibration cannot fix in software.
-- Assign servo IDs and the serial port in `conf/<module>.yaml` first — `solarian setup-module` if they are not already set. Servo model and continuous-vs-limited live on the Module class, not in yaml.
+- Assign servo IDs and the serial port in `conf/modules/<module>.yaml` first — `solarian setup-module` if they are not already set. Servo model and continuous-vs-limited live on the Module class, not in yaml.
 - **Stop `run-robot`.** The bus can only be open once; every calibrate command talks to the device in-process, the same way `solarian calibrate` does.
 - Run on the machine the device is wired to (the Pi under a `pi` deployment; your laptop under `localhost`).
 
 ```yaml
-# conf/right_arm.yaml
+# conf/modules/right_arm.yaml
 actuators:
   shoulder_pan:
     id: 1
@@ -78,7 +78,7 @@ This is the only direction question. There is no “which encoder end is min.”
 
 ### Output
 
-Values are written to `conf/right_arm.yaml` and to the servos (or applied in software on buses with no homing register).
+Values are written to `conf/modules/right_arm.yaml` and to the servos (or applied in software on buses with no homing register).
 
 ![Output: saved calibration fields](/images/calibration/output.png)
 
@@ -90,7 +90,7 @@ Values are written to `conf/right_arm.yaml` and to the servos (or applied in sof
 | `home` | Normalized pose you matched. Not `move.yaml` `poses.home` |
 
 ```yaml
-# conf/right_arm.yaml — after solarian calibrate
+# conf/modules/right_arm.yaml — after solarian calibrate
 actuators:
   shoulder_pan:
     id: 1
@@ -128,7 +128,7 @@ The MuJoCo `jnt_range` must equal the real hard-stop angles. Continuous joints s
 
 ## Calibrate Latencies
 
-A UMI skill needs observation and action delays measured on **this** hardware. Stop `run-robot`. Each command writes its results into `conf/<module>.yaml`. Full scheme: [Latency & Synchronization](/docs/latency).
+A UMI skill needs observation and action delays measured on **this** hardware. Stop `run-robot`. Each command writes its results into `conf/modules/<module>.yaml`. Full scheme: [Latency & Synchronization](/docs/latency).
 
 1. `solarian calibrate-arm` — mode 1 (all): `max_speed`, then `action_latency`, then `receive_latency`.
 2. `solarian calibrate-gripper` — mode 1 (all), same three.

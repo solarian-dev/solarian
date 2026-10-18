@@ -6,7 +6,7 @@ A *policy plugin* (e.g. ``solarian-policy-diffusion`` or
 library: a :class:`~solarian.core.ai.system1.policy_server.PolicyServer`
 (inference) and a :class:`PolicyTrainer` (training).  The framework's
 ``solarian train`` command is deliberately library-agnostic: it never
-imports a concrete trainer.  Instead it reads the ``policy`` key from the
+imports a concrete trainer.  Instead it reads the ``trainer`` key from the
 config, resolves the matching :class:`PolicyTrainer` subclass through the
 ``solarian.trainers`` entry-point group (see
 :mod:`solarian.core.ai.system1.trainer_registry`), and runs it.
@@ -17,6 +17,7 @@ override:
 * :meth:`config_class`  — the pydantic schema used to validate the config
   (defaults to the thin :class:`~solarian.core.configs.TrainConfig`).
 * :meth:`modal_spec`    — the container image spec for cloud training.
+* :meth:`resolvers`     — OmegaConf resolvers the config interpolates with.
 * :meth:`add_arguments` / :meth:`from_args` — standalone CLI launching (so a
   trainer can also be driven directly under ``accelerate launch``).
 
@@ -37,7 +38,7 @@ Typical plugin usage::
 import abc
 import argparse
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,15 @@ class PolicyTrainer(abc.ABC):
         """
         return ModalSpec()
 
+    @classmethod
+    def resolvers(cls) -> Dict[str, Callable[..., Any]]:
+        """OmegaConf resolvers the training config uses, ``{name: function}``.
+
+        Registered before the config is resolved, so a config written for the
+        library's own tooling (``${eval:...}``) loads unchanged.
+        """
+        return {}
+
     # ------------------------------------------------------------------
     # Standalone CLI helpers
     # ------------------------------------------------------------------
@@ -145,6 +155,9 @@ class PolicyTrainer(abc.ABC):
         """
         from omegaconf import OmegaConf
 
+        from solarian.core.ai.system1.trainer_registry import register_resolvers
+
+        register_resolvers(cls)
         cfg_dict = OmegaConf.to_container(OmegaConf.load(args.config), resolve=True)
         cfg = cls.config_class().model_validate(cfg_dict)
         output_dir = getattr(args, "output_dir", None) or getattr(cfg, "output_dir", None)

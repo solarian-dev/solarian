@@ -1,0 +1,171 @@
+export const metadata = {
+  title: 'Solarian Base CLI Reference',
+  description:
+    'Every solarian base command and flag: login, link, deploy, env, manifest, train and runs, with JSON output for scripts and agents.',
+}
+
+
+# CLI reference
+
+`solarian base` ships in the `solarian-base` plugin (`pip install
+solarian-base`). It works on the project linked in the current directory, and
+every action takes `--json`. {{ className: 'lead' }}
+
+```bash
+solarian base <action> [args]
+solarian base --help
+```
+
+## Account
+
+### login
+
+Sign in through the browser, or store an existing token.
+
+```bash
+solarian base login [--url URL] [--token TOKEN] [--no-browser]
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--url URL` | The Base to log in to. Default: the stored one, else `http://localhost:8000` |
+| `--token TOKEN` | Store a token from **Settings → API tokens** instead of approving in the browser |
+| `--no-browser` | Print the approval link without opening it |
+
+### logout
+
+Forget the stored token: `solarian base logout`.
+
+### whoami
+
+The signed-in user, the Base URL and the linked project: `solarian base whoami`.
+
+## Project
+
+### link
+
+Link this directory to a Base project. Writes `.solarian/project.json` and
+gitignores `.solarian/`.
+
+```bash
+solarian base link [--project NAME|ID] [--create] [-y]
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--project NAME\|ID` | The project to link. Default: the directory's name |
+| `--create` | Create the project when it does not exist |
+| `-y`, `--yes` | Answer yes to the confirmation |
+
+### deploy
+
+Upload the code as a new deployment, unless it is unchanged, and wait for the
+build.
+
+```bash
+solarian base deploy [--force] [--no-wait] [-m MESSAGE]
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--force` | Deploy even when the code is unchanged |
+| `--no-wait` | Return once the upload is accepted, without waiting for the build |
+| `-m`, `--message` | A message shown with the deployment |
+
+### manifest
+
+What a deployment of this directory would contain, its trainers and train
+configs, without uploading anything.
+
+```bash
+solarian base manifest [--conf-path conf] [--root DIR]
+```
+
+### env
+
+Secrets set in the project's training jobs.
+
+```bash
+solarian base env ls
+solarian base env add KEY [VALUE]    # prompts for the value when omitted
+solarian base env rm KEY
+```
+
+Names starting with `SOLARIAN_` or `MODAL_` are reserved.
+
+## Training
+
+### train
+
+Deploy when the code changed, start a training job on cloud GPUs, and follow
+its run.
+
+```bash
+solarian base train CONFIG [overrides...] [flags]
+solarian base train --conf conf/training/NAME [overrides...] [flags]
+```
+
+`CONFIG` is a training file of the project, `conf/training/CONFIG.yaml`.
+Overrides are Hydra overrides, as for `solarian train`.
+
+| Flag | Effect |
+| --- | --- |
+| `--dataset KEY=ID` | Train on a Base dataset: the same as `++KEY=base://datasets/ID`. Repeatable |
+| `--gpu-type T` | Override the config's `modal.gpu_type` |
+| `--gpus N` | Override the config's `modal.gpus` |
+| `--no-deploy` | Use the current deployment as it is |
+| `--no-follow` | Return once the job is queued |
+| `-m`, `--message` | Message for the deployment, if one is made |
+
+Ctrl-C while following leaves the job running and prints how to resume
+following it.
+
+### runs
+
+```bash
+solarian base runs ls [--all] [--state STATE] [--limit 20]
+solarian base runs show RUN_ID
+solarian base runs logs RUN_ID [-f] [--tail 200]
+```
+
+| Command | Flags |
+| --- | --- |
+| `runs ls` | `--all`: every project's runs. `--state`: `queued`, `running`, `finished`, `failed`, `crashed` or `killed`. `--limit`: how many (default 20) |
+| `runs show` | — |
+| `runs logs` | `-f`, `--follow`: keep printing until the run ends. `--tail N`: the last N lines first (default 200) |
+
+## For scripts and agents
+
+Every action takes `--json` and prints the API's own objects. Errors print
+`{"error": ..., "status": ...}` and exit with code 1.
+
+```bash
+solarian base train umi --dataset task.dataset_mix.0.path=3f2a9c1e --no-follow --json
+solarian base runs show "$RUN" --json | jq .summary
+```
+
+The plugin ships a `deploy-and-train` skill
+(`solarian_base/skills/deploy-and-train/SKILL.md`) that walks a coding agent
+through linking, deploying, training on a Base dataset and reading the run. The
+REST API behind these commands is documented at `/api/docs/` on your Base.
+
+## Environment
+
+| Variable | Replaces |
+| --- | --- |
+| `SOLARIAN_BASE_URL` | The URL stored by `login` |
+| `SOLARIAN_TOKEN` | The token stored by `login` |
+| `SOLARIAN_PROJECT_ID` | The project from `link` |
+| `SOLARIAN_HOME` | Where `auth.json` lives (default `~/.solarian`) |
+
+## Other commands that talk to Base
+
+| Command | What it does with Base |
+| --- | --- |
+| `solarian run-robot -d solarian_base` | Connects the robot to its managed relay; see [Robots & Controller](/docs/solarian-base/robots) |
+| `solarian train`, `solarian modal-train` | Log their runs to Base: `solarian_base` is the default tracking backend; see [Experiment tracking](/docs/tracking) |
+
+## See also
+
+- [Getting Started](/docs/solarian-base/getting-started) — logging in and linking.
+- [Command Line Interface](/docs/commands) — every other solarian command.

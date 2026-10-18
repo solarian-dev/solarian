@@ -116,21 +116,17 @@ def package_dirs(package: str, local_path: Path | None) -> list[Path]:
 def config_sources(package: str, local_path: Path | None) -> list[tuple[Path, str]]:
     """``(source, conf filename)`` for templates this plugin seeds.
 
-    ``templates/*.yaml`` keeps its filename. A plugin with no templates directory
-    still seeds a legacy ``conf.yaml`` as ``conf/<short-name>.yaml``.
+    ``templates/**/*.yaml`` keeps its path under ``templates/``, so
+    ``templates/training/umi_pick.yaml`` seeds
+    ``conf/training/umi_pick.yaml``.
     """
     roots = [root for root in package_dirs(package, local_path) if root.is_dir()]
     for root in roots:
         templates = root / "templates"
         if templates.is_dir():
-            files = sorted(path for path in templates.glob("*.yaml") if path.is_file())
+            files = sorted(path for path in templates.rglob("*.yaml") if path.is_file())
             if files:
-                return [(path, path.name) for path in files]
-    short = package[len("solarian-"):] if package.startswith("solarian-") else package
-    for root in roots:
-        conf = root / "conf.yaml"
-        if conf.is_file():
-            return [(conf, f"{short}.yaml")]
+                return [(path, path.relative_to(templates).as_posix()) for path in files]
     return []
 
 
@@ -142,6 +138,7 @@ def seed_configs(sources: list[tuple[Path, str]], conf_dir: Path) -> list[Path]:
         dest = conf_dir / name
         if dest.exists():
             continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
         written.append(dest)
     return written
@@ -226,9 +223,9 @@ class InstallCommand(BaseCommand):
     and installs the one it finds editable. A path skips PyPI and installs
     that directory editable.
 
-    Config templates shipped in the package's templates/ directory are copied
-    into conf/ when those files are not already there. A module plugin that
-    only ships conf.yaml is copied to conf/<short-name>.yaml.
+    Config templates shipped in the package's templates/ directory, including
+    its subdirectories, are copied into conf/ when those files are not already
+    there: templates/modules/arm.yaml becomes conf/modules/arm.yaml.
     """
     usage = "<package-or-path>"
     options = {

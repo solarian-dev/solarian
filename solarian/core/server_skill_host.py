@@ -44,16 +44,17 @@ def _bind_robot_module_schemas() -> None:
     """
     from solarian.conf import settings
 
+    from solarian.core.conf_paths import module_config_path
+
     robot_cls = get_class(settings.ROBOT_CLASS)
-    conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
     for name, attr in list(robot_cls.__dict__.items()):
         if not isinstance(attr, Module):
             continue
-        yaml_path = os.path.join(conf_path, f"{name}.yaml")
-        if not os.path.exists(yaml_path):
+        yaml_path = module_config_path(name)
+        if not yaml_path.exists():
             logger.warning("No config for robot module '%s'; skipping its schema", name)
             continue
-        attr.bind(load_config_yaml(yaml_path, type(attr).config_class), name)
+        attr.bind(load_config_yaml(str(yaml_path), type(attr).config_class), name)
 
 
 class ServerSkillHost:

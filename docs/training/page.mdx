@@ -15,7 +15,7 @@ the trained policy, so a policy is self-contained. {{ className: 'lead' }}
 
 ```mermaid
 flowchart TD
-    cli["solarian train"] --> resolve["read cfg.policy"]
+    cli["solarian train"] --> resolve["read cfg.trainer"]
     resolve --> reg["solarian.trainers entry points"]
     reg --> trainer["PolicyTrainer subclass (plugin)"]
     cli --> trainer
@@ -27,49 +27,63 @@ flowchart TD
 
 The command never imports any ML library. It:
 
-1. Reads the `policy` key from the composed config.
+1. Reads the `trainer` key from the composed training file.
 2. Resolves the matching `PolicyTrainer` subclass through the `solarian.trainers`
    entry-point group.
-3. Validates the config with that trainer's `config_class()`.
-4. Resolves an `output_dir` (defaults to `$SOLARIAN_PROJECT_PATH/models/<job_name>`).
-5. Runs it in this process: `TrainerCls(cfg, output_dir).train()`.
+3. Registers that trainer's `resolvers()`, then resolves the file, so it can use
+   interpolations only its trainer defines (`${eval:...}` for UMI).
+4. Validates the config with that trainer's `config_class()`.
+5. Resolves an `output_dir` (defaults to `$SOLARIAN_PROJECT_PATH/models/<job_name>`).
+6. Runs it in this process: `TrainerCls(cfg, output_dir).train()`.
 
 The `solarian-modal` plugin's `solarian modal-train` runs the same config on
 Modal; see [Cloud training](#cloud-training-modal).
 
 ```bash
-solarian train --conf conf/train
-solarian train --conf conf/train-cup-arrange
+solarian train --conf conf/training/cup_arrange
+solarian train --conf conf/training/cup_arrange training.num_epochs=10
 ```
 
-`--conf conf/<file>` composes that yaml instead of the command's default
-`conf/train.yaml`.
+`--conf` names the training file; there is no default. Any key in it can be
+overridden on the command line as `key=value`.
 
-## A config per task
+## One file per training run
 
-A trainer plugin ships `templates/train-<name>.yaml`. `solarian install` copies
-it into `conf/` once, when that file is not already there. That copy is a base.
-Copy it again per task. `policy:` stays the trainer's entry-point name, so
-several tasks share one trainer.
+Every run is one complete file in `conf/training/`: which trainer runs it, the
+data, the model, the optimizer, the schedule and the tracking. Nothing is
+inherited from another file and no value hides in code, so the file is the
+whole record of the run.
+
+A trainer plugin ships `templates/training/<name>.yaml`. `solarian install`
+copies it to `conf/training/<name>.yaml` once, when that file is not already
+there. Copy it per run. `trainer:` stays the trainer's entry-point name, so
+several runs share one trainer.
 
 ```bash
-solarian train --conf conf/train-cup-arrange
+cp conf/training/umi.yaml conf/training/cup_arrange.yaml
+solarian train --conf conf/training/cup_arrange
 ```
 
 ### UMI
 
-`solarian-umi-skill` registers `policy: umi` and seeds `conf/train-umi.yaml`.
-Copy it per task (`conf/train-cup-arrange.yaml`, `conf/train-pick-object.yaml`,
-`conf/train-place-object.yaml`, ...) and set:
+`solarian-umi-skill` registers `trainer: umi` and seeds three training files:
+`conf/training/umi.yaml` (camera and proprioception, no target),
+`conf/training/umi_pick.yaml` (the target box as a 4th image channel) and
+`conf/training/umi_pick_mask.yaml` (the object's mask, CLS token and
+`box_pool`). Each is the UMI training config written as `python train.py`
+reads it in the UMI repo, with the task inlined under `task:`, plus four
+Solarian keys at the top: `trainer`, `job_name`, `output_dir` and `modal`.
+Copy one per run and set:
 
 - `job_name` — checkpoints land in `models/<job_name>/`.
-- `dataset_path` — that task's `.zarr.zip`, produced by `solarian umi-slam`.
-- `config_name` — the Hydra config shipped in the plugin, without `.yaml`.
-  The default is `train_diffusion_unet_timm_umi_cup_wild`.
+- `task.dataset_mix` — the datasets, `[{path, weight}]`, from `solarian umi-slam`.
+- `task.dataset.val_dataset_path`, `training.init_from_ckpt`, `batch_size`,
+  `training.num_epochs`, ... — every other value of the run, already written
+  out.
 
 Training runs in this process from the UMI code copied into the plugin. It writes
 `models/<job_name>/checkpoints/latest.ckpt`. Pair each training file with a
-skill yaml copied from `conf/umi.yaml`, and set that file's
+skill yaml copied from `conf/skills/umi.yaml`, and set that file's
 `policy_server.checkpoint` to the same path. The same `UMISkill` loads whichever
 file you name:
 
@@ -78,8 +92,8 @@ self.start_skill(UMISkill(params={"config": "cup_arrange.yaml"}))
 ```
 
 ```text
-conf/train-cup-arrange.yaml    job_name: cup_arrange
-conf/cup_arrange.yaml          policy_server.checkpoint: models/cup_arrange/checkpoints/latest.ckpt
+conf/training/cup_arrange.yaml    job_name: cup_arrange
+conf/skills/cup_arrange.yaml      policy_server.checkpoint: models/cup_arrange/checkpoints/latest.ckpt
 ```
 
 The copied training and SLAM code is from
@@ -88,7 +102,7 @@ copyright 2023 Columbia Artificial Intelligence and Robotics Lab, MIT
 license. The license text ships beside each copy, as `slam/LICENSE.umi` and `diffusion_policy/LICENSE.umi`.
 
 `solarian umi-slam <session_dir>` turns a directory of GoPro or Lumi collector
-MP4s into `<session_dir>/dataset.zarr.zip`, which is the `dataset_path` above.
+MP4s into a dataset, which is a `task.dataset_mix` path above.
 ORB-SLAM3 runs in Docker image `chicheng/orb_slam3:latest` and GoPro IMU
 extraction in `chicheng/openicc:latest`. An image already on the machine is
 used as it is. A missing image is downloaded only after you agree.
@@ -122,6 +136,7 @@ class MyTrainer(PolicyTrainer):
 | --- | --- |
 | `train(self)` | **Required.** Runs training to completion. |
 | `config_class()` | Pydantic schema validating the config (defaults to the thin `TrainConfig`). |
+| `resolvers()` | OmegaConf resolvers the trainer's files may use, registered before they resolve. |
 | `modal_spec()` | Declares the container image (apt/pip deps) for cloud training. |
 | `add_arguments` / `from_args` / `main` | Standalone CLI launching (e.g. under `accelerate launch`). |
 
@@ -129,7 +144,7 @@ class MyTrainer(PolicyTrainer):
 
 The framework's `TrainConfig`
 ([`solarian/core/configs.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py))
-only knows common fields — `policy`, `train_dataset`, `val_dataset`,
+only knows common fields — `trainer`, `train_dataset`, `val_dataset`,
 `output_dir`, `job_name`, `batch_size`, `steps` and logging — and uses `extra="allow"`, so any plugin-specific keys (model architecture,
 optimizer, ...) pass through untouched. A plugin's `config_class()` is a
 `TrainConfig` subclass that re-adds and validates those fields.
@@ -147,7 +162,7 @@ my_policy = "my_policy_pkg.trainer:MyTrainer"
 my-policy-server = "my_policy_pkg.policy_server:main"
 ```
 
-Then `policy: my_policy` in the train config selects it. Install missing
+Then `trainer: my_policy` in a training file selects it. Install missing
 plugins with `pip install <plugin>`; `solarian train` lists the available
 trainers if the requested one isn't installed.
 
@@ -157,7 +172,7 @@ Install the `solarian-modal` plugin and call `solarian modal-train` with the
 same config as `solarian train`, plus a `modal:` block:
 
 ```bash
-solarian modal-train --conf conf/train-cup-arrange
+solarian modal-train --conf conf/training/cup_arrange
 ```
 
 ```yaml
@@ -176,17 +191,25 @@ checkpoints in `/outputs/<job_name>` on the volume. The command returns once the
 job is spawned, so calling it once per config runs jobs in parallel. The
 plugin's README covers the details.
 
+To train without a Modal account, or on datasets stored in Solarian Base, deploy
+the project and use `solarian base train` with the same config; see
+[Training & Runs](/docs/solarian-base/training). Metrics go wherever
+`logging.backend` says, Solarian Base by default; see
+[Experiment tracking](/docs/tracking).
+
 ## Reference plugins
 
-- **`solarian-policy-lerobot`** (`policy: lerobot_act`) — trains and serves a
+- **`solarian-policy-lerobot`** (`trainer: lerobot_act`) — trains and serves a
   [LeRobot](https://github.com/huggingface/lerobot) ACT policy.
-- **`solarian-umi-skill`** (`policy: umi`) — trains a
+- **`solarian-umi-skill`** (`trainer: umi`) — trains a
   [UMI](https://umi-gripper.github.io/) diffusion policy locally. The same
   plugin's `UMISkill` runs the checkpoint over HTTP. See
-  [A config per task](#a-config-per-task).
+  [One file per training run](#one-file-per-training-run).
 
 ## See also
 
+- [Experiment tracking](/docs/tracking) — log to wandb, Solarian Base, or both.
+- [Training & Runs on Solarian Base](/docs/solarian-base/training) — deploy the project and train on cloud GPUs.
 - [Skills](/docs/skills) — behaviors that consume a policy server.
 - [Servers](/docs/servers) — the `PolicyServer` / `PolicyClient` HTTP contract.
 - [Plugins](/docs/plugins) — how Solarian discovers plugins.

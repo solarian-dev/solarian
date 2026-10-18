@@ -75,11 +75,11 @@ def select_ik_module(module_name: Optional[str] = None) -> tuple[str, object]:
 
 
 def load_module(module_name: str, template):
-    """Instantiate a module from its ``conf/<name>.yaml`` (not connected)."""
+    """Instantiate a module from its ``conf/modules/<name>.yaml`` (not connected)."""
+    from solarian.core.conf_paths import module_config_path
     from solarian.utils.configs import load_config_yaml
 
-    conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
-    yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
+    yaml_path = str(module_config_path(module_name))
     module_cfg = load_config_yaml(yaml_path, type(template).config_class)
     return template.bind(module_cfg, module_name)
 

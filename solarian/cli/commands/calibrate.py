@@ -47,9 +47,9 @@ class CalibrateCommand(BaseCommand):
 
     def handle(self, cfg) -> None:
         from solarian.conf import settings
+        from solarian.core.conf_paths import module_config_path
         from solarian.utils.configs import load_config_yaml
 
-        conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
         all_modules: dict[str, tuple[type, str]] = {}
         for class_attr, source_label in [
             ("ROBOT_CLASS", "Robot"),
@@ -93,8 +93,7 @@ class CalibrateCommand(BaseCommand):
             self._calibrate_ik_module(cfg, module_name)
             return
 
-        yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
-        module_cfg = load_config_yaml(yaml_path, module_class.config_class)
+        module_cfg = load_config_yaml(str(module_config_path(module_name)), module_class.config_class)
         module = module_class(module_cfg, module_name)
         module.connect()
         try:

@@ -216,7 +216,7 @@ Read them from the module's [`ObservationBuffer`](/docs/glossary#observationbuff
 
 `self.observations` is one mapping from module name to buffer covering both sides, so a controller-side leader arm and a robot-side follower are read the same way. See [Skills](/docs/skills) for what a skill does with it.
 
-Controller-side modules read their config from `cfg.modules[name]` (i.e. inline under `controller.yaml` rather than from a top-level `conf/<name>.yaml`).
+Controller-side modules read their config from `cfg.modules[name]` (i.e. inline under `controller.yaml` rather than from `conf/modules/<name>.yaml`).
 
 ## Lifecycle hooks you can override
 

@@ -129,7 +129,7 @@ class CameraObs(ModuleObs):
         inputs=[MyRobot.cam.camera.rgb_image],
         processor=Sam2BboxProcessor,
         output=BoundingBoxData(),
-        conf="conf/bbox_tracker.yaml",   # execution_place: server
+        conf="conf/services/bbox_tracker.yaml",   # execution_place: server
     )
 ```
 

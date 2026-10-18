@@ -88,31 +88,46 @@ def test_an_unreachable_pypi_with_no_local_package_fails(tmp_path):
 def test_templates_are_copied_once(tmp_path):
     plugin = tmp_path / "solarian-move-skill"
     templates = plugin / "solarian_move_skill" / "templates"
-    templates.mkdir(parents=True)
-    (templates / "move.yaml").write_text("poses: {home: {}}\n", encoding="utf-8")
-    (plugin / "solarian_move_skill" / "conf.yaml").write_text("ignored: true\n", encoding="utf-8")
+    (templates / "skills").mkdir(parents=True)
+    (templates / "skills" / "move.yaml").write_text("poses: {home: {}}\n", encoding="utf-8")
     _package(plugin)
 
     sources = config_sources("solarian-move-skill", plugin)
-    assert [name for _src, name in sources] == ["move.yaml"]
+    assert [name for _src, name in sources] == ["skills/move.yaml"]
 
     conf = tmp_path / "conf"
     written = seed_configs(sources, conf)
-    assert written == [conf / "move.yaml"]
-    (conf / "move.yaml").write_text("poses: {edited: {}}\n", encoding="utf-8")
+    assert written == [conf / "skills" / "move.yaml"]
+    (conf / "skills" / "move.yaml").write_text("poses: {edited: {}}\n", encoding="utf-8")
     assert seed_configs(sources, conf) == []
-    assert "edited" in (conf / "move.yaml").read_text(encoding="utf-8")
+    assert "edited" in (conf / "skills" / "move.yaml").read_text(encoding="utf-8")
 
 
-def test_a_legacy_conf_yaml_is_named_after_the_plugin(tmp_path):
+def test_template_subdirectories_keep_their_path(tmp_path):
+    plugin = tmp_path / "solarian-umi-skill"
+    templates = plugin / "solarian_umi_skill" / "templates"
+    (templates / "skills").mkdir(parents=True)
+    (templates / "training").mkdir()
+    (templates / "skills" / "umi.yaml").write_text("config_name: umi\n", encoding="utf-8")
+    (templates / "training" / "umi_pick.yaml").write_text("trainer: umi\n", encoding="utf-8")
+    _package(plugin)
+
+    sources = config_sources("solarian-umi-skill", plugin)
+    assert [name for _src, name in sources] == ["skills/umi.yaml", "training/umi_pick.yaml"]
+
+    conf = tmp_path / "conf"
+    assert seed_configs(sources, conf) == [
+        conf / "skills" / "umi.yaml", conf / "training" / "umi_pick.yaml"]
+
+
+def test_a_flat_conf_yaml_is_not_seeded(tmp_path):
     plugin = tmp_path / "solarian-ur5"
     pkg = plugin / "solarian_ur5"
     pkg.mkdir(parents=True)
     (pkg / "conf.yaml").write_text("port: /dev/ttyUSB0\n", encoding="utf-8")
     _package(plugin)
 
-    sources = config_sources("solarian-ur5", plugin)
-    assert sources == [(pkg / "conf.yaml", "ur5.yaml")]
+    assert config_sources("solarian-ur5", plugin) == []
 
 
 def test_an_installed_package_is_found_by_import(tmp_path, monkeypatch):
@@ -144,8 +159,8 @@ def test_dependency_is_inserted_once(tmp_path):
 def test_install_from_a_local_path_seeds_config_and_the_dependency(tmp_path, monkeypatch):
     plugin = tmp_path / "plugins" / "solarian-move-skill"
     templates = plugin / "solarian_move_skill" / "templates"
-    templates.mkdir(parents=True)
-    (templates / "move.yaml").write_text("frequency: 10\n", encoding="utf-8")
+    (templates / "skills").mkdir(parents=True)
+    (templates / "skills" / "move.yaml").write_text("frequency: 10\n", encoding="utf-8")
     _package(plugin)
     (tmp_path / "pyproject.toml").write_text(
         "[project]\nname = 'demo'\ndependencies = [\n]\n",
@@ -170,7 +185,7 @@ def test_install_from_a_local_path_seeds_config_and_the_dependency(tmp_path, mon
     cmd.handle(None)
 
     assert installed == [("solarian-move-skill", plugin.resolve())]
-    assert (tmp_path / "conf" / "move.yaml").read_text(encoding="utf-8") == "frequency: 10\n"
+    assert (tmp_path / "conf" / "skills" / "move.yaml").read_text(encoding="utf-8") == "frequency: 10\n"
     assert "solarian-move-skill>=0.1.0" in (tmp_path / "pyproject.toml").read_text(
         encoding="utf-8"
     )

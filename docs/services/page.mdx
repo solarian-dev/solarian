@@ -42,14 +42,14 @@ class RightWristCameraObs(ModuleObs):
         inputs=[MyRobot.right_wrist_camera.camera.rgb_image],
         processor=Sam2BboxProcessor,
         output=BoundingBoxData(),
-        conf="conf/bbox_tracker.yaml",
+        conf="conf/services/bbox_tracker.yaml",
     )
 ```
 
 With no `execution_place=` argument, the field reads where it runs from its conf, so one deployment key moves it between the relay and the robot:
 
 ```yaml
-# conf/bbox_tracker.yaml
+# conf/services/bbox_tracker.yaml
 execution_place: ${deployment.pnp_execution_place}
 server_url: ${deployment.bbox_tracker_url}
 resize: 224

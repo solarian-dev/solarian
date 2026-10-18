@@ -96,7 +96,7 @@ class Skill(ABC):
     the :attr:`policy_server_module` class attribute and the checkpoint
     location in config (``policy_server.checkpoint``).  Config is resolved by
     deep-merging the plugin's bundled defaults (``conf.yaml`` next to the skill
-    module) with a **project-level** override at ``conf/<config_name>.yaml``
+    module) with a **project-level** override at ``conf/skills/<config_name>.yaml``
     (project wins), so each project points the skill at its own checkpoint
     without editing the installed plugin.  The skill always defines where the
     checkpoint is; when ``policy_server.managed`` is true it launches that
@@ -156,7 +156,7 @@ class Skill(ABC):
     config_filename: str = "conf.yaml"
 
     #: Basename (without extension) of the *project-level* config file that
-    #: overrides the bundled defaults, looked up at ``conf/<config_name>.yaml``
+    #: overrides the bundled defaults, looked up at ``conf/skills/<config_name>.yaml``
     #: in the active project.  ``None`` means "no project override"; skills that
     #: want project-owned config (e.g. the policy checkpoint path) should set
     #: this to their stable skill name — typically the ``solarian.skills``
@@ -312,36 +312,13 @@ class Skill(ABC):
         return out
 
     @classmethod
-    def _project_conf_dir(cls):
-        """Locate the active project's ``conf/`` directory.
-
-        Uses ``SOLARIAN_CONF_PATH`` (set by the CLI for every command), falling
-        back to ``SOLARIAN_PROJECT_PATH/conf`` or ``<cwd>/conf``.  These env
-        vars are inherited by skill child processes spawned from the
-        robot/controller, so this works both from ``run-policy`` and at skill
-        runtime.
-        """
-        import os
-        from pathlib import Path
-
-        conf_path = os.environ.get("SOLARIAN_CONF_PATH")
-        if conf_path:
-            return Path(conf_path)
-        project = os.environ.get("SOLARIAN_PROJECT_PATH")
-        base = Path(project) if project else Path.cwd()
-        return base / "conf"
-
-    @classmethod
     def project_config_path(cls):
-        """Path to the project-level ``conf/<config_name>.yaml`` if it exists."""
-        from pathlib import Path
+        """Path to the project-level ``conf/skills/<config_name>.yaml`` if it exists."""
+        from solarian.core.conf_paths import skill_config_path
 
         if not cls.config_name:
             return None
-        conf_dir = cls._project_conf_dir()
-        if conf_dir is None:
-            return None
-        path = Path(conf_dir) / f"{cls.config_name}.yaml"
+        path = skill_config_path(cls.config_name)
         return path if path.exists() else None
 
     @classmethod
@@ -358,7 +335,7 @@ class Skill(ABC):
     @classmethod
     def load_config(cls) -> Dict[str, Any]:
         """Resolved skill config: bundled defaults deep-merged with the
-        project-level override (``conf/<config_name>.yaml``), project wins.
+        project-level override (``conf/skills/<config_name>.yaml``), project wins.
 
         ``${deployment.*}`` references are resolved last, so both files can name
         host-specific values such as a policy server URL."""
@@ -382,8 +359,8 @@ class Skill(ABC):
         ``module``, ``checkpoint``, ``host``, ``port`` and ``managed``.
 
         The checkpoint is resolved from the merged config (project-level
-        ``conf/<config_name>.yaml`` overriding the bundled ``policy_server.checkpoint``).
-        ``config`` is a filename in ``conf/`` or a path, and replaces that
+        ``conf/skills/<config_name>.yaml`` overriding the bundled ``policy_server.checkpoint``).
+        ``config`` is a filename in ``conf/skills/`` or a path, and replaces that
         merge. Explicit checkpoint/host/port arguments take precedence. A
         missing checkpoint is an error.
         """
@@ -391,15 +368,12 @@ class Skill(ABC):
             return None
 
         if config:
-            from pathlib import Path
-
             import yaml
 
+            from solarian.core.conf_paths import skill_config_path
             from solarian.utils.configs import resolve_with_deployment
 
-            path = Path(config)
-            if not path.is_absolute() and len(path.parts) == 1:
-                path = cls._project_conf_dir() / path
+            path = skill_config_path(config)
             if not path.is_file():
                 raise ValueError(f"Skill config not found: {path}")
             with open(path, "r") as f:
@@ -409,7 +383,7 @@ class Skill(ABC):
         else:
             server_cfg = (cls.load_config().get("policy_server") or {})
             project_file = (
-                f"conf/{cls.config_name}.yaml" if cls.config_name else "conf/<skill>.yaml"
+                f"conf/skills/{cls.config_name}.yaml" if cls.config_name else "conf/skills/<skill>.yaml"
             )
         checkpoint = checkpoint or server_cfg.get("checkpoint")
         if not checkpoint:

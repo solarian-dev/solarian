@@ -65,7 +65,7 @@ solarian install <package-or-path>
 
 Installs a plugin into the current Python environment, adds it to the project's `pyproject.toml`, and copies its config template into `conf/` when that file is not already there. A name is resolved on PyPI first (`ur5` installs `solarian-ur5`). If PyPI has no such project, the command looks in the current directory and then in `plugins/`. A path installs that directory editable and skips PyPI.
 
-`templates/<file>.yaml` is copied to `conf/<file>.yaml`. A module that only ships `conf.yaml` is copied to `conf/<short-name>.yaml`, and the attribute on your `Robot` has to match that filename. See [Using Plugins](/docs/using-plugins) and [Project Configs](/docs/project-configs).
+`templates/<folder>/<file>.yaml` is copied to `conf/<folder>/<file>.yaml`, so a module plugin's `templates/modules/ur5.yaml` lands at `conf/modules/ur5.yaml`, and the attribute on your `Robot` has to match that filename. See [Using Plugins](/docs/using-plugins) and [Project Configs](/docs/project-configs).
 
 ```bash
 solarian install solarian-move-skill
@@ -167,7 +167,7 @@ All four `calibrate-*` commands above talk to the module in-process (same as `so
 solarian setup-module module_name=<attr>
 ```
 
-Interactive helper for setting up a hardware module — assigning servo IDs, picking a port, and writing the resulting values into `conf/<attr>.yaml`.
+Interactive helper for setting up a hardware module — assigning servo IDs, picking a port, and writing the resulting values into `conf/modules/<attr>.yaml`.
 
 ### `calibrate-servo`
 
@@ -265,7 +265,7 @@ solarian record num_episodes=10 episode_time_s=20
 
 The same teleop loop as `run-controller`, cut into episodes: reset the scene, record for `episode_time_s`, seal, repeat. Press `delete` during an episode to throw it away and record it again — the index is reused, so a bad take leaves no gap — `r` to seal early, and quit the UI to end the session.
 
-The robot is what writes the dataset, so `conf/record.yaml` holds only the shape of the session (`name`, `num_episodes`, `episode_time_s`, `reset_time_s`, `tasks`) and the robot's `conf/robot.yaml` `recording:` block holds where and how. See [Recording](/docs/recording).
+The robot is what writes the dataset, so `conf/commands/record.yaml` holds only the shape of the session (`name`, `num_episodes`, `episode_time_s`, `reset_time_s`, `tasks`) and the robot's `conf/robot.yaml` `recording:` block holds where and how. See [Recording](/docs/recording).
 
 ### `replay`
 
@@ -302,15 +302,25 @@ Runs [dataset ops](/docs/datasets#dataset-ops) on recorded sessions without chan
 solarian umi-slam datasets/cup_session
 ```
 
-Turns a directory of GoPro or Lumi collector MP4s into `dataset.zarr.zip` for UMI training. This is not a `solarian record` session. ORB-SLAM3 runs in Docker image `chicheng/orb_slam3:latest` and GoPro IMU extraction in `chicheng/openicc:latest`. If an image is not already on this machine, the command asks before downloading it. The copied pipeline is from [Universal Manipulation Interface](https://github.com/real-stanford/universal_manipulation_interface) (MIT). Point `dataset_path` in `conf/train-<task>.yaml` at the zarr it writes. See [Training](/docs/training).
+Turns a directory of GoPro or Lumi collector MP4s into `dataset.zarr.zip` for UMI training. This is not a `solarian record` session. ORB-SLAM3 runs in Docker image `chicheng/orb_slam3:latest` and GoPro IMU extraction in `chicheng/openicc:latest`. If an image is not already on this machine, the command asks before downloading it. The copied pipeline is from [Universal Manipulation Interface](https://github.com/real-stanford/universal_manipulation_interface) (MIT). Add the dataset it writes to `task.dataset_mix` in a training file, `conf/training/<name>.yaml`. See [Training](/docs/training).
 
 ### `train`
 
 ```bash
-solarian train --conf conf/train-cup-arrange
+solarian train --conf conf/training/cup_arrange
 ```
 
-Trains the policy named by `policy:` in that yaml. With no `--conf`, the command reads `conf/train.yaml`. A trainer plugin seeds `conf/train-<name>.yaml` on install; copy that file per task. For UMI (`policy: umi`), each copy writes `models/<job_name>/checkpoints/latest.ckpt`, and the same `UMISkill` loads that checkpoint from the matching skill yaml. See [Training](/docs/training).
+Runs one training file with the trainer its `trainer:` key names. There is no default file. A trainer plugin seeds `conf/training/<name>.yaml` on install; copy that file per run. For UMI (`trainer: umi`), each copy writes `models/<job_name>/checkpoints/latest.ckpt`, and the same `UMISkill` loads that checkpoint from the matching skill yaml. See [Training](/docs/training).
+
+### `base`
+
+```bash
+solarian base deploy
+solarian base train --conf conf/training/cup_arrange --dataset task.dataset_mix.0.path=3f2a9c1e
+solarian base runs logs -f 1a2b3c4d
+```
+
+From the `solarian-base` plugin. Links the project to Solarian Base (`login`, `link`), deploys its code (`deploy`), manages the secrets its jobs get (`env`), trains on cloud GPUs and follows the run (`train`), and reads runs (`runs ls|show|logs`). Every action takes `--json`. See the [Solarian Base CLI reference](/docs/solarian-base/cli) for every flag, and [Solarian Base](/docs/solarian-base) for what Base does.
 
 ## Utility commands
 
@@ -336,7 +346,7 @@ Detects and lists every camera available to the system (V4L2 on Linux, AVFoundat
 solarian onshape-export <assembly_dir> [--clean-only] [--keys-file PATH] [--update-yaml PATH]
 ```
 
-Exports an Onshape CAD assembly into an attachable MuJoCo (MJCF) model for [simulation](/docs/simulation). `<assembly_dir>` holds a `config.json` describing the assembly and a `solarian` block controlling the export. With `--update-yaml conf/<module>.yaml`, joint ranges from the cleaned MJCF are synced into that module conf's `sim_range_min`/`sim_range_max` and into `config.json` `joint_properties.*.limits`. See [Onshape → Sim Models](/docs/onshape-models) for the full workflow. Part of the `[sim]` extra.
+Exports an Onshape CAD assembly into an attachable MuJoCo (MJCF) model for [simulation](/docs/simulation). `<assembly_dir>` holds a `config.json` describing the assembly and a `solarian` block controlling the export. With `--update-yaml conf/modules/<module>.yaml`, joint ranges from the cleaned MJCF are synced into that module conf's `sim_range_min`/`sim_range_max` and into `config.json` `joint_properties.*.limits`. See [Onshape → Sim Models](/docs/onshape-models) for the full workflow. Part of the `[sim]` extra.
 
 ### `shell`
 
@@ -385,7 +395,7 @@ CommandRegistry.register_lazy(
     "my-command",
     module_path="myproject.commands.my_command",
     help="Run the my-command demo.",
-    config_name="my_command",          # picks conf/my_command.yaml
+    config_name="commands/my_command", # picks conf/commands/my_command.yaml
     setup_modules=("robot",),          # which project modules to auto-import
     category="Robot",
 )
@@ -397,4 +407,4 @@ The command then runs as:
 solarian my-command target=arm speed=2.0
 ```
 
-If `config_name` is set, the command receives a parsed `DictConfig` from `conf/<config_name>.yaml`; otherwise it gets an empty `DictConfig`. If `get_config_class()` returns a Pydantic model, Solarian validates the config and prints friendly errors on failure.
+If `config_name` is set, the command receives a parsed `DictConfig` from `conf/<config_name>.yaml` (`commands/record` is `conf/commands/record.yaml`); otherwise it gets an empty `DictConfig`. If `get_config_class()` returns a Pydantic model, Solarian validates the config and prints friendly errors on failure.

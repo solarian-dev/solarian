@@ -495,10 +495,12 @@ class ConfigBaseModel(BaseModel):
 
 
 class LoggerConfig(ConfigBaseModel):
-    type: Literal['wandb'] | None = None
+    type: str | list[str] | None = None
     
 class TrainLoggerConfig(ConfigBaseModel):
-    type: Literal['none', 'wandb']
+    #: A solarian.tracking backend (wandb, solarian_base, none), or a list of
+    #: them to log to several. $SOLARIAN_TRACKING overrides it.
+    type: str | list[str]
     project: str
     notes: str | None = None
     log_artifact: bool = False
@@ -548,14 +550,14 @@ class TrainConfig(ConfigBaseModel):
     The framework only knows these common fields; everything policy- or
     library-specific (model architecture, optimizer, etc.) is carried
     through untouched (``extra='allow'``) and validated by the plugin
-    trainer's own :meth:`config_class`.  The ``policy`` field selects which
+    trainer's own :meth:`config_class`.  The ``trainer`` field selects which
     installed trainer (``solarian.trainers`` entry point) runs.
     """
     model_config = ConfigDict(extra="allow")
 
     #: Name of the trainer to run (resolved via the ``solarian.trainers``
     #: entry-point group), e.g. ``"diffusion"`` or ``"lerobot_act"``.
-    policy: str
+    trainer: str
 
     train_dataset: str
     val_dataset: str | None = None
@@ -576,12 +578,11 @@ class TrainConfig(ConfigBaseModel):
     def to_tags(self) -> list[str]:
         """Generic run tags for logging. Plugins may override to add more."""
         return [
-            f"policy:{self.policy}",
+            f"trainer:{self.trainer}",
             f"batch_size:{self.batch_size}",
             f"train_dataset:{self.train_dataset}",
             f"val_dataset:{self.val_dataset if self.val_dataset else self.train_dataset}",
         ]
-
 
 
 class SetupModuleConfig(ConfigBaseModel):

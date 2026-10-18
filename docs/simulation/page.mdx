@@ -73,10 +73,10 @@ sim: null   # null defers to the robot class's is_sim; override with sim=true/fa
 
 ## Same YAML, `sim_joint` / `sim_range_*`
 
-Real and simulated robots read the **same** `conf/<module>.yaml` files. Deployment fields (`id`, `port`) are ignored in sim; `sim_joint` / `sim_range_*` on each actuator supply the MuJoCo mapping and are ignored on hardware:
+Real and simulated robots read the **same** `conf/modules/<module>.yaml` files. Deployment fields (`id`, `port`) are ignored in sim; `sim_joint` / `sim_range_*` on each actuator supply the MuJoCo mapping and are ignored on hardware:
 
 ```yaml
-# conf/arm.yaml
+# conf/modules/arm.yaml
 actuators:
   shoulder_pan:
     id: 1

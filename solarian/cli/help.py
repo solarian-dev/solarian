@@ -26,7 +26,8 @@ GLOBAL_OPTIONS: tuple[tuple[tuple[str, ...], dict], ...] = (
             "default": "conf",
             "metavar": "DIR",
             "help": "Conf directory holding the yaml configs. DIR/NAME composes "
-                    "NAME.yaml instead of the command's own config (default: conf).",
+                    "NAME.yaml, folders included (conf/training/umi_pick), instead of "
+                    "the command's own config (default: conf).",
         },
     ),
     (

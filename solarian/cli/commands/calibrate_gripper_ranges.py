@@ -146,7 +146,7 @@ class CalibrateGripperRangesCommand(BaseCommand):
 
         yaml_path = module._module_yaml_path()
         if yaml_path is None:
-            print(f"No conf/{module.name}.yaml to write the table to.")
+            print(f"No conf/modules/{module.name}.yaml to write the table to.")
             return
 
         steps = _prompt_steps()

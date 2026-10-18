@@ -183,7 +183,7 @@ A caller can still override either per instance — `MoveSkill(params={"pose": "
 A config-driven skill such as `UMISkill` also reads `execution_place` from its yaml, so a deployment key can move it without code changes:
 
 ```yaml
-# conf/umi_pnp.yaml
+# conf/skills/umi_pnp.yaml
 execution_place: ${deployment.pnp_execution_place}
 ```
 
@@ -246,7 +246,7 @@ Skills resolve their config by deep-merging two layers, with the project layer
 winning:
 
 1. **Bundled defaults** — a `conf.yaml` shipped next to the skill module. A skill living in a project rather than a plugin usually skips this and keeps its defaults as class attributes, since sibling skills in one package cannot each own a file of that name.
-2. **Project override** — `conf/<config_name>.yaml` in your project, where `config_name` is a class attribute on the skill (for a plugin, its `solarian.skills` entry-point name, e.g. `move`).
+2. **Project override** — `conf/skills/<config_name>.yaml` in your project, where `config_name` is a class attribute on the skill (for a plugin, its `solarian.skills` entry-point name, e.g. `move`).
 
 At launch, individual `params` keys override both. This keeps project-specific
 values — most importantly the **policy checkpoint path** — in your project's
@@ -254,14 +254,14 @@ values — most importantly the **policy checkpoint path** — in your project's
 needs and inherits the rest:
 
 ```yaml
-# <your-project>/conf/move.yaml — overrides plugin defaults
+# <your-project>/conf/skills/move.yaml — overrides plugin defaults
 frequency: 10
 ```
 
-`UMISkill` is the exception: the yaml you pass as `params["config"]` is the whole config, not a thin override. `solarian install solarian-umi-skill` copies `templates/umi.yaml` to `conf/umi.yaml`; copy that file per policy.
+`UMISkill` is the exception: the yaml you pass as `params["config"]` is the whole config, not a thin override. `solarian install solarian-umi-skill` copies `templates/skills/umi.yaml` to `conf/skills/umi.yaml`; copy that file per policy.
 
 ```yaml
-# <your-project>/conf/cup_arrange.yaml
+# <your-project>/conf/skills/cup_arrange.yaml
 policy_server_url: http://localhost:8001
 policy_server:
   managed: false
@@ -285,7 +285,7 @@ per robot belongs here rather than on the controller, which is how
 `CartesianTeleopSkill` gets its jog rates:
 
 ```yaml
-# <your-project>/conf/cartesian_teleop.yaml
+# <your-project>/conf/skills/cartesian_teleop.yaml
 pos_step: 0.004      # metres per tick a held key jogs the pose
 rot_step: 0.012      # radians
 gripper_max_mm: 85.0
@@ -325,10 +325,10 @@ to via `policy_server_url`.
 
 ### Example plugin
 
-`plugins/solarian-umi-skill` is a complete reference *skill* plugin: it ships `UMISkill`, auto-discovered through its `solarian.skills` entry point (`umi`). Copy `conf/umi.yaml` per policy and start the skill with that filename, then run its policy server (hosted by the `solarian-policy-diffusion` policy plugin):
+`plugins/solarian-umi-skill` is a complete reference *skill* plugin: it ships `UMISkill`, auto-discovered through its `solarian.skills` entry point (`umi`). Copy `conf/skills/umi.yaml` per policy and start the skill with that filename, then run its policy server (hosted by the `solarian-policy-diffusion` policy plugin):
 
 ```bash
-# reuses the checkpoint from conf/cup_arrange.yaml
+# reuses the checkpoint from conf/skills/cup_arrange.yaml
 solarian run-policy umi --config cup_arrange.yaml
 # or launch directly:
 solarian-diffusion-policy --input <checkpoint.ckpt> --port 8001

@@ -20,7 +20,7 @@ The whole process is driven by a single `config.json`, so once an assembly is se
 solarian onshape-export <assembly_dir>              # full export (needs network)
 solarian onshape-export <assembly_dir> --clean-only # re-run only the clean stage
 solarian onshape-export <assembly_dir> --keys-file path/to/keys.txt
-solarian onshape-export <assembly_dir> --update-yaml conf/right_arm.yaml
+solarian onshape-export <assembly_dir> --update-yaml conf/modules/right_arm.yaml
 ```
 
 `<assembly_dir>` is a directory containing a `config.json`. The command writes the cleaned, attachable MJCF (by default to the project's `assets/`, see `output_xml`) and prints where it landed.
@@ -187,10 +187,10 @@ class So106Robot(Robot):
     )
 ```
 
-2. **Map each servo to the model** — `sim_joint` / `sim_range_*` per actuator in the module's `conf/<module>.yaml`, naming the MJCF joint (with the attach `prefix`) and the radian range that the servo's normalized command space maps onto:
+2. **Map each servo to the model** — `sim_joint` / `sim_range_*` per actuator in the module's `conf/modules/<module>.yaml`, naming the MJCF joint (with the attach `prefix`) and the radian range that the servo's normalized command space maps onto:
 
 ```yaml
-# conf/right_arm.yaml
+# conf/modules/right_arm.yaml
 actuators:
   shoulder_pan:
     id: 1
@@ -248,7 +248,7 @@ solarian onshape-export assets/umi_slim_gripper_description
 ```
 
 ```yaml
-# conf/right_gripper.yaml
+# conf/modules/right_gripper.yaml
 actuators:
   gripper:
     id: 7

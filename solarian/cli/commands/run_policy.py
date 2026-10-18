@@ -44,8 +44,8 @@ class RunPolicyCommand(BaseCommand):
     options = {
         "<skill_name>": "Skill whose policy server to run; unknown names print the "
                         "installed skills.",
-        "--config FILE": "Yaml to read the checkpoint from (a filename in conf/ or a "
-                         "path). UMISkill defaults to conf/umi.yaml.",
+        "--config FILE": "Yaml to read the checkpoint from (a filename in conf/skills/ or a "
+                         "path). UMISkill defaults to conf/skills/umi.yaml.",
         "--checkpoint PATH": "Checkpoint to serve, overriding the skill's configured "
                              "one.",
         "--host HOST": "Address to bind (default: the skill's config).",
@@ -62,7 +62,7 @@ class RunPolicyCommand(BaseCommand):
         parser.add_argument("--config", default=None,
                             help="Skill yaml (a conf filename or a path). "
                                  "UMISkill reads policy_server from this file "
-                                 "instead of conf/umi.yaml.")
+                                 "instead of conf/skills/umi.yaml.")
         parser.add_argument("--checkpoint", "-c", default=None,
                             help="Checkpoint path (overrides the skill's configured checkpoint).")
         parser.add_argument("--host", default=None, help="Host to bind the server to.")
@@ -94,7 +94,7 @@ class RunPolicyCommand(BaseCommand):
             print(f"Error: unknown skill {skill_name!r}. Available skills: {available}.")
             sys.exit(1)
 
-        # Resolve the project-level config override (conf/<skill>.yaml) by the
+        # Resolve the project-level config override (conf/skills/<skill>.yaml) by the
         # name the skill was looked up under, if the skill didn't set one.
         if not getattr(skill_cls, "config_name", None):
             skill_cls.config_name = skill_name

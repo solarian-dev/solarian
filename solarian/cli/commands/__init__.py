@@ -217,7 +217,7 @@ CommandRegistry.register_lazy(
     "record",
     module_path=f"{_pkg}.record",
     help="Teleoperate and record a training dataset, episode by episode",
-    config_name="record",
+    config_name="commands/record",
     setup_modules=("robot", "observation", "action", "controller"),
     category="Recording & Replay",
 )
@@ -225,7 +225,7 @@ CommandRegistry.register_lazy(
     "replay",
     module_path=f"{_pkg}.replay",
     help="Replay a recorded dataset's actions back onto the robot",
-    config_name="replay",
+    config_name="commands/replay",
     setup_modules=("robot", "observation", "action", "controller"),
     category="Recording & Replay",
 )
@@ -249,7 +249,7 @@ CommandRegistry.register_lazy(
     "train",
     module_path=f"{_pkg}.train",
     help="Train a policy via an installed policy trainer plugin.",
-    config_name="train",
+    config_name=None,
     setup_modules=(),
     category="Training & Data",
 )

@@ -27,6 +27,7 @@ class FileSpec:
 PROJECT_FILES: Tuple[FileSpec, ...] = (
     # Project-level files
     FileSpec(Path("pyproject.toml.tmpl"), Path("pyproject.toml")),
+    FileSpec(Path("gitignore.tmpl"), Path(".gitignore")),
     # Python package goes into {package_name}/ subdirectory
     FileSpec(Path("__init__.py.tmpl"), Path("{package_name}/__init__.py")),
     FileSpec(Path("robot.py.tmpl"), Path("{package_name}/robot.py")),
@@ -41,11 +42,11 @@ PROJECT_FILES: Tuple[FileSpec, ...] = (
     # conf/
     
     FileSpec(Path("conf/controller.yaml.tmpl"), Path("conf/controller.yaml")),
-    FileSpec(Path("conf/record.yaml.tmpl"), Path("conf/record.yaml")),
-    FileSpec(Path("conf/replay.yaml.tmpl"), Path("conf/replay.yaml")),
+    FileSpec(Path("conf/commands/record.yaml.tmpl"), Path("conf/commands/record.yaml")),
+    FileSpec(Path("conf/commands/replay.yaml.tmpl"), Path("conf/commands/replay.yaml")),
     FileSpec(Path("conf/robot.yaml.tmpl"), Path("conf/robot.yaml")),
     FileSpec(Path("conf/server.yaml.tmpl"), Path("conf/server.yaml")),
-    FileSpec(Path("conf/train.yaml.tmpl"), Path("conf/train.yaml")),
+    FileSpec(Path("conf/training/lerobot_act.yaml.tmpl"), Path("conf/training/lerobot_act.yaml")),
     FileSpec(Path("conf/deployment/localhost.yaml.tmpl"), Path("conf/deployment/localhost.yaml")),
 )
 
@@ -161,9 +162,11 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print(f"      ├── robot.yaml")
     print(f"      ├── controller.yaml")
     print(f"      ├── server.yaml")
-    print(f"      ├── record.yaml")
-    print(f"      ├── replay.yaml")
-    print(f"      ├── train.yaml")
+    print(f"      ├── commands/")
+    print(f"      │   ├── record.yaml")
+    print(f"      │   └── replay.yaml")
+    print(f"      ├── training/")
+    print(f"      │   └── lerobot_act.yaml")
     print(f"      └── deployment/")
     print(f"          └── localhost.yaml")
     print()

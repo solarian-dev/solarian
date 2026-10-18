@@ -22,6 +22,12 @@ from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
+from solarian.core.conf_paths import (
+    calibrations_dir,
+    conf_dir,
+    module_config_path,
+    skill_config_path,
+)
 
 _WINDOW = "calibrate-umi-camera"
 _DUMP_DEFAULT = ".cache/umi_image_compare"
@@ -32,10 +38,6 @@ _BOARD = (9, 6)
 _MIN_SAMPLES = 8
 _GOPRO_WH = (1920, 1080)
 _OPENCV_PATTERN_URL = "https://github.com/opencv/opencv/blob/master/doc/pattern.png"
-
-
-def _conf_dir() -> Path:
-    return Path(os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf")))
 
 
 def _project_dir() -> Path:
@@ -58,17 +60,14 @@ def _as_bool(val) -> bool:
 
 
 def _skill_config_path(cfg) -> Path:
-    """``config=`` names the UMI yaml; otherwise the installed ``conf/umi.yaml``."""
+    """``config=`` names the UMI yaml; otherwise the installed ``conf/skills/umi.yaml``."""
     raw = _cfg_get(cfg, "config")
     name = str(raw).strip() if raw else "umi.yaml"
     if name.lower() in {"", "null", "none"}:
         name = "umi.yaml"
     if not name.endswith((".yaml", ".yml")):
         name = f"{name}.yaml"
-    path = Path(name)
-    if path.is_absolute() or len(path.parts) > 1:
-        return path
-    return _conf_dir() / path
+    return skill_config_path(name)
 
 
 def _load_skill_cfg(cfg=None):
@@ -101,16 +100,19 @@ def _resolve_gold(cfg, skill_cfg) -> Path:
 
 
 def _camera_yaml_path(cfg, skill_cfg) -> Path:
+    """``camera_yaml=`` (a module name or filename in conf/modules/, or a
+    path), otherwise the skill's camera module."""
     raw = _cfg_get(cfg, "camera_yaml")
     if raw:
         p = Path(str(raw))
-        return p if p.is_absolute() else _conf_dir() / p
+        if p.is_absolute() or len(p.parts) > 1:
+            return p
+        return module_config_path(p.stem)
     cam_module = skill_cfg.get("camera")
     if not cam_module:
         modules = skill_cfg.get("modules") or {}
         cam_module = modules.get("camera", "right_wrist_camera")
-    cam_module = str(cam_module)
-    return _conf_dir() / f"{cam_module}.yaml"
+    return module_config_path(str(cam_module))
 
 
 def _load_camera_capture_size(yaml_path: Path) -> tuple[int | None, int | None]:
@@ -463,7 +465,7 @@ def _run_overlay(
     )
     remap = None
     if remap_path is not None and remap_path.is_file():
-        remap = OpticalRemap(str(remap_path), _conf_dir())
+        remap = OpticalRemap(str(remap_path), conf_dir())
         print(
             f"Live overlay with remap {remap_path} "
             f"(model={remap.aligner.model})"
@@ -772,7 +774,7 @@ class CalibrateUmiCameraCommand(BaseCommand):
             if remap_raw:
                 from solarian.core.optical_remap import resolve_remap_path
 
-                remap_path = resolve_remap_path(str(remap_raw), _conf_dir())
+                remap_path = resolve_remap_path(str(remap_raw), conf_dir())
             _run_overlay(
                 gold=gold,
                 gold_path=gold_path,
@@ -847,7 +849,7 @@ class CalibrateUmiCameraCommand(BaseCommand):
                 print(f"Paired GoPro images={gopro_dir}")
 
         cam_module = camera_yaml.stem if camera_yaml.suffix == ".yaml" else "camera"
-        calib_dir = _conf_dir() / "calibrations"
+        calib_dir = calibrations_dir()
         calib_dir.mkdir(parents=True, exist_ok=True)
         remap_path = calib_dir / f"{cam_module}_gopro_remap.json"
         geometry_dir = session / "geometry" if session.exists() or user_dir else None

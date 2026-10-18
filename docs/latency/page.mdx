@@ -26,19 +26,19 @@ Compensation exists to **reproduce the training-time relationship**, not to make
 Five physical delays: one observation and one action latency for the arm and the gripper, plus the camera's observation latency. Each lives in the yaml of the module it describes, because that is what it is a property of — a command-to-motion delay is set by the module's `frequency` and its servo, and no checkpoint changes it. Two keys carry all five, and they are the same two on every module:
 
 ```yaml
-# conf/right_arm.yaml
+# conf/modules/right_arm.yaml
 receive_latency: 0.005075
 action_latency: 0.112
 ```
 
 ```yaml
-# conf/right_gripper.yaml
+# conf/modules/right_gripper.yaml
 receive_latency: 0.001073
 action_latency: 0.042
 ```
 
 ```yaml
-# conf/right_wrist_camera.yaml
+# conf/modules/right_wrist_camera.yaml
 receive_latency: 0.149
 ```
 
@@ -154,7 +154,7 @@ The general rule: **an obs latency that is too large makes the robot act on a st
 
 The values Solarian once shipped came from UMI's `example/eval_robots_config.yaml`, which describes a UR5 over RTDE, a WSG gripper, and a GoPro through an Elgato HDMI capture card. **They are a placeholder, not a default.** Nothing about a Feetech serial bus and a Pi CSI camera resembles that rig.
 
-Each command writes its result into `conf/<module>.yaml` as it measures it, so there is nothing to copy by hand. A figure that is not a measurement is not written: a speed the hardware never fell behind is only a lower bound, and a negative latency means the sweep did not track.
+Each command writes its result into `conf/modules/<module>.yaml` as it measures it, so there is nothing to copy by hand. A figure that is not a measurement is not written: a speed the hardware never fell behind is only a lower bound, and a negative latency means the sweep did not track.
 
 ### Where to run these
 

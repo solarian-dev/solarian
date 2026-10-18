@@ -136,10 +136,10 @@ v4l2-ctl -d /dev/video0 --list-formats-ext
 
 ### Training a model
 
-First you should create a config file in the `conf/train` directory. Then you can run the following command:
+Each training run is one file in `conf/training/`, seeded by the trainer plugin on install. Copy one per run, then:
 
 ```bash
-python manage.py train --conf conf/your_train_config.yaml
+solarian train --conf conf/training/your_run
 ```
 
 ## Useful commands

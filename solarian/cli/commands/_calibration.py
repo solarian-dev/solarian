@@ -112,16 +112,13 @@ def pick_module(
     Searches the project's Robot and Controller classes for modules that
     subclass *base_cls* and, when *sensor_cls* is given, declare a sensor of
     that type (cameras share no module base class, only a ``Camera`` sensor).
-    Prompts when more than one matches and loads ``conf/<module_name>.yaml``.
+    Prompts when more than one matches and loads ``conf/modules/<module_name>.yaml``.
     Returns ``None`` (after printing why) when nothing matches. The result is
     not connected — wrap it in :func:`module_running`.
     """
     from solarian.conf import settings
+    from solarian.core.conf_paths import module_config_path
     from solarian.utils.configs import load_config_yaml
-
-    conf_path = os.environ.get(
-        "SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf")
-    )
 
     found: dict[str, tuple[type, str]] = {}
     for class_attr, source_label in [
@@ -169,8 +166,7 @@ def pick_module(
         idx = prompt_choice("Enter module number", len(entries))
 
     module_name, (module_class, _) = entries[idx - 1]
-    yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
-    module_cfg = load_config_yaml(yaml_path, module_class.config_class)
+    module_cfg = load_config_yaml(str(module_config_path(module_name)), module_class.config_class)
     return module_class(module_cfg, module_name)
 
 

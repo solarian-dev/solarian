@@ -40,7 +40,7 @@ class MyRobot(Robot):
 ```
 
 <Note>
-  The module attribute name (<code>arm</code>) is still the canonical module ID — it keys <code>conf/arm.yaml</code>, the Observation/Action schemas, and the <code>module</code> field of each <code>ModuleAttachment</code>. Nothing about the schema changes between real and sim.
+  The module attribute name (<code>arm</code>) is still the canonical module ID — it keys <code>conf/modules/arm.yaml</code>, the Observation/Action schemas, and the <code>module</code> field of each <code>ModuleAttachment</code>. Nothing about the schema changes between real and sim.
 </Note>
 
 ## The switch
@@ -141,7 +141,7 @@ ModuleAttachment(
 `prefix` namespaces the attached model, so a joint named `shoulder_pan` in `arm.xml` becomes `arm/shoulder_pan` in the composed world. Each servo's `sim_joint` in the module YAML must reference the **prefixed** name:
 
 ```yaml
-# conf/arm.yaml
+# conf/modules/arm.yaml
 actuators:
   shoulder_pan:
     # ... hardware fields ...

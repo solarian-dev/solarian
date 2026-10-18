@@ -1,48 +1,16 @@
-from enum import Enum
-import os
-from pathlib import Path
-
-from solarian.core.configs import LoggerConfig, WandBLoggerConfig
-from solarian.analytics.wandb_logger import WandBLogger
+from solarian.core.configs import LoggerConfig
 from solarian.analytics.logger import Logger
 
 
-class LoggerEnum(str, Enum):
-    WANDB = "wandb"
-
-loggers = {
-    LoggerEnum.WANDB.value: WandBLogger,
-}
-
 class LoggerFactory():
-    
+
     @staticmethod
     def create_logger(logger_cfg: LoggerConfig, **kwargs) -> Logger:
-        """
-        Create a logger instance based on configuration.
-        
-        Args:
-            logger_cfg: The logger configuration
-            **kwargs: Additional arguments to pass to the logger constructor
-            
-        Returns:
-            Logger instance
-            
+        """A logger for ``logger_cfg``, whose ``type`` names a solarian.tracking backend.
+
         Raises:
-            ValueError: If the logger type is not implemented or the configuration is invalid
+            ValueError: If the backend is unknown or fails to start.
         """
-        # Validation is already handled by Pydantic models at this point
-        try:
-            if logger_cfg.type not in loggers:
-                raise ValueError(f"Logger type '{logger_cfg.type}' is not implemented.")
-                
-            # Let the specific logger implementation handle additional validation
-            return loggers[logger_cfg.type](logger_cfg, **kwargs)
-            
-        except Exception as e:
-            # Handle non-validation errors
-            if not isinstance(e, ValueError):
-                # Wrap other exceptions with helpful context
-                raise ValueError(f"Error creating logger: {str(e)}") from e
-            # Re-raise ValueError exceptions
-            raise
+        from solarian.analytics.tracking_logger import TrackingLogger
+
+        return TrackingLogger(logger_cfg, **kwargs)

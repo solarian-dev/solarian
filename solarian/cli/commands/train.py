@@ -2,7 +2,7 @@
 ``solarian train`` — library-agnostic training dispatcher.
 
 The framework does not know how any particular policy is trained.  It reads
-the ``policy`` key from the composed config, resolves the matching
+the ``trainer`` key from the training file, resolves the matching
 :class:`~solarian.core.ai.system1.policy_trainer.PolicyTrainer` subclass via
 the ``solarian.trainers`` entry-point group, validates the config with that
 trainer's :meth:`config_class`, and runs it on this machine. The
@@ -10,65 +10,46 @@ trainer's :meth:`config_class`, and runs it on this machine. The
 Modal.
 
 Concrete training lives entirely in policy plugins (e.g.
-``solarian-policy-diffusion``, ``solarian-policy-lerobot``).
+``solarian-umi-skill``, ``solarian-policy-lerobot``).
 """
 
 import os
 import sys
 from pathlib import Path
 
-from omegaconf import OmegaConf, DictConfig
-
 from solarian.cli import BaseCommand, CommandRegistry
-from solarian.core.ai.system1.trainer_registry import (
-    available_trainer_names,
-    get_trainer_class,
-)
+from solarian.core.ai.system1.trainer_registry import load_train_config
 
 
-@CommandRegistry.register('train', 'train')
+@CommandRegistry.register('train')
 class TrainCommand(BaseCommand):
     category = "Training & Data"
     help = 'Train a policy via an installed policy trainer plugin.'
     description = """
-    Reads the policy key from conf/train.yaml, resolves the matching trainer plugin
-    (solarian-policy-diffusion, solarian-policy-lerobot, ...), validates the whole
-    config against that trainer's schema and runs it.
+    Runs one training file, conf/training/<name>.yaml. Its trainer key selects
+    the installed trainer plugin (solarian-umi-skill, solarian-policy-lerobot,
+    ...), which validates the whole file against its schema and runs it.
 
     Checkpoints land in output_dir, defaulting to models/<job_name>. To run the
-    same config on Modal's GPUs instead, install solarian-modal and use
+    same file on Modal's GPUs instead, install solarian-modal and use
     solarian modal-train. The framework knows nothing about the training itself: everything specific
-    lives in the plugin, so the keys the config accepts are the ones that trainer
-    declares.
+    lives in the plugin, so the keys the file accepts are the ones that trainer
+    declares. Any key is overridden as key=value.
     """
     examples = (
-        "solarian train",
-        "solarian train policy=diffusion job_name=cup_arrange_v3",
+        "solarian train --conf conf/training/umi_pick",
+        "solarian train --conf conf/training/umi_pick training.num_epochs=50",
     )
+    # The trainer's own resolvers have to be registered first.
+    resolve_config = False
 
     def get_config_class(self):
-        # Validation is deferred to the resolved trainer's config_class(),
-        # so the command receives the raw composed config.
+        # Validation is deferred to the resolved trainer's config_class().
         return None
 
     def handle(self, cfg) -> None:
         try:
-            if isinstance(cfg, DictConfig):
-                cfg_dict = OmegaConf.to_container(cfg, resolve=True)
-            else:
-                cfg_dict = dict(cfg)
-
-            policy = cfg_dict.get("policy")
-            if not policy:
-                available = ", ".join(available_trainer_names()) or "(none installed)"
-                raise ValueError(
-                    "Training config must set 'policy' to select a trainer. "
-                    f"Available trainers: {available}."
-                )
-
-            # Resolve the trainer plugin and validate the config with its schema.
-            trainer_cls = get_trainer_class(policy)
-            train_cfg = trainer_cls.config_class().model_validate(cfg_dict)
+            trainer_cls, _cfg_dict, train_cfg = load_train_config(cfg)
 
             if train_cfg.output_dir:
                 output_dir = Path(train_cfg.output_dir).expanduser()

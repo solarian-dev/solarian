@@ -17,7 +17,7 @@ Defined in [`solarian/core/robot.py`](https://github.com/solarian-dev/solarian/b
 
 ## Defining a Robot
 
-Subclass `Robot` and attach `Module` instances as **class attributes**. The attribute name is the canonical module ID — it's used to look up `conf/<name>.yaml`, to key the `Observation` and `Action` schemas, and to address per-module action queues.
+Subclass `Robot` and attach `Module` instances as **class attributes**. The attribute name is the canonical module ID — it's used to look up `conf/modules/<name>.yaml`, to key the `Observation` and `Action` schemas, and to address per-module action queues.
 
 ```python
 from solarian.core import Robot
@@ -72,7 +72,7 @@ The fields map to [`RobotConfig`](https://github.com/solarian-dev/solarian/blob/
   </Property>
 </Properties>
 
-Every individual module attached to the robot also reads its own `conf/<attr>.yaml`. So `MyRobot.arm` reads `conf/arm.yaml`, `MyRobot.gripper` reads `conf/gripper.yaml`, etc. See [Modules](/docs/modules) and [Project Configs](/docs/project-configs).
+Every individual module attached to the robot also reads its own `conf/modules/<attr>.yaml`. So `MyRobot.arm` reads `conf/modules/arm.yaml`, `MyRobot.gripper` reads `conf/modules/gripper.yaml`, etc. See [Modules](/docs/modules) and [Project Configs](/docs/project-configs).
 
 ## Lifecycle
 

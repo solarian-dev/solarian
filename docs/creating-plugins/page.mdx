@@ -110,7 +110,7 @@ feetech = "solarian_feetech.bus:FeetechBus"
 
 ## Anatomy of a module plugin
 
-A module plugin composes actuators/sensors into a ready-to-use unit and ships a default `conf.yaml`. `solarian-umi-slim` is a parallel gripper driven by a single Feetech servo — note it depends on `solarian-feetech` rather than reimplementing the driver:
+A module plugin composes actuators/sensors into a ready-to-use unit and ships a default config in `templates/modules/`. `solarian-umi-slim` is a parallel gripper driven by a single Feetech servo — note it depends on `solarian-feetech` rather than reimplementing the driver:
 
 ```python
 # solarian_umi_slim/module.py
@@ -149,10 +149,10 @@ umi-slim = "solarian_umi_slim.module:UmiSlimModule"
 
 ### Bundle a default config
 
-Ship a `conf.yaml` next to the module so [`solarian install`](/docs/using-plugins#install-a-plugin) can seed `conf/<short-name>.yaml`. A plugin that wants a different filename (a skill's `conf/move.yaml`) ships that file under `templates/` instead. Keep the module's tunables here:
+Ship the config under `templates/`, in the folder of the `conf/` directory that reads it, so [`solarian install`](/docs/using-plugins#install-a-plugin) can seed it: `templates/modules/<name>.yaml` becomes `conf/modules/<name>.yaml`, a skill's `templates/skills/move.yaml` becomes `conf/skills/move.yaml`, and a service's `templates/services/bbox_tracker.yaml` becomes `conf/services/bbox_tracker.yaml`. Keep the module's tunables here:
 
 ```yaml
-# solarian_umi_slim/conf.yaml
+# solarian_umi_slim/templates/modules/umi_slim.yaml
 port: /dev/ttyUSB0
 frequency: 30
 aperture_closed_mm: 0.0
@@ -168,12 +168,12 @@ actuators:
 
 ### Ship data files (models, configs)
 
-Non-Python files (`conf.yaml`, MuJoCo models, meshes) must be declared as package data so they travel with the wheel. `solarian-umi-slim` ships its simulation model this way:
+Non-Python files (config templates, MuJoCo models, meshes) must be declared as package data so they travel with the wheel. `solarian-umi-slim` ships its simulation model this way:
 
 ```toml
 [tool.setuptools.package-data]
 solarian_umi_slim = [
-    "conf.yaml",
+    "templates/modules/*.yaml",
     "assets/umi_slim.xml",
     "assets/umi_slim_description/meshes/*.stl",
 ]

@@ -1,0 +1,151 @@
+export const metadata = {
+  title: 'Experiment Tracking',
+  description:
+    'Log training metrics with a wandb-shaped API and pick the backend in config: wandb, Solarian Base, both, or none.',
+}
+
+
+# Experiment tracking
+
+`solarian.tracking` has wandb's surface: `init`, `log`, `summary`, `finish`,
+with the same arguments. Where a run goes is configuration, not code. A train
+config's `logging.backend` names `wandb`, `solarian_base`, both, or `none`, so
+moving a project from wandb to [Solarian Base](/docs/solarian-base) is a
+one-line change. {{ className: 'lead' }}
+
+## Switching backend
+
+Every stock trainer reads the `logging:` block of the train config. Its keys
+are `wandb.init`'s, plus `backend`:
+
+```yaml
+logging:
+  backend: solarian_base     # solarian_base (the default), wandb, none, or a list
+  project: umi
+  name: pick_side
+  tags: [bbox, mirrored]
+  group: pick
+  notes: Side grasp, box pool
+```
+
+```bash
+# The same config, once per backend
+solarian train --conf conf/training/umi ++logging.backend=wandb
+solarian train --conf conf/training/umi ++logging.backend=solarian_base
+solarian train --conf conf/training/umi "++logging.backend=[wandb,solarian_base]"
+```
+
+A config without `logging.backend` logs to Solarian Base, so it needs
+`solarian base login` and `solarian base link` first; name `wandb` or `none`
+to train without them.
+
+`++` sets the key whether or not the config already has it; a config written
+before tracking existed has no `logging.backend`, and plain
+`logging.backend=...` fails on it.
+
+`$SOLARIAN_TRACKING` overrides the config: comma-separated names, or `none`.
+The jobs Solarian Base launches set it, so their runs always report back to
+Base, and also to wandb when the config names it.
+
+| Backend | Needs | Where the run shows |
+| --- | --- | --- |
+| `wandb` | `wandb login`, or `WANDB_API_KEY` | wandb.ai |
+| `solarian_base` | `pip install solarian-base`, `solarian base login` and `solarian base link` | The project's **Runs** page on Base |
+| `none` | nothing | nowhere; metrics are dropped |
+
+`solarian modal-train` copies the credentials of every backend the config
+resolves to into the container, so a Modal job logs where a local one would.
+The Base URL has to be reachable from there: a job cannot report to a Base on
+`localhost`.
+
+Tracking never stops training. When Base cannot be reached, metrics and console
+lines queue and the run opens, or catches up, once Base answers again; at the
+end, the process waits up to 30 seconds for the last of them. A rejected token
+or an unknown project fails at start instead, before a GPU is spent.
+
+## Logging from your own code
+
+Replace `import wandb` with `from solarian import tracking`. The calls stay
+the same:
+
+```python
+from solarian import tracking
+
+run = tracking.init(project="umi", name="pick_side", tags=["bbox"], config=cfg)
+for step, batch in enumerate(loader):
+    loss = train_step(batch)
+    run.log({"train/loss": loss, "epoch": epoch}, step=step)
+run.summary["best_val_loss"] = best
+run.finish()
+```
+
+`init` takes `backend=` too, for scripts without a config. The process's
+console output goes to the run's **Logs** tab on Base. An uncaught exception
+finishes the run as crashed, and an exit without `finish()` closes it at exit.
+
+With [Accelerate](https://huggingface.co/docs/accelerate), pass the trackers
+`accelerate_trackers` builds from the `logging:` block, in place of
+`log_with="wandb"`:
+
+```python
+from accelerate import Accelerator
+from solarian.tracking.accelerate import accelerate_trackers
+
+log_with, init_kwargs = accelerate_trackers(cfg.logging)   # a plain dict
+accelerator = Accelerator(log_with=log_with)
+accelerator.init_trackers(project_name=cfg.logging.project, config=cfg, init_kwargs=init_kwargs)
+accelerator.log({"train_loss": loss}, step=global_step)
+```
+
+## What Base shows
+
+A run on Base has three tabs, a simplified wandb:
+
+- **Charts** — one line chart per metric, grouped into sections by the prefix
+  before `/` (`train/loss`, `val/loss`). Filter panels with a regex and plot
+  against step, a logged `epoch`, or time since the start.
+- **Overview** — state, duration, host, GPU, git commit, the command, editable
+  notes and tags, the config, the summary, and the job and deployment that
+  launched the run.
+- **Logs** — the console output, searchable, with timestamps.
+
+The **Runs** list filters by tag, group and state. Files and artifacts are not
+tracked: datasets and checkpoints already live in Base.
+
+## Writing a backend
+
+A backend subclasses `solarian.tracking.Tracker` and registers under the
+`solarian.trackers` entry-point group:
+
+```python
+from solarian.tracking import RunSpec, Tracker
+
+class MyTracker(Tracker):
+    name = "mine"
+
+    def __init__(self, spec: RunSpec):
+        super().__init__(spec)        # spec has init()'s arguments and system info
+
+    def log(self, values, step):
+        ...
+
+    def finish(self, exit_code):
+        ...
+
+    @classmethod
+    def forward_env(cls):
+        return {"MINE_API_KEY": os.environ["MINE_API_KEY"]}   # copied into Modal jobs
+```
+
+```toml
+[project.entry-points."solarian.trackers"]
+mine = "my_pkg.tracker:MyTracker"
+```
+
+A tracker runs on the logging process only (rank 0) and must not raise once
+constructed: an outage of the tracking service should not end a training run.
+
+## See also
+
+- [Training & Runs on Solarian Base](/docs/solarian-base/training) — deploy a project, train it on cloud GPUs, and read its runs.
+- [Training](/docs/training) — `solarian train` and `solarian modal-train`.

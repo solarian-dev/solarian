@@ -47,14 +47,16 @@ def load_deployment_config() -> DictConfig:
     configs and child processes (``solarian run-policy``) all see the same values.
     Empty for projects with no ``deployment/`` directory.
     """
-    conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
+    from solarian.core.conf_paths import DEPLOYMENT, conf_dir
+
+    conf_path = str(conf_dir())
     name = os.environ.get("SOLARIAN_DEPLOYMENT") or DEFAULT_DEPLOYMENT
 
     key = (conf_path, name)
     if key in _deployment_cache:
         return _deployment_cache[key]
 
-    deployment_dir = os.path.join(conf_path, "deployment")
+    deployment_dir = os.path.join(conf_path, DEPLOYMENT)
     if not os.path.isdir(deployment_dir):
         conf = OmegaConf.create({})
     else:
@@ -139,8 +141,8 @@ def load_module_configs_for_robot(robot_class) -> dict[str, tuple[type, ModuleCo
     Load module configs from separate YAML files based on a Robot class's annotations.
     
     For each annotation on the robot class that is a Module subclass, looks for
-    a corresponding {name}.yaml file in the conf directory and loads it using
-    the module's own `config_class` (which must extend ModuleConfig).
+    a corresponding conf/modules/{name}.yaml and loads it using the module's
+    own `config_class` (which must extend ModuleConfig).
     
     Args:
         robot_class: The Robot subclass (e.g. MySolarianRobot) with module annotations.
@@ -148,9 +150,9 @@ def load_module_configs_for_robot(robot_class) -> dict[str, tuple[type, ModuleCo
     Returns:
         Dict mapping module name to (module_type, config_instance) tuples.
     """
+    from solarian.core.conf_paths import module_config_path
     from solarian.core.module import Module
-    
-    conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
+
     module_configs = {}
     
     # Walk the MRO to find all Module annotations (not just the leaf class)
@@ -161,7 +163,7 @@ def load_module_configs_for_robot(robot_class) -> dict[str, tuple[type, ModuleCo
                 continue
             seen.add(name)
             if isinstance(anno, type) and issubclass(anno, Module):
-                yaml_path = os.path.join(conf_path, f"{name}.yaml")
+                yaml_path = str(module_config_path(name))
                 if not os.path.exists(yaml_path):
                     raise FileNotFoundError(
                         f"Module config file not found: {yaml_path}\n"

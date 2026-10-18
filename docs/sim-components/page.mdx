@@ -25,7 +25,7 @@ Each component is keyed as `"{module}/{component}"` in the world, so identically
 Declare the servo exactly as you would for hardware and add flat `sim_*` fields on [`ActuatorConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py). The MuJoCo actuator name defaults to the same string as `sim_joint`:
 
 ```yaml
-# conf/arm.yaml
+# conf/modules/arm.yaml
 actuators:
   shoulder_pan:
     id: 1                # hardware fields — ignored in sim
@@ -72,7 +72,7 @@ Omit `sim_joint` to make a servo **virtual**: it holds the last commanded value 
 A camera renders a named MuJoCo camera instead of capturing from a device. Use the ordinary [`OpenCVCameraModule`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/opencv_module.py) and add a `sim:` block ([`SimSensorConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py)) naming the camera:
 
 ```yaml
-# conf/wrist_camera.yaml
+# conf/modules/wrist_camera.yaml
 sensors:
   camera:
     port: ${camera_port}   # hardware — ignored in sim

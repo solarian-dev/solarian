@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 _ROBOT_REPORT_TIMEOUT_S = 5.0
 
 
-@CommandRegistry.register('record', 'record')
+@CommandRegistry.register('record', 'commands/record')
 class RecordCommand(BaseCommand):
     category = "Recording & Replay"
     help = "Teleoperate and record a training dataset, episode by episode"
@@ -22,7 +22,7 @@ class RecordCommand(BaseCommand):
     record for episode_time_s, seal, repeat. The robot is what writes the dataset
     — one mp4 per camera at archive resolution plus one parquet of every signal at
     its native rate — so `conf/robot.yaml`'s `recording:` block decides where and
-    how, and `conf/record.yaml` decides only the shape of the session.
+    how, and `conf/commands/record.yaml` decides only the shape of the session.
 
     The robot (`solarian run-robot`) and the relay (`solarian run-server`) have to
     be up. Press delete during an episode to throw it away and record it again: the

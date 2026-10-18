@@ -32,7 +32,7 @@ A single package can ship any combination of these. The type determines which fi
     A driver for a motor, servo, or sensor plus the <a href="/docs/core">Bus</a> that speaks its protocol. Registers under <code>solarian.actuators</code> / <code>solarian.actuator_buses</code> (or <code>solarian.sensors</code> / <code>solarian.sensor_buses</code>). Example: <code>solarian-feetech</code>, <code>solarian-dynamixel</code>.
   </Property>
   <Property name="Module">
-    An opinionated <a href="/docs/modules">Module</a> that composes actuators/sensors into a ready-to-use unit (an arm, a gripper), usually with a bundled <code>conf.yaml</code>. Registers under <code>solarian.modules</code>. Example: <code>solarian-ur5</code>, <code>solarian-umi-slim</code>.
+    An opinionated <a href="/docs/modules">Module</a> that composes actuators/sensors into a ready-to-use unit (an arm, a gripper), usually with a bundled <code>templates/modules/</code> config. Registers under <code>solarian.modules</code>. Example: <code>solarian-ur5</code>, <code>solarian-umi-slim</code>.
   </Property>
   <Property name="Robot">
     A full <a href="/docs/robots">Robot</a> definition wiring several modules together. Registers under <code>solarian.robots</code>.

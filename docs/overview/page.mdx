@@ -65,8 +65,8 @@ All three nodes speak the same protocol: a Pydantic-validated [`Action`](/docs/a
 
 - **Real-time multi-process modules.** Each hardware [`Module`](/docs/modules) runs in its own process at its own configurable rate (`frequency` Hz), talking to the robot loop through shared-memory ring buffers, so a 500 Hz arm and a 30 Hz camera coexist without blocking each other. Scheduling is a property, not a base class, so cheap input devices like a keyboard run inline instead of paying for a process.
 - **Typed observations and actions.** [`Observation`](/docs/observations) and [`Action`](/docs/actions) are Pydantic-typed schemas that bind directly to your modules. The same data flows from hardware through the wire to your controller, your dataset, and your policy.
-- **Plug-and-play hardware.** Hardware drivers ship as standalone `solarian-<name>` [plugins](/docs/plugins). `solarian install ur5` installs the package and copies the default config straight into `conf/ur5.yaml`.
-- **Hydra-driven configuration.** Every command takes its config from a YAML file (`robot.yaml`, `controller.yaml`, `server.yaml`, `record.yaml`, …) composed via [Hydra defaults](/docs/project-configs). Each module's config lives in `conf/<module_name>.yaml` matching the attribute name on your `Robot`.
+- **Plug-and-play hardware.** Hardware drivers ship as standalone `solarian-<name>` [plugins](/docs/plugins). `solarian install ur5` installs the package and copies the default config straight into `conf/modules/ur5.yaml`.
+- **Hydra-driven configuration.** Every command takes its config from a YAML file (`robot.yaml`, `controller.yaml`, `server.yaml`, `record.yaml`, …) composed via [Hydra defaults](/docs/project-configs). Each module's config lives in `conf/modules/<module_name>.yaml` matching the attribute name on your `Robot`.
 - **AI Controller.** [`AIController`](/docs/ai_controller) implements a dual-process System 1 / System 2 architecture — a fast reactive loop running [Skills](/docs/skills) and a slower `ThinkProcess` driven by a vision-language model.
 - **Recording, replay, and training.** First-class CLI commands ([`record`](/docs/commands), `replay`, `train`) let you go from teleoperated demonstrations to a trained policy without leaving the framework.
 - **Settings and lifecycle.** A simple `settings.py` pattern (à la Django) registers your `Robot`, `Controller`, and `Server` classes, so the CLI can discover and run any of them with the right configuration.
@@ -76,7 +76,7 @@ All three nodes speak the same protocol: a Pydantic-validated [`Action`](/docs/a
 ```text
 1. create-solarian myrobot               (scaffold the project)
 2. solarian install ur5                  (install a plugin and copy its config)
-3. edit conf/ur5.yaml                    (set port, ID, frequency, …)
+3. edit conf/modules/ur5.yaml            (set port, ID, frequency, …)
 4. solarian run-server                   (relay machine)
 5. solarian run-robot                    (on the robot)
 6. solarian run-controller               (your laptop — keyboard teleop)

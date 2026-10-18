@@ -168,6 +168,10 @@ class BaseCommand(ABC):
     #: When False, the command runs without a project config or settings.py.
     uses_config = True
 
+    #: When False, :meth:`handle` receives the composed config unresolved and
+    #: resolves it itself, e.g. after registering resolvers only it knows.
+    resolve_config = True
+
     #: Project modules ``setup()`` imports for this command (see
     #: ``solarian.cli.commands``); None imports all. Built-ins repeat it on
     #: ``register_lazy``.

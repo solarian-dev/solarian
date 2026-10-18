@@ -384,9 +384,9 @@ class Robot(EventHost, ABC):
 
     def load_module_config(self, module_name: str, module_class: type):
         """Load module config from YAML using the module's own config class"""
+        from solarian.core.conf_paths import module_config_path
         from solarian.utils.configs import load_config_yaml
-        conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
-        yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
+        yaml_path = str(module_config_path(module_name))
         module_cfg = load_config_yaml(yaml_path, module_class.config_class)
         return module_cfg
 

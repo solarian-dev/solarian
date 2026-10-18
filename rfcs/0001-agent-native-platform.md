@@ -793,6 +793,41 @@ operations produce versions, never rewrites; every job accepts `dry_run` and
 returns what would change and an estimated cost; and a token can carry a GPU
 budget.
 
+#### Deploy, train, track (phase 3, part 1)
+
+The relation between solarian and Base is the one between Next.js and Vercel. A
+project is deployed from the CLI (`solarian base deploy`, a bundle honouring
+`.gitignore`) or the GUI (import from git). A **Deployment** is an immutable
+snapshot with a build log and a manifest of its trainers and train configs; the
+newest ready one is the project's current deployment, and older ones can be
+promoted back. A deployed project runs training jobs now, and inference and
+services later, against that snapshot.
+
+What exists:
+
+- `solarian base login|logout|whoami|link|deploy|env|manifest|train|runs`, all
+  with `--json`, in the `solarian-base` plugin so core stays vendor-neutral.
+  `login` is a browser device flow that mints a personal access token.
+- `TrainJob`: `POST /api/projects/{id}/train/` with a train config (from a
+  deployment) or a stock trainer (params validated by its JSON Schema), Hydra
+  overrides, `base://datasets/<id>[@version]` refs and a GPU choice. It returns
+  202 and a job; a Celery worker runs `solarian modal-train` inside the
+  deployment on Base's Modal account, and beat reconciles status, cancellation
+  and checkpoints. The job's process gets a token scoped to `runs:write` for its
+  own run, which expires with the job.
+- Experiment tracking: `solarian.tracking` has wandb's API with pluggable
+  backends (`wandb`, `none`, and `solarian_base` from the plugin), selected by a
+  config's `logging.backend` or `$SOLARIAN_TRACKING`. Base stores runs with
+  metric history, console logs, tags, notes, config, summary and system info,
+  and shows Charts, Overview and Logs per run.
+- The OpenAPI schema is served at `/api/schema/` (Swagger at `/api/docs/`), with
+  the new endpoints tagged Deployments, Environment variables, Training, Runs
+  and Tokens.
+
+Not yet: `dry_run` and cost estimates, GPU budgets on tokens, organisation
+scope, typed request and response bodies for the plain `APIView` endpoints, and
+backends other than Modal.
+
 ### 6.8 MCP
 
 Two servers, both thin.
@@ -804,6 +839,14 @@ op catalog and the API:
   agent can *look* at episodes while curating), `list_ops`, `run_op` (with
   `dry_run`), `get_job`, `job_logs`, `train`, `evaluate`, `deploy_service`,
   `list_robots`.
+- `list_runs`, `get_run` (summary, config and the launching job) and
+  `run_metrics` (sampled history of named keys), so an agent can compare
+  experiments and decide what to train next.
+
+`train` maps onto `POST /api/projects/{id}/train/` and takes the same
+`base://` dataset refs as the CLI; `get_job` and `job_logs` read the training
+job and its run. Until the remote server exists, the `deploy-and-train` skill
+shipped by the `solarian-base` plugin covers the same loop through the CLI.
 
 **`solarian mcp`**, a local stdio server run inside a project, for the live
 robot or the sim:

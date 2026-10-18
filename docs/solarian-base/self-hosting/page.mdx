@@ -1,0 +1,123 @@
+export const metadata = {
+  title: 'Self-hosting Solarian Base',
+  description:
+    'Run Solarian Base on your own machine: its processes, the two Python environments, configuration, and exposing it to Modal training jobs with Tailscale Funnel.',
+}
+
+
+# Self-hosting
+
+Base is a Django API with Celery workers and a Next.js web app. Running it on
+your own machine takes seven processes, two Python environments and a few
+settings; training on Modal also needs Base to be reachable from the internet. {{ className: 'lead' }}
+
+The repository's `README.md` has the complete list of settings; this page
+covers what a local Base needs.
+
+## Processes
+
+Each runs in its own terminal, from `backend/` unless noted:
+
+| Process | Command | What breaks without it |
+| --- | --- | --- |
+| Redis | `brew services start redis` | Everything: the Celery broker and the WebSocket layer |
+| API | `python manage.py runserver 8000` | Everything |
+| Default worker | `celery -A config worker -l info --concurrency 2 -n default@%h` | Dataset ops and deployment builds stay queued |
+| Interactive worker | `celery -A config worker -Q interactive -l info --concurrency 2 -n interactive@%h` | Review sessions |
+| Train worker | `celery -A config worker -Q train -l info --concurrency 2 -n train@%h` | Training jobs stay `queued` |
+| Beat | `celery -A config beat -l info` | Job states never update; stale runs and sessions are never reaped |
+| Web app | `npm run dev`, from `frontend/` | The GUI |
+
+`runserver` serves HTTP and WebSockets: Daphne is installed, so it runs the
+ASGI app. Keep the train worker's concurrency low: a launch holds its slot for
+minutes while Modal builds the image and uploads datasets.
+
+For a quick look without workers, `CELERY_TASK_ALWAYS_EAGER=1 python manage.py
+runserver 8000` runs every task inline.
+
+## Two Python environments
+
+Django and solarian live in separate environments. Base runs the `solarian` CLI
+as a subprocess for dataset ops, deployment builds, training launches, relays
+and controller sessions.
+
+```bash
+# Base: Django, Celery, and the modal client that polls training jobs
+conda create -n solarian_base python=3.10 -y && conda activate solarian_base
+cd backend && pip install -e ".[dev]"
+
+# solarian: the CLI Base runs, with the plugins training needs
+conda create -n solarian python=3.10 -y && conda activate solarian
+pip install solarian solarian-modal solarian-base
+```
+
+Base finds the CLI in `CONTROLLER_SOLARIAN_BIN`, then on `PATH`, then in a
+conda env named `solarian` next to the one Django runs in.
+
+## Configure
+
+Settings come from `backend/.env` or the process environment, read when each
+process starts: restart the API and the workers after a change.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FRONTEND_URL` | `http://localhost:3000` | Where `solarian base login` sends you to approve |
+| `PUBLIC_API_URL` | `http://localhost:8000` | Where training jobs report their runs; must be reachable from Modal |
+| `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | unset | The Modal account jobs run under; unset uses `~/.modal.toml` |
+| `CONTROLLER_SOLARIAN_BIN` | found automatically | The `solarian` executable |
+| `CONTROLLER_LOCAL_PROJECT_DIR` | unset | Project checkout relays and controller sessions run from |
+| `CONTROLLER_RELAY_PUBLIC_HOST` | `127.0.0.1` | The relay address robots dial |
+| `DATASETS_ROOT` | `backend/datasets` | Where datasets are stored |
+| `DJANGO_SECRET_KEY` | a development key | Also encrypts project secrets; set it outside development |
+
+Then create the database:
+
+```bash
+python manage.py migrate
+python manage.py createsuperuser   # optional, for /admin/
+```
+
+## Training on Modal from a local Base
+
+A training job reports to `PUBLIC_API_URL`. A Modal container cannot reach
+`localhost`, nor a Tailscale address, since it is not on your tailnet.
+[Tailscale Funnel](https://tailscale.com/kb/1223/funnel) publishes the API at a
+public HTTPS address:
+
+```bash
+tailscale funnel --bg --set-path /api http://127.0.0.1:8000/api
+tailscale funnel status          # https://<machine>.<tailnet>.ts.net/api
+```
+
+Only `/api` is published. Then:
+
+1. Set `PUBLIC_API_URL=https://<machine>.<tailnet>.ts.net` and restart the
+   train worker.
+2. Log the CLI in through the same URL, so trainings started from your machine
+   report there too:
+
+   ```bash
+   solarian base login --url https://<machine>.<tailnet>.ts.net
+   ```
+
+3. Check from outside: `curl -i https://<machine>.<tailnet>.ts.net/api/projects/`
+   answers `401`.
+
+<Note>
+  While Funnel is on, anyone can reach the API, guarded by its tokens. Turn it
+  off with `tailscale funnel --https=443 off`, and set `DEBUG=False` while it
+  is on. A job whose Base is unreachable still trains: its tracking warns once
+  and catches up when Base answers again.
+</Note>
+
+## Check it
+
+- Web app: http://localhost:3000
+- API: http://localhost:8000/api/, with interactive docs at `/api/docs/`
+- Admin: http://localhost:8000/admin/
+- `redis-cli ping` answers `PONG`
+
+## See also
+
+- [Getting Started](/docs/solarian-base/getting-started) — connecting the CLI to your Base.
+- [Training & Runs](/docs/solarian-base/training) — what the train worker launches.

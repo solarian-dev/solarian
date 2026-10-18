@@ -57,7 +57,7 @@ The pose convention is a 6-vector `(x, y, z, rx, ry, rz)`: position in metres, o
 Each of the six [`CartesianIKActuator`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ik/actuator.py) declarations is one component of the end-effector pose. The pose index each drives comes from its `cfg.id` (0..5 == x, y, z, rx, ry, rz), and they use raw metric units (`mode: raw`), not the normalized space of joint servos:
 
 ```yaml
-# conf/arm.yaml — Cartesian actuators alongside the joint actuators
+# conf/modules/arm.yaml — Cartesian actuators alongside the joint actuators
 actuators:
   # ... the six joint servos ...
   x:  { id: 0, model: ik_cartesian, type: ik_cartesian, port: ${actuator_port}, mode: raw }

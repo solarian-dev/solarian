@@ -41,9 +41,8 @@ class SetupModuleCommand(BaseCommand):
 
     def handle(self, cfg: RobotConfig) -> None:
         from solarian.conf import settings
+        from solarian.core.conf_paths import module_config_path
         from solarian.utils.configs import load_config_yaml
-
-        conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
 
         all_modules: dict[str, tuple[type, str]] = {}
 
@@ -86,8 +85,7 @@ class SetupModuleCommand(BaseCommand):
         print(f"\nSetting up module: {module_name}")
 
         # Proceed with module setup
-        yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
-        module_cfg = load_config_yaml(yaml_path, module_class.config_class)
+        module_cfg = load_config_yaml(str(module_config_path(module_name)), module_class.config_class)
 
         module = module_class(module_cfg, module_name)
         module.connect()

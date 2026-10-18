@@ -286,8 +286,9 @@ class Controller(EventHost, ABC):
         calibration, or limits -- declare a ``default_config`` and are used
         without the project shipping an empty YAML file for them.
         """
-        conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
-        yaml_path = os.path.join(conf_path, f"{module_name}.yaml")
+        from solarian.core.conf_paths import module_config_path
+
+        yaml_path = str(module_config_path(module_name))
         default_config = getattr(module_class, "default_config", None)
         if default_config is not None and not os.path.exists(yaml_path):
             return module_class.config_class(**default_config)

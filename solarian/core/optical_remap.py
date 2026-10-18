@@ -704,7 +704,9 @@ def load_policy_remap(
         return None
     use_one_opencv_thread()
     if conf_dir is None:
-        conf_dir = Path(os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf")))
+        from solarian.core.conf_paths import conf_dir as project_conf_dir
+
+        conf_dir = project_conf_dir()
     remap = OpticalRemap(
         str(remap_path), conf_dir, camera_wh=(int(camera_wh[0]), int(camera_wh[1]))
     )

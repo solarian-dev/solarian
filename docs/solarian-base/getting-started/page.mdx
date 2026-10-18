@@ -1,0 +1,93 @@
+export const metadata = {
+  title: 'Getting Started with Solarian Base',
+  description:
+    'Create a Solarian Base account, install the solarian-base CLI plugin, log in, link a project, and issue API tokens for CI and agents.',
+}
+
+
+# Getting started
+
+Base needs an account, the `solarian-base` plugin for the CLI, and a link
+between your project directory and a Base project. {{ className: 'lead' }}
+
+## Create an account
+
+Open your Base and use **Sign up** on the login page (`/auth/register`). The
+username you choose is the one you sign in with; it cannot be changed later.
+**Settings** holds your name, email, password, API tokens and the theme.
+
+## Install the CLI plugin
+
+The `solarian base` commands ship in the `solarian-base` plugin, in the same
+environment as solarian:
+
+```bash
+pip install solarian-base
+solarian base --help
+```
+
+## Log in
+
+```bash
+solarian base login
+```
+
+The command opens your browser on **Sign in the solarian CLI** (`/cli/login`)
+with a code; check that it matches the one in the terminal and press
+**Approve**. The CLI stores a token in `~/.solarian/auth.json`.
+
+| Variant | What it does |
+| --- | --- |
+| `solarian base login --url https://base.example.com` | Log in to a Base other than the default (`http://localhost:8000`) |
+| `solarian base login --no-browser` | Print the approval link instead of opening it |
+| `solarian base login --token sol_...` | Store a token you created under **Settings → API tokens** |
+| `solarian base whoami` | Show who you are logged in as, where, and the linked project |
+| `solarian base logout` | Forget the stored token |
+
+## Link a project
+
+From the root of a solarian project:
+
+```bash
+solarian base link                    # a Base project with this directory's name
+solarian base link --project so106    # a project by name or id
+solarian base link --create           # create it when it does not exist
+```
+
+`link` writes `.solarian/project.json` and adds `.solarian/` to `.gitignore`.
+Every other command reads the project from there. Without `--create`, `link`
+asks before creating a missing project; in a script, or with `--json`, it fails
+instead and lists the projects you have.
+
+From the web app, **Projects → New Project** creates one; the CLI then links to
+it by name.
+
+## API tokens
+
+**Settings → API tokens** issues tokens for CI, scripts and agents: enter a
+name and press **Issue**. The token is shown once, in the **Token issued**
+dialog. **Revoke** disables it at once.
+
+On a machine without a browser, set the token in the environment instead of
+logging in:
+
+```bash
+export SOLARIAN_BASE_URL=https://base.example.com
+export SOLARIAN_TOKEN=sol_...
+export SOLARIAN_PROJECT_ID=2af39d01-...   # instead of `solarian base link`
+solarian base whoami
+```
+
+The environment wins over `~/.solarian/auth.json` and `.solarian/project.json`.
+
+<Note>
+  Organizations, members and plans exist in Base, and plans set limits such as
+  storage and controller minutes. There is no page to manage them in the web
+  app yet; every account starts on the Free plan.
+</Note>
+
+## See also
+
+- [Quick Start](/docs/solarian-base/quickstart) — the next steps, end to end.
+- [CLI Reference](/docs/solarian-base/cli) — every `solarian base` command.
+- [Self-hosting](/docs/solarian-base/self-hosting) — when the Base you log in to runs on your machine.

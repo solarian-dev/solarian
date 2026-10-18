@@ -17,7 +17,7 @@ solarian install feetech
 ```
 
 1. **Installs the package** into the current Python environment. A short name is prefixed, so `feetech` installs `solarian-feetech`. PyPI is tried first; if the project is not published, the command looks for `solarian-feetech/` in the current folder and then under `plugins/`.
-2. **Copies the default config** into `conf/` when the destination is absent. A file in the package's `templates/` directory keeps its name (`templates/move.yaml` → `conf/move.yaml`). A module that only ships `conf.yaml` lands at `conf/<short-name>.yaml`, so this command writes `conf/feetech.yaml`.
+2. **Copies the default config** into `conf/` when the destination is absent. A file in the package's `templates/` directory keeps its folder and name (`templates/skills/move.yaml` → `conf/skills/move.yaml`, `templates/modules/feetech.yaml` → `conf/modules/feetech.yaml`).
 3. **Records the dependency** — adds `solarian-feetech>=0.1.0` to the project's `pyproject.toml`.
 
 The Robot attribute has to match that filename. A second instance (a left arm and a right arm from one plugin) is a copy of the yaml under the new name.
@@ -31,10 +31,10 @@ from solarian.core import Robot
 from solarian_ur5.module import UR5ArmModule
 
 class MyRobot(Robot):
-    ur5 = UR5ArmModule()   # reads conf/ur5.yaml
+    ur5 = UR5ArmModule()   # reads conf/modules/ur5.yaml
 ```
 
-Then edit `conf/ur5.yaml` to set ports, servo IDs, frequency, and calibration paths for your hardware. See [Project Configs](/docs/project-configs).
+Then edit `conf/modules/ur5.yaml` to set ports, servo IDs, frequency, and calibration paths for your hardware. See [Project Configs](/docs/project-configs).
 
 ### A local path
 
@@ -56,14 +56,14 @@ MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"
 UMISkill(params={"config": "cup_arrange.yaml"})
 ```
 
-`pose` is any name under `poses:` in `conf/move.yaml`, which `solarian install solarian-move-skill` creates from the plugin's template when the file is not already there. `config` is a yaml in `conf/`. `solarian install solarian-umi-skill` copies `templates/umi.yaml` to `conf/umi.yaml`; copy that file for each policy.
+`pose` is any name under `poses:` in `conf/skills/move.yaml`, which `solarian install solarian-move-skill` creates from the plugin's template when the file is not already there. `config` is a yaml in `conf/`. `solarian install solarian-umi-skill` copies `templates/umi.yaml` to `conf/skills/umi.yaml`; copy that file for each policy.
 
 Class-attribute skills you declare on your controller take priority over a discovered skill of the same name, so you can still override one by declaring it explicitly.
 
 `UMISkill` reads the checkpoint and the rest of its parameters from the file you passed. `arm`, `gripper`, and `camera` live in that file too:
 
 ```yaml
-# conf/cup_arrange.yaml — one UMI policy
+# conf/skills/cup_arrange.yaml — one UMI policy
 policy_server_url: http://localhost:8001
 policy_server:
   managed: false

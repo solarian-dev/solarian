@@ -1645,9 +1645,9 @@ class CalibrateHandEyeCommand(BaseCommand):
         obj_pts = _marker_points(marker_mm / 1000.0)
         # Resolved before any hardware opens: a missing remap should fail now,
         # not after the board is taped down and the arm is in the user's hands.
-        conf_dir = Path(
-            os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
-        )
+        from solarian.core.conf_paths import conf_dir as project_conf_dir
+
+        conf_dir = project_conf_dir()
         optics = _measurement_optics(sensor_cfg, conf_dir)
         if optics is None:
             return

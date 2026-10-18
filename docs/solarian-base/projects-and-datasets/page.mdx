@@ -1,0 +1,129 @@
+export const metadata = {
+  title: 'Projects & Datasets',
+  description:
+    'Organize work in Solarian Base projects, upload LeRobot, UMI and Solarian datasets, view them, and curate them with computed datasets, ops and review sessions.',
+}
+
+
+# Projects & datasets
+
+A project groups everything Base holds for one solarian project. Its datasets
+are the recordings you upload, which never change, and the computed datasets
+you derive from them with ops, version by version. {{ className: 'lead' }}
+
+## Projects
+
+**From the web app:** **Projects → New Project** asks for a name and an
+optional description. A project's page has, from top to bottom:
+
+- **Edit**, for the name and description;
+- **Deployments** — see [Deployments & Secrets](/docs/solarian-base/deployments);
+- **Training** and **Start training** — see [Training & Runs](/docs/solarian-base/training);
+- **Datasets** and **New Dataset**;
+- **Environment variables**.
+
+Deleting a project, from the **Projects** list, deletes its datasets too.
+
+**From the CLI:** `solarian base link --create` creates a project named after
+the current directory and links it. There are no other project commands.
+
+## Upload a dataset
+
+**From the web app:** on the project page, **New Dataset → Upload**. Pick the
+archive, give it a name, and press **Upload Dataset**.
+
+| Format | Archive | Recognized by |
+| --- | --- | --- |
+| LeRobot | `.zip` | `meta/info.json` |
+| UMI (Zarr) | `.zarr.zip` | the Zarr store, or `meta/episode_ends` |
+| Solarian | `.solarian.zip` | `session.json` and `episodes/*/episode.parquet` |
+
+The format comes from the archive's contents, not its name; `.7z` works too.
+An upload can be up to 50 GB, within your plan's storage (5 GB on Free). See
+[Dataset Formats](/docs/datasets) for what each format holds.
+
+<Note>Web app only: there is no CLI upload or download of datasets yet.</Note>
+
+**Datasets** lists every dataset of every project.
+
+## View a dataset
+
+A dataset's page plays one episode at a time:
+
+- **Observations** — every camera, in sync, with tracked boxes and masks drawn
+  on top when the dataset has them, and a 3D gripper view when it has poses;
+- **Actions** — one chart per action and state series, following the playhead;
+- the sidebar's **Data** chooses which series and cameras are shown, and
+  **Info** gives the episode, frame and FPS counts.
+
+**Delete** removes the current episode from an uploaded dataset. On a computed
+dataset, use the `delete-episodes` op instead, which keeps the original.
+
+**Start training** on a ready, uploaded dataset opens the training dialog with
+it already selected.
+
+## Computed datasets
+
+A computed dataset is a tree of versions over one uploaded Solarian dataset.
+Each version applies one op to its parent, so the source stays untouched and any
+step can be redone.
+
+**From the web app:** **New Dataset → Computed from…** on the project page, or
+**New computed dataset** on a Solarian dataset's page. Then, in **Versions**:
+
+1. Select the source or a version and press **Apply op…**.
+2. Choose the op and its parameters. Ops that work per episode offer **Batch**
+   or **Episode by episode**.
+3. Press **Apply**. **Log** shows the op's output while it runs, and **Cancel**
+   stops it.
+
+Versions are numbered in the order they were made and named after their op,
+such as `01-track` or `02-split-pick-place-pick`.
+
+| Op | Title | What it does | Episode by episode |
+| --- | --- | --- | --- |
+| `delete-episodes` | Delete episodes | Drops the episodes you name | Yes: **Keep** or **Drop** each one |
+| `mirror` | Mirror left-right | Follows every episode with its left-right mirror | No |
+| `split-pick-place` | Split into pick and place | Cuts each episode at its return to home, into a pick version and a place version | No |
+| `merge` | Merge datasets | Combines this dataset with others | No |
+| `track` | Track an object | Tracks an object in a camera with SAM 2 | Yes: **Accept** or **Redo** each one |
+
+`track` comes from the `solarian-sam2-tracker` plugin. A project can add its
+own ops in `<package>/dataset_ops/`, scaffolded with `solarian add-op`; Base
+lists them with `(project)` next to their name.
+
+### Review sessions
+
+**Episode by episode** opens the version for review. Base keeps a worker on it
+while you go through the episodes:
+
+- for a filter such as `delete-episodes`: **Keep ⏎** or **Drop D**;
+- for a map such as `track`: watch the result, then **Accept ⏎**, **Redo R**
+  (after clicking a new prompt on the frame), or **Stop Esc**.
+
+Once every episode is decided, **Close** makes the version final, so ops can
+build on it and it can be trained on or exported.
+
+### Use a version
+
+- **Export…** turns a closed version into a new, standalone uploaded dataset.
+- **Download** gets the version as one `.solarian.zip`, which is what training
+  reads.
+- **Drop** deletes the version.
+- To train on it without exporting, reference it as
+  `base://datasets/<id>@<version>`:
+
+  ```bash
+  solarian base train umi_pick "++task.dataset_mix.0.path=base://datasets/3f2a9c1e@02-split-pick-place-pick"
+  ```
+
+<Note>
+  Web app only. `solarian dataset new|apply|session|export` performs the same
+  ops on a local copy of a dataset, but does not talk to Base.
+</Note>
+
+## See also
+
+- [Dataset Formats](/docs/datasets) — LeRobot, UMI and Solarian layouts.
+- [Training & Runs](/docs/solarian-base/training) — training on Base datasets.
+- [Recording](/docs/recording) — producing Solarian datasets.

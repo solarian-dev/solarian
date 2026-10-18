@@ -67,10 +67,10 @@ Solarian hardware drivers ship as standalone `solarian-<name>` packages. [`solar
 solarian install ur5
 ```
 
-This installs `solarian-ur5` and creates `conf/ur5.yaml` from the plugin's bundled `conf.yaml`. The filename is the attribute name you'll use on your `Robot`. This guide calls the module `arm`, so rename the file to match:
+This installs `solarian-ur5` and creates `conf/modules/ur5.yaml` from the plugin's `templates/modules/ur5.yaml`. The filename is the attribute name you'll use on your `Robot`. This guide calls the module `arm`, so rename the file to match:
 
 ```bash
-mv conf/ur5.yaml conf/arm.yaml
+mv conf/modules/ur5.yaml conf/modules/arm.yaml
 ```
 
 See [Core Plugins](/docs/core-plugins) for the drivers to start with.
@@ -85,7 +85,7 @@ class MyrobotRobot(Robot):
     arm = UR5ArmModule()
 ```
 
-The attribute name `arm` matches `conf/arm.yaml` — that's how Solarian routes per-module configuration. See [Project Configs](/docs/project-configs) for details.
+The attribute name `arm` matches `conf/modules/arm.yaml` — that's how Solarian routes per-module configuration. See [Project Configs](/docs/project-configs) for details.
 
 ## 3. Define an observation and an action schema
 
@@ -171,7 +171,7 @@ To split nodes across machines, add `conf/deployment/lab.yaml` with the relay's 
 In the controller window, press `a` and `d` to nudge `shoulder_pan`. You should see the corresponding actuator move. The relay server window logs every action and observation it forwards.
 
 <Note>
-  If something doesn't move, double-check that the module attribute name (`arm`) matches the YAML filename (`conf/arm.yaml`) **and** the `Observation`/`Action` attribute names. Solarian validates these at class definition time and will raise a `TypeError` if they disagree.
+  If something doesn't move, double-check that the module attribute name (`arm`) matches the YAML filename (`conf/modules/arm.yaml`) **and** the `Observation`/`Action` attribute names. Solarian validates these at class definition time and will raise a `TypeError` if they disagree.
 </Note>
 
 ## Where to go next

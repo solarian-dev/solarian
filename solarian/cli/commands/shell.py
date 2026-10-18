@@ -36,9 +36,10 @@ class ShellCommand(BaseCommand):
 
     def _load_config(self, config_name, config_class):
         """Load a Hydra config and parse it into the given config class."""
+        from solarian.core.conf_paths import conf_dir
         from solarian.utils.configs import parse_with_friendly_errors, resolve_with_deployment
 
-        conf_path = os.environ.get("SOLARIAN_CONF_PATH", os.path.join(os.getcwd(), "conf"))
+        conf_path = str(conf_dir())
 
         if GlobalHydra.instance().is_initialized():
             GlobalHydra.instance().clear()
