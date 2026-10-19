@@ -92,16 +92,15 @@ class Skill(ABC):
     Subclasses **must** implement :meth:`control_step`.
     They may also override :meth:`setup` and :meth:`teardown`.
 
-    A skill that is driven by a policy declares the policy server it uses via
-    the :attr:`policy_server_module` class attribute and the checkpoint
-    location in config (``policy_server.checkpoint``).  Config is resolved by
-    deep-merging the plugin's bundled defaults (``conf.yaml`` next to the skill
-    module) with a **project-level** override at ``conf/skills/<config_name>.yaml``
-    (project wins), so each project points the skill at its own checkpoint
-    without editing the installed plugin.  The skill always defines where the
-    checkpoint is; when ``policy_server.managed`` is true it launches that
-    server as a child process to load it, and the ``solarian run-policy
-    <skill>`` command can launch it standalone.
+    A skill that is driven by a policy names the service that serves it via
+    the :attr:`policy_service` class attribute, and its conf's ``server:``
+    block says which checkpoint and port (see :mod:`solarian.services.launch`).
+    Config is resolved by deep-merging the plugin's bundled defaults
+    (``conf.yaml`` next to the skill module) with a **project-level** override
+    at ``conf/skills/<config_name>.yaml`` (project wins), so each project
+    points the skill at its own checkpoint without editing the installed
+    plugin. ``solarian run-service <conf>`` runs that server standalone, and a
+    skill may launch it itself when ``server.managed`` is true.
 
     Args:
         name: Unique identifier for this skill instance.
@@ -144,15 +143,13 @@ class Skill(ABC):
     #: Skills never outlive the runtime that launched them.
     daemon: bool = True
 
-    #: Importable module that runs this skill's policy server (``python -m
-    #: <module>``).  The module's ``main()`` must be built on
-    #: :meth:`~solarian.core.ai.system1.policy_server.PolicyServer.main`, so it
-    #: accepts ``--input <checkpoint> --host <host> --port <port>``.  ``None``
-    #: for skills that don't use a policy server.
-    policy_server_module: Optional[str] = None
+    #: ``solarian.services`` entry point serving this skill's policy (a
+    #: :class:`~solarian.services.policy.PolicyServer`): the default for its
+    #: conf's ``server.service``. ``None`` for skills that don't use a policy.
+    policy_service: Optional[str] = None
 
     #: Filename of the bundled default config shipped alongside the skill's
-    #: module (used to locate ``policy_server.checkpoint`` and friends).
+    #: module.
     config_filename: str = "conf.yaml"
 
     #: Basename (without extension) of the *project-level* config file that
@@ -268,7 +265,7 @@ class Skill(ABC):
         )
 
     # ------------------------------------------------------------------
-    # Associated policy server
+    # Config
     # ------------------------------------------------------------------
 
     @classmethod
@@ -300,8 +297,8 @@ class Skill(ABC):
         """Recursively merge ``override`` onto ``base`` (values in ``override`` win).
 
         Nested dicts are merged key-by-key so a project file can set e.g. just
-        ``policy_server.checkpoint`` and inherit the other ``policy_server.*``
-        defaults from the bundled config.
+        ``server.checkpoint`` and inherit the other ``server.*`` defaults from
+        the bundled config.
         """
         out = dict(base or {})
         for key, value in (override or {}).items():
@@ -343,65 +340,6 @@ class Skill(ABC):
 
         merged = cls._deep_merge(cls.load_default_config(), cls.load_project_config())
         return resolve_with_deployment(merged)
-
-    @classmethod
-    def get_policy_server_spec(
-        cls,
-        checkpoint: Optional[str] = None,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        config: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Describe how to launch this skill's policy server.
-
-        Returns ``None`` for skills that don't use a policy server (no
-        :attr:`policy_server_module`).  Otherwise returns a dict with
-        ``module``, ``checkpoint``, ``host``, ``port`` and ``managed``.
-
-        The checkpoint is resolved from the merged config (project-level
-        ``conf/skills/<config_name>.yaml`` overriding the bundled ``policy_server.checkpoint``).
-        ``config`` is a filename in ``conf/skills/`` or a path, and replaces that
-        merge. Explicit checkpoint/host/port arguments take precedence. A
-        missing checkpoint is an error.
-        """
-        if not cls.policy_server_module:
-            return None
-
-        if config:
-            import yaml
-
-            from solarian.core.conf_paths import skill_config_path
-            from solarian.utils.configs import resolve_with_deployment
-
-            path = skill_config_path(config)
-            if not path.is_file():
-                raise ValueError(f"Skill config not found: {path}")
-            with open(path, "r") as f:
-                loaded = resolve_with_deployment(yaml.safe_load(f) or {})
-            server_cfg = loaded.get("policy_server") or {}
-            project_file = str(path)
-        else:
-            server_cfg = (cls.load_config().get("policy_server") or {})
-            project_file = (
-                f"conf/skills/{cls.config_name}.yaml" if cls.config_name else "conf/skills/<skill>.yaml"
-            )
-        checkpoint = checkpoint or server_cfg.get("checkpoint")
-        if not checkpoint:
-            raise ValueError(
-                f"{cls.__name__} declares a policy server "
-                f"({cls.policy_server_module!r}) but no checkpoint is defined. "
-                f"Set 'policy_server.checkpoint' in {project_file} "
-                f"(or the skill's bundled {cls.config_filename}), or pass an explicit checkpoint."
-            )
-        host = host or server_cfg.get("host", "127.0.0.1")
-        port = int(port if port is not None else server_cfg.get("port", 8001))
-        return {
-            "module": cls.policy_server_module,
-            "checkpoint": str(checkpoint),
-            "host": str(host),
-            "port": port,
-            "managed": bool(server_cfg.get("managed", False)),
-        }
 
     # ------------------------------------------------------------------
     # Stop control

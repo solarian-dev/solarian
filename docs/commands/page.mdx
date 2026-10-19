@@ -231,21 +231,13 @@ solarian write-controller-calibration
 
 Writes the calibration values from YAML into the controller hardware.
 
-### `run-policy`
-
-```bash
-solarian run-policy <skill_name> [--config FILE] [--checkpoint PATH] [--host HOST] [--port PORT]
-```
-
-Runs the [`PolicyServer`](/docs/servers) associated with a skill. The skill declares its server via the `policy_server_module` class attribute and the checkpoint location in its config (`policy_server.checkpoint`); this command resolves both and launches the server (overridable with `--checkpoint`/`--host`/`--port`). `--config` is a filename in `conf/` or a path, and replaces the skill's default config file. For example, `solarian run-policy umi --config cup_arrange.yaml` starts the diffusion policy server that `solarian-umi-skill` drives. See [Training](/docs/training) and [Skills](/docs/skills).
-
 ### `run-service`
 
 ```bash
-solarian run-service <service_name> [--host HOST] [--port PORT] [server args...]
+solarian run-service <conf_or_service> [--checkpoint PATH] [--host HOST] [--port PORT] [server args...]
 ```
 
-Runs the HTTP server of an installed [service](/docs/services) plugin, such as `sam2-tracker`, on the machine with the GPU. `--port` defaults to the service's own default (8765), and every other argument goes to the plugin's server, so `solarian run-service sam2-tracker --model small --checkpoint-dir ~/sam2` picks the SAM 2 model and downloads that checkpoint into the directory when it is missing. An unknown name lists the installed services.
+Runs a [service](/docs/services): a tracker, a depth model, or a [policy](/docs/policies) server. Name a conf in `conf/services/` or `conf/skills/` with a `server:` block to run the server it describes, with its checkpoint, port and args, or name an installed service to run it with your own. `--checkpoint`, `--host` and `--port` override the conf, and every other argument goes to the server after the conf's `args`. So `solarian run-service bbox_tracker` starts the SAM 2 tracker `conf/services/bbox_tracker.yaml` calls, `solarian run-service umi_pnp --checkpoint models/pick/checkpoints/latest.ckpt` the diffusion policy `conf/skills/umi_pnp.yaml` drives, and `solarian run-service sam2-tracker --model small` the tracker with your arguments. An unknown name lists the installed services. To serve on Modal or Solarian Base instead, see [Serving on Modal](/docs/services#serving-on-modal).
 
 ### `run-server`
 
@@ -318,9 +310,10 @@ Runs one training file with the trainer its `trainer:` key names. There is no de
 solarian base deploy
 solarian base train --conf conf/training/cup_arrange --dataset task.dataset_mix.0.path=3f2a9c1e
 solarian base runs logs -f 1a2b3c4d
+solarian base endpoints start umi_pnp --checkpoint 1a2b3c4d
 ```
 
-From the `solarian-base` plugin. Links the project to Solarian Base (`login`, `link`), deploys its code (`deploy`), manages the secrets its jobs get (`env`), trains on cloud GPUs and follows the run (`train`), and reads runs (`runs ls|show|logs`). Every action takes `--json`. See the [Solarian Base CLI reference](/docs/solarian-base/cli) for every flag, and [Solarian Base](/docs/solarian-base) for what Base does.
+From the `solarian-base` plugin. Links the project to Solarian Base (`login`, `link`), deploys its code (`deploy`), manages the secrets its jobs get (`env`), trains on cloud GPUs and follows the run (`train`), reads runs (`runs ls|show|logs`), lists the checkpoints its jobs wrote (`models ls`), and serves the project's services and policies on cloud GPUs (`endpoints ls|start|stop|logs`). Every action takes `--json`. See the [Solarian Base CLI reference](/docs/solarian-base/cli) for every flag, and [Solarian Base](/docs/solarian-base) for what Base does.
 
 ## Utility commands
 

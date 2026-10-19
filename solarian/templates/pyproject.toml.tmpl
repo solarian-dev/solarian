@@ -3,16 +3,42 @@ name = "${project_name}"
 version = "0.1.0"
 description = "A Solarian robotics project."
 requires-python = ">=3.10"
+# What every role imports: run-robot, run-server and run-controller all load
+# observation.py, which builds its schema from the robot's module classes. Keep
+# servo SDKs out of here; they go in the [robot] / [controller] extras.
+#
+#   pip install -e ".[robot]"        # the machine wired to the robot
+#   pip install -e ".[server]"       # the relay
+#   pip install -e ".[controller]"   # the operator's machine
+#   pip install -e ".[all]"          # everything on one machine
 dependencies = [
     "solarian>=0.1.0",
-    # `solarian base`: deploy, train on cloud GPUs and track experiments.
-    "solarian-base>=0.1.0",
     # Module plugins are added here by 'solarian add-module'.
     # You can also add them manually, e.g.:
     #   "solarian-ur5>=0.1.0",
     #   "solarian-feetech>=0.1.0",
 ]
 
+[project.optional-dependencies]
+# The [hardware] side of the module plugins the robot runs, e.g.:
+#   "solarian-so106[hardware]>=0.1.0",
+robot = []
+server = []
+# The plugins only the controller imports (leader arms, controller-side
+# skills), with [hardware] for the devices wired to it, e.g.:
+#   "solarian-dynamixel[hardware]>=0.1.0",
+controller = []
+all = [
+    "${project_name}[robot,server,controller]",
+    # `solarian base`: deploy, train on cloud GPUs and track experiments.
+    "solarian-base>=0.1.0",
+]
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+# The project root also holds conf/, datasets/, models/, ... which flat-layout
+# auto-discovery would refuse to guess between.
+[tool.setuptools.packages.find]
+include = ["${package_name}*"]

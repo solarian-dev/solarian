@@ -30,6 +30,9 @@ class ServiceProcessor(Processor):
     def __init__(self, inputs, output, conf: str | None = None):
         super().__init__(inputs, output, conf)
         self.label = str(self.cfg.get("label", type(self).__name__)) if self.cfg else type(self).__name__
+        #: The service's bearer token, from the conf's ``token`` (a hosted
+        #: endpoint's ``solarian_base_endpoint_token``); None for an open server.
+        self.token = self.cfg.get("token") if self.cfg else None
         self._cond = threading.Condition()
         #: Bumped by every start/stop so a result computed for an earlier
         #: request is discarded rather than published after it.

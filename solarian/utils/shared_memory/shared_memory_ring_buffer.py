@@ -144,11 +144,20 @@ class SharedMemoryRingBuffer:
                     'Put executed too fast {}items/{:.4f}s ~= {}Hz'.format(
                         past_iters, deltat,hz))
 
-        # write to shared memory
-        for key, value in data.items():
-            arr: np.ndarray
-            arr = self.shared_arrays[key].get()
-            if isinstance(value, np.ndarray):
+        unknown = data.keys() - self.shared_arrays.keys()
+        if unknown:
+            raise KeyError(
+                f"No shared-memory slot for {sorted(unknown)}: the example this buffer "
+                f"was sized from had no value there (a Data with shape=None?)"
+            )
+        # write to shared memory. A key left out (a None field) is zeroed, or the
+        # slot would replay what was written there a lap of the ring ago.
+        for key, shared in self.shared_arrays.items():
+            arr: np.ndarray = shared.get()
+            value = data.get(key)
+            if value is None:
+                arr[next_idx] = 0
+            elif isinstance(value, np.ndarray):
                 arr[next_idx] = value
             else:
                 arr[next_idx] = np.array(value, dtype=arr.dtype)

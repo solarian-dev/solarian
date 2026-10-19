@@ -172,7 +172,7 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print()
     print("Next steps:")
     print(f"  cd {project_name}")
-    print(f"  pip install -e .          # Install your project as a package")
+    print(f"  pip install -e \".[all]\"   # Install your project; .[robot], .[server] or .[controller] per machine")
     print(f"  solarian install <plugin>          # Install a plugin")
     print(f"  solarian run-robot        # Run the robot")
     print()

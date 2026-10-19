@@ -726,12 +726,54 @@ with no frontend change. `POST /api/datasets/{id}/versions/` starts a job.
 
 ### 6.6 Models as hosted services
 
-A `ServiceDeployment` runs `solarian run-service <name>` on a GPU backend and
-records its URL, token, model params, status and idle timeout (services scale
-to zero; a robot's first call wakes them). `connection_file.py` emits each
-deployed service's URL and token into `conf/deployment/solarian_base.yaml`, so a
-project switches from a local tracker to a hosted one by changing deployment,
-not code, which is already how `bbox_tracker_url` works.
+An **Endpoint** runs `solarian run-service <name>` on a GPU backend against a
+deployment and records its URL, checkpoint, GPU, status and idle timeout
+(services scale to zero; a robot's first call wakes them). It is not called a
+"service deployment": Base already has Deployments (code snapshots) and
+solarian has deployment confs (where a robot's nodes run), and a third meaning
+would make every sentence about the connection file ambiguous. "Endpoint"
+names what the robot sees, a URL it calls.
+
+A policy is a service with a checkpoint, so one command and one model cover
+both. `run-policy` was merged into `run-service`; a conf's `server:` block
+(service, checkpoint, args, `managed`) says what runs, whether the conf is a
+service conf or a skill conf. `ServiceServer` and `ServiceClient` are the
+framework, and `PolicyServer`/`PolicyClient` are thin subclasses adding the
+policy routes.
+
+`connection_file.py` emits each running endpoint's URL, and the project's
+endpoint token, into `conf/deployment/solarian_base.yaml`, keyed by the conf
+key the endpoint fills (`bbox_tracker_url`, `pnp_policy_server_url`). A
+robot's own deployment `extends:` that file, so a project switches from a local
+tracker or policy to a hosted one by changing deployment, not code. The
+connection file can be downloaded without the relay block for a robot that
+keeps its own relay and only uses the endpoints.
+
+What exists (phase 3, part 2):
+
+- `solarian modal-serve <name>` deploys a conf's server as a Modal app with
+  `@modal.web_server`. The URL is derived from a label, so it is stable across
+  restarts and known before the deploy finishes. Base labels endpoints
+  `sb-<project>-<slug>`, one per project and conf key: starting a new endpoint
+  for `pnp_policy_server_url` replaces the old one once its own deploy
+  succeeds, and the connection file never has to change.
+- `Endpoint` in Base: `POST /api/projects/{id}/endpoints/` with a servable (a
+  conf with a `server:` block from the deployment's manifest), an optional
+  training job checkpoint, a GPU type, warm containers and an idle timeout. A
+  Celery worker runs `solarian modal-serve` inside the deployment; beat
+  reconciles status every 30 s from Modal's app state without polling health,
+  so a scaled-to-zero endpoint stays asleep. Only checkpoints Base's own
+  training jobs wrote can be served; they are on the project's volume already.
+- Auth: `ServiceServer` checks a bearer token from `$SOLARIAN_ENDPOINT_TOKEN`
+  (empty means open, for local use) and `ServiceClient` sends it. Base keeps
+  one token per project, encrypted at rest, and passes it to every endpoint.
+- Surfaces: **Services & Policies** (endpoints across all projects, with
+  start, stop, restart, logs and health) and **Models** (every training job's
+  checkpoints, with **Serve**); `solarian base models ls` and
+  `solarian base endpoints ls|start|stop|logs`, with `--json`.
+
+Not yet: sessions and batching (below), warm pools, latency budgets, per-endpoint
+tokens and backends other than Modal.
 
 #### Warm, multi-tenant model servers
 
@@ -766,8 +808,8 @@ Latency decides placement:
   where a service should run, and `doctor` flags a placement that cannot meet
   its budget.
 
-Hosted services need authentication, which `ServiceServer` lacks today: a bearer
-token checked by the base class and sent by `ServiceProcessor`'s client.
+Hosted services need authentication: a bearer token checked by
+`ServiceServer` and sent by `ServiceClient`, which phase 3 part 2 added.
 
 ### 6.7 One API, three surfaces
 
@@ -778,13 +820,13 @@ clients of that API:
 
 - **GUI** for humans: the viewer, curation by eye, approvals, cost.
 - **CLI** for agents in an IDE: `solarian base login`, `datasets
-  push|pull|ls|info`, `ops run`, `jobs status|logs`, `train`, `services deploy`,
+  push|pull|ls|info`, `ops run`, `jobs status|logs`, `train`, `endpoints start`,
   all with `--json`. Coding agents are fluent in shells, so this is the primary
   agent surface.
 - **MCP** for agents outside a project (section 6.8).
 
 Authentication adds **personal access tokens** with scopes (`datasets:read`,
-`datasets:write`, `jobs:run`, `services:deploy`, `robots:control`), named for
+`datasets:write`, `jobs:run`, `endpoints:write`, `robots:control`), named for
 where they live ("cursor on raul-mbp") and shown in an audit log. Robot tokens
 stay separate. `robots:control` is never granted by default.
 
@@ -800,8 +842,8 @@ project is deployed from the CLI (`solarian base deploy`, a bundle honouring
 `.gitignore`) or the GUI (import from git). A **Deployment** is an immutable
 snapshot with a build log and a manifest of its trainers and train configs; the
 newest ready one is the project's current deployment, and older ones can be
-promoted back. A deployed project runs training jobs now, and inference and
-services later, against that snapshot.
+promoted back. A deployed project runs training jobs and serves its services
+and policies (section 6.6) against that snapshot.
 
 What exists:
 
@@ -1046,7 +1088,7 @@ Each phase ends with a check that someone other than its author can run.
 - **Phase 3: services, GPU and parity.** `solarian-depth` with op and service on
   one core; multi-tenant sessions and batching in `ServiceServer`, with the SAM 2
   tracker as the first multi-session service; warm pools; Modal and
-  customer-owned-node backends; `ServiceDeployment` with latency budgets and
+  customer-owned-node backends; `Endpoint` with latency budgets and
   link-loss behaviour; provenance in checkpoints, the deployment check and the
   `parity` op; training as a job with lineage. Exit: two robots share one
   tracker process; a policy trained on tracked boxes refuses to start against a

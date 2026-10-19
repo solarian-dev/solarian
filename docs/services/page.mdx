@@ -1,18 +1,18 @@
 export const metadata = {
   title: 'Services',
   description:
-    'A service is a model served over HTTP that a calculated observation field calls, such as a click-to-track bounding box. Run it with solarian run-service and start it from the controller.',
+    'A service is a model served over HTTP that a calculated observation field or a skill calls, such as a click-to-track bounding box or a policy. Run it with solarian run-service, on Modal, or on Solarian Base.',
 }
 
 # Services
 
-A **service** computes something an observation is enriched with, such as a tracked bounding box or a depth map, on a machine that can afford it. The observation carries the result as an ordinary [`CalculatedField`](/docs/observations), so skills, the recorder and the controller GUI read it like any sensor. {{ className: 'lead' }}
+A **service** computes something on a machine that can afford it: a tracked bounding box or a depth map an observation is enriched with, or a policy's next action. An observation carries a service's result as an ordinary [`CalculatedField`](/docs/observations), so skills, the recorder and the controller GUI read it like any sensor. A [policy](/docs/policies) is a service with a standard API that a skill drives. {{ className: 'lead' }}
 
 A service plugin ships three pieces:
 
-- a `ServiceServer` subclass, the HTTP server that holds the model, run with `solarian run-service <name>` on the GPU host;
-- a `ServiceProcessor` subclass, which a `CalculatedField` declares and which calls that server;
-- a `Service` class naming both, advertised under the `solarian.services` entry-point group.
+- a `ServiceServer` subclass, the HTTP server that holds the model (a policy plugin's is a `PolicyServer`);
+- the caller: a `ServiceProcessor` subclass, which a `CalculatedField` declares, or a skill driving a `PolicyClient`;
+- a `Service` class describing the server, advertised under the `solarian.services` entry-point group.
 
 ```toml
 [project.entry-points."solarian.services"]
@@ -21,13 +21,67 @@ sam2-tracker = "solarian_sam2_tracker.service:Sam2TrackerService"
 
 Defined in [`solarian/services/`](https://github.com/solarian-dev/solarian/blob/main/solarian/services).
 
+## The `server:` block
+
+A conf that needs a server says which, in a `server:` block of the same shape whether it is a processor's conf in `conf/services/` or a skill's in `conf/skills/`:
+
+```yaml
+# conf/services/bbox_tracker.yaml
+server_url: ${deployment.bbox_tracker_url}
+token: ${oc.select:deployment.solarian_base_endpoint_token,null}
+server:
+  service: sam2-tracker
+  port: 8765
+  args: [--model, small]
+```
+
+```yaml
+# conf/skills/umi_pnp.yaml
+policy_server_url: ${deployment.pnp_policy_server_url}
+policy_server_token: ${oc.select:deployment.solarian_base_endpoint_token,null}
+server:
+  service: diffusion-policy
+  managed: false
+  checkpoint: ${oc.select:deployment.pnp_policy_checkpoint,null}
+  host: 0.0.0.0
+  port: 8003
+```
+
+<Properties>
+  <Property name="service" type="str">
+    The <code>solarian.services</code> entry point to run. Only a skill's managed launch can do without it, falling back to the skill's <code>policy_service</code>.
+  </Property>
+  <Property name="checkpoint" type="str">
+    The checkpoint the server loads, passed with the service's <code>checkpoint_arg</code>. Required by a service that takes one, refused by one that does not.
+  </Property>
+  <Property name="host, port" type="str, int">
+    Where the server binds. Default: <code>0.0.0.0</code> and the service's <code>default_port</code>.
+  </Property>
+  <Property name="args" type="list[str]">
+    Passed to the server unchanged.
+  </Property>
+  <Property name="managed" type="bool">
+    Whether a skill launches this server itself, next to it, when it starts. Default: false.
+  </Property>
+</Properties>
+
+`solarian run-service`, a skill's managed server, `solarian modal-serve` and [Solarian Base](/docs/solarian-base/endpoints) all resolve this one block, so they cannot disagree on what a conf serves.
+
 ## Running a service
 
 ```bash
-solarian run-service sam2-tracker --model small --checkpoint-dir ~/sam2/checkpoints
+solarian run-service bbox_tracker                     # the conf's server
+solarian run-service umi_pnp --checkpoint models/pick/checkpoints/latest.ckpt
+solarian run-service sam2-tracker --model small       # an installed service, with your own args
 ```
 
-`--host` and `--port` are handled by `run-service` (the port defaults to the service's `default_port`, 8765); every other argument goes to the plugin's server. `sam2-tracker` downloads the chosen SAM 2.1 checkpoint into `--checkpoint-dir` when the file is not already there. A server answers `GET /health` and `GET /info`, plus its own routes.
+Name a conf (its name, filename or path) to run the server its `server:` block describes, or an installed service to run it with your own arguments. `--checkpoint`, `--host` and `--port` override the conf; every other argument goes to the server, after the conf's `args`. A name that matches both a service conf and a skill conf is an error that lists both. `sam2-tracker` downloads the chosen SAM 2.1 checkpoint into `--checkpoint-dir` when the file is not already there.
+
+Every server answers `GET /health` and `GET /info`, plus its own routes, and stamps each response with `X-Server-Ms`, the time it spent, so a client can tell network time from compute.
+
+## Auth
+
+With `SOLARIAN_ENDPOINT_TOKEN` set in its environment, a server answers only requests carrying `Authorization: Bearer <token>`; without it, the server is open. A client takes the token from its conf: `token` for a processor, `policy_server_token` for a skill. Reading it as `${oc.select:deployment.solarian_base_endpoint_token,null}` leaves it null on your own network and picks up the token of [Base's endpoints](/docs/solarian-base/endpoints) from the robot's connection file.
 
 ## Declaring the field
 
@@ -82,6 +136,33 @@ A processor is called inline, once per observation, on the path that forwards it
 
 Each processor reports `<label> call (ms)` and `<label> age (ms)` on the StatusBoard. Comparing those between a relay-computed and a robot-computed run shows what each placement costs.
 
+## Policies
+
+A policy server is a `ServiceServer` with one standard API, so a skill drives diffusion, ACT or a classical planner through the same `PolicyClient`:
+
+| Route | Does |
+| --- | --- |
+| `POST /predict` | `{"obs_dict": {...}, "kwargs": {...}}` to `{"action": [...], "raw_action": ..., "info": ...}` |
+| `POST /reset` | Clear episode state |
+| `POST /reload` | Reload from disk |
+| `GET /model_info`, `GET /shape_meta` | What the policy is and the observations it expects |
+
+Its `Service` sets `checkpoint_arg`, which makes it a service that takes a checkpoint: what `run-service` and Base call a policy. See [Policies](/docs/policies) for writing one.
+
+## Serving on Modal
+
+`solarian modal-serve`, from the `solarian-modal` plugin, deploys the server `run-service` would start as a persistent Modal web endpoint, on your own Modal account:
+
+```bash
+solarian modal-serve bbox_tracker --label bbox-tracker
+solarian modal-serve umi_pnp --label pnp --checkpoint /data/outputs/pick/checkpoints/latest.ckpt
+solarian modal-serve stop pnp
+```
+
+The endpoint is at `https://<workspace>--<label>.modal.run`, and the label keeps that URL across redeploys. It scales to zero after `--scaledown` seconds idle (300 by default) unless `--min-containers 1` keeps it warm, runs on `--gpu T4` by default (`none` for CPU), and requires the bearer token when `SOLARIAN_ENDPOINT_TOKEN` is set where you run the command. Set the conf's URL key, here `bbox_tracker_url`, to the URL it prints.
+
+[Solarian Base](/docs/solarian-base/endpoints) runs the same command for you, on its own Modal account, and writes the URLs and the token into the robot's connection file.
+
 ## Writing a service
 
 ```python
@@ -106,12 +187,15 @@ class MyProcessor(ServiceProcessor):
 class MyService(Service):
     server_module = "my_plugin.server"   # calls MyServer.main()
     processor_cls = MyProcessor
+    default_port = 8770
 ```
 
-`ServiceClient` wraps the HTTP calls, and `solarian.utils.wire` encodes numpy arrays in JSON payloads. `solarian-sam2-tracker` is a complete example.
+`ServiceClient` wraps the HTTP calls, with the bearer token and connect retries, and `solarian.utils.wire` encodes numpy arrays in JSON payloads. `Service.checkpoint_arg` names the server's flag for a checkpoint (`--input` for a policy), and `Service.modal_spec()` the image to serve it in on Modal; left as `None`, the image is derived from the server package's requirements. `solarian-sam2-tracker` is a complete example.
 
 ## See also
 
+- [Policies](/docs/policies): writing a policy server and the skill side of the policy API.
+- [Solarian Base: Services, Policies & Models](/docs/solarian-base/endpoints): run them on Base's GPUs.
 - [Server](/docs/servers): how the relay computes server-side fields and hosts skills.
 - [Observations](/docs/observations): `CalculatedField` and `ExecutionPlace`.
 - [Events](/docs/events): `CLICK` and the other controller events.

@@ -39,7 +39,7 @@ To see what a deployment of the current directory would contain, without
 uploading anything:
 
 ```bash
-solarian base manifest            # trainers and train configs it would expose
+solarian base manifest            # trainers, train configs, servables and the robot
 solarian base manifest --json
 ```
 
@@ -54,6 +54,11 @@ what jobs use unless told otherwise. In **Deployments** on the project page:
 
 `solarian base train` deploys first when the code changed; `--no-deploy` uses
 the current deployment as it is.
+
+A deployment that becomes current also registers the project's robot, when the
+project has a `conf/robot.yaml`: named after the project, with its relay
+provisioned, ready for its connection file. See
+[Robots & Controller](/docs/solarian-base/robots#register-a-robot).
 
 <Note>
   A Base deployment is unrelated to `conf/deployment/*.yaml`, the robot's

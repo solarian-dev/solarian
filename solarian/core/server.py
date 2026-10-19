@@ -10,6 +10,7 @@ from solarian.core.configs import ServerConfig
 from solarian.core.clock_sync import serve_clock_sync_reply
 from solarian.core.data import set_image_jpeg_quality
 from solarian.core.execution import ExecutionPlace
+from solarian.core.optical_remap import use_one_opencv_thread
 from solarian.core import Observation
 from solarian.utils import StatusBoard
 
@@ -34,6 +35,10 @@ class RelayServer:
         self.cfg = cfg
         self._logged_absent_robot = False
         set_image_jpeg_quality(cfg.img_compression_quality)
+        # Before any processor touches OpenCV: once its thread pool has run,
+        # cv2.setNumThreads hangs in every child forked from here (a skill's
+        # optical remap calls it), and the limit set now is inherited instead.
+        use_one_opencv_thread()
 
         # ZAP first: the authenticator has to be running before any CURVE server
         # socket completes a handshake, or early connections are refused.

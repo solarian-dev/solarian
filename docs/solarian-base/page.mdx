@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Solarian Base',
   description:
-    'Solarian Base hosts what a solarian project needs beyond the robot: datasets, deployments, cloud training with experiment tracking, and robot sessions in the browser.',
+    'Solarian Base hosts what a solarian project needs beyond the robot: datasets, deployments, cloud training with experiment tracking, hosted services and policies, and robot sessions in the browser.',
 }
 
 
@@ -9,7 +9,8 @@ export const metadata = {
 
 solarian is to Solarian Base what Next.js is to Vercel. You build a project
 with solarian; Base stores its datasets, deploys its code, trains it on cloud
-GPUs, tracks every run, and lets you drive its robots from a browser. Most
+GPUs, tracks every run, serves its models and services, and lets you drive its
+robots from a browser. Most
 actions work from the `solarian base` CLI and from the web app alike. {{ className: 'lead' }}
 
 ```mermaid
@@ -21,13 +22,17 @@ flowchart TB
     datasets --> job
     computed --> job
     job -->|"Modal GPU"| run["Run: charts, overview, logs"]
+    job --> models["Models: checkpoints"]
+    models --> endpoints["Services and policies on Modal GPUs"]
+    deployment --> endpoints
     robot["Robot"] -->|"run-robot -d solarian_base"| relay["Managed relay"]
+    robot -->|"HTTPS"| endpoints
     relay --> session["Controller session in the browser"]
 ```
 
 New to Base? Follow the [Quick Start](/docs/solarian-base/quickstart): it takes
-one project from a deployment to a trained model and a robot driven from the
-browser.
+one project from a deployment to a trained model, served on Base and called by
+the robot's skills, and a robot driven from the browser.
 
 ## What you can do, and where
 
@@ -42,7 +47,8 @@ browser.
 | Train on cloud GPUs | `solarian base train` | **Start training** |
 | Follow runs | `solarian base runs` | **Runs** |
 | Robots, relays, controller sessions | Not available yet, except `solarian run-robot` on the robot | **Robots** |
-| Hosted services and policy servers | Not available yet | Not available yet |
+| Checkpoints of training jobs | `solarian base models ls` | **Models** |
+| Hosted services and policy servers | `solarian base endpoints` | **Services & Policies**, **Models → Serve** |
 
 Every capability is also in the REST API. The interactive reference is at
 `/api/docs/` on your Base, and the schema at `/api/schema/`.
@@ -76,6 +82,12 @@ Every capability is also in the REST API. The interactive reference is at
     notes and a summary. A job opens one; so does any training that logs with
     the `solarian_base` backend.
   </Property>
+  <Property name="Endpoint">
+    A service or policy server of the project running on a Modal GPU at a
+    stable URL, from a conf with a `server:` block and, for a policy, a
+    checkpoint a training job wrote. The robot's connection file points the
+    project's confs at it.
+  </Property>
   <Property name="Robot">
     A physical robot registered in a project. Base hosts a relay for it, so it
     can be driven from a controller session in the browser.
@@ -89,6 +101,7 @@ Every capability is also in the REST API. The interactive reference is at
 - [Projects & Datasets](/docs/solarian-base/projects-and-datasets) — uploads, the viewer, computed datasets and review.
 - [Deployments & Secrets](/docs/solarian-base/deployments) — shipping code and environment variables.
 - [Training & Runs](/docs/solarian-base/training) — cloud training jobs and the runs they log.
+- [Services, Policies & Models](/docs/solarian-base/endpoints) — serving checkpoints and services on cloud GPUs for the robot's skills.
 - [Robots & Controller](/docs/solarian-base/robots) — connecting a robot, the managed relay and controller sessions.
 - [CLI Reference](/docs/solarian-base/cli) — every `solarian base` command and flag.
 - [Self-hosting](/docs/solarian-base/self-hosting) — running Base on your own machine.

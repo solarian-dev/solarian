@@ -61,15 +61,17 @@ class UICommand:
 
 @dataclass
 class UIImage:
-    """One camera frame and any boxes drawn over it.
+    """One camera frame and any boxes and masks drawn over it.
 
     ``data`` is ``HxWx3`` uint8 RGB — the same layout every UI wants, so the
-    conversion to BGR or to JPEG belongs to whichever one needs it.
+    conversion to BGR or to JPEG belongs to whichever one needs it. ``masks``
+    are ``HxW`` 0/1 arrays the size of ``data``.
     """
 
     label: str
     data: np.ndarray
     bboxes: list = field(default_factory=list)
+    masks: list = field(default_factory=list)
 
 
 @dataclass

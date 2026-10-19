@@ -37,6 +37,8 @@ def ui():
 
 
 def _snapshot() -> UISnapshot:
+    mask = np.zeros((48, 64), dtype=np.uint8)
+    mask[4:20, 8:24] = 1
     return UISnapshot(
         t_ns=123,
         fps=30,
@@ -45,7 +47,8 @@ def _snapshot() -> UISnapshot:
             UIImage(
                 label="cam/rgb",
                 data=np.full((48, 64, 3), 7, dtype=np.uint8),
-                bboxes=[(1, 2, 3, 4)],
+                bboxes=[(2, 4, 6, 8)],
+                masks=[mask],
             )
         ],
         key_help=[("space", "stop all skills")],
@@ -90,7 +93,10 @@ def test_hello_then_snapshot_round_trip(ui):
         assert image["width"] == 32, "wider frames are downscaled to ui_image_max_width"
         assert image["height"] == 24, "aspect ratio is preserved"
         assert image["jpeg"][:2] == b"\xff\xd8", "JPEG SOI marker"
-        assert image["bboxes"] == [[1.0, 2.0, 3.0, 4.0]]
+        assert image["bboxes"] == [[1.0, 2.0, 3.0, 4.0]], "boxes scale with the frame"
+        (ring,) = image["outlines"]
+        xs, ys = ring[0::2], ring[1::2]
+        assert (min(xs), max(xs), min(ys), max(ys)) == (4, 12, 2, 10), "rings scale with the frame"
 
     asyncio.run(scenario())
 

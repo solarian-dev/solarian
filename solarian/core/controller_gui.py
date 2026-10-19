@@ -29,6 +29,8 @@ import numpy as np
 
 import logging
 
+from solarian.core.ui.overlay import MASK_COLOR, mask_rings, tint_masks
+
 logger = logging.getLogger(__name__)
 
 # Colors (RGB).
@@ -173,7 +175,7 @@ class ControllerGUI:
         self,
         *,
         sections: Sequence[tuple[str, Sequence[tuple[str, str]]]],
-        images: Sequence[tuple[str, np.ndarray, Sequence]],
+        images: Sequence[tuple[str, np.ndarray, Sequence, Sequence]],
         key_help: Sequence[tuple[str, str]],
         status: str = "",
         fps: Optional[float] = None,
@@ -182,8 +184,9 @@ class ControllerGUI:
 
         Args:
             sections: ``(title, [(field, value), ...])`` dashboard panels.
-            images: ``(label, rgb_array, bboxes)`` camera frames (HxWx3,
-                uint8, RGB), each with its pixel ``(x0, y0, x1, y1)`` boxes.
+            images: ``(label, rgb_array, bboxes, masks)`` camera frames
+                (HxWx3, uint8, RGB), each with its pixel ``(x0, y0, x1, y1)``
+                boxes and its HxW 0/1 masks.
             key_help: ``(keys, description)`` rows for the bindings panel;
                 individual keys (split on ``/`` and spaces) that are currently
                 held are highlighted.
@@ -305,19 +308,19 @@ class ControllerGUI:
         cell_w = width // cols
         cell_h = height // rows
         self._image_rects = []
-        for i, (label, img, bboxes) in enumerate(images):
+        for i, (label, img, bboxes, masks) in enumerate(images):
             c = i % cols
             r = i // cols
             cx = x + c * cell_w
             cy = y + r * cell_h
             drawn = self._blit_image(
-                img, bboxes, cx, cy + self._line_h, cell_w - 6, cell_h - self._line_h - 6
+                img, bboxes, masks, cx, cy + self._line_h, cell_w - 6, cell_h - self._line_h - 6
             )
             if drawn is not None:
                 self._image_rects.append((label, *drawn))
             self._blit_text(label, cx + 2, cy, _TITLE)
 
-    def _blit_image(self, img: np.ndarray, bboxes, x, y, max_w, max_h):
+    def _blit_image(self, img: np.ndarray, bboxes, masks, x, y, max_w, max_h):
         """Draw *img* scaled into the box; returns ``(rect, (iw, ih))`` or None."""
         pygame = self._pygame
         if img is None or max_w <= 0 or max_h <= 0:
@@ -327,6 +330,8 @@ class ControllerGUI:
             return None
         if arr.dtype != np.uint8:
             arr = np.clip(arr, 0, 255).astype(np.uint8)
+        # Tinted at full resolution so the fill keeps the mask's own edge.
+        arr = tint_masks(arr, masks)
         ih, iw = arr.shape[:2]
         scale = min(max_w / iw, max_h / ih)
         dw, dh = max(1, int(iw * scale)), max(1, int(ih * scale))
@@ -335,6 +340,11 @@ class ControllerGUI:
         if (dw, dh) != (iw, ih):
             surf = pygame.transform.smoothscale(surf, (dw, dh))
         self.screen.blit(surf, (x, y))
+        # Rings are drawn after scaling so the edge stays 2 px on screen.
+        for mask in masks:
+            for ring in mask_rings(mask):
+                points = [(x + int(px * dw / iw), y + int(py * dh / ih)) for px, py in ring]
+                pygame.draw.lines(self.screen, MASK_COLOR, True, points, 2)
         for bbox in bboxes:
             x0, y0, x1, y1 = (int(v) for v in bbox[:4])
             if x0 == y0 == x1 == y1 == 0:

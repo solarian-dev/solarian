@@ -1,22 +1,26 @@
 """
 ${class_prefix} Policy Server
 
-Hosts inference for the ${plugin_name} policy over HTTP.
+Hosts inference for the ${plugin_name} policy over HTTP. ``solarian run-service``
+starts it as ``python -m ${package_name}.policy_server --input <checkpoint>``.
 """
 
+import argparse
 from typing import Any, Dict
 
 import numpy as np
 
-from solarian.core.ai.system1.policy_server import PolicyServer
+from solarian.services import PolicyServer
 
 
 class ${class_prefix}PolicyServer(PolicyServer):
     title = "${class_prefix} Policy Server"
 
+    def __init__(self, checkpoint: str):
+        super().__init__(checkpoint=checkpoint)
+
     def load(self) -> None:
-        # TODO: load the checkpoint / model into memory. self.config holds the
-        # kwargs the server was constructed with.
+        # TODO: load self.config["checkpoint"] into memory.
         raise NotImplementedError
 
     def predict(self, obs_dict: Dict[str, np.ndarray], **kwargs: Any) -> Dict[str, Any]:
@@ -26,9 +30,21 @@ class ${class_prefix}PolicyServer(PolicyServer):
 
     @property
     def model_info(self) -> Dict[str, Any]:
-        return {"name": "${plugin_name}"}
+        return {"name": "${plugin_name}", "checkpoint": self.config["checkpoint"]}
 
     @property
     def shape_meta(self) -> Dict[str, Any]:
         # TODO: describe observation / action shapes.
         return {}
+
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--input", required=True, help="Checkpoint to serve.")
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> "${class_prefix}PolicyServer":
+        return cls(checkpoint=args.input)
+
+
+if __name__ == "__main__":
+    ${class_prefix}PolicyServer.main()

@@ -30,6 +30,7 @@ import websockets
 from websockets.asyncio.server import serve
 
 from solarian.core.ui.base import UICommand, UIImage, UISnapshot
+from solarian.core.ui.overlay import mask_rings
 
 logger = logging.getLogger(__name__)
 
@@ -295,13 +296,21 @@ class ExternalUI:
             if not ok:
                 logger.debug("Could not JPEG-encode %s", image.label)
                 continue
+            # Boxes and rings are in capture pixels; the client draws in the sent frame's.
+            scale = frame.shape[1] / image.data.shape[1]
             encoded.append(
                 {
                     "label": image.label,
                     "jpeg": buffer.tobytes(),
                     "width": int(frame.shape[1]),
                     "height": int(frame.shape[0]),
-                    "bboxes": [[float(v) for v in bbox[:4]] for bbox in image.bboxes],
+                    "bboxes": [[float(v) * scale for v in bbox[:4]] for bbox in image.bboxes],
+                    # Flat [x, y, ...] rings, filled even-odd: Solarian Base's TargetOutlines.
+                    "outlines": [
+                        (ring * scale).round().astype(int).reshape(-1).tolist()
+                        for mask in image.masks
+                        for ring in mask_rings(mask)
+                    ],
                 }
             )
         return encoded

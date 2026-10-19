@@ -65,9 +65,10 @@ Class-attribute skills you declare on your controller take priority over a disco
 ```yaml
 # conf/skills/cup_arrange.yaml — one UMI policy
 policy_server_url: http://localhost:8001
-policy_server:
-  managed: false
+server:
+  service: diffusion-policy
   checkpoint: data/models/cup_wild_vit_l_1img.ckpt
+  port: 8001
 arm: right_arm
 gripper: right_gripper
 camera: right_wrist_camera
@@ -75,17 +76,17 @@ camera: right_wrist_camera
 
 ## Policy plugins: train & serve
 
-[Policy](/docs/policies) plugins ship the trainer and the server a skill calls over HTTP. Install the plugin (with the extra you need), then use the CLI:
+[Policy](/docs/policies) plugins ship the trainer and the server a skill calls over HTTP, registered as a [service](/docs/services). Install the plugin (with the extra you need), then use the CLI:
 
 ```bash
 pip install "solarian-policy-diffusion[serve]"   # torch, etc. for inference
 # or [train] to train, [modal] for cloud training with solarian modal-train
 
-# serve the checkpoint a skill drives (resolves the skill's config)
-solarian run-policy umi --config cup_arrange.yaml
+# serve the checkpoint a skill conf names in its server: block
+solarian run-service cup_arrange
 
-# or launch the server directly
-solarian-diffusion-policy --input <checkpoint.ckpt> --port 8001
+# or any checkpoint, with the service directly
+solarian run-service diffusion-policy --checkpoint <checkpoint.ckpt> --port 8001
 ```
 
 Trainers register under `solarian.trainers`, so `solarian train` can select them by name (`model.type=diffusion`). See [Training](/docs/training).
@@ -127,5 +128,5 @@ pip list | grep solarian-          # every installed Solarian plugin
 
 - [Plugins](/docs/plugins) — what plugins are and the kinds you can install.
 - [Creating Plugins](/docs/creating-plugins) — build and publish your own.
-- [CLI](/docs/commands#install) — full `install` and `run-policy` reference.
+- [CLI](/docs/commands#install) — full `install` and `run-service` reference.
 - [Project Configs](/docs/project-configs) — what `install` copies into `conf/`.

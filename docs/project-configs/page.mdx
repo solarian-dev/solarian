@@ -162,6 +162,41 @@ export SOLARIAN_DEPLOYMENT=pi          # e.g. in the Pi's shell profile
 
 The default is `localhost`. A name with no matching file is an error listing the available deployments.
 
+### Extending a deployment
+
+A deployment can name another with `extends:` and set only what differs; its keys are merged over the other's, recursively:
+
+```yaml
+# conf/deployment/solarian_base.yaml
+extends: turing
+bbox_tracker_url: https://acme--sb-1a2b3c4d5e6f-bbox-tracker-url.modal.run
+```
+
+The connection file [Solarian Base](/docs/solarian-base/robots) writes works this way: it extends the profile the robot already uses with Base's relay and the URLs of the project's endpoints.
+
+### Server URLs and tokens
+
+A conf that calls a server reads its URL from a deployment key, so one profile can point the project at servers on the local network and another at hosted ones:
+
+```yaml
+# conf/services/bbox_tracker.yaml
+server_url: ${deployment.bbox_tracker_url}
+token: ${oc.select:deployment.solarian_base_endpoint_token,null}
+server:
+  service: sam2-tracker
+  port: 8765
+
+# conf/skills/umi_pnp.yaml
+policy_server_url: ${deployment.pnp_policy_server_url}
+policy_server_token: ${oc.select:deployment.solarian_base_endpoint_token,null}
+server:
+  service: diffusion-policy
+  checkpoint: ${oc.select:deployment.pnp_policy_checkpoint,null}
+  port: 8003
+```
+
+`${oc.select:deployment.KEY,null}` falls back to null when the deployment does not set the key, here the bearer token only hosted endpoints require. The `server:` block says what `solarian run-service` and Solarian Base run for the conf; see [Services](/docs/services#the-server-block).
+
 <Note>
   A deployment describes the whole topology, not a single machine. If the robot runs on a Pi while you teleop from a laptop, one deployment file holds the Pi's paths for the robot's modules *and* the laptop's paths for the controller's modules. See [Server](/docs/servers) for the full topology.
 </Note>

@@ -8,8 +8,9 @@ from multiprocessing.managers import SharedMemoryManager
 import numpy as np
 import pytest
 
-from solarian.core.data import PosData
-from solarian.core.observation import ModuleObs, SensorField
+from solarian.core.data import ImageData, MaskData, PosData
+from solarian.core.execution import ExecutionPlace
+from solarian.core.observation import CalculatedField, ModuleObs, SensorField
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 
 
@@ -175,3 +176,56 @@ def test_shared_memory_last_k_returns_oldest_first(obs_cls):
 
         values = [float(o["joint"].value) for o in buffer.last_k(10)]
         assert np.allclose(values, [1.0, 2.0, 3.0])
+
+
+@pytest.fixture
+def camera_obs_cls():
+    """An image and a mask segmented from it, the mask declared without a shape."""
+    previous = ModuleObs._active_subclass
+    image = ImageData(path=("cam", "camera", "rgb_image"), shape=(6, 8, 3))
+
+    class _CameraObs(ModuleObs):
+        rgb = SensorField(image)
+        target_mask = CalculatedField(
+            inputs=[image],
+            processor=object,
+            output=MaskData(),
+            execution_place=ExecutionPlace.ROBOT,
+        )
+
+    yield _CameraObs
+    ModuleObs._active_subclass = previous
+
+
+def _camera_sample(camera_obs_cls, mask):
+    return camera_obs_cls(
+        {
+            "rgb": {"value": np.zeros((6, 8, 3), dtype=np.uint8), "timestamp": 0.0},
+            "target_mask": {"value": mask, "timestamp": 0.0},
+        }
+    )
+
+
+def test_a_shapeless_mask_is_sized_like_its_image(camera_obs_cls):
+    assert camera_obs_cls.zeros()["target_mask"].value.shape == (6, 8)
+
+
+@needs_shared_memory
+def test_a_none_mask_reads_back_empty_not_a_lap_old_mask(camera_obs_cls):
+    mask = np.ones((6, 8), dtype=np.uint8)
+    with SharedMemoryManager() as shm_manager:
+        # Two slots, so the third put lands on the first one's slot.
+        buffer = ObservationBuffer.create_from_example(
+            shm_manager=shm_manager,
+            example_observation=camera_obs_cls.zeros(),
+            get_max_k=1,
+            get_time_budget=0.01,
+            put_desired_frequency=1,
+        )
+
+        buffer.put(_camera_sample(camera_obs_cls, mask))
+        assert (buffer.get()["target_mask"].value == mask).all()
+        buffer.put(_camera_sample(camera_obs_cls, mask))
+        buffer.put(_camera_sample(camera_obs_cls, None))
+
+        assert not buffer.get()["target_mask"].value.any()

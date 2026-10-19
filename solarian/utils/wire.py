@@ -14,6 +14,9 @@ def encode_arrays(values: Dict[str, Any]) -> Dict[str, Any]:
     a 224x224x3 float32 image measured 3.05 MB and 142 ms on a Pi 5, against
     176 ms for the diffusion policy it was being sent to. ``dtype`` carries
     byte order, so a little-endian sender and a big-endian receiver agree.
+
+    Nested dicts are encoded too (a policy's ``obs_dict``); the receiver
+    decodes the dict it reads arrays from with :func:`decode_arrays`.
     """
     out: Dict[str, Any] = {}
     for key, value in values.items():
@@ -24,6 +27,8 @@ def encode_arrays(values: Dict[str, Any]) -> Dict[str, Any]:
                 "dtype": value.dtype.str,
                 "shape": list(value.shape),
             }
+        elif isinstance(value, dict):
+            out[key] = encode_arrays(value)
         else:
             out[key] = value
     return out

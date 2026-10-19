@@ -50,7 +50,7 @@ from solarian.core.ui.base import (
 from solarian.core.ai.system1.skill import Skill, SkillStatus
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
-from solarian.core.data import ImageData, BoundingBoxData
+from solarian.core.data import ImageData, BoundingBoxData, MaskData
 from solarian.perception.processor import field_name_for_input
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 from solarian.utils.shared_memory.action_queue import ModuleActionQueue
@@ -152,7 +152,8 @@ class Controller(EventHost, ABC):
             self.device = 'cpu'
         
         self._image_field_keys: list[tuple[str, str]] | None = None
-        self._bbox_field_map: dict[tuple[str, str], list[tuple[str, str]]] | None = None
+        #: ``(module, image field)`` -> the box and mask fields computed from it.
+        self._overlay_field_map: dict[tuple[str, str], list[str]] | None = None
         #: The front end, built by :meth:`start`. A controller that is only
         #: connected to (to read sensors, say) never has one.
         self.ui: ControllerUI | None = None
@@ -625,10 +626,10 @@ class Controller(EventHost, ABC):
         self.running = False
 
     def _build_display_schema(self):
-        """Build and cache the mapping of image/bbox fields per module."""
+        """Build and cache the image fields and the box/mask fields drawn over each."""
         obs_spec = Observation.get_module_obs_spec()
         image_keys: list[tuple[str, str]] = []
-        bbox_map: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        overlay_map: dict[tuple[str, str], list[str]] = {}
 
         for module_name, module_obs_instance in obs_spec.items():
             module_obs_cls = type(module_obs_instance)
@@ -641,35 +642,34 @@ class Controller(EventHost, ABC):
                     image_keys.append((module_name, field_name))
 
             for field_name, cf in calculated_fields.items():
-                if cf.data_class is not BoundingBoxData:
+                if cf.data_class not in (BoundingBoxData, MaskData):
                     continue
                 for inp in cf.inputs:
                     input_field = field_name_for_input(
                         inp, sensor_fields, calculated_fields
                     )
                     if input_field:
-                        img_key = (module_name, input_field)
-                        bbox_map.setdefault(img_key, []).append(
-                            (module_name, field_name)
+                        overlay_map.setdefault((module_name, input_field), []).append(
+                            field_name
                         )
                         break
 
         self._image_field_keys = image_keys
-        self._bbox_field_map = bbox_map
+        self._overlay_field_map = overlay_map
 
     # -- UI snapshot -------------------------------------------------------
     @profile
     def _collect_display_images(self) -> list[UIImage]:
-        """Every image field in the latest observation, with its boxes.
+        """Every image field in the latest observation, with its boxes and masks.
 
         One collection for every front end: a window grid, a browser and a JPEG
-        encoder all want the same pixels, and the calculated bounding boxes
+        encoder all want the same pixels, and the calculated boxes and masks
         belong to the frame they were computed from rather than to whoever draws
         them.
         """
-        if self._image_field_keys is None or self._bbox_field_map is None:
+        if self._image_field_keys is None or self._overlay_field_map is None:
             self._build_display_schema()
-        assert self._image_field_keys is not None and self._bbox_field_map is not None
+        assert self._image_field_keys is not None and self._overlay_field_map is not None
 
         images: list[UIImage] = []
         for module_name, field_name in self._image_field_keys:
@@ -687,21 +687,27 @@ class Controller(EventHost, ABC):
                 continue
 
             bboxes = []
-            for _bbox_module, bbox_field in self._bbox_field_map.get(
-                (module_name, field_name), ()
-            ):
+            masks = []
+            for overlay_field in self._overlay_field_map.get((module_name, field_name), ()):
                 try:
-                    bbox_data = module_obs[bbox_field]
+                    overlay = module_obs[overlay_field]
                 except KeyError:
                     continue
-                if bbox_data is not None and bbox_data.value is not None:
-                    bboxes.append(bbox_data.value)
+                if overlay is None or overlay.value is None:
+                    continue
+                if isinstance(overlay, MaskData):
+                    # A mask segmented on another resolution would misalign.
+                    if np.shape(overlay.value) == field_data.value.shape[:2]:
+                        masks.append(overlay.value)
+                else:
+                    bboxes.append(overlay.value)
 
             images.append(
                 UIImage(
                     label=f"{module_name}/{field_name}",
                     data=field_data.value,
                     bboxes=bboxes,
+                    masks=masks,
                 )
             )
         return images

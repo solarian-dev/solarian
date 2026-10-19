@@ -3,7 +3,7 @@ PolicyTrainer — base class for training a policy inside a plugin.
 
 A *policy plugin* (e.g. ``solarian-policy-diffusion`` or
 ``solarian-policy-lerobot``) ships two things keyed to a model family /
-library: a :class:`~solarian.core.ai.system1.policy_server.PolicyServer`
+library: a :class:`~solarian.services.policy.PolicyServer`
 (inference) and a :class:`PolicyTrainer` (training).  The framework's
 ``solarian train`` command is deliberately library-agnostic: it never
 imports a concrete trainer.  Instead it reads the ``trainer`` key from the

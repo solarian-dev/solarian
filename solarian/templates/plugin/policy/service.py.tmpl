@@ -1,0 +1,19 @@
+"""
+${class_prefix} policy as a service: what ``solarian run-service`` and Solarian
+Base start for a ${plugin_name} checkpoint.
+"""
+
+from solarian.services import Service
+
+
+class ${class_prefix}Service(Service):
+    server_module = "${package_name}.policy_server"
+    default_port = 8001
+    checkpoint_arg = "--input"
+
+    @classmethod
+    def modal_spec(cls):
+        # Served in the environment its checkpoints were trained in.
+        from ${package_name}.trainer import ${class_prefix}Trainer
+
+        return ${class_prefix}Trainer.modal_spec()

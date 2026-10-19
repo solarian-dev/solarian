@@ -262,11 +262,13 @@ frequency: 10
 
 ```yaml
 # <your-project>/conf/skills/cup_arrange.yaml
-policy_server_url: http://localhost:8001
-policy_server:
+policy_server_url: ${deployment.policy_server_url}
+policy_server_token: ${oc.select:deployment.solarian_base_endpoint_token,null}
+server:
+  service: diffusion-policy
   managed: false
-  checkpoint: data/models/cup_wild_vit_l_1img.ckpt
-  host: 127.0.0.1
+  checkpoint: ${deployment.policy_checkpoint}
+  host: 0.0.0.0
   port: 8001
 ```
 
@@ -274,11 +276,12 @@ policy_server:
 UMISkill(params={"config": "cup_arrange.yaml"})
 ```
 
-The same config backs `solarian run-policy <skill>`, so the launcher reuses
-the project's checkpoint. `--config <file>` reads a different yaml, which is
-how `solarian run-policy umi --config cup_arrange.yaml` picks one policy.
-A skill that declares a `policy_server_module` but has no checkpoint (in the
-file, and none passed on the CLI) errors clearly.
+The `server:` block is what `solarian run-service cup_arrange` runs, so the
+server and the skill read one checkpoint and one port. A conf whose service
+takes a checkpoint but names none (in the file, and none passed with
+`--checkpoint`) errors clearly. See [Services](/docs/services#the-server-block)
+for the block, and [Solarian Base](/docs/solarian-base/endpoints) to serve it on
+a cloud GPU.
 
 Nothing about this is specific to policies. Any value an operator wants to tune
 per robot belongs here rather than on the controller, which is how
@@ -303,13 +306,13 @@ class CartesianTeleopSkill(Skill):
 
 ## Skills as plugins
 
-A **skill plugin** is an installable `solarian-skill-*` package — the unit a third party can publish and a user can install. It mirrors the module/actuator plugin pattern and builds on three public classes from `solarian.core.ai.system1`:
+A **skill plugin** is an installable `solarian-skill-*` package — the unit a third party can publish and a user can install. It mirrors the module/actuator plugin pattern and builds on three public classes:
 
-- **`Skill`** — the behavior (runs in its own process), as above.
-- **`PolicyClient`** — a generic HTTP client used by a skill to call a policy. It is policy-agnostic: the same client works for diffusion, ACT, VLAs, or classical methods (waypoints, SLAM).
-- **`PolicyServer`** — a base class for hosting a policy behind a small HTTP API. Subclass it and implement `load`, `predict`, `model_info` and `shape_meta`; the base hides FastAPI/uvicorn and gives you `serve()` and a `main()` CLI launcher.
+- **`Skill`** — the behavior (runs in its own process), as above, from `solarian.core.ai.system1`.
+- **`PolicyClient`** — a generic HTTP client used by a skill to call a policy, from `solarian.services`. It is policy-agnostic: the same client works for diffusion, ACT, VLAs, or classical methods (waypoints, SLAM).
+- **`PolicyServer`** — a [service](/docs/services) server with the standard policy API, from `solarian.services`. Subclass it and implement `load`, `predict`, `model_info` and `shape_meta`; the base hides FastAPI/uvicorn and gives you `serve()`, bearer auth and a `main()` CLI launcher.
 
-A skill that uses a policy implements both a `Skill` and a `PolicyServer`, and talks to the server through `PolicyClient`. The server is a **separate process** whose location is independent of the skill: it can run on the robot, the controller, or a dedicated GPU box. Point the skill at it via a `policy_server_url`, or set the skill to launch a co-located ("managed") server itself.
+A skill that uses a policy names the service serving it with the `policy_service` class attribute (e.g. `"diffusion-policy"`) and talks to the server through `PolicyClient`. The server is a **separate process** whose location is independent of the skill: it can run on the robot, the controller, a dedicated GPU box, or Solarian Base. Point the skill at it via a `policy_server_url`, or set `server.managed: true` to have the skill launch a co-located server itself.
 
 A plugin advertises its skill via an entry point in `pyproject.toml`:
 
@@ -325,13 +328,13 @@ to via `policy_server_url`.
 
 ### Example plugin
 
-`plugins/solarian-umi-skill` is a complete reference *skill* plugin: it ships `UMISkill`, auto-discovered through its `solarian.skills` entry point (`umi`). Copy `conf/skills/umi.yaml` per policy and start the skill with that filename, then run its policy server (hosted by the `solarian-policy-diffusion` policy plugin):
+`plugins/solarian-umi-skill` is a complete reference *skill* plugin: it ships `UMISkill`, auto-discovered through its `solarian.skills` entry point (`umi`). Copy `conf/skills/umi.yaml` per policy and start the skill with that filename, then run its policy server (the `diffusion-policy` service of the `solarian-policy-diffusion` policy plugin):
 
 ```bash
-# reuses the checkpoint from conf/skills/cup_arrange.yaml
-solarian run-policy umi --config cup_arrange.yaml
-# or launch directly:
-solarian-diffusion-policy --input <checkpoint.ckpt> --port 8001
+# the checkpoint and port from conf/skills/cup_arrange.yaml
+solarian run-service cup_arrange
+# or any checkpoint, with the service directly:
+solarian run-service diffusion-policy --checkpoint <checkpoint.ckpt> --port 8001
 ```
 
 ## See also

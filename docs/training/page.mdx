@@ -84,8 +84,8 @@ Copy one per run and set:
 Training runs in this process from the UMI code copied into the plugin. It writes
 `models/<job_name>/checkpoints/latest.ckpt`. Pair each training file with a
 skill yaml copied from `conf/skills/umi.yaml`, and set that file's
-`policy_server.checkpoint` to the same path. The same `UMISkill` loads whichever
-file you name:
+`server.checkpoint` to the same path. `solarian run-service cup_arrange` then
+serves it, and the same `UMISkill` loads whichever file you name:
 
 ```python
 self.start_skill(UMISkill(params={"config": "cup_arrange.yaml"}))
@@ -93,7 +93,7 @@ self.start_skill(UMISkill(params={"config": "cup_arrange.yaml"}))
 
 ```text
 conf/training/cup_arrange.yaml    job_name: cup_arrange
-conf/skills/cup_arrange.yaml      policy_server.checkpoint: models/cup_arrange/checkpoints/latest.ckpt
+conf/skills/cup_arrange.yaml      server.checkpoint: models/cup_arrange/checkpoints/latest.ckpt
 ```
 
 The copied training and SLAM code is from
@@ -152,17 +152,19 @@ optimizer, ...) pass through untouched. A plugin's `config_class()` is a
 ## Registering a trainer
 
 A policy plugin advertises its trainer under the `solarian.trainers`
-entry-point group and (optionally) a console script for its server:
+entry-point group, and its policy server as a service under `solarian.services`:
 
 ```toml
 [project.entry-points."solarian.trainers"]
 my_policy = "my_policy_pkg.trainer:MyTrainer"
 
-[project.scripts]
-my-policy-server = "my_policy_pkg.policy_server:main"
+[project.entry-points."solarian.services"]
+my-policy = "my_policy_pkg.service:MyPolicyService"
 ```
 
-Then `trainer: my_policy` in a training file selects it. Install missing
+Then `trainer: my_policy` in a training file selects it, and
+`solarian run-service my-policy --checkpoint <ckpt>` serves what it trained; see
+[Policies](/docs/policies#writing-a-policy-server). Install missing
 plugins with `pip install <plugin>`; `solarian train` lists the available
 trainers if the requested one isn't installed.
 
@@ -193,7 +195,8 @@ plugin's README covers the details.
 
 To train without a Modal account, or on datasets stored in Solarian Base, deploy
 the project and use `solarian base train` with the same config; see
-[Training & Runs](/docs/solarian-base/training). Metrics go wherever
+[Training & Runs](/docs/solarian-base/training). Base serves the checkpoints its
+jobs write, too; see [Services, Policies & Models](/docs/solarian-base/endpoints). Metrics go wherever
 `logging.backend` says, Solarian Base by default; see
 [Experiment tracking](/docs/tracking).
 
@@ -211,5 +214,5 @@ the project and use `solarian base train` with the same config; see
 - [Experiment tracking](/docs/tracking) — log to wandb, Solarian Base, or both.
 - [Training & Runs on Solarian Base](/docs/solarian-base/training) — deploy the project and train on cloud GPUs.
 - [Skills](/docs/skills) — behaviors that consume a policy server.
-- [Servers](/docs/servers) — the `PolicyServer` / `PolicyClient` HTTP contract.
+- [Policies](/docs/policies) — the `PolicyServer` / `PolicyClient` HTTP contract, and serving a checkpoint.
 - [Plugins](/docs/plugins) — how Solarian discovers plugins.

@@ -208,7 +208,7 @@ An AI plugin usually comes in two halves (they can be separate packages):
 umi = "solarian_umi_skill.skill:UMISkill"
 ```
 
-- A **policy plugin** — the trainable model. `solarian-policy-diffusion` ships a `Trainer` (for `solarian train`) and a `PolicyServer`, with heavy ML deps kept behind optional extras so merely *discovering* the plugin doesn't pull in PyTorch:
+- A **policy plugin** — the trainable model. `solarian-policy-diffusion` ships a `Trainer` (for `solarian train`), a `PolicyServer`, and a `Service` that registers the server so `solarian run-service` can serve a checkpoint, with heavy ML deps kept behind optional extras so merely *discovering* the plugin doesn't pull in PyTorch:
 
 ```toml
 [project.optional-dependencies]
@@ -218,11 +218,11 @@ train = ["torch", "accelerate", "wandb", ...]
 [project.entry-points."solarian.trainers"]
 diffusion = "solarian_policy_diffusion.trainer:DiffusionTrainer"
 
-[project.scripts]
-solarian-diffusion-policy = "solarian_policy_diffusion.policy_server:main"
+[project.entry-points."solarian.services"]
+diffusion-policy = "solarian_policy_diffusion.service:DiffusionPolicyService"
 ```
 
-`solarian create-plugin policy <name>` scaffolds all three stubs at once — `trainer.py`, `policy_server.py`, and `skill.py` — and registers the `solarian.trainers` + `solarian.skills` entry points. See [Skills](/docs/skills) and [Policies](/docs/policies) for the class contracts.
+`solarian create-plugin policy <name>` scaffolds the stubs at once — `trainer.py`, `policy_server.py`, `service.py` and `skill.py` — and registers the `solarian.trainers`, `solarian.services` and `solarian.skills` entry points. See [Skills](/docs/skills) and [Policies](/docs/policies) for the class contracts.
 
 ## Anatomy of a command plugin
 

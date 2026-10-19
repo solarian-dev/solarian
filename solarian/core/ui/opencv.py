@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from solarian.core.ui.base import UICommand, UICommandType, UIImage, UISnapshot
+from solarian.core.ui.overlay import MASK_COLOR, mask_rings, tint_masks
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class OpenCVUI:
         for image in snapshot.images:
             if image.label not in self._windows:
                 self._open_window(image)
-            frame = self._with_bboxes(image)
+            frame = self._with_overlays(image)
             cv2.imshow(image.label, np.ascontiguousarray(frame[:, :, ::-1]))
 
     def tick(self, fps: int) -> None:
@@ -112,10 +113,12 @@ class OpenCVUI:
         )
 
     @staticmethod
-    def _with_bboxes(image: UIImage) -> np.ndarray:
-        if not image.bboxes:
+    def _with_overlays(image: UIImage) -> np.ndarray:
+        if not image.bboxes and not image.masks:
             return image.data
-        frame = image.data.copy()
+        frame = tint_masks(image.data, image.masks).copy()
+        for mask in image.masks:
+            cv2.polylines(frame, mask_rings(mask), True, MASK_COLOR, 2)
         for bbox in image.bboxes:
             if all(value == 0 for value in bbox[:4]):
                 continue

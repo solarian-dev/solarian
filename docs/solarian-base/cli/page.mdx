@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Solarian Base CLI Reference',
   description:
-    'Every solarian base command and flag: login, link, deploy, env, manifest, train and runs, with JSON output for scripts and agents.',
+    'Every solarian base command and flag: login, link, deploy, env, manifest, train, runs, models and endpoints, with JSON output for scripts and agents.',
 }
 
 
@@ -60,7 +60,8 @@ solarian base link [--project NAME|ID] [--create] [-y]
 ### deploy
 
 Upload the code as a new deployment, unless it is unchanged, and wait for the
-build.
+build. A project with a `conf/robot.yaml` gets its robot registered on Base,
+named after the project; the build log links to its page.
 
 ```bash
 solarian base deploy [--force] [--no-wait] [-m MESSAGE]
@@ -74,8 +75,9 @@ solarian base deploy [--force] [--no-wait] [-m MESSAGE]
 
 ### manifest
 
-What a deployment of this directory would contain, its trainers and train
-configs, without uploading anything.
+What a deployment of this directory would contain, its trainers, train
+configs, servables (the confs Base can serve) and robot (`conf/robot.yaml`,
+which a deployment registers), without uploading anything.
 
 ```bash
 solarian base manifest [--conf-path conf] [--root DIR]
@@ -134,6 +136,49 @@ solarian base runs logs RUN_ID [-f] [--tail 200]
 | `runs show` | — |
 | `runs logs` | `-f`, `--follow`: keep printing until the run ends. `--tail N`: the last N lines first (default 200) |
 
+## Serving
+
+### models
+
+Checkpoints the project's training jobs wrote, with the endpoints serving each.
+
+```bash
+solarian base models ls [--all]
+```
+
+`--all` lists every project's. The first column is the job's id prefix, which
+`endpoints start --checkpoint` takes.
+
+### endpoints
+
+Services and policies of the project, running on Modal GPUs. See
+[Services, Policies & Models](/docs/solarian-base/endpoints).
+
+```bash
+solarian base endpoints ls [--all] [--kind service|policy] [--status S]
+solarian base endpoints start SERVABLE [--checkpoint JOB[:PATH]] [flags] [-- server args]
+solarian base endpoints stop ENDPOINT_ID
+solarian base endpoints logs ENDPOINT_ID
+```
+
+`SERVABLE` is a conf with a `server:` block, `conf/services/NAME.yaml` or
+`conf/skills/NAME.yaml`. `start` deploys when the code changed and follows the
+deploy until the endpoint is up.
+
+| Flag | Effect |
+| --- | --- |
+| `--checkpoint JOB[:PATH]` | For a policy: a training job's id or prefix, and optionally the file (default: its `latest.ckpt`) |
+| `--gpu-type T` | `T4` by default; `none` for CPU |
+| `--min-containers N` | Containers kept warm (default 0: scale to zero) |
+| `--scaledown S` | Seconds idle before scaling to zero (default 300) |
+| `--no-deploy` | Use the current deployment as it is |
+| `--no-wait` | Return once the endpoint is queued |
+| `-m`, `--message` | Message for the deployment, if one is made |
+| `-- ARGS` | Appended to the conf's `server.args` |
+
+`endpoints ls --status` takes `starting`, `running`, `stopped` or `failed`,
+comma-separated.
+
 ## For scripts and agents
 
 Every action takes `--json` and prints the API's own objects. Errors print
@@ -142,11 +187,13 @@ Every action takes `--json` and prints the API's own objects. Errors print
 ```bash
 solarian base train umi --dataset task.dataset_mix.0.path=3f2a9c1e --no-follow --json
 solarian base runs show "$RUN" --json | jq .summary
+solarian base endpoints start umi_pnp --checkpoint "$JOB" --json | jq -r .url
 ```
 
 The plugin ships a `deploy-and-train` skill
 (`solarian_base/skills/deploy-and-train/SKILL.md`) that walks a coding agent
-through linking, deploying, training on a Base dataset and reading the run. The
+through linking, deploying, training on a Base dataset, reading the run and
+serving the checkpoint. The
 REST API behind these commands is documented at `/api/docs/` on your Base.
 
 ## Environment
@@ -162,7 +209,7 @@ REST API behind these commands is documented at `/api/docs/` on your Base.
 
 | Command | What it does with Base |
 | --- | --- |
-| `solarian run-robot -d solarian_base` | Connects the robot to its managed relay; see [Robots & Controller](/docs/solarian-base/robots) |
+| `solarian run-robot -d solarian_base` | Connects the robot to its managed relay, and its skills to the project's endpoints; see [Robots & Controller](/docs/solarian-base/robots) |
 | `solarian train`, `solarian modal-train` | Log their runs to Base: `solarian_base` is the default tracking backend; see [Experiment tracking](/docs/tracking) |
 
 ## See also

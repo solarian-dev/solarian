@@ -146,17 +146,17 @@ def test_commands_with_their_own_argv_store_it_on_the_command():
                 "overwrite": True,
             },
         ),
-        "run-policy": (
+        "run-service": (
             [
-                "umi", "--config", "cup.yaml", "--checkpoint", "cup.ckpt",
-                "--host", "0.0.0.0", "--port", "8001",
+                "umi_pnp", "--checkpoint", "cup.ckpt",
+                "--host", "0.0.0.0", "--port", "8001", "--model", "small",
             ],
             {
-                "skill": "umi",
-                "config": "cup.yaml",
+                "name": "umi_pnp",
                 "checkpoint": "cup.ckpt",
                 "host": "0.0.0.0",
-                "port": "8001",
+                "port": 8001,
+                "server_args": ["--model", "small"],
             },
         ),
     }

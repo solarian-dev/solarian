@@ -186,17 +186,9 @@ CommandRegistry.register_lazy(
     category="Controller",
 )
 CommandRegistry.register_lazy(
-    "run-policy",
-    module_path=f"{_pkg}.run_policy",
-    help="Run the policy server associated with a skill",
-    config_name=None,
-    setup_modules=(),
-    category="Controller",
-)
-CommandRegistry.register_lazy(
     "run-service",
     module_path=f"{_pkg}.run_service",
-    help="Run the server of an installed service plugin (e.g. a bbox tracker)",
+    help="Run a service: a project conf's server (tracker, policy) or an installed service",
     config_name=None,
     setup_modules=(),
     category="Controller",

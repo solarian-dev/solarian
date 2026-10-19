@@ -44,7 +44,7 @@ def load_deployment_config() -> DictConfig:
 
     Read straight from ``{SOLARIAN_CONF_PATH}/deployment/{SOLARIAN_DEPLOYMENT}.yaml``
     rather than from the Hydra tree, so command configs, module configs, skill
-    configs and child processes (``solarian run-policy``) all see the same values.
+    configs and child processes (``solarian run-service``) all see the same values.
     Empty for projects with no ``deployment/`` directory.
     """
     from solarian.core.conf_paths import DEPLOYMENT, conf_dir

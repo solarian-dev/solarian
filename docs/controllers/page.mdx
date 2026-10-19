@@ -91,7 +91,7 @@ Mapped to [`ControllerConfig`](https://github.com/solarian-dev/solarian/blob/mai
     Per-module configuration for any modules attached to the controller (e.g. leader arms used for teleop).
   </Property>
   <Property name="policy_path" type="str">
-    Path to a policy checkpoint (used by <code>solarian run-policy</code> and the AI Controller).
+    Path to a policy checkpoint the AI Controller loads. A skill's policy server reads its own, from the <code>server:</code> block of its conf; see <a href="/docs/services#the-server-block">Services</a>.
   </Property>
   <Property name="device" type="str">
     Torch device (<code>cpu</code>, <code>cuda</code>, <code>mps</code>) for any policy / model the controller loads.

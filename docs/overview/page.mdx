@@ -82,7 +82,7 @@ All three nodes speak the same protocol: a Pydantic-validated [`Action`](/docs/a
 6. solarian run-controller               (your laptop — keyboard teleop)
 7. solarian record                       (capture an episode)
 8. solarian train ...                    (train a policy)
-9. solarian run-policy                   (deploy)
+9. solarian run-service <skill conf>     (serve the policy a skill drives)
 ```
 
 Each step uses the same `Robot`, `Controller`, `Observation`, and `Action` classes you defined once in your project package.

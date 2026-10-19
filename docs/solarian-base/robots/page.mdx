@@ -20,17 +20,24 @@ flowchart LR
 ```
 
 <Note>
-  Robots, relays and controller sessions are web app only for now. The one
-  command involved is `solarian run-robot` on the robot itself; there are no
-  `solarian base` commands for robots yet.
+  Robots, relays and controller sessions are mostly web app for now:
+  `solarian base deploy` registers the robot, and `solarian run-robot` runs on
+  the robot itself.
 </Note>
 
 ## Register a robot
 
+**From the CLI:** `solarian base deploy`. A project with a `conf/robot.yaml`
+registers its robot when a deployment becomes current: named after the project,
+at the conf's `fps`. Later deployments keep that robot, and its keys, and only
+update its control rate.
+
 **From the web app:** **Robots → Register Robot**, with its **Project**,
-**Name** and **Control rate**. Registering provisions the robot's relay: a block
-of five ports and a pair of encryption keys. It does not let anyone command the
-robot yet.
+**Name** and **Control rate**, for a project you do not deploy. A deployment
+keeps a robot registered this way instead of adding another.
+
+Registering provisions the robot's relay: a block of five ports and a pair of
+encryption keys. It does not let anyone command the robot yet.
 
 ## Connect it
 
@@ -46,11 +53,26 @@ solarian run-robot -d solarian_base
 ```
 
 `solarian_base` is a [deployment profile](/docs/project-configs) like any
-other: it extends `localhost` with Base's relay and keys. The robot shows
-`online` while the relay has heard from it within the last 10 seconds.
+other: it extends one of the project's profiles with Base's relay and keys. The
+robot shows `online` while the relay has heard from it within the last 10
+seconds.
 
 Each download issues a new token; earlier ones keep working until you revoke
 them under **Tokens**.
+
+### What the file extends and carries
+
+- **Extends** is the profile the file adds to, `localhost` by default: where the
+  robot's device paths, ports and placement keys come from. Set it to the
+  profile the robot already runs with, such as `turing`, and **Save**.
+- The file carries the URL of every running [service and
+  policy](/docs/solarian-base/endpoints) of the project, under the deployment
+  key its conf reads, and `solarian_base_endpoint_token`, the token they
+  require. **Services and policies in the file** lists them. Download the file
+  again after starting or stopping one.
+- **Include the managed relay** is on by default. Turn it off for a robot that
+  keeps its own relay and controller and uses Base only for GPUs: the file then
+  carries only the endpoints, and the download issues no token.
 
 ## Allow cloud control
 
@@ -125,15 +147,15 @@ What Base runs for you, and what you still run yourself:
 | Server (`solarian run-server`) | The managed relay, one per robot | `solarian run-server`, on your network |
 | Controller (`solarian run-controller`) | A controller session, from **Open Controller** | `solarian run-controller` |
 | Robot (`solarian run-robot`) | Never: it runs on the robot | `solarian run-robot -d solarian_base` |
-| Services (`solarian run-service`, such as `sam2-tracker`) | Not available yet | `solarian run-service <name>` |
-| Policy servers (`solarian run-policy`) | Not available yet | `solarian run-policy` |
+| Services and policy servers (`solarian run-service`) | An endpoint on a Modal GPU, from **Services & Policies** or **Models** | `solarian run-service <conf>` |
 
-To use a service or a policy server with a robot connected to Base, run it
-yourself where the robot or the controller can reach it. See
-[Services](/docs/services), [Server](/docs/servers) and [Policies](/docs/policies).
+An endpoint's URL reaches the robot through the connection file, so a skill or
+calculated field calls it with no change. See
+[Services, Policies & Models](/docs/solarian-base/endpoints).
 
 ## See also
 
 - [Server](/docs/servers), [Controller](/docs/controllers), [Robot](/docs/robots) — the three nodes.
 - [Configs](/docs/project-configs) — deployment profiles such as `solarian_base`.
 - [Quick Start](/docs/solarian-base/quickstart) — connecting a robot, step by step.
+- [Services, Policies & Models](/docs/solarian-base/endpoints) — what the connection file points the project at.

@@ -1,0 +1,125 @@
+export const metadata = {
+  title: 'Policies',
+  description:
+    'A Policy is the trainable model a Skill calls to produce actions — diffusion, ACT, VLAs, or classical methods. A policy server is a service with a standard API, trained and served independently of the Skill that consumes it.',
+}
+
+# Policies
+
+A **Policy** is the model that turns observations into actions. A [Skill](/docs/skills) is a behavior; the Policy is the brain the Skill calls to decide what to do next. A policy server is a [service](/docs/services) with one standard API, so the same policy can back different skills, and the same skill can swap policies without code changes. {{ className: 'lead' }}
+
+## Skill, PolicyClient, PolicyServer
+
+Solarian keeps the *behavior* and the *model* in separate processes connected over a small HTTP API:
+
+<Properties>
+  <Property name="Skill">
+    Runs the behavior loop and decides <em>when</em> to call the policy. See <a href="/docs/skills">Skills</a>.
+  </Property>
+  <Property name="PolicyClient">
+    A policy-agnostic HTTP client a Skill uses to call a policy: a <code>ServiceClient</code> with <code>predict</code>, <code>reset</code>, <code>reload</code>, <code>get_model_info</code> and <code>get_shape_meta</code>. The same client works for diffusion, ACT, VLAs, or classical methods (waypoints, SLAM).
+  </Property>
+  <Property name="PolicyServer">
+    A <code>ServiceServer</code> that serves the policy routes. Subclass it and implement <code>load</code>, <code>predict</code>, <code>model_info</code> and <code>shape_meta</code>; the base adds <code>/health</code>, <code>/info</code>, bearer auth and <code>main()</code>.
+  </Property>
+</Properties>
+
+Both live in `solarian.services`. The `PolicyServer` runs as a **separate process** whose location is independent of the skill: on the robot, the controller, a GPU box, Modal, or [Solarian Base](/docs/solarian-base/endpoints). Point a skill at it with `policy_server_url` in its conf, or let the skill launch it itself with `server.managed: true`.
+
+## Serving a policy
+
+A skill conf's `server:` block says which policy service runs and with which checkpoint:
+
+```yaml
+# conf/skills/umi_pnp.yaml
+policy_server_url: ${deployment.pnp_policy_server_url}
+policy_server_token: ${oc.select:deployment.solarian_base_endpoint_token,null}
+server:
+  service: diffusion-policy
+  checkpoint: ${oc.select:deployment.pnp_policy_checkpoint,null}
+  port: 8003
+```
+
+```bash
+solarian run-service umi_pnp                                   # the conf's checkpoint
+solarian run-service umi_pnp --checkpoint models/pick/checkpoints/latest.ckpt
+solarian run-service diffusion-policy --checkpoint cup.ckpt --port 8001
+```
+
+To serve it on a cloud GPU instead, `solarian modal-serve umi_pnp` deploys it on your Modal account, and Solarian Base serves the checkpoints its training jobs wrote from **Models**. See [Services](/docs/services#serving-on-modal) and [Services, Policies & Models](/docs/solarian-base/endpoints).
+
+## Policy plugins
+
+Policies ship as installable **policy plugins** (`solarian-policy-*`), separate from the skill plugins that drive them. A policy plugin provides the trainer, the `PolicyServer`, and a `Service` advertising it, so training and serving live in one package:
+
+| Plugin | Service | Checkpoint |
+| --- | --- | --- |
+| `solarian-policy-diffusion` | `diffusion-policy` | A `.ckpt` from the `diffusion` trainer |
+| `solarian-policy-lerobot` | `lerobot-act` | A LeRobot checkpoint directory |
+
+## Writing a policy server
+
+```python
+# my_policy/policy_server.py
+from solarian.services import PolicyServer
+
+class MyPolicyServer(PolicyServer):
+    def __init__(self, checkpoint: str):
+        super().__init__(checkpoint=checkpoint)   # kept in self.config
+
+    def load(self):
+        ...                                  # load self.config["checkpoint"]
+
+    def predict(self, obs_dict, **kwargs):
+        return {"action": ..., "raw_action": None, "info": None}
+
+    @property
+    def model_info(self):
+        return {"checkpoint": self.config["checkpoint"]}
+
+    @property
+    def shape_meta(self):
+        return {...}
+
+    @classmethod
+    def add_arguments(cls, parser):
+        parser.add_argument("--input", "-i", required=True)
+
+    @classmethod
+    def from_args(cls, args):
+        return cls(checkpoint=args.input)
+
+if __name__ == "__main__":
+    MyPolicyServer.main()
+```
+
+Register it as a service that takes a checkpoint:
+
+```python
+# my_policy/service.py
+from solarian.services import Service
+
+class MyPolicyService(Service):
+    server_module = "my_policy.policy_server"
+    default_port = 8001
+    checkpoint_arg = "--input"
+
+    @classmethod
+    def modal_spec(cls):
+        from my_policy.trainer import MyTrainer
+        return MyTrainer.modal_spec()        # serve in the image it trained in
+```
+
+```toml
+[project.entry-points."solarian.services"]
+my-policy = "my_policy.service:MyPolicyService"
+```
+
+A skill names it with `policy_service = "my-policy"`. `solarian create-plugin policy <name>` scaffolds the trainer, the server, the service and a skill.
+
+## Where to go next
+
+- [Services](/docs/services) — the `server:` block, auth and the server framework policies share.
+- [Training](/docs/training) — how to train the checkpoints a policy server loads.
+- [Skills](/docs/skills) — the behaviors that call policies through `PolicyClient`.
+- [AI Controller](/docs/ai_controller) — the orchestrator that runs skills.

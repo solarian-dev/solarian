@@ -60,6 +60,7 @@ COMPONENT_FILES: Dict[str, Tuple[FileSpec, ...]] = {
     "policy": (
         FileSpec(Path("policy/trainer.py.tmpl"), "{package_name}/trainer.py"),
         FileSpec(Path("policy/policy_server.py.tmpl"), "{package_name}/policy_server.py"),
+        FileSpec(Path("policy/service.py.tmpl"), "{package_name}/service.py"),
         FileSpec(Path("policy/skill.py.tmpl"), "{package_name}/skill.py"),
     ),
     "op": (
@@ -92,6 +93,7 @@ ENTRY_POINTS: Dict[str, List[Tuple[str, str, str]]] = {
     "policy": [
         ("solarian.trainers", "{plugin_name}", "{package_name}.trainer:{class_prefix}Trainer"),
         ("solarian.skills", "{plugin_name}", "{package_name}.skill:{class_prefix}Skill"),
+        ("solarian.services", "{plugin_name}", "{package_name}.service:{class_prefix}Service"),
     ],
     "op": [
         ("solarian.dataset_ops", "{plugin_name}", "{package_name}.op:{class_prefix}Op"),

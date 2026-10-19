@@ -41,7 +41,7 @@ A single package can ship any combination of these. The type determines which fi
     A self-contained <a href="/docs/skills">Skill</a> behavior the <a href="/docs/ai_controller">AI Controller</a> can orchestrate. Registers under <code>solarian.skills</code> and is auto-discovered by any <code>AIController</code>. Example: <code>solarian-umi-skill</code>.
   </Property>
   <Property name="Policy">
-    A trainable model: a <code>Trainer</code> (for <code>solarian train</code>) and/or a <code>PolicyServer</code> a skill calls over HTTP. Registers under <code>solarian.trainers</code> (and often <code>solarian.skills</code>). Example: <code>solarian-policy-diffusion</code>. See <a href="/docs/policies">Policies</a>.
+    A trainable model: a <code>Trainer</code> (for <code>solarian train</code>) and/or a <code>PolicyServer</code> a skill calls over HTTP. Registers under <code>solarian.trainers</code> and <code>solarian.services</code> (and often <code>solarian.skills</code>). Example: <code>solarian-policy-diffusion</code>. See <a href="/docs/policies">Policies</a>.
   </Property>
   <Property name="Command">
     A custom <code>solarian</code> subcommand. Registers under <code>solarian.commands</code>. Example: <code>solarian feetech-set-id</code> shipped by <code>solarian-feetech</code>.
@@ -59,7 +59,8 @@ Discovery is powered by standard Python entry points read via `importlib.metadat
 | Module | `solarian.modules` | `solarian install` |
 | Robot | `solarian.robots` | project wiring |
 | Skill | `solarian.skills` | `AIController` |
-| Policy | `solarian.trainers` (+ `solarian.skills`) | `solarian train`, `run-policy` |
+| Policy | `solarian.trainers`, `solarian.services` (+ `solarian.skills`) | `solarian train`, `run-service` |
+| Service | `solarian.services` | `run-service`, `modal-serve` |
 | Command | `solarian.commands` | `solarian` CLI |
 
 ## Available plugins

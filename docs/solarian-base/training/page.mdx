@@ -85,7 +85,9 @@ Base runs `solarian modal-train` inside the deployment, with:
   `modal.secrets` and `modal.volume` in the config are ignored.
 
 Checkpoints land in `/outputs/<job_name>` on that volume. The job panel and the
-run's overview list them.
+run's overview list them, and **Models** lists every job's, with **Serve** to
+run one as a policy endpoint; see
+[Services, Policies & Models](/docs/solarian-base/endpoints).
 
 ## Follow and stop a job
 
@@ -130,3 +132,4 @@ too, without a job, once you are logged in and linked. See
 - [Training](/docs/training) — trainers, train configs and `solarian modal-train`.
 - [Experiment tracking](/docs/tracking) — the logging API and its backends.
 - [Deployments & Secrets](/docs/solarian-base/deployments) — what a job runs against.
+- [Services, Policies & Models](/docs/solarian-base/endpoints) — serve the checkpoints a job wrote.

@@ -1,5 +1,5 @@
 import numpy as np
-from .data import Data, ImageData, threshold_level as _threshold_level
+from .data import Data, ImageData, MaskData, threshold_level as _threshold_level
 from .execution import ExecutionPlace
 
 
@@ -174,6 +174,18 @@ class CalculatedField:
     @property
     def data_class(self):
         return self.output.__class__
+
+    def zeros(self) -> Data:
+        """The output before anything is computed, sized for shared memory.
+
+        A ``MaskData`` declared without a shape is the size of the image it
+        segments, which a camera only knows once its config is bound.
+        """
+        if isinstance(self.output, MaskData) and self.output.shape is None:
+            image = next((i for i in self.inputs if isinstance(i, ImageData)), None)
+            if image is not None and image.shape is not None:
+                return MaskData(shape=tuple(image.shape[:2]))
+        return self.output.zeros()
         
 
 
@@ -306,7 +318,7 @@ class ModuleObs:
         for name, sf_spec in cls.get_sensor_fields_spec().items():
             data[name] = sf_spec.source.duplicate().to_dict()
         for name, cf_spec in cls.get_calculated_fields_spec().items():
-            data[name] = cf_spec.output.zeros().to_dict()
+            data[name] = cf_spec.zeros().to_dict()
         return cls(data)
 
     # -- Dict interface ----------------------------------------------------
