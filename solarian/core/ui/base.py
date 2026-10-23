@@ -63,8 +63,9 @@ class UICommand:
 class UIImage:
     """One camera frame and any boxes and masks drawn over it.
 
-    ``data`` is ``HxWx3`` uint8 RGB — the same layout every UI wants, so the
-    conversion to BGR or to JPEG belongs to whichever one needs it. ``masks``
+    ``data`` is ``HxWx3`` uint8 RGB. ``jpeg``, when set, is that same frame
+    already encoded — the bytes that arrived from the robot — and a front end
+    that sends a picture sends those rather than encoding ``data``. ``masks``
     are ``HxW`` 0/1 arrays the size of ``data``.
     """
 
@@ -72,6 +73,7 @@ class UIImage:
     data: np.ndarray
     bboxes: list = field(default_factory=list)
     masks: list = field(default_factory=list)
+    jpeg: bytes | None = None
 
 
 @dataclass

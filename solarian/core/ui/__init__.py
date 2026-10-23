@@ -74,7 +74,6 @@ def build_ui(controller) -> ControllerUI:
             bind=cfg.ui_bind,
             token=cfg.ui_token,
             image_fps=cfg.ui_image_fps,
-            image_max_width=cfg.ui_image_max_width,
             hello=controller.ui_hello(),
         )
 

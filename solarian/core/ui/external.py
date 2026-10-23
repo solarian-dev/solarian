@@ -6,7 +6,8 @@ UI. It serves msgpack over a loopback WebSocket:
 * ``hello``    — once per connection: the skills that can be started, the key
   bindings, the observation schema. Enough to build a UI without importing the
   project's Python.
-* ``snapshot`` — one per frame, images JPEG-encoded and rate-limited.
+* ``snapshot`` — one per frame. A camera JPEG is the one the robot sent;
+  only a frame that arrived as pixels is encoded here. Pictures are rate-limited.
 * commands flow the other way as ``{"type": ..., "data": {...}}``, exactly the
   :class:`~solarian.core.ui.base.UICommand` wire form.
 
@@ -23,18 +24,15 @@ import threading
 import time
 from collections import deque
 
-import cv2
 import msgpack
-import numpy as np
 import websockets
 from websockets.asyncio.server import serve
 
-from solarian.core.ui.base import UICommand, UIImage, UISnapshot
+from solarian.core.data import encode_jpeg
+from solarian.core.ui.base import UICommand, UICommandType, UIImage, UISnapshot
 from solarian.core.ui.overlay import mask_rings
 
 logger = logging.getLogger(__name__)
-
-_JPEG_QUALITY = 70
 
 
 class _Slot:
@@ -70,8 +68,8 @@ class ExternalUI:
         token: Shared secret the client must present in an ``auth`` frame. A
             controller with no token accepts any local connection.
         image_fps: Cap on snapshot frames that carry images. The dashboard is
-            cheap; JPEG is not.
-        image_max_width: Downscale wider frames to bound bandwidth.
+            cheap; JPEG is not. The JPEG is the one the robot sent, at that
+            frame's own size and quality.
         hello: Payload for the one-shot ``hello`` message.
     """
 
@@ -83,15 +81,16 @@ class ExternalUI:
         bind: str = "127.0.0.1:8700",
         token: str | None = None,
         image_fps: int = 15,
-        image_max_width: int = 640,
         hello: dict | None = None,
     ):
         self._token = token
         self._image_period_ns = int(1e9 / image_fps) if image_fps else 0
-        self._image_max_width = image_max_width
         self._hello = hello or {}
 
         self._commands: deque[UICommand] = deque(maxlen=4096)
+        # label -> (width, height) of the frame the client was sent. A click
+        # comes back in those pixels, which are the observation's own.
+        self._sent_frame: dict[str, tuple[int, int]] = {}
         self._clients: set[_Slot] = set()
         self._latest: UISnapshot | None = None
         self._latest_lock = threading.Lock()
@@ -249,9 +248,39 @@ class ExternalUI:
         if message is None:
             return
         try:
-            self._commands.append(UICommand.from_dict(message))
+            command = UICommand.from_dict(message)
         except (KeyError, ValueError):
             logger.debug("External UI ignored unknown command %r", message)
+            return
+        if command.type is UICommandType.CLICK:
+            command = self._click_in_capture_pixels(command)
+        self._commands.append(command)
+
+    def _click_in_capture_pixels(self, command: UICommand) -> UICommand:
+        """Clamp a click to the frame the client was sent.
+
+        The point is already in that frame's pixels: the JPEG is the
+        observation image, not a resized copy of it.
+        """
+        point = command.data.get("point")
+        sent = self._sent_frame.get(str(command.data.get("label") or ""))
+        if sent is None or not point:
+            return command
+        try:
+            px, py = float(point[0]), float(point[1])
+        except (TypeError, ValueError, IndexError):
+            return command
+        width, height = sent
+        return UICommand(
+            type=command.type,
+            data={
+                **command.data,
+                "point": [
+                    min(width - 1, max(0, int(round(px)))),
+                    min(height - 1, max(0, int(round(py)))),
+                ],
+            },
+        )
 
     @staticmethod
     def _decode(raw) -> dict | None:
@@ -287,41 +316,31 @@ class ExternalUI:
 
         encoded = []
         for image in images:
-            frame = self._downscale(image.data)
-            ok, buffer = cv2.imencode(
-                ".jpg",
-                frame[:, :, ::-1],
-                [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY],
-            )
-            if not ok:
-                logger.debug("Could not JPEG-encode %s", image.label)
-                continue
-            # Boxes and rings are in capture pixels; the client draws in the sent frame's.
-            scale = frame.shape[1] / image.data.shape[1]
+            # The robot's JPEG is the picture. Encoding ``data`` again would
+            # be a second generation, at a size and quality the robot did not
+            # choose. ``data`` is only encoded when the frame never was a JPEG.
+            jpeg = image.jpeg
+            if not jpeg:
+                try:
+                    jpeg = encode_jpeg(image.data)
+                except RuntimeError:
+                    logger.debug("Could not JPEG-encode %s", image.label, exc_info=True)
+                    continue
+            height, width = image.data.shape[:2]
+            self._sent_frame[image.label] = (int(width), int(height))
             encoded.append(
                 {
                     "label": image.label,
-                    "jpeg": buffer.tobytes(),
-                    "width": int(frame.shape[1]),
-                    "height": int(frame.shape[0]),
-                    "bboxes": [[float(v) * scale for v in bbox[:4]] for bbox in image.bboxes],
+                    "jpeg": jpeg,
+                    "width": int(width),
+                    "height": int(height),
+                    "bboxes": [[float(v) for v in bbox[:4]] for bbox in image.bboxes],
                     # Flat [x, y, ...] rings, filled even-odd: Solarian Base's TargetOutlines.
                     "outlines": [
-                        (ring * scale).round().astype(int).reshape(-1).tolist()
+                        ring.round().astype(int).reshape(-1).tolist()
                         for mask in image.masks
                         for ring in mask_rings(mask)
                     ],
                 }
             )
         return encoded
-
-    def _downscale(self, frame: np.ndarray) -> np.ndarray:
-        width = frame.shape[1]
-        if not self._image_max_width or width <= self._image_max_width:
-            return frame
-        scale = self._image_max_width / width
-        return cv2.resize(
-            frame,
-            (self._image_max_width, max(1, int(frame.shape[0] * scale))),
-            interpolation=cv2.INTER_AREA,
-        )

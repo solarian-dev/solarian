@@ -29,7 +29,6 @@ def ui():
         bind=f"127.0.0.1:{_free_port()}",
         token="s3cret",
         image_fps=1000,
-        image_max_width=32,
         hello=HELLO,
     )
     yield served
@@ -90,13 +89,32 @@ def test_hello_then_snapshot_round_trip(ui):
 
         image = data["images"][0]
         assert image["label"] == "cam/rgb"
-        assert image["width"] == 32, "wider frames are downscaled to ui_image_max_width"
-        assert image["height"] == 24, "aspect ratio is preserved"
+        assert image["width"] == 64, "the frame is sent at the observation's own size"
+        assert image["height"] == 48
         assert image["jpeg"][:2] == b"\xff\xd8", "JPEG SOI marker"
-        assert image["bboxes"] == [[1.0, 2.0, 3.0, 4.0]], "boxes scale with the frame"
+        assert image["bboxes"] == [[2.0, 4.0, 6.0, 8.0]], "boxes stay in observation pixels"
         (ring,) = image["outlines"]
         xs, ys = ring[0::2], ring[1::2]
-        assert (min(xs), max(xs), min(ys), max(ys)) == (4, 12, 2, 10), "rings scale with the frame"
+        assert (min(xs), max(xs), min(ys), max(ys)) == (8, 23, 4, 19), "rings stay in observation pixels"
+
+    asyncio.run(scenario())
+
+
+def test_a_jpeg_from_the_robot_is_forwarded_unchanged(ui):
+    """The browser is shown the frame the robot encoded, not a second one."""
+    robot_jpeg = b"\xff\xd8" + b"robot-jpeg-q90" + b"\xff\xd9"
+    snapshot = _snapshot()
+    snapshot.images[0].jpeg = robot_jpeg
+
+    async def scenario():
+        async with await _connect(ui) as connection:
+            await connection.recv()  # hello
+            await asyncio.sleep(0.1)
+            ui.render(snapshot)
+            frame = msgpack.unpackb(await asyncio.wait_for(connection.recv(), 5))
+        image = frame["data"]["images"][0]
+        assert image["jpeg"] == robot_jpeg
+        assert (image["width"], image["height"]) == (64, 48)
 
     asyncio.run(scenario())
 
@@ -125,6 +143,35 @@ def test_commands_reach_the_controller(ui):
     ], "an unknown command type is dropped, not fatal"
     assert commands[0].data == {"key": "t"}
     assert ui.poll() == [], "polling drains"
+
+
+def test_a_click_is_already_in_image_pixels(ui):
+    """The JPEG is the observation image, so a click needs no rescaling."""
+
+    async def scenario():
+        async with await _connect(ui) as connection:
+            await connection.recv()  # hello
+            await asyncio.sleep(0.1)
+            ui.render(_snapshot())
+            await asyncio.wait_for(connection.recv(), 5)
+            await connection.send(
+                msgpack.packb(
+                    {"type": "click", "data": {"label": "cam/rgb", "point": [16, 12]}}
+                )
+            )
+            await connection.send(
+                msgpack.packb(
+                    {"type": "click", "data": {"label": "other/image", "point": [16, 12]}}
+                )
+            )
+            await asyncio.sleep(0.2)
+
+    asyncio.run(scenario())
+
+    tracked, unknown = ui.poll()
+    assert tracked.data["point"] == [16, 12]
+    assert tracked.data["label"] == "cam/rgb"
+    assert unknown.data["point"] == [16, 12], "an unseen image has no frame to clamp to"
 
 
 def test_a_send_only_client_is_not_sent_snapshots(ui):
@@ -187,7 +234,6 @@ def test_image_frames_are_rate_limited():
     served = ExternalUI(
         bind=f"127.0.0.1:{_free_port()}",
         image_fps=1,
-        image_max_width=32,
         hello=HELLO,
     )
 

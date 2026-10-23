@@ -708,6 +708,7 @@ class Controller(EventHost, ABC):
                     data=field_data.value,
                     bboxes=bboxes,
                     masks=masks,
+                    jpeg=field_data._jpeg,
                 )
             )
         return images

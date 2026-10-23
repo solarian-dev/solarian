@@ -394,11 +394,9 @@ class ControllerConfig(BaseModel):
     #: connection that can reach ``ui_bind``.
     ui_token: str | None = None
     #: Cap on external-UI frames that carry camera images. Dashboard frames are
-    #: not throttled; JPEG is the expensive part.
+    #: not throttled; JPEG is the expensive part. The picture itself is the
+    #: JPEG the robot already sent, at that JPEG's size and quality.
     ui_image_fps: int = 15
-    #: Downscale camera frames wider than this before encoding, to bound the
-    #: external UI's bandwidth.
-    ui_image_max_width: int = 640
     #: Names of declared modules whose device is sampled by the UI instead of by
     #: this process, replaced at construction by a
     #: :class:`~solarian.core.remote_input_module.RemoteInputModule`. The way a

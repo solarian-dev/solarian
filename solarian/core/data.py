@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Any, ClassVar, Optional, Tuple, Type, TYPE_CHECKING, Union
 import numpy as np
-from pydantic import BaseModel, ConfigDict, model_validator, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 import time
 import pickle
 import zlib
@@ -22,6 +22,33 @@ def set_image_jpeg_quality(quality: int | None) -> None:
 
 def get_image_jpeg_quality() -> int | None:
     return _image_jpeg_quality
+
+
+def encode_jpeg(image: np.ndarray) -> bytes:
+    """Browser JPEG of an RGB array, at :func:`get_image_jpeg_quality`.
+
+    OpenCV encodes BGR. The swap here is undone by
+    :meth:`ImageData._uncompress_impl`, so a round trip returns the same
+    array, and the file itself is the one a browser can show.
+    """
+    try:
+        import cv2
+    except ImportError as e:
+        raise RuntimeError("JPEG encoding requires opencv-python (cv2).") from e
+
+    if image.ndim == 3 and image.shape[2] == 3:
+        image = image[:, :, ::-1]
+    image = np.ascontiguousarray(image)
+    quality = get_image_jpeg_quality()
+    if quality is None:
+        ok, buf = cv2.imencode(".jpg", image)
+    else:
+        ok, buf = cv2.imencode(
+            ".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
+        )
+    if not ok:
+        raise RuntimeError("cv2.imencode('.jpg', image) failed")
+    return buf.tobytes()
 
 
 class Data(BaseModel):
@@ -82,11 +109,16 @@ class Data(BaseModel):
         """
         self.payload = v
         if type(v) == bytes:
+            self._drop_encoded()
             self.is_compressed = True
             self.uncompress()
         else:
             self.is_compressed = False
             self.compression_codec = None
+            self._drop_encoded()
+
+    def _drop_encoded(self) -> None:
+        return
 
     def compress(self) -> None:
         if self.is_compressed:
@@ -228,6 +260,9 @@ class ImageData(Data):
     dtype: Type = np.uint8
     shape: Optional[Tuple[int, int, int]] = None
     payload: Optional[np.ndarray] = Field(default=None, alias="value")
+    # The JPEG this array was decoded from. Retired when the pixels are
+    # replaced: a later encode would be a different picture.
+    _jpeg: bytes | None = PrivateAttr(default=None)
 
     def model_post_init(self, __context: Any) -> None:
         # Only initialize if not compressed and no value provided
@@ -237,25 +272,21 @@ class ImageData(Data):
     def _default_codec(self) -> str:
         return "jpeg"
 
-    def _compress_impl(self, raw: Any) -> bytes:
-        try:
-            import cv2
-        except ImportError as e:
-            raise RuntimeError("ImageData.compress() requires opencv-python (cv2).") from e
+    def _drop_encoded(self) -> None:
+        self._jpeg = None
 
+    def uncompress(self) -> None:
+        encoded = self.payload if self.is_compressed else None
+        super().uncompress()
+        if isinstance(encoded, (bytes, bytearray, memoryview)) and encoded:
+            self._jpeg = bytes(encoded)
+
+    def _compress_impl(self, raw: Any) -> bytes:
         if raw is None:
             return b""
         if not isinstance(raw, np.ndarray):
             raise TypeError(f"ImageData expects np.ndarray, got {type(raw)!r}")
-
-        params = None
-        quality = get_image_jpeg_quality()
-        if quality is not None:
-            params = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
-        ok, buf = cv2.imencode(".jpg", raw, params) if params is not None else cv2.imencode(".jpg", raw)
-        if not ok:
-            raise RuntimeError("cv2.imencode('.jpg', image) failed")
-        return buf.tobytes()
+        return encode_jpeg(raw)
 
     def _uncompress_impl(self, b: bytes) -> Any:
         try:
@@ -272,6 +303,9 @@ class ImageData(Data):
         img = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
         if img is None:
             raise RuntimeError("cv2.imdecode() failed")
+        # encode_jpeg swapped RGB to BGR for OpenCV. Swap back.
+        if img.ndim == 3 and img.shape[2] == 3:
+            img = np.ascontiguousarray(img[:, :, ::-1])
         return img
 
 
