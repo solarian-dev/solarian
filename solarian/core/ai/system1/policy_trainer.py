@@ -58,6 +58,7 @@ class ModalSpec:
         pip_packages: Optional[List[str]] = None,
         local_python_packages: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = None,
+        bake_warm_up: bool = False,
     ):
         #: Python version for the micromamba/base image.
         self.python_version = python_version
@@ -72,6 +73,10 @@ class ModalSpec:
         self.local_python_packages = list(local_python_packages or [])
         #: Extra environment variables baked into the image.
         self.env = dict(env or {})
+        #: A served service only: run the server's ``--warm-up`` while building
+        #: the image, on the GPU type it serves on, so what it writes outside the
+        #: volume (torch.compile's caches, at paths ``env`` sets) ships in the image.
+        self.bake_warm_up = bake_warm_up
 
 
 class PolicyTrainer(abc.ABC):
@@ -108,6 +113,17 @@ class PolicyTrainer(abc.ABC):
     # ------------------------------------------------------------------
     # Optional overrides
     # ------------------------------------------------------------------
+
+    def check_inputs(self, skip: Callable[[str], bool] = lambda path: False) -> None:
+        """Raise ``FileNotFoundError`` or ``ValueError`` for an input the run cannot use.
+
+        Callers run it before :meth:`train`, whose training set takes minutes
+        to load. ``solarian modal-train`` runs it on the launching machine
+        before it uploads anything or books GPUs, so it must need neither a GPU
+        nor the trainer's heavy dependencies. Paths for which ``skip`` is true
+        are checked elsewhere: on the volume by the run, or by the launcher
+        before it uploaded them.
+        """
 
     @classmethod
     def config_class(cls) -> type:
@@ -183,4 +199,5 @@ class PolicyTrainer(abc.ABC):
         cls.add_arguments(parser)
         args = parser.parse_args(argv)
         trainer = cls.from_args(args)
+        trainer.check_inputs()
         trainer.train()

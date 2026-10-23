@@ -3,8 +3,8 @@
 What online review runs on: the op's ``setup`` (a SAM 2 model, say) happens
 once, then each ``redo`` reprocesses one episode with per-episode params over
 the version's, in about the time the op takes on that episode alone. A MAP
-op's episode is rewritten in place; a FILTER op's keep/drop decision rebuilds
-the version, which holds only episode metadata. Every change is recorded in
+op's episode is rewritten in place; a FILTER op's keep/drop decisions are
+written into the version when it closes. Every change is recorded in
 ``computed.json`` under the version's ``episodes``, so ``rebuild`` replays it.
 """
 
@@ -16,10 +16,15 @@ import shutil
 from pathlib import Path
 from typing import Callable, Mapping
 
-from solarian.core.recording.archive import EPISODE_FILE, EpisodeRef, Session, SessionWriter, episode_dir
+from solarian.core.recording.archive import EPISODE_FILE, episode_dir
 from solarian.datasets.computed import ACCEPTED, DONE, OPEN, ComputedDataset, summarize
 from solarian.datasets.op import Episode, OpContext, OpKind
 from solarian.datasets.runner import get_op, validate_params
+
+
+def _stored_bytes(prefix: Path) -> int:
+    """Bytes under ``prefix`` as :func:`summarize` counts them."""
+    return sum(p.stat().st_size for p in prefix.rglob("*") if p.is_file() and not p.name.startswith("."))
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
@@ -65,12 +70,6 @@ class OpSession:
     def kind(self) -> OpKind:
         return self.op_cls.kind
 
-    def _record(self, episode: int, **state) -> None:
-        with self.computed.edit() as data:
-            entry = data["versions"][self.key]
-            entry["episodes"][str(episode)] = {**entry["episodes"].get(str(episode), {}), **state}
-            entry["summary"] = summarize(self.path)
-
     def redo(self, episode: int, params: Mapping | None = None) -> dict:
         """MAP: reprocess the version's episode ``episode`` with ``params`` over the version's.
 
@@ -86,6 +85,9 @@ class OpSession:
         out = self.op.map(source, validated, self.ctx) or source.derive()
 
         prefix = self.path / episode_dir(episode)
+        stored_before = _stored_bytes(prefix)
+        own_meta = prefix / EPISODE_FILE
+        rows_before = int((json.loads(own_meta.read_bytes()) if own_meta.is_file() else source.meta)["n_rows"])
         # The previous run's members go: a member it wrote and this one did not
         # must read through to the parent again.
         for old in [p for p in prefix.rglob("*") if p.is_file() and p.name != EPISODE_FILE]:
@@ -100,7 +102,17 @@ class OpSession:
         _write_atomic(prefix / EPISODE_FILE, json.dumps(meta, indent=2).encode())
         changed = {name: value for name, value in out.meta.items()
                    if name != "index" and source.meta.get(name) != value}
-        self._record(episode, status=DONE, params=overrides, result=changed)
+        with self.computed.edit() as data:
+            entry = data["versions"][self.key]
+            entry["episodes"][str(episode)] = {
+                **entry["episodes"].get(str(episode), {}), "status": DONE, "params": overrides, "result": changed}
+            summary = entry.get("summary")
+            if summary:
+                # Only this episode changed: summarize() reads every episode, seconds of NFS a redo.
+                summary["frames"] += int(meta["n_rows"]) - rows_before
+                summary["bytes"] += _stored_bytes(prefix) - stored_before
+            else:
+                entry["summary"] = summarize(self.path)
         return changed
 
     def keep(self, episode: int, keep: bool) -> None:
@@ -111,13 +123,13 @@ class OpSession:
             raise ValueError(f"{self.parent.path.name} has no episode {episode}")
         with self.computed.edit() as data:
             entry = data["versions"][self.key]
+            was = entry["episodes"][str(episode)]["keep"]
             entry["episodes"][str(episode)] = {"status": ACCEPTED, "keep": keep}
-            kept = [i for i in self.inputs if entry["episodes"][str(i)]["keep"]]
-            op = Session(self.path).version["op"]
-            with SessionWriter(self.path, parents=[self.parent], force=True, op=op) as writer:
-                for index in kept:
-                    writer.add_episode(self.parent.episode_meta(index), source=EpisodeRef(self.parent, index))
-            entry["summary"] = summarize(self.path)
+            if keep != was:
+                # The version's files are rewritten on close; until then only its totals follow.
+                sign = 1 if keep else -1
+                entry["summary"]["episodes"] += sign
+                entry["summary"]["frames"] += sign * int(self.parent.episode_meta(episode)["n_rows"])
 
     def replay(self, episodes: Mapping[str, dict]) -> None:
         """Repeat a recorded review: every redo with its params, every decision, every accept."""

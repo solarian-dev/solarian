@@ -91,6 +91,25 @@ def test_a_token_is_required_on_every_route_once_set():
     assert http.get("/health", headers={"Authorization": "Bearer s3cret"}).status_code == 200
 
 
+def test_warm_up_runs_after_loading_and_can_run_alone(monkeypatch):
+    steps = []
+
+    class _Warm(_Echo):
+        def load(self):
+            steps.append("load")
+
+        def warm_up(self):
+            steps.append("warm up")
+
+    monkeypatch.setattr(_Warm, "serve", lambda self, host, port: steps.append("serve"))
+    _Warm.main([])
+    assert steps == ["serve"]
+
+    steps.clear()
+    _Warm.main(["--warm-up"])
+    assert steps == ["load", "warm up"], "an image build warms up and exits without serving"
+
+
 def test_the_token_comes_from_the_environment(monkeypatch):
     monkeypatch.setenv("SOLARIAN_ENDPOINT_TOKEN", "from-env")
     http = TestClient(_loaded(_Echo()).build_app())

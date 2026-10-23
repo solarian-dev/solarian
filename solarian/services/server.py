@@ -50,6 +50,10 @@ class ServiceServer(abc.ABC):
     def load(self) -> None:
         """Load the model; called once before the server accepts requests."""
 
+    def warm_up(self) -> None:
+        """Run what the first requests would, after :meth:`load` and before the
+        server reports healthy: a model compiled on first use compiles here."""
+
     @property
     @abc.abstractmethod
     def info(self) -> Dict[str, Any]:
@@ -104,6 +108,7 @@ class ServiceServer(abc.ABC):
 
         port = self.default_port if port is None else port
         self.load()
+        self.warm_up()
         self.loaded = True
         app = self.build_app()
         logger.info(
@@ -134,6 +139,16 @@ class ServiceServer(abc.ABC):
             "--port", "-p", type=int, default=cls.default_port,
             help=f"Bind port (default {cls.default_port})",
         )
+        parser.add_argument(
+            "--warm-up", action="store_true",
+            help="Load and warm up, then exit without serving: an image build runs this "
+                 "to keep what warming up caches (compiled kernels).",
+        )
         cls.add_arguments(parser)
         args = parser.parse_args(argv)
-        cls.from_args(args).serve(host=args.host, port=args.port)
+        server = cls.from_args(args)
+        if args.warm_up:
+            server.load()
+            server.warm_up()
+            return
+        server.serve(host=args.host, port=args.port)

@@ -17,7 +17,7 @@ from test_dataset_ops import CAMERA, N, make_session
 from solarian.cli.commands.dataset import DatasetCommand
 from solarian.core.recording.archive import Session, targets_bytes, targets_member
 from solarian.datasets import Cancelled, DatasetOp, Episode, EpisodeOut, OpContext, OpKind, runner
-from solarian.datasets.computed import ACCEPTED, CLOSED, DONE, OPEN, PENDING, ComputedDataset
+from solarian.datasets.computed import ACCEPTED, CLOSED, DONE, OPEN, PENDING, ComputedDataset, summarize
 from solarian.datasets.op_session import OpSession
 
 
@@ -150,6 +150,14 @@ def test_online_map_reads_through_until_redone(computed):
         session.redo(4, {"value": 1})
 
 
+def test_a_redo_keeps_the_summary_as_a_full_count_would(computed):
+    [key] = computed.apply("mark", online=True)
+    session = OpSession(computed, key)
+    for episode, value in [(2, 7), (2, 5), (0, None), (1, 3), (2, None)]:
+        session.redo(episode, {"value": value})
+        assert computed.entry(key)["summary"] == summarize(computed.version_path(key))
+
+
 def test_a_filter_review_overrides_the_decisions(computed):
     [key] = computed.apply("delete-episodes", params={"episodes": [1]}, review=True)
     review = computed.entry(key)["episodes"]
@@ -158,9 +166,18 @@ def test_a_filter_review_overrides_the_decisions(computed):
     session = OpSession(computed, key)
     session.keep(1, True)
     session.keep(3, False)
+    session.keep(3, False)
+    open_summary = computed.entry(key)["summary"]
+    version = computed.session(key)
+    assert [version.episode_meta(i)["start_ts"] for i in version.episodes()] == [0.0, 200.0, 300.0], \
+        "the version is rewritten when it closes"
+
+    computed.close(key)
     version = computed.session(key)
     assert [version.episode_meta(i)["start_ts"] for i in version.episodes()] == [0.0, 100.0, 200.0]
-    assert computed.entry(key)["summary"]["episodes"] == 3
+    assert computed.entry(key)["summary"] == summarize(computed.version_path(key))
+    assert {k: open_summary[k] for k in ("episodes", "frames")} == \
+        {k: computed.entry(key)["summary"][k] for k in ("episodes", "frames")}
     with pytest.raises(ValueError, match="keep"):
         session.redo(0)
 
@@ -241,6 +258,7 @@ def test_cli_redo_and_accept(computed, capsys):
     review = computed.entry(key)["episodes"]
     assert review["0"] == {"status": ACCEPTED, "keep": True}
     assert review["2"]["status"] == ACCEPTED
+    computed.close(key)
     assert computed.session(key).episodes() == [0, 1, 2, 3]
     assert N == computed.session(key).episode_meta(0)["n_rows"]
 

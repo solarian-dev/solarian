@@ -60,6 +60,7 @@ class TrainCommand(BaseCommand):
             train_cfg.output_dir = str(output_dir)
 
             trainer = trainer_cls(train_cfg, output_dir=str(output_dir))
+            trainer.check_inputs()
             trainer.train()
 
         except Exception as e:

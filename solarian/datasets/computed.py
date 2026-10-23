@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Sequence
 
-from solarian.core.recording.archive import EpisodeRef, Session, SessionWriter, materialize
+from solarian.core.recording.archive import VERSION_FILE, EpisodeRef, Session, SessionWriter, materialize
 from solarian.datasets.op import OpKind
 from solarian.datasets.runner import Progress, get_op, op_record, run_op, validate_params
 
@@ -270,6 +270,16 @@ class ComputedDataset:
             for index in parent.episodes():
                 writer.add_episode(parent.episode_meta(index), source=EpisodeRef(parent, index))
 
+    def _write_kept(self, key: str, entry: dict) -> None:
+        """Rewrite filter version ``key`` as its review decided: the parent's kept episodes."""
+        parent = self.session(entry["parent"])
+        path = self.version_path(key)
+        op = json.loads((path / VERSION_FILE).read_bytes())["op"]
+        with SessionWriter(path, parents=[parent], force=True, op=op) as writer:
+            for index in entry["inputs"]:
+                if entry["episodes"][str(index)]["keep"]:
+                    writer.add_episode(parent.episode_meta(index), source=EpisodeRef(parent, index))
+
     def _initial_review(self, kind: OpKind, entry: dict, key: str, online: bool) -> dict:
         if entry["state"] == CLOSED:
             return {}
@@ -297,6 +307,9 @@ class ComputedDataset:
                 raise KeyError(f"{self.path.name} has no version {key!r}")
             if entry["state"] != OPEN:
                 raise ValueError(f"{key} is {entry['state']}, not open")
+            if get_op(entry["op"]).kind is OpKind.FILTER:
+                self._write_kept(key, entry)
+                entry["summary"] = summarize(self.version_path(key))
             entry["state"] = CLOSED
             entry["closed_at"] = time.time()
         shutil.rmtree(self.version_path(key) / ".work", ignore_errors=True)
