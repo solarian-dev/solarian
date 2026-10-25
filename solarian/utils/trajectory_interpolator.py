@@ -37,6 +37,89 @@ def _extend(times: np.ndarray, values: np.ndarray, t: float, value) -> tuple:
     return np.append(times, [t]), np.concatenate([values, value[None]])
 
 
+# Knot spacing (s) for an acceleration-limited move. The interpolators are
+# piecewise linear, so the trapezoid is only as smooth as this sampling; 10 ms
+# is finer than any module tick that samples it.
+_PROFILE_DT = 0.01
+# Lookback (s) for the finite-difference velocity of a trajectory.
+_VELOCITY_DT = 0.01
+# A profile shorter than this (s) is an instant: added to a monotonic clock
+# days into uptime, it would not even advance the time.
+_MIN_PROFILE_S = 1e-6
+
+
+def _knots(total: float, dt: float) -> np.ndarray:
+    """0, dt, 2dt, ... and *total*, never closer than dt/2 to one another.
+
+    The sample times get added to ``time.monotonic()``; at ~5e5 s of uptime
+    float64 resolves only ~1e-10 s, so a last sample a hair before *total*
+    would land on the same instant and break ``Slerp``.
+    """
+    inner = np.arange(0.0, max(total - 0.5 * dt, 0.0), dt)
+    if inner.size == 0:
+        inner = np.array([0.0])
+    return np.append(inner, total)
+
+
+def _trapezoid(dist: float, v_max: float, a_max: float, v0: float = 0.0,
+               dt: float = _PROFILE_DT) -> tuple[np.ndarray, np.ndarray]:
+    """Knot times from 0 and fractions of *dist* for a move that ends at rest.
+
+    Ramps from *v0* at *a_max*, cruises at *v_max*, and decelerates at *a_max*
+    to stop on the target; a move too short to reach *v_max* peaks lower
+    (triangular). A *v0* that cannot stop within *dist* at *a_max* decelerates
+    at exactly the rate that does, so the target is never overshot.
+    """
+    if dist <= 0.0:
+        return np.array([0.0]), np.array([1.0])
+    # An unlimited axis still needs finite arithmetic: inf * 0 is nan.
+    a_max = min(float(a_max), 1e9)
+    v_max = min(float(v_max), 1e9)
+    v0 = min(max(float(v0), 0.0), v_max)
+    if v0 * v0 >= 2.0 * a_max * dist:
+        a_dec = v0 * v0 / (2.0 * dist)
+        total = 2.0 * dist / v0
+        if total < _MIN_PROFILE_S:
+            return np.array([0.0]), np.array([1.0])
+        taus = _knots(total, dt)
+        x = v0 * taus - 0.5 * a_dec * taus * taus
+    else:
+        v_peak = min(v_max, float(np.sqrt(a_max * dist + 0.5 * v0 * v0)))
+        t1 = (v_peak - v0) / a_max
+        d1 = (v_peak * v_peak - v0 * v0) / (2.0 * a_max)
+        d3 = v_peak * v_peak / (2.0 * a_max)
+        t2 = max(dist - d1 - d3, 0.0) / v_peak
+        total = t1 + t2 + v_peak / a_max
+        if total < _MIN_PROFILE_S:
+            return np.array([0.0]), np.array([1.0])
+        taus = _knots(total, dt)
+        ta = np.minimum(taus, t1)
+        tc = np.clip(taus - t1, 0.0, t2)
+        td = np.clip(taus - t1 - t2, 0.0, None)
+        x = (v0 * ta + 0.5 * a_max * ta * ta
+             + v_peak * tc
+             + v_peak * td - 0.5 * a_max * td * td)
+    s = np.clip(x / dist, 0.0, 1.0)
+    s[-1] = 1.0
+    return taus, s
+
+
+def _lookback(times: np.ndarray, t: float) -> float:
+    """Finite-difference window ending at *t* that stays on the trajectory.
+
+    Reaching back before the first knot reads the clamped start pose, which
+    halves the apparent speed right after a retarget.
+    """
+    return min(_VELOCITY_DT, float(t) - float(times[0]))
+
+
+def _stretch(taus: np.ndarray, duration: float) -> np.ndarray:
+    """Slow a profile uniformly so it lasts at least *duration*."""
+    if taus[-1] > 0.0 and duration > taus[-1]:
+        return taus * (duration / taus[-1])
+    return taus
+
+
 class TrajectoryInterpolator(ABC):
     """Abstract base class for trajectory interpolators."""
     
@@ -276,14 +359,32 @@ class JointTrajectoryInterpolator(TrajectoryInterpolator):
             max_joint_speed = np.full(self.n_joints, max_joint_speed[0])
         return float(np.max(distances / max_joint_speed))
     
+    def velocity(self, t: float) -> np.ndarray:
+        """Joint velocity just before *t*; zero past the last waypoint."""
+        h = _lookback(self.times, t)
+        if h <= 0.0:
+            return np.zeros(self.n_joints)
+        return (self(t) - self(t - h)) / h
+
     def drive_to_waypoint(self, value, time, curr_time,
-                          max_joint_speed=np.inf) -> "JointTrajectoryInterpolator":
-        """Drive to a waypoint, starting from curr_time."""
+                          max_joint_speed=np.inf,
+                          max_joint_acc=None) -> "JointTrajectoryInterpolator":
+        """Drive to a waypoint, starting from curr_time.
+
+        With *max_joint_acc* the move is a trapezoid that starts at the current
+        velocity along the new path and ends at rest; without it, one
+        constant-speed segment.
+        """
         value = np.atleast_1d(value)
         assert len(value) == self.n_joints, f"value must have {self.n_joints} joints"
         time = max(time, curr_time)
         
         curr_value = self(curr_time)
+        if max_joint_acc is not None:
+            return self._drive_profiled(
+                curr_value, value, time - curr_time, curr_time,
+                max_joint_speed, max_joint_acc,
+            )
         min_duration = self._compute_min_duration(curr_value, value, max_joint_speed)
         duration = time - curr_time
         duration = max(duration, min_duration)
@@ -296,6 +397,27 @@ class JointTrajectoryInterpolator(TrajectoryInterpolator):
         )
         
         return JointTrajectoryInterpolator(times, values)
+
+    def _drive_profiled(self, start, end, duration, curr_time,
+                        max_joint_speed, max_joint_acc) -> "JointTrajectoryInterpolator":
+        """One shared time scaling; the joint that needs longest sets it."""
+        delta = end - start
+        dist = np.abs(delta)
+        speeds = np.broadcast_to(np.atleast_1d(max_joint_speed), dist.shape)
+        accs = np.broadcast_to(np.atleast_1d(max_joint_acc), dist.shape)
+        if not np.any(dist > 0.0):
+            return JointTrajectoryInterpolator(np.array([curr_time]), end[None, :])
+        ratio = dist / speeds
+        lead = int(np.argmax(ratio if np.any(ratio > 0.0) else dist))
+        rate = max(float(self.velocity(curr_time)[lead] / delta[lead]), 0.0)
+        taus, s = max(
+            (_trapezoid(dist[i], speeds[i], accs[i], rate * dist[i])
+             for i in range(len(dist))),
+            key=lambda profile: profile[0][-1],
+        )
+        taus = _stretch(taus, duration)
+        values = start[None, :] + s[:, None] * delta[None, :]
+        return JointTrajectoryInterpolator(curr_time + taus, values)
     
     def schedule_waypoint(self, value, time, curr_time=None,
                           last_waypoint_time=None,
@@ -431,14 +553,43 @@ class PoseTrajectoryInterpolator(TrajectoryInterpolator):
         all_poses = self(all_times)
         return PoseTrajectoryInterpolator(times=all_times, poses=all_poses)
     
+    def velocity(self, t: float) -> np.ndarray:
+        """Linear (m/s) and world-frame angular (rad/s) velocity just before *t*.
+
+        Zero past the last waypoint, where the trajectory holds.
+        """
+        h = _lookback(self.times, t)
+        if h <= 0.0:
+            return np.zeros(6)
+        before, now = self(t - h), self(t)
+        turn = (st.Rotation.from_rotvec(now[3:])
+                * st.Rotation.from_rotvec(before[3:]).inv())
+        return np.concatenate([(now[:3] - before[:3]) / h, turn.as_rotvec() / h])
+
     def drive_to_waypoint(self, pose, time, curr_time,
                           max_pos_speed=np.inf, 
-                          max_rot_speed=np.inf) -> "PoseTrajectoryInterpolator":
+                          max_rot_speed=np.inf,
+                          max_pos_acc=None,
+                          max_rot_acc=None) -> "PoseTrajectoryInterpolator":
+        """Drive to *pose*, starting from curr_time.
+
+        With an acceleration limit the move is a trapezoid that starts at the
+        current velocity along the new path and ends at rest; without one, a
+        single constant-speed segment.
+        """
         assert max_pos_speed > 0
         assert max_rot_speed > 0
         time = max(time, curr_time)
         
         curr_pose = self(curr_time)
+        if max_pos_acc is not None or max_rot_acc is not None:
+            return self._drive_profiled(
+                curr_pose, np.asarray(pose, dtype=np.float64),
+                time - curr_time, curr_time,
+                max_pos_speed, max_rot_speed,
+                np.inf if max_pos_acc is None else max_pos_acc,
+                np.inf if max_rot_acc is None else max_rot_acc,
+            )
         pos_dist, rot_dist = pose_distance(curr_pose, pose)
         pos_min_duration = pos_dist / max_pos_speed
         rot_min_duration = rot_dist / max_rot_speed
@@ -453,6 +604,88 @@ class PoseTrajectoryInterpolator(TrajectoryInterpolator):
         )
 
         return PoseTrajectoryInterpolator(times, poses)
+
+    def _drive_profiled(self, start, end, duration, curr_time,
+                        max_pos_speed, max_rot_speed,
+                        max_pos_acc, max_rot_acc,
+                        rate: float | None = None) -> "PoseTrajectoryInterpolator":
+        """Straight line plus slerp, on one time scaling set by the slower axis.
+
+        *rate* is the progress (1/s) along the path at *curr_time*; when not
+        given it is read off the current motion.
+        """
+        delta_pos = end[:3] - start[:3]
+        start_rot = st.Rotation.from_rotvec(start[3:])
+        delta_rot = (st.Rotation.from_rotvec(end[3:]) * start_rot.inv()).as_rotvec()
+        pos_dist = float(np.linalg.norm(delta_pos))
+        rot_dist = float(np.linalg.norm(delta_rot))
+        if pos_dist == 0.0 and rot_dist == 0.0:
+            return PoseTrajectoryInterpolator(np.array([curr_time]), end[None, :])
+
+        if rate is None:
+            # Read off whichever axis dominates the move.
+            velocity = self.velocity(curr_time)
+            if pos_dist / max_pos_speed >= rot_dist / max_rot_speed:
+                rate = float(velocity[:3] @ delta_pos) / (pos_dist * pos_dist)
+            else:
+                rate = float(velocity[3:] @ delta_rot) / (rot_dist * rot_dist)
+        if rate < 0.0:
+            # Heading back the way it came: brake to rest first rather than
+            # reversing in one tick.
+            braked = self.stop(curr_time, max_pos_acc, max_rot_acc)
+            rest_time = float(braked.times[-1])
+            rest = braked(rest_time)
+            onward = PoseTrajectoryInterpolator(
+                np.array([rest_time]), rest[None, :]
+            )._drive_profiled(
+                rest, end, duration - (rest_time - curr_time),
+                rest_time, max_pos_speed, max_rot_speed, max_pos_acc, max_rot_acc,
+            )
+            return PoseTrajectoryInterpolator(
+                np.concatenate([braked.times, onward.times[1:]]),
+                np.concatenate([braked.poses, onward.poses[1:]]),
+            )
+        rate = max(rate, 0.0)
+
+        taus, s = max(
+            (_trapezoid(pos_dist, max_pos_speed, max_pos_acc, rate * pos_dist),
+             _trapezoid(rot_dist, max_rot_speed, max_rot_acc, rate * rot_dist)),
+            key=lambda profile: profile[0][-1],
+        )
+        taus = _stretch(taus, duration)
+        poses = np.empty((len(s), 6))
+        poses[:, :3] = start[:3] + s[:, None] * delta_pos
+        poses[:, 3:] = (
+            st.Rotation.from_rotvec(s[:, None] * delta_rot) * start_rot
+        ).as_rotvec()
+        return PoseTrajectoryInterpolator(curr_time + taus, poses)
+
+    def stop(self, curr_time, max_pos_acc, max_rot_acc) -> "PoseTrajectoryInterpolator":
+        """Decelerate from the current motion to rest at the braking pose."""
+        pose = self(curr_time)
+        velocity = self.velocity(curr_time)
+        speed = float(np.linalg.norm(velocity[:3]))
+        rot_speed = float(np.linalg.norm(velocity[3:]))
+        if speed == 0.0 and rot_speed == 0.0:
+            return PoseTrajectoryInterpolator(np.array([curr_time]), pose[None, :])
+        target = pose.copy()
+        target[:3] += velocity[:3] * speed / (2.0 * max_pos_acc)
+        turn = velocity[3:] * rot_speed / (2.0 * max_rot_acc)
+        target[3:] = (
+            st.Rotation.from_rotvec(turn) * st.Rotation.from_rotvec(pose[3:])
+        ).as_rotvec()
+        # Braking distance v^2/2a covered from speed v is progress 2a/v per
+        # second; the axis that takes longer to stop sets the shared scaling.
+        rates = [
+            2.0 * acc / v
+            for v, acc in ((speed, max_pos_acc), (rot_speed, max_rot_acc))
+            if v > 0.0
+        ]
+        return self._drive_profiled(
+            pose, target, 0.0, curr_time,
+            max(speed, 1e-9), max(rot_speed, 1e-9), max_pos_acc, max_rot_acc,
+            rate=min(rates),
+        )
 
     def schedule_waypoint(self, pose, time, 
                           max_pos_speed=np.inf, 

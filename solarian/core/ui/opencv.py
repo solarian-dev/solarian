@@ -119,11 +119,18 @@ class OpenCVUI:
         frame = tint_masks(image.data, image.masks).copy()
         for mask in image.masks:
             cv2.polylines(frame, mask_rings(mask), True, MASK_COLOR, 2)
-        for bbox in image.bboxes:
+        texts = list(image.bbox_texts[:len(image.bboxes)])
+        texts += [None] * (len(image.bboxes) - len(texts))
+        for bbox, text in zip(image.bboxes, texts):
             if all(value == 0 for value in bbox[:4]):
                 continue
             x1, y1, x2, y2 = bbox[:4]
             cv2.rectangle(
                 frame, (int(x1), int(y1)), (int(x2), int(y2)), _BBOX_COLOR, 2
             )
+            if text:
+                cv2.putText(
+                    frame, text, (int(x1), max(14, int(y1) - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, _BBOX_COLOR, 1, cv2.LINE_AA,
+                )
         return frame

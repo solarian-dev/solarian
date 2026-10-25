@@ -822,6 +822,8 @@ class Module(ABC):
         int(ActionType.MOVE_J),
         int(ActionType.SERVO_L),
         int(ActionType.SERVO_J),
+        int(ActionType.STOP_L),
+        int(ActionType.STOP_J),
     })
 
     def _is_drive_waypoint(self, action) -> bool:

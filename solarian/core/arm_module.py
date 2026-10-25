@@ -48,6 +48,11 @@ _LATCH_CONFIRM_TRIES = 3
 _LATCH_JUMP_TICKS = 120
 
 
+def _float_param(action: ModuleAction, key: str) -> float | None:
+    value = action.params.get(key)
+    return float(value) if value is not None else None
+
+
 def _max_wrapped_abs(delta: np.ndarray, spans: np.ndarray) -> float:
     """Largest per-joint error, wrapping continuous joints onto their circle."""
     delta = np.asarray(delta, dtype=np.float64).reshape(-1)
@@ -565,14 +570,41 @@ class ArmModule(ActuatorModule):
         self._joint_interp = None
 
     # ========= UR-style motion API (SI units) ============
-    def moveJ(self, q, speed: float = _DEFAULT_JOINT_SPEED, acceleration: float = 1.4, t_now: float | None = None) -> None:
+    def _pose_accel_kwargs(
+        self,
+        max_pos_acc: float | None = None,
+        max_rot_acc: float | None = None,
+    ) -> dict[str, float | None]:
+        """``cfg.max_accel`` split into position / rotation, call site winning."""
+        max_accel = self.cfg.max_accel
+        if max_accel is None:
+            pos = rot = None
+        elif isinstance(max_accel, (int, float)):
+            pos = rot = float(max_accel)
+        else:
+            pos = float(max_accel[0])
+            rot = float(max_accel[1] if len(max_accel) > 1 else max_accel[0])
+        if max_pos_acc is not None:
+            pos = float(max_pos_acc)
+        if max_rot_acc is not None:
+            rot = float(max_rot_acc)
+        return {"max_pos_acc": pos, "max_rot_acc": rot}
+
+    def moveJ(
+        self,
+        q,
+        speed: float = _DEFAULT_JOINT_SPEED,
+        acceleration: float | None = None,
+        t_now: float | None = None,
+    ) -> None:
         """Exclusive joint-space move to ``q`` (radians).
 
-        Stops Cartesian servo (UR ``servoStop`` + ``moveJ``). ``acceleration`` is
-        accepted for UR5 overrides; the software interpolator is speed-limited
-        linear only.
+        Stops Cartesian servo (UR ``servoStop`` + ``moveJ``). ``acceleration``
+        (rad/s^2, default ``cfg.max_joint_accel``) ramps the move up and down;
+        without one it runs at constant ``speed``.
         """
-        del acceleration  # software interpolator has no trapezoid
+        if acceleration is None:
+            acceleration = self.cfg.max_joint_accel
         t = float(t_now if t_now is not None else time.monotonic())
         self._exclusive_move = True
         self._logged_exclusive_block = False
@@ -583,22 +615,30 @@ class ArmModule(ActuatorModule):
             times=np.array([t]), values=q_now[None, :]
         )
         self._joint_interp = interp.drive_to_waypoint(
-            q_target, time=t, curr_time=t, max_joint_speed=float(speed)
+            q_target,
+            time=t,
+            curr_time=t,
+            max_joint_speed=float(speed),
+            max_joint_acc=acceleration,
         )
 
     def moveL(
         self,
         pose,
         speed: float | None = None,
-        acceleration: float = 1.2,
+        acceleration: float | None = None,
         t_now: float | None = None,
         rot_speed: float | None = None,
+        rot_acceleration: float | None = None,
     ) -> None:
         """Exclusive linear Cartesian move to ``pose`` (metres + rotvec).
 
-        ``speed`` / ``rot_speed`` override ``cfg.max_speed`` when given.
+        ``speed`` / ``rot_speed`` override ``cfg.max_speed`` and
+        ``acceleration`` / ``rot_acceleration`` override ``cfg.max_accel``.
+        With an acceleration the move ramps up from the current motion and
+        down to rest, like a UR ``moveL``; without one it is a single
+        constant-speed segment.
         """
-        del acceleration
         t = float(t_now if t_now is not None else time.monotonic())
         self._exclusive_move = True
         self._logged_exclusive_block = False
@@ -614,7 +654,38 @@ class ArmModule(ActuatorModule):
                 max_pos_speed=float(speed) if speed is not None else None,
                 max_rot_speed=float(rot_speed) if rot_speed is not None else None,
             ),
+            **self._pose_accel_kwargs(acceleration, rot_acceleration),
         )
+        self.last_waypoint_time = float(self.interp.times[-1])
+
+    def stopL(
+        self,
+        acceleration: float | None = None,
+        rot_acceleration: float | None = None,
+        t_now: float | None = None,
+    ) -> None:
+        """Decelerate the Cartesian motion to rest (UR ``stopL``).
+
+        Brakes along the current velocity at ``acceleration`` /
+        ``rot_acceleration`` (default ``cfg.max_accel``). With no limit
+        configured, holds the commanded pose at once.
+        """
+        t = float(t_now if t_now is not None else time.monotonic())
+        if self._joint_interp is not None:
+            self._joint_interp = self._joint_interp.trim(t, t)
+        if self.interp is None:
+            return
+        accel = self._pose_accel_kwargs(acceleration, rot_acceleration)
+        if accel["max_pos_acc"] is None and accel["max_rot_acc"] is None:
+            self.interp = self.interp.trim(t, t)
+        else:
+            self._exclusive_move = True
+            self._logged_exclusive_block = False
+            self.interp = self.interp.stop(
+                t,
+                np.inf if accel["max_pos_acc"] is None else accel["max_pos_acc"],
+                np.inf if accel["max_rot_acc"] is None else accel["max_rot_acc"],
+            )
         self.last_waypoint_time = float(self.interp.times[-1])
 
     def servoJ(self, q, duration: float = 0.1, t_now: float | None = None) -> None:
@@ -729,14 +800,29 @@ class ArmModule(ActuatorModule):
             except Exception:  # noqa: BLE001
                 current = np.zeros(6, dtype=np.float64)
             pose = compose_ee_delta(current, pose)
-        speed = action.params.get("speed")
-        rot_speed = action.params.get("rot_speed")
         self.moveL(
             pose,
-            speed=float(speed) if speed is not None else None,
-            rot_speed=float(rot_speed) if rot_speed is not None else None,
+            speed=_float_param(action, "speed"),
+            acceleration=_float_param(action, "accel"),
+            rot_speed=_float_param(action, "rot_speed"),
+            rot_acceleration=_float_param(action, "rot_accel"),
             t_now=t_now,
         )
+        return True
+
+    @action_handler(ActionType.STOP_L)
+    def _handle_stop_l(self, action: ModuleAction, t_now: float) -> bool:
+        self.stopL(
+            acceleration=_float_param(action, "accel"),
+            rot_acceleration=_float_param(action, "rot_accel"),
+            t_now=t_now,
+        )
+        return True
+
+    @action_handler(ActionType.STOP_J)
+    def _handle_stop_j(self, action: ModuleAction, t_now: float) -> bool:
+        if self._joint_interp is not None:
+            self._joint_interp = self._joint_interp.trim(t_now, t_now)
         return True
 
     @action_handler(ActionType.MOVE_J)
@@ -746,14 +832,11 @@ class ArmModule(ActuatorModule):
             self._warn_missing_joints("MOVE_J")
             return True
         q, _ = extracted
-        speed = action.params.get("speed")
+        speed = _float_param(action, "speed")
         self.moveJ(
             q,
-            speed=(
-                float(speed)
-                if speed is not None
-                else float(self.default_joint_speed)
-            ),
+            speed=speed if speed is not None else float(self.default_joint_speed),
+            acceleration=_float_param(action, "accel"),
             t_now=t_now,
         )
         return True

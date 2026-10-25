@@ -66,13 +66,15 @@ class UIImage:
     ``data`` is ``HxWx3`` uint8 RGB. ``jpeg``, when set, is that same frame
     already encoded — the bytes that arrived from the robot — and a front end
     that sends a picture sends those rather than encoding ``data``. ``masks``
-    are ``HxW`` 0/1 arrays the size of ``data``.
+    are ``HxW`` 0/1 arrays the size of ``data``. ``bbox_texts`` has one entry
+    per box: the text written by it, or None.
     """
 
     label: str
     data: np.ndarray
     bboxes: list = field(default_factory=list)
     masks: list = field(default_factory=list)
+    bbox_texts: list = field(default_factory=list)
     jpeg: bytes | None = None
 
 

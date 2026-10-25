@@ -642,7 +642,7 @@ class Controller(EventHost, ABC):
                     image_keys.append((module_name, field_name))
 
             for field_name, cf in calculated_fields.items():
-                if cf.data_class not in (BoundingBoxData, MaskData):
+                if not issubclass(cf.data_class, (BoundingBoxData, MaskData)):
                     continue
                 for inp in cf.inputs:
                     input_field = field_name_for_input(
@@ -687,6 +687,7 @@ class Controller(EventHost, ABC):
                 continue
 
             bboxes = []
+            bbox_texts = []
             masks = []
             for overlay_field in self._overlay_field_map.get((module_name, field_name), ()):
                 try:
@@ -701,6 +702,7 @@ class Controller(EventHost, ABC):
                         masks.append(overlay.value)
                 else:
                     bboxes.append(overlay.value)
+                    bbox_texts.append(overlay.overlay_text())
 
             images.append(
                 UIImage(
@@ -708,6 +710,7 @@ class Controller(EventHost, ABC):
                     data=field_data.value,
                     bboxes=bboxes,
                     masks=masks,
+                    bbox_texts=bbox_texts,
                     jpeg=field_data._jpeg,
                 )
             )
@@ -1390,6 +1393,16 @@ class Controller(EventHost, ABC):
             self._remote_running.pop(name, None)
             if skill.execution_mode is ExecutionMode.INLINE:
                 skill.teardown()
+                # What teardown dispatched, e.g. a stop for the motion the
+                # skill started, has to go out: the skill is no longer
+                # drained by the tick.
+                last_words: list[dict] = []
+                self._drain_skill_actions(skill, last_words)
+                self._pending_actions.extend(
+                    Action(action_type=ActionType.MODULE_ACTION, data=slot)
+                    for slot in last_words
+                    if slot
+                )
             else:
                 skill.request_stop()
             logger.info("Stopped skill '%s'", name)
@@ -1506,6 +1519,27 @@ class Controller(EventHost, ABC):
                 self._local_skills.pop(name, None)
                 self._remote_stopping.pop(name, None)
 
+    def _drain_skill_actions(self, skill, slots: list[dict]) -> None:
+        """Merge everything *skill* queued into *slots*, one per queue position."""
+        for module_name, module_queue in skill.action_queues.items():
+            if module_queue is None or module_queue.empty():
+                continue
+            try:
+                queued_actions = module_queue.get_all()
+            except Exception:
+                logger.exception(
+                    "Could not drain '%s' actions from skill '%s'",
+                    module_name,
+                    skill.skill_name,
+                )
+                continue
+            for index, module_action in enumerate(queued_actions):
+                while len(slots) <= index:
+                    slots.append({})
+                _deep_merge_module_actions(
+                    slots[index], {module_name: module_action.to_dict()}
+                )
+
     def _tick_skills(self) -> Action | None:
         # Before the skills: an episode boundary that loses a race with a
         # teleop action is a corrupt episode, not a late one.
@@ -1568,24 +1602,7 @@ class Controller(EventHost, ABC):
         for skill in list(self._local_skills.values()):
             if skill.execution_place.is_remote:
                 continue
-            for module_name, module_queue in skill.action_queues.items():
-                if module_queue is None or module_queue.empty():
-                    continue
-                try:
-                    queued_actions = module_queue.get_all()
-                except Exception:
-                    logger.exception(
-                        "Could not drain '%s' actions from skill '%s'",
-                        module_name,
-                        skill.skill_name,
-                    )
-                    continue
-                for index, module_action in enumerate(queued_actions):
-                    while len(slots) <= index:
-                        slots.append({})
-                    _deep_merge_module_actions(
-                        slots[index], {module_name: module_action.to_dict()}
-                    )
+            self._drain_skill_actions(skill, slots)
         for name in finished:
             self.stop_skill(name)
 

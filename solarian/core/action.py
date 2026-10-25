@@ -49,6 +49,11 @@ class ActionType:
     #: "field", "params"}``; whichever host computes the field handles it.
     START_SERVICE = 17
     STOP_SERVICE = 18
+    #: Decelerate the Cartesian motion to rest (``stopL``). ``params["accel"]``
+    #: / ``["rot_accel"]`` override the module's ``max_accel``.
+    STOP_L = 19
+    #: Stop configuration-space motion and hold the commanded target.
+    STOP_J = 20
     CUSTOM_START = 100
 
     def __init__(self, value: int = 0):

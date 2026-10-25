@@ -243,6 +243,14 @@ class GripperModule(ActuatorModule):
         )
         return True
 
+    @action_handler(ActionType.STOP_J)
+    def _handle_stop_j(self, action: ModuleAction, t_now: float) -> bool:
+        """Hold the aperture the trajectory has reached."""
+        if self.interp is not None:
+            self.interp = self.interp.trim(t_now, t_now)
+            self.last_waypoint_time = t_now
+        return True
+
     @action_handler(ActionType.SERVO_J)
     def _handle_servo_j(self, action: ModuleAction, t_now: float) -> bool:
         extracted = self._extract_scalar_waypoint(action)

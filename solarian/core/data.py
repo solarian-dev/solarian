@@ -323,6 +323,11 @@ class BoundingBoxData(Data):
     def _coerce_payload(self, value):
         return np.asarray(value, dtype=self.dtype).reshape(self.shape)
 
+    def overlay_text(self) -> str | None:
+        """What the UI writes by the box; a subclass carrying more than the
+        corners says what they mean here. None writes nothing."""
+        return None
+
 
 class MaskData(Data):
     """``(H, W)`` uint8 0/1 segmentation of the source image. All zeros = no target."""

@@ -492,6 +492,7 @@ def _movej_arm(q_now: np.ndarray | None = None) -> ArmModule:
     module.interp = None
     module._joint_interp = None
     module.last_waypoint_time = 0.0
+    module.cfg = SimpleNamespace(max_joint_accel=None)
     start = (
         np.zeros(6, dtype=np.float64)
         if q_now is None

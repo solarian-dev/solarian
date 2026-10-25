@@ -23,6 +23,7 @@ keys), which the timeout-based OpenCV ``waitKey`` path cannot.
 from __future__ import annotations
 
 import os
+from itertools import zip_longest
 from typing import Callable, Optional, Sequence
 
 import numpy as np
@@ -184,9 +185,10 @@ class ControllerGUI:
 
         Args:
             sections: ``(title, [(field, value), ...])`` dashboard panels.
-            images: ``(label, rgb_array, bboxes, masks)`` camera frames
-                (HxWx3, uint8, RGB), each with its pixel ``(x0, y0, x1, y1)``
-                boxes and its HxW 0/1 masks.
+            images: ``(label, rgb_array, bboxes, masks, bbox_texts)`` camera
+                frames (HxWx3, uint8, RGB), each with its pixel
+                ``(x0, y0, x1, y1)`` boxes, its HxW 0/1 masks, and per box the
+                text written above it or None.
             key_help: ``(keys, description)`` rows for the bindings panel;
                 individual keys (split on ``/`` and spaces) that are currently
                 held are highlighted.
@@ -308,19 +310,20 @@ class ControllerGUI:
         cell_w = width // cols
         cell_h = height // rows
         self._image_rects = []
-        for i, (label, img, bboxes, masks) in enumerate(images):
+        for i, (label, img, bboxes, masks, bbox_texts) in enumerate(images):
             c = i % cols
             r = i // cols
             cx = x + c * cell_w
             cy = y + r * cell_h
             drawn = self._blit_image(
-                img, bboxes, masks, cx, cy + self._line_h, cell_w - 6, cell_h - self._line_h - 6
+                img, bboxes, masks, cx, cy + self._line_h, cell_w - 6, cell_h - self._line_h - 6,
+                bbox_texts,
             )
             if drawn is not None:
                 self._image_rects.append((label, *drawn))
             self._blit_text(label, cx + 2, cy, _TITLE)
 
-    def _blit_image(self, img: np.ndarray, bboxes, masks, x, y, max_w, max_h):
+    def _blit_image(self, img: np.ndarray, bboxes, masks, x, y, max_w, max_h, bbox_texts=()):
         """Draw *img* scaled into the box; returns ``(rect, (iw, ih))`` or None."""
         pygame = self._pygame
         if img is None or max_w <= 0 or max_h <= 0:
@@ -345,21 +348,25 @@ class ControllerGUI:
             for ring in mask_rings(mask):
                 points = [(x + int(px * dw / iw), y + int(py * dh / ih)) for px, py in ring]
                 pygame.draw.lines(self.screen, MASK_COLOR, True, points, 2)
-        for bbox in bboxes:
+        for bbox, text in zip_longest(bboxes, list(bbox_texts)[:len(bboxes)]):
             x0, y0, x1, y1 = (int(v) for v in bbox[:4])
             if x0 == y0 == x1 == y1 == 0:
                 continue
+            left, top = x + int(x0 * dw / iw), y + int(y0 * dh / ih)
             pygame.draw.rect(
                 self.screen,
                 _BBOX,
                 pygame.Rect(
-                    x + int(x0 * dw / iw),
-                    y + int(y0 * dh / ih),
+                    left,
+                    top,
                     max(1, int((x1 - x0) * dw / iw)),
                     max(1, int((y1 - y0) * dh / ih)),
                 ),
                 width=2,
             )
+            if text:
+                surf = self.font.render(text, True, _BBOX, _BG)
+                self.screen.blit(surf, (left, max(y, top - surf.get_height() - 2)))
         return (x, y, dw, dh), (iw, ih)
 
     def _blit_text(self, text, x, y, color, font=None):

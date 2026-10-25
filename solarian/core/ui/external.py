@@ -335,6 +335,7 @@ class ExternalUI:
                     "width": int(width),
                     "height": int(height),
                     "bboxes": [[float(v) for v in bbox[:4]] for bbox in image.bboxes],
+                    "bbox_texts": list(image.bbox_texts),
                     # Flat [x, y, ...] rings, filled even-odd: Solarian Base's TargetOutlines.
                     "outlines": [
                         ring.round().astype(int).reshape(-1).tolist()

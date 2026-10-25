@@ -99,7 +99,11 @@ def _within_speed_limit(module: ArmModule, amplitude: float, freq: float) -> boo
 
 def _run_to(module: ArmModule, target, speed: float, axis: int | None = None):
     """Drive to *target* at *speed*, recording *axis* when one is given."""
-    module.moveL(target, speed=speed)
+    # Unlimited acceleration: a ramp inside the 10-90% window would read as
+    # the actuator being slower than it is.
+    module.moveL(
+        target, speed=speed, acceleration=np.inf, rot_acceleration=np.inf
+    )
     # Planned at the commanded speed even when the arm cannot manage it, so
     # stopping at the planned end would cut the move short.
     duration = module.last_waypoint_time - time.monotonic() + SETTLE_S

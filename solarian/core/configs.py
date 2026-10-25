@@ -235,6 +235,13 @@ class ModuleConfig(BaseModel):
     # # Interpolator settings
     interpolator_type: InterpolatorType = InterpolatorType.JOINT
     max_speed: float | list[float] = 1.0  # max speed for interpolation (single or per-joint)
+    #: Acceleration limit for ``moveL`` / ``moveJ`` / ``stopL``, shaped like
+    #: ``max_speed`` (``[pos m/s^2, rot rad/s^2]`` on a pose interpolator).
+    #: ``None`` keeps go-to moves at constant speed with no ramp.
+    max_accel: float | list[float] | None = None
+    #: Joint acceleration limit (rad/s^2) for an arm's ``moveJ``; ``max_accel``
+    #: is Cartesian there. ``None`` keeps ``moveJ`` at constant speed.
+    max_joint_accel: float | None = None
     #: Seconds between commanding a motion and the hardware performing it.
     #: The mirror of :attr:`receive_latency`: that one moves a timestamp
     #: backwards, this one moves a target time earlier, so a waypoint has to be

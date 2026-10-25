@@ -43,7 +43,8 @@ class PygameUI:
         self._gui.render(
             sections=snapshot.sections,
             images=[
-                (image.label, image.data, image.bboxes, image.masks) for image in snapshot.images
+                (image.label, image.data, image.bboxes, image.masks, image.bbox_texts)
+                for image in snapshot.images
             ],
             key_help=snapshot.key_help,
             status=snapshot.status,
