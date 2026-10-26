@@ -42,7 +42,8 @@ class DPTHead(nn.Module):
         features=256, 
         use_bn=False, 
         out_channels=[256, 512, 1024, 1024], 
-        use_clstoken=False
+        use_clstoken=False,
+        metric=False,
     ):
         super(DPTHead, self).__init__()
         
@@ -110,7 +111,8 @@ class DPTHead(nn.Module):
             nn.Conv2d(head_features_1 // 2, head_features_2, kernel_size=3, stride=1, padding=1),
             nn.ReLU(True),
             nn.Conv2d(head_features_2, 1, kernel_size=1, stride=1, padding=0),
-            nn.ReLU(True),
+            # The metric checkpoints end in 0..1, scaled by max_depth.
+            nn.Sigmoid() if metric else nn.ReLU(True),
             nn.Identity(),
         )
     
@@ -157,9 +159,13 @@ class DepthAnythingV2(nn.Module):
         features=256, 
         out_channels=[256, 512, 1024, 1024], 
         use_bn=False, 
-        use_clstoken=False
+        use_clstoken=False,
+        max_depth=None,
     ):
+        """``max_depth`` (metres) builds the metric model, whose output is depth;
+        without it the output is relative disparity."""
         super(DepthAnythingV2, self).__init__()
+        self.max_depth = max_depth
         
         self.intermediate_layer_idx = {
             'vits': [2, 5, 8, 11],
@@ -171,7 +177,8 @@ class DepthAnythingV2(nn.Module):
         self.encoder = encoder
         self.pretrained = DINOv2(model_name=encoder)
         
-        self.depth_head = DPTHead(self.pretrained.embed_dim, features, use_bn, out_channels=out_channels, use_clstoken=use_clstoken)
+        self.depth_head = DPTHead(self.pretrained.embed_dim, features, use_bn, out_channels=out_channels,
+                                  use_clstoken=use_clstoken, metric=max_depth is not None)
     
     def forward(self, x):
         patch_h, patch_w = x.shape[-2] // 14, x.shape[-1] // 14
@@ -179,7 +186,10 @@ class DepthAnythingV2(nn.Module):
         features = self.pretrained.get_intermediate_layers(x, self.intermediate_layer_idx[self.encoder], return_class_token=True)
         
         depth = self.depth_head(features, patch_h, patch_w)
-        depth = F.relu(depth)
+        if self.max_depth is not None:
+            depth = depth * self.max_depth
+        else:
+            depth = F.relu(depth)
         
         return depth.squeeze(1)
     

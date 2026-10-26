@@ -50,7 +50,7 @@ from solarian.core.ui.base import (
 from solarian.core.ai.system1.skill import Skill, SkillStatus
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
-from solarian.core.data import ImageData, BoundingBoxData, MaskData
+from solarian.core.data import ImageData, BoundingBoxData, MaskData, PointData
 from solarian.perception.processor import field_name_for_input
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 from solarian.utils.shared_memory.action_queue import ModuleActionQueue
@@ -642,7 +642,7 @@ class Controller(EventHost, ABC):
                     image_keys.append((module_name, field_name))
 
             for field_name, cf in calculated_fields.items():
-                if not issubclass(cf.data_class, (BoundingBoxData, MaskData)):
+                if not issubclass(cf.data_class, (BoundingBoxData, PointData, MaskData)):
                     continue
                 for inp in cf.inputs:
                     input_field = field_name_for_input(
@@ -701,7 +701,7 @@ class Controller(EventHost, ABC):
                     if np.shape(overlay.value) == field_data.value.shape[:2]:
                         masks.append(overlay.value)
                 else:
-                    bboxes.append(overlay.value)
+                    bboxes.append(overlay.overlay_box())
                     bbox_texts.append(overlay.overlay_text())
 
             images.append(

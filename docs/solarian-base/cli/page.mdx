@@ -187,7 +187,7 @@ Every action takes `--json` and prints the API's own objects. Errors print
 ```bash
 solarian base train umi --dataset task.dataset_mix.0.path=3f2a9c1e --no-follow --json
 solarian base runs show "$RUN" --json | jq .summary
-solarian base endpoints start umi_pnp --checkpoint "$JOB" --json | jq -r .url
+solarian base endpoints start umi_target --checkpoint "$JOB" --json | jq -r .url
 ```
 
 The plugin ships a `deploy-and-train` skill

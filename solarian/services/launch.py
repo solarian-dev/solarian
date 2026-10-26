@@ -3,10 +3,10 @@
 A project conf that needs a server says which, in one block of the same shape
 whether it is a processor's conf or a skill's::
 
-    # conf/services/bbox_tracker.yaml        # conf/skills/umi_pnp.yaml
+    # conf/services/bbox_tracker.yaml        # conf/skills/umi_target.yaml
     server:                                  server:
       service: sam2-tracker                    service: diffusion-policy
-      port: 8765                               checkpoint: ${deployment.pnp_policy_checkpoint}
+      port: 8765                               checkpoint: ${deployment.umi_target_policy_checkpoint}
       args: [--model, small]                   host: 0.0.0.0
                                                port: 8003
 

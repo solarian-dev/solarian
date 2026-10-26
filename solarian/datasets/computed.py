@@ -18,7 +18,9 @@ is what :meth:`ComputedDataset.rebuild` replays: the file is the dataset's code.
 
 Review state is keyed by the episodes the review shows: the version's own for
 a MAP op (episode ``k`` is the ``k``-th of ``inputs``), the parent's for a
-FILTER op, whose dropped episodes the version no longer has.
+FILTER op, whose dropped episodes the version no longer has. A MAP episode
+the review dropped (``keep: false``) is left out when the version closes, and
+the rest are renumbered; the review keeps the indices it was made on.
 """
 
 from __future__ import annotations
@@ -33,7 +35,15 @@ import time
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Sequence
 
-from solarian.core.recording.archive import VERSION_FILE, EpisodeRef, Session, SessionWriter, materialize
+from solarian.core.recording.archive import (
+    EPISODE_FILE,
+    VERSION_FILE,
+    EpisodeRef,
+    Session,
+    SessionWriter,
+    episode_dir,
+    materialize,
+)
 from solarian.datasets.op import OpKind
 from solarian.datasets.runner import Progress, get_op, op_record, run_op, validate_params
 
@@ -280,6 +290,21 @@ class ComputedDataset:
                 if entry["episodes"][str(index)]["keep"]:
                     writer.add_episode(parent.episode_meta(index), source=EpisodeRef(parent, index))
 
+    def _write_mapped_kept(self, key: str, entry: dict) -> None:
+        """Rewrite map version ``key`` without the episodes its review dropped, renumbered from 0."""
+        parent = self.session(entry["parent"])
+        path = self.version_path(key)
+        op = json.loads((path / VERSION_FILE).read_bytes())["op"]
+        with SessionWriter(path, parents=[parent], force=True, op=op) as writer:
+            for index, source in enumerate(entry["inputs"]):
+                if entry["episodes"][str(index)].get("keep") is False:
+                    continue
+                prefix = path / episode_dir(index)
+                files = {p.relative_to(prefix).as_posix(): p for p in prefix.rglob("*")
+                         if p.is_file() and p.name != EPISODE_FILE and not p.name.startswith(".")}
+                meta = json.loads((prefix / EPISODE_FILE).read_bytes())
+                writer.add_episode(meta, files=files, source=EpisodeRef(parent, source))
+
     def _initial_review(self, kind: OpKind, entry: dict, key: str, online: bool) -> dict:
         if entry["state"] == CLOSED:
             return {}
@@ -309,6 +334,9 @@ class ComputedDataset:
                 raise ValueError(f"{key} is {entry['state']}, not open")
             if get_op(entry["op"]).kind is OpKind.FILTER:
                 self._write_kept(key, entry)
+                entry["summary"] = summarize(self.version_path(key))
+            elif any(state.get("keep") is False for state in entry["episodes"].values()):
+                self._write_mapped_kept(key, entry)
                 entry["summary"] = summarize(self.version_path(key))
             entry["state"] = CLOSED
             entry["closed_at"] = time.time()

@@ -186,12 +186,12 @@ server:
   service: sam2-tracker
   port: 8765
 
-# conf/skills/umi_pnp.yaml
-policy_server_url: ${deployment.pnp_policy_server_url}
+# conf/skills/umi_target.yaml
+policy_server_url: ${deployment.umi_target_policy_server_url}
 policy_server_token: ${oc.select:deployment.solarian_base_endpoint_token,null}
 server:
   service: diffusion-policy
-  checkpoint: ${oc.select:deployment.pnp_policy_checkpoint,null}
+  checkpoint: ${oc.select:deployment.umi_target_policy_checkpoint,null}
   port: 8003
 ```
 

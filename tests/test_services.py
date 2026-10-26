@@ -11,7 +11,7 @@ import zmq
 
 from solarian.core.action import ActionType
 from solarian.core.clock_sync import LatencyEma
-from solarian.core.data import BoundingBoxData, ImageData
+from solarian.core.data import BoundingBoxData, ImageData, PointData
 from solarian.core.execution import ExecutionPlace
 from solarian.core.message import Message
 from solarian.core.observation import CalculatedField
@@ -167,6 +167,15 @@ def test_bounding_box_is_an_int32_array():
     assert box.value.dtype == np.int32
     assert box.value.tolist() == [1, 2, 3, 4]
     assert BoundingBoxData().value.tolist() == [0, 0, 0, 0]
+
+
+def test_a_point_is_drawn_as_a_square_centred_on_it():
+    point = PointData(box_px=10).duplicate({"value": [100.4, 50.0, 87.0]})
+    assert point.value.dtype == np.float32
+    assert point.overlay_box().tolist() == [95, 45, 105, 55]
+    assert point.overlay_text() == "point 87%"
+    assert PointData().overlay_box().tolist() == [0, 0, 0, 0]
+    assert PointData().overlay_text() is None
 
 
 class _Echo(ServiceProcessor):

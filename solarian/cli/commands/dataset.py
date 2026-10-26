@@ -415,13 +415,14 @@ class DatasetCommand(BaseCommand):
         """One JSON request per stdin line, one event per stdout line, until ``close`` or EOF.
 
         ``{"episode": k, "params": {...}}`` redoes a map episode,
-        ``{"episode": i, "keep": false}`` decides a filter one,
-        ``{"accept": k}`` accepts one and ``{"close": true}`` closes the version.
-        A request's ``id`` comes back on its events.
+        ``{"episode": i, "keep": false}`` drops one (a filter's parent episode,
+        or a map's own), ``{"accept": k}`` accepts one and ``{"close": true}``
+        closes the version. A request's ``id`` comes back on its events.
 
         While a redo runs, the op's partial results come out as ``preview``
-        events. A newer redo of the same episode, or ``{"cancel": k}``, stops
-        the one running or queued, which ends with ``cancelled``.
+        events. A newer redo of the same episode, a decision on it, or
+        ``{"cancel": k}``, stops the one running or queued, which ends with
+        ``cancelled``.
         """
         import queue
         import threading
@@ -461,8 +462,8 @@ class DatasetCommand(BaseCommand):
                     request = {"invalid": f"JSONDecodeError: {exc}"}
                 if "cancel" in request:
                     wanted[int(request["cancel"])] = None
-                elif "episode" in request and "keep" not in request:
-                    wanted[int(request["episode"])] = request
+                elif "episode" in request:
+                    wanted[int(request["episode"])] = None if "keep" in request else request
                 requests.put(request)
             requests.put(None)
 

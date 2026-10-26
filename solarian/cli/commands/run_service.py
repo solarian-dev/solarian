@@ -44,8 +44,8 @@ class RunServiceCommand(BaseCommand):
     }
     examples = (
         "solarian run-service bbox_tracker",
-        "solarian run-service umi_pnp",
-        "solarian run-service umi_pnp --checkpoint models/pick/checkpoints/latest.ckpt",
+        "solarian run-service umi_target",
+        "solarian run-service umi_target --checkpoint models/pick/checkpoints/latest.ckpt",
         "solarian run-service sam2-tracker --port 8765 --model small",
     )
 

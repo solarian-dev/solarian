@@ -38,9 +38,9 @@ which `solarian install solarian-umi-skill` seeds; see
 [Training](/docs/training)), a recording to train on, and a Base to log in to. To run Base on your own machine, see
 [Self-hosting](/docs/solarian-base/self-hosting).
 
-Steps 7 to 9 use the point-and-pick skill of the `so106` example:
-`conf/skills/umi_pnp.yaml`, whose diffusion policy picks the object a SAM 2
-tracker boxes (`conf/services/bbox_tracker.yaml`). Any conf with a `server:`
+Steps 7 to 9 use a point-and-pick skill: `conf/skills/umi_target.yaml`, a
+`UMISkill` whose diffusion policy picks the object a SAM 2 tracker boxes
+(`conf/services/bbox_tracker.yaml`). Any conf with a `server:`
 block works the same way; see [Services](/docs/services).
 
 ## 1. Log in and link the project
@@ -138,12 +138,12 @@ the ones its training jobs wrote, with a policy conf of the project: one whose
 `server:` block names a service that takes a checkpoint.
 
 ```yaml
-# conf/skills/umi_pnp.yaml
-policy_server_url: ${deployment.pnp_policy_server_url}
+# conf/skills/umi_target.yaml
+policy_server_url: ${deployment.umi_target_policy_server_url}
 policy_server_token: ${oc.select:deployment.solarian_base_endpoint_token,null}
 server:
   service: diffusion-policy
-  checkpoint: ${oc.select:deployment.pnp_policy_checkpoint,null}
+  checkpoint: ${oc.select:deployment.umi_target_policy_checkpoint,null}
   port: 8003
 ```
 
@@ -151,14 +151,14 @@ server:
 
 ```bash
 solarian base models ls                                  # job prefix, size, path
-solarian base endpoints start umi_pnp --checkpoint 1a2b3c4d
+solarian base endpoints start umi_target --checkpoint 1a2b3c4d
 ```
 
 `--checkpoint` takes the job and, optionally, the file: `1a2b3c4d` serves its
 `latest.ckpt`, `1a2b3c4d:/outputs/pick/checkpoints/epoch_0040.ckpt` another one.
 
 **From the web app:** **Models**, then **Serve** on the checkpoint. Pick
-`umi_pnp` as the servable, a GPU, and start.
+`umi_target` as the servable, a GPU, and start.
 
 **You should see** the endpoint `starting` while Modal builds the image (minutes
 the first time), then `running` with a URL under **Services & Policies**. The
@@ -222,7 +222,7 @@ reads, and the token they require.
 ```yaml
 extends: turing
 bbox_tracker_url: 'https://acme--sb-1a2b3c4d5e6f-bbox-tracker-url.modal.run'
-pnp_policy_server_url: 'https://acme--sb-1a2b3c4d5e6f-pnp-policy-server-url.modal.run'
+umi_target_policy_server_url: 'https://acme--sb-1a2b3c4d5e6f-umi-target-policy-server-url.modal.run'
 solarian_base_endpoint_token: '...'
 ```
 
@@ -235,7 +235,7 @@ solarian run-robot -d solarian_base         # on the robot
 solarian run-controller -d solarian_base    # on the controller
 ```
 
-Then start `UMIPnPSkill` from the controller and click the object in the wrist
+Then start the skill from the controller and click the object in the wrist
 camera. The tracker boxes it on Base, and the skill sends each observation to
 the policy on Base. Nothing in the skill or the confs changed: only the
 deployment keys did. Stop an endpoint, or start one, and download the file

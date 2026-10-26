@@ -51,7 +51,7 @@ installed, or a URL that is not a `${deployment.*}` key.
 
 ```
 serve   bbox_tracker: service sam2-tracker -> bbox_tracker_url
-serve   umi_pnp: policy diffusion-policy -> pnp_policy_server_url
+serve   umi_target: policy diffusion-policy -> umi_target_policy_server_url
 ```
 
 ## Start an endpoint
@@ -60,7 +60,7 @@ serve   umi_pnp: policy diffusion-policy -> pnp_policy_server_url
 
 ```bash
 solarian base endpoints start bbox_tracker
-solarian base endpoints start umi_pnp --checkpoint 1a2b3c4d --min-containers 1
+solarian base endpoints start umi_target --checkpoint 1a2b3c4d --min-containers 1
 solarian base endpoints start bbox_tracker -- --model large     # extra server args
 ```
 
@@ -104,7 +104,7 @@ own Modal account.
 ## URLs, replacing and stopping
 
 Each project has one URL per URL key, so serving another checkpoint with
-`umi_pnp`, or redeploying `bbox_tracker` with new code, keeps the URL the robot
+`umi_target`, or redeploying `bbox_tracker` with new code, keeps the URL the robot
 already has. The new endpoint replaces the old one once it is up; until then the
 old one keeps answering, and if the new one fails, it stays. Only one endpoint
 per URL key can be starting at a time.
@@ -162,7 +162,7 @@ its project under its URL key, and the token they require:
 ```yaml
 extends: turing
 bbox_tracker_url: 'https://acme--sb-1a2b3c4d5e6f-bbox-tracker-url.modal.run'
-pnp_policy_server_url: 'https://acme--sb-1a2b3c4d5e6f-pnp-policy-server-url.modal.run'
+umi_target_policy_server_url: 'https://acme--sb-1a2b3c4d5e6f-umi-target-policy-server-url.modal.run'
 solarian_base_endpoint_token: '...'
 ```
 

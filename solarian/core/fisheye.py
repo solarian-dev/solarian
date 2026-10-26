@@ -8,12 +8,37 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Optional
+from typing import Iterable, Optional
 
 import numpy as np
 
 MIN_SAMPLES = 8
 DEFAULT_BOARD = (9, 6)
+
+#: ``(x0, y0, x1, y1)`` in frame pixels, exclusive of ``x1`` / ``y1``.
+Box = tuple[int, int, int, int]
+
+
+def lit_box(frames: Iterable[np.ndarray], threshold: int = 20, margin: int = 8) -> Box | None:
+    """``(x0, y0, x1, y1)`` around what is ever lit in ``frames``, or None when that is the whole frame.
+
+    A fisheye fills a circle and leaves the corners black. A model that
+    squashes whatever it is given to a fixed square gives the scene more of
+    its input, at the same cost, when the frame is cropped to the circle.
+    """
+    lit = None
+    for frame in frames:
+        bright = frame.max(axis=-1) > threshold
+        lit = bright if lit is None else lit | bright
+    if lit is None or not lit.any():
+        return None
+    h, w = lit.shape
+    ys, xs = np.nonzero(lit)
+    x0, y0 = max(0, int(xs.min()) - margin), max(0, int(ys.min()) - margin)
+    x1, y1 = min(w, int(xs.max()) + 1 + margin), min(h, int(ys.max()) + 1 + margin)
+    if (x1 - x0) * (y1 - y0) >= 0.95 * w * h:
+        return None
+    return x0, y0, x1, y1
 
 
 def parse_fisheye_intrinsics(json_data: dict) -> dict:

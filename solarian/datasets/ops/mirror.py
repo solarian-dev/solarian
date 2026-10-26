@@ -66,8 +66,15 @@ def mirror_table(table: pa.Table, axis: int) -> tuple[pa.Table, list[str]]:
 
 
 def mirror_targets(targets: dict, width: int) -> dict:
-    """bbox ``x0, x1 -> W - x1, W - x0`` (x1 exclusive, as cv2.boundingRect gives it); mask flipped."""
+    """bbox ``x0, x1 -> W - x1, W - x0`` (x1 exclusive, as cv2.boundingRect gives it); mask flipped;
+    point ``x -> W - x`` (continuous pixels, as TAPNext scales them)."""
     out = dict(targets)
+    if "point" in targets:
+        point = targets["point"].copy()
+        # A negative coordinate means a row the tracker never reached, and is kept.
+        valid = (point >= 0).all(axis=1)
+        point[valid, 0] = width - point[valid, 0]
+        out["point"] = point
     if "bbox" in targets:
         bbox = targets["bbox"].copy()
         # A negative coordinate means "no box" and is kept.
@@ -80,6 +87,14 @@ def mirror_targets(targets: dict, width: int) -> dict:
         mask = np.unpackbits(targets["mask"], axis=-1, count=int(targets["mask_width"]))
         out["mask"] = np.packbits(mask[..., ::-1], axis=-1)
     return out
+
+
+def mirror_coverage(coverage: dict, width: int) -> dict:
+    """An episode.json ``targets`` entry, its ``crop`` x0, y0, x1, y1 mirrored like a bbox."""
+    if "crop" not in coverage:
+        return coverage
+    x0, y0, x1, y1 = coverage["crop"]
+    return {**coverage, "crop": [width - x1, y0, width - x0, y1]}
 
 
 def mirror_tags(frames: list[dict], width: int) -> list[dict]:
@@ -132,6 +147,9 @@ class MirrorOp(DatasetOp):
 
         meta = episode.meta
         mirrored = {**meta, "stats": column_stats(table, meta.get("stats", {})), "mirror": {"axis": params.axis}}
+        if "targets" in meta:
+            mirrored["targets"] = {camera: mirror_coverage(coverage, widths[camera])
+                                   for camera, coverage in meta["targets"].items()}
         if "umi" in meta:
             mirrored["umi"] = {
                 module: {key: reflect_pose6(np.asarray(value, dtype=np.float64), axis).tolist()

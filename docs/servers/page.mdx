@@ -121,7 +121,7 @@ All three nodes need to agree on the same four port numbers and the same relay I
 ```python
 from solarian.core.observation import CalculatedField, ModuleObs, SensorField
 from solarian.core.data import BoundingBoxData
-from solarian_sam2_tracker import Sam2BboxProcessor
+from solarian_sam2 import Sam2BboxProcessor
 
 class CameraObs(ModuleObs):
     image = SensorField(MyRobot.cam.camera.rgb_image)

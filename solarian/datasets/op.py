@@ -42,6 +42,7 @@ from solarian.core.recording.archive import (
     EpisodeRef,
     Session,
     episode_dir,
+    targets_bytes,
     targets_member,
     video_member,
 )
@@ -115,6 +116,20 @@ class Episode:
     def derive(self, files: dict[str, bytes | Path] | None = None, **meta) -> EpisodeOut:
         """This episode with ``files`` replaced or added and ``meta`` merged into episode.json."""
         return EpisodeOut(meta={**self.meta, **meta}, files=dict(files or {}), source=self)
+
+    def derive_targets(self, camera: str, arrays: dict, replaces: Iterable[str], coverage: dict) -> EpisodeOut:
+        """This episode with ``arrays`` written into ``camera``'s targets npz.
+
+        The arrays other ops wrote there are kept, but those named in
+        ``replaces``, which belong to the op writing: its new run may store
+        fewer of them (a box without its mask). ``coverage`` becomes
+        ``camera``'s entry in episode.json ``targets``, what the latest op found.
+        """
+        kept = {k: v for k, v in (self.targets(camera) or {}).items() if k not in set(replaces)}
+        return self.derive(
+            {f"targets/{camera}.npz": targets_bytes(**kept, **arrays)},
+            targets={**self.meta.get("targets", {}), camera: coverage},
+        )
 
 
 @dataclass

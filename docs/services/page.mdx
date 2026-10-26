@@ -16,7 +16,7 @@ A service plugin ships three pieces:
 
 ```toml
 [project.entry-points."solarian.services"]
-sam2-tracker = "solarian_sam2_tracker.service:Sam2TrackerService"
+sam2-tracker = "solarian_sam2.service:Sam2TrackerService"
 ```
 
 Defined in [`solarian/services/`](https://github.com/solarian-dev/solarian/blob/main/solarian/services).
@@ -36,13 +36,13 @@ server:
 ```
 
 ```yaml
-# conf/skills/umi_pnp.yaml
-policy_server_url: ${deployment.pnp_policy_server_url}
+# conf/skills/umi_target.yaml
+policy_server_url: ${deployment.umi_target_policy_server_url}
 policy_server_token: ${oc.select:deployment.solarian_base_endpoint_token,null}
 server:
   service: diffusion-policy
   managed: false
-  checkpoint: ${oc.select:deployment.pnp_policy_checkpoint,null}
+  checkpoint: ${oc.select:deployment.umi_target_policy_checkpoint,null}
   host: 0.0.0.0
   port: 8003
 ```
@@ -71,7 +71,7 @@ server:
 
 ```bash
 solarian run-service bbox_tracker                     # the conf's server
-solarian run-service umi_pnp --checkpoint models/pick/checkpoints/latest.ckpt
+solarian run-service umi_target --checkpoint models/pick/checkpoints/latest.ckpt
 solarian run-service sam2-tracker --model small       # an installed service, with your own args
 ```
 
@@ -88,7 +88,7 @@ With `SOLARIAN_ENDPOINT_TOKEN` set in its environment, a server answers only req
 ```python
 from solarian.core.data import BoundingBoxData
 from solarian.core.observation import CalculatedField, ModuleObs, SensorField
-from solarian_sam2_tracker import Sam2BboxProcessor
+from solarian_sam2 import Sam2BboxProcessor
 
 class RightWristCameraObs(ModuleObs):
     image = SensorField(MyRobot.right_wrist_camera.camera.rgb_image)
@@ -104,12 +104,12 @@ With no `execution_place=` argument, the field reads where it runs from its conf
 
 ```yaml
 # conf/services/bbox_tracker.yaml
-execution_place: ${deployment.pnp_execution_place}
+execution_place: ${deployment.umi_target_execution_place}
 server_url: ${deployment.bbox_tracker_url}
 resize: 224
 ```
 
-Every host reads the same conf and deployment, so they always agree on where the field is computed. The keys have no fallback: a deployment that does not set them fails at startup, naming the missing key. A skill that reads the field, such as `UMIPnPSkill`, takes its own `execution_place` from the same key, so the two cannot be placed apart. The host that computes it builds the processor. The others carry the field as zeros until it arrives.
+Every host reads the same conf and deployment, so they always agree on where the field is computed. The keys have no fallback: a deployment that does not set them fails at startup, naming the missing key. A skill that reads the field, such as a `UMISkill` with `targets`, takes its own `execution_place` from the same key, so the two cannot be placed apart. The host that computes it builds the processor. The others carry the field as zeros until it arrives.
 
 ## Starting and stopping
 
@@ -155,8 +155,8 @@ Its `Service` sets `checkpoint_arg`, which makes it a service that takes a check
 
 ```bash
 solarian modal-serve bbox_tracker --label bbox-tracker
-solarian modal-serve umi_pnp --label pnp --checkpoint /data/outputs/pick/checkpoints/latest.ckpt
-solarian modal-serve stop pnp
+solarian modal-serve umi_target --label pick --checkpoint /data/outputs/pick/checkpoints/latest.ckpt
+solarian modal-serve stop pick
 ```
 
 The endpoint is at `https://<workspace>--<label>.modal.run`, and the label keeps that URL across redeploys. It scales to zero after `--scaledown` seconds idle (300 by default) unless `--min-containers 1` keeps it warm, runs on `--gpu T4` by default (`none` for CPU), and requires the bearer token when `SOLARIAN_ENDPOINT_TOKEN` is set where you run the command. Set the conf's URL key, here `bbox_tracker_url`, to the URL it prints.
@@ -190,7 +190,7 @@ class MyService(Service):
     default_port = 8770
 ```
 
-`ServiceClient` wraps the HTTP calls, with the bearer token and connect retries, and `solarian.utils.wire` encodes numpy arrays in JSON payloads. `Service.checkpoint_arg` names the server's flag for a checkpoint (`--input` for a policy), and `Service.modal_spec()` the image to serve it in on Modal; left as `None`, the image is derived from the server package's requirements. `solarian-sam2-tracker` is a complete example.
+`ServiceClient` wraps the HTTP calls, with the bearer token and connect retries, and `solarian.utils.wire` encodes numpy arrays in JSON payloads. `Service.checkpoint_arg` names the server's flag for a checkpoint (`--input` for a policy), and `Service.modal_spec()` the image to serve it in on Modal; left as `None`, the image is derived from the server package's requirements. `solarian-sam2` is a complete example.
 
 ## See also
 

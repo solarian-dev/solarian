@@ -3,9 +3,11 @@
 What online review runs on: the op's ``setup`` (a SAM 2 model, say) happens
 once, then each ``redo`` reprocesses one episode with per-episode params over
 the version's, in about the time the op takes on that episode alone. A MAP
-op's episode is rewritten in place; a FILTER op's keep/drop decisions are
-written into the version when it closes. Every change is recorded in
-``computed.json`` under the version's ``episodes``, so ``rebuild`` replays it.
+op's episode is rewritten in place. ``keep`` decides whether an episode stays:
+a FILTER op's parent episode, overriding the op, or a MAP op's own one, found
+not worth keeping while it was reviewed; the decisions are written into the
+version when it closes. Every change is recorded in ``computed.json`` under
+the version's ``episodes``, so ``rebuild`` replays it.
 """
 
 from __future__ import annotations
@@ -104,32 +106,54 @@ class OpSession:
                    if name != "index" and source.meta.get(name) != value}
         with self.computed.edit() as data:
             entry = data["versions"][self.key]
+            previous = entry["episodes"].get(str(episode), {})
+            # A redo keeps the episode, even one dropped before.
+            dropped = previous.get("keep") is False
             entry["episodes"][str(episode)] = {
-                **entry["episodes"].get(str(episode), {}), "status": DONE, "params": overrides, "result": changed}
+                **{k: v for k, v in previous.items() if k != "keep"},
+                "status": DONE, "params": overrides, "result": changed}
             summary = entry.get("summary")
             if summary:
                 # Only this episode changed: summarize() reads every episode, seconds of NFS a redo.
-                summary["frames"] += int(meta["n_rows"]) - rows_before
+                if dropped:
+                    summary["episodes"] += 1
+                    summary["frames"] += int(meta["n_rows"])
+                else:
+                    summary["frames"] += int(meta["n_rows"]) - rows_before
                 summary["bytes"] += _stored_bytes(prefix) - stored_before
             else:
                 entry["summary"] = summarize(self.path)
         return changed
 
     def keep(self, episode: int, keep: bool) -> None:
-        """FILTER: keep or drop the parent's episode ``episode``, overriding the op's decision."""
-        if self.kind is not OpKind.FILTER:
-            raise ValueError(f"{self.op_cls.name} is a {self.kind.value} op; redo() its episodes")
-        if episode not in self.inputs:
-            raise ValueError(f"{self.parent.path.name} has no episode {episode}")
+        """Keep or drop ``episode``, and accept the decision.
+
+        FILTER: the parent's episode, overriding the op's decision. MAP: the
+        version's own episode, redone or not; a dropped one is left out on close.
+        """
+        if self.kind is OpKind.FILTER:
+            if episode not in self.inputs:
+                raise ValueError(f"{self.parent.path.name} has no episode {episode}")
+            rows = int(self.parent.episode_meta(episode)["n_rows"])
+        else:
+            if not 0 <= episode < len(self.inputs):
+                raise ValueError(f"{self.key} has episodes 0-{len(self.inputs) - 1}, not {episode}")
+            rows = int(json.loads((self.path / episode_dir(episode) / EPISODE_FILE).read_bytes())["n_rows"])
         with self.computed.edit() as data:
             entry = data["versions"][self.key]
-            was = entry["episodes"][str(episode)]["keep"]
-            entry["episodes"][str(episode)] = {"status": ACCEPTED, "keep": keep}
+            state = entry["episodes"][str(episode)]
+            # A MAP episode is kept unless it says otherwise.
+            was = state.get("keep", True)
+            if self.kind is OpKind.FILTER:
+                entry["episodes"][str(episode)] = {"status": ACCEPTED, "keep": keep}
+            else:
+                state = {k: v for k, v in state.items() if k != "keep"}
+                entry["episodes"][str(episode)] = {**state, "status": ACCEPTED, **({} if keep else {"keep": False})}
             if keep != was:
                 # The version's files are rewritten on close; until then only its totals follow.
                 sign = 1 if keep else -1
                 entry["summary"]["episodes"] += sign
-                entry["summary"]["frames"] += sign * int(self.parent.episode_meta(episode)["n_rows"])
+                entry["summary"]["frames"] += sign * rows
 
     def replay(self, episodes: Mapping[str, dict]) -> None:
         """Repeat a recorded review: every redo with its params, every decision, every accept."""
@@ -141,5 +165,7 @@ class OpSession:
                 continue
             if "params" in state:
                 self.redo(episode, state["params"])
-            if state.get("status") == ACCEPTED:
+            if state.get("keep") is False:
+                self.keep(episode, False)
+            elif state.get("status") == ACCEPTED:
                 self.computed.accept(self.key, episode)

@@ -31,22 +31,22 @@ Both live in `solarian.services`. The `PolicyServer` runs as a **separate proces
 A skill conf's `server:` block says which policy service runs and with which checkpoint:
 
 ```yaml
-# conf/skills/umi_pnp.yaml
-policy_server_url: ${deployment.pnp_policy_server_url}
+# conf/skills/umi_target.yaml
+policy_server_url: ${deployment.umi_target_policy_server_url}
 policy_server_token: ${oc.select:deployment.solarian_base_endpoint_token,null}
 server:
   service: diffusion-policy
-  checkpoint: ${oc.select:deployment.pnp_policy_checkpoint,null}
+  checkpoint: ${oc.select:deployment.umi_target_policy_checkpoint,null}
   port: 8003
 ```
 
 ```bash
-solarian run-service umi_pnp                                   # the conf's checkpoint
-solarian run-service umi_pnp --checkpoint models/pick/checkpoints/latest.ckpt
+solarian run-service umi_target                                   # the conf's checkpoint
+solarian run-service umi_target --checkpoint models/pick/checkpoints/latest.ckpt
 solarian run-service diffusion-policy --checkpoint cup.ckpt --port 8001
 ```
 
-To serve it on a cloud GPU instead, `solarian modal-serve umi_pnp` deploys it on your Modal account, and Solarian Base serves the checkpoints its training jobs wrote from **Models**. See [Services](/docs/services#serving-on-modal) and [Services, Policies & Models](/docs/solarian-base/endpoints).
+To serve it on a cloud GPU instead, `solarian modal-serve umi_target` deploys it on your Modal account, and Solarian Base serves the checkpoints its training jobs wrote from **Models**. See [Services](/docs/services#serving-on-modal) and [Services, Policies & Models](/docs/solarian-base/endpoints).
 
 ## Policy plugins
 

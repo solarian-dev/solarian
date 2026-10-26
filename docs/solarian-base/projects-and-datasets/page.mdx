@@ -87,8 +87,13 @@ such as `01-track` or `02-split-pick-place-pick`.
 | `split-pick-place` | Split into pick and place | Cuts each episode at its return to home, into a pick version and a place version | No |
 | `merge` | Merge datasets | Combines this dataset with others | No |
 | `track` | Track an object | Tracks an object in a camera with SAM 2 | Yes: **Accept** or **Redo** each one |
+| `track_point` | Track a point | Tracks a clicked point in a camera with TAPNext, such as where to place an object | Yes: **Accept** or **Redo** each one |
 
-`track` comes from the `solarian-sam2-tracker` plugin. A project can add its
+`track` comes from the `solarian-sam2` plugin and `track_point` from
+`solarian-tapnext`; both write into the episode's `targets/<camera>.npz`
+without dropping each other's arrays, so one version can carry a pick box and
+a place point. `track_point` uses the running TAPNext endpoint when there is
+one. A project can add its
 own ops in `<package>/dataset_ops/`, scaffolded with `solarian add-op`; Base
 lists them with `(project)` next to their name.
 

@@ -66,11 +66,18 @@ solarian train --conf conf/training/cup_arrange
 
 ### UMI
 
-`solarian-umi-skill` registers `trainer: umi` and seeds three training files:
+`solarian-umi-skill` registers `trainer: umi` and seeds four training files:
 `conf/training/umi.yaml` (camera and proprioception, no target),
-`conf/training/umi_pick.yaml` (the target box as a 4th image channel) and
+`conf/training/umi_pick.yaml` (the target box as a 4th image channel),
 `conf/training/umi_pick_mask.yaml` (the object's mask, CLS token and
-`box_pool`). Each is the UMI training config written as `python train.py`
+`box_pool`) and `conf/training/umi_place.yaml` (a place point, drawn as a
+square on the 4th channel). A target is any `task.shape_meta.obs` entry with
+`bbox_mode: mask_channel`, `point_mode: mask_channel` or `type: mask`, read
+from the dataset array of the same name (`bbox`, `point` or `mask`, written by
+the `track` and `track_point` dataset ops). Each target adds one input channel
+to the ViT, so a policy can take several, and a checkpoint with fewer starts
+one with more (`training.init_from_ckpt`; the new channel starts at zero).
+Each is the UMI training config written as `python train.py`
 reads it in the UMI repo, with the task inlined under `task:`, plus four
 Solarian keys at the top: `trainer`, `job_name`, `output_dir` and `modal`.
 Copy one per run and set:
@@ -95,6 +102,11 @@ self.start_skill(UMISkill(params={"config": "cup_arrange.yaml"}))
 conf/training/cup_arrange.yaml    job_name: cup_arrange
 conf/skills/cup_arrange.yaml      server.checkpoint: models/cup_arrange/checkpoints/latest.ckpt
 ```
+
+A checkpoint with targets also needs the skill yaml's `targets`, which maps
+each to the camera field holding it, such as `{point: target_point}` for a
+place policy. `conf/skills/umi_target.yaml` is the template; see
+[Skills](/docs/skills#configuration).
 
 The copied training and SLAM code is from
 [Universal Manipulation Interface](https://github.com/real-stanford/universal_manipulation_interface),

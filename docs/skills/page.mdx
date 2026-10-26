@@ -183,8 +183,8 @@ A caller can still override either per instance — `MoveSkill(params={"pose": "
 A config-driven skill such as `UMISkill` also reads `execution_place` from its yaml, so a deployment key can move it without code changes:
 
 ```yaml
-# conf/skills/umi_pnp.yaml
-execution_place: ${deployment.pnp_execution_place}
+# conf/skills/umi_target.yaml
+execution_place: ${deployment.umi_target_execution_place}
 ```
 
 That is how to compare the two placements for one policy: run the same task with a deployment that sets `server` and one that sets `robot`. A skill that reads a calculated field must run where that field is computed or downstream of it. The relay sees robot-computed fields, but the robot never sees relay-computed ones.
@@ -282,6 +282,21 @@ takes a checkpoint but names none (in the file, and none passed with
 `--checkpoint`) errors clearly. See [Services](/docs/services#the-server-block)
 for the block, and [Solarian Base](/docs/solarian-base/endpoints) to serve it on
 a cloud GPU.
+
+A checkpoint trained with targets (a box, mask or point marking something on
+the wrist image) reads each from a calculated field of the camera, named in
+`targets`. One `UMISkill` picks or places depending on the yaml and the
+checkpoint: `setup` checks the mapping covers exactly the checkpoint's targets
+and that each field has the matching data class (`BoundingBoxData`,
+`MaskData` or `PointData`). A skill with targets must set `execution_place`,
+from the same deployment key as the fields' trackers.
+
+```yaml
+# <your-project>/conf/skills/place_object.yaml
+execution_place: ${deployment.policy_execution_place}
+targets:
+  point: target_point     # a PointData field fed by solarian-tapnext's point tracker
+```
 
 Nothing about this is specific to policies. Any value an operator wants to tune
 per robot belongs here rather than on the controller, which is how

@@ -182,6 +182,45 @@ def test_a_filter_review_overrides_the_decisions(computed):
         session.redo(0)
 
 
+def test_a_map_review_drops_episodes_when_the_version_closes(computed):
+    [key] = computed.apply("mark", online=True)
+    session = OpSession(computed, key)
+    session.redo(2, {"value": 7})
+    session.redo(1, {"value": 4})
+    session.keep(1, False)
+    session.keep(1, False)
+    assert computed.entry(key)["episodes"]["1"] == {
+        "status": ACCEPTED, "params": {"value": 4}, "result": {"targets": {CAMERA: {"value": 4.0}}}, "keep": False}
+    open_summary = computed.entry(key)["summary"]
+    assert open_summary["episodes"] == 3
+    assert computed.session(key).episodes() == [0, 1, 2, 3], "the version is rewritten when it closes"
+
+    computed.close(key)
+    version = computed.session(key)
+    assert [version.episode_meta(i)["start_ts"] for i in version.episodes()] == [0.0, 200.0, 300.0]
+    assert [_box(version, i) for i in version.episodes()] == [2.0, 7.0, 2.0]
+    assert computed.entry(key)["summary"] == summarize(computed.version_path(key))
+    assert {k: open_summary[k] for k in ("episodes", "frames")} == \
+        {k: computed.entry(key)["summary"][k] for k in ("episodes", "frames")}
+
+
+def test_a_redo_or_a_keep_brings_a_dropped_map_episode_back(computed):
+    [key] = computed.apply("mark", online=True)
+    session = OpSession(computed, key)
+    session.keep(0, False)
+    session.keep(3, False)
+    session.redo(0, {"value": 5})
+    session.keep(3, True)
+    review = computed.entry(key)["episodes"]
+    assert "keep" not in review["0"] and review["0"]["status"] == DONE
+    assert review["3"] == {"status": ACCEPTED}
+    assert computed.entry(key)["summary"] == summarize(computed.version_path(key))
+
+    computed.close(key)
+    assert computed.session(key).episodes() == [0, 1, 2, 3]
+    assert _box(computed.session(key), 0) == 5.0
+
+
 def test_rebuild_replays_ops_and_review(computed, tmp_path):
     [deleted] = computed.apply("delete-episodes", params={"episodes": [0]}, review=True)
     OpSession(computed, deleted).keep(0, True)
@@ -190,6 +229,8 @@ def test_rebuild_replays_ops_and_review(computed, tmp_path):
     session = OpSession(computed, marked)
     session.redo(1, {"value": 9})
     computed.accept(marked, 1)
+    session.redo(2, {"value": 8})
+    session.keep(2, False)
     computed.close(marked)
 
     rebuilt = computed.rebuild(tmp_path / "again")
@@ -197,7 +238,9 @@ def test_rebuild_replays_ops_and_review(computed, tmp_path):
     assert rebuilt.entry(marked)["state"] == CLOSED
     assert rebuilt.entry(marked)["episodes"]["1"]["status"] == ACCEPTED
     assert rebuilt.entry(marked)["episodes"]["0"]["status"] == PENDING
+    assert rebuilt.entry(marked)["episodes"]["2"]["keep"] is False
     assert rebuilt.session(deleted).episodes() == [0, 1, 2, 3]
+    assert rebuilt.session(marked).episodes() == [0, 1, 2]
     assert _box(rebuilt.session(marked), 1) == 9.0
     assert _box(rebuilt.session(marked), 0) == _box(computed.session(marked), 0)
 
@@ -285,3 +328,22 @@ def test_cli_session_previews_a_redo_until_it_is_stopped(computed, monkeypatch, 
     assert [e for e in events if e["event"] == "preview" and e["id"] == "b"] == [
         {"event": "preview", "episode": 1, "id": "b", "frame": 0}]
     assert _box(computed.session(key), 1) == 6.0
+
+
+def test_cli_session_drop_stops_the_episodes_redo(computed, monkeypatch, capsys):
+    [key] = computed.apply("slow-mark", online=True)
+    SlowMarkOp.previewed.clear()
+
+    def stdin():
+        yield json.dumps({"id": "a", "episode": 1, "params": {"value": 0}}) + "\n"
+        SlowMarkOp.previewed.wait(5)
+        yield json.dumps({"id": "d", "episode": 1, "keep": False}) + "\n"
+        yield json.dumps({"close": True}) + "\n"
+
+    monkeypatch.setattr(sys, "stdin", stdin())
+    _cli(["session", str(computed.path)])
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    order = [(e["event"], e.get("id")) for e in events if e["event"] != "preview"]
+    assert order == [("ready", None), ("started", "a"), ("cancelled", "a"), ("kept", "d"), ("closed", None)]
+    assert len(computed.session(key).episodes()) == 3

@@ -23,7 +23,7 @@ from solarian.core.recording.archive import (
     targets_bytes,
     video_member,
 )
-from solarian.datasets import run_op
+from solarian.datasets import Episode, run_op
 from solarian.datasets.ops.mirror import reflect_rotvec
 from solarian.datasets.video import VideoEncoder, decode
 
@@ -74,6 +74,8 @@ def make_session(path: Path, episodes: int = 3, extra_column: bool = False) -> P
             pose = np.stack([table.column(f"obs.robot0.{f}").to_numpy() for f in POSE], axis=-1)
             bbox = np.tile(np.array([[2, 8, 10, 16]], dtype=np.float32), (N, 1))
             bbox[3] = -1
+            point = np.tile(np.array([[3.5, 9.0]], dtype=np.float32), (N, 1))
+            point[4] = -1
             writer.add_episode(
                 {"index": i, "n_rows": N, "start_ts": 100.0 * i, "end_ts": 100.0 * i + N / FPS,
                  "status": "ok", "n_frames": {CAMERA: N}, "stats": column_stats(table, {"obs.robot0.y": {}}),
@@ -82,7 +84,7 @@ def make_session(path: Path, episodes: int = 3, extra_column: bool = False) -> P
                     "episode.parquet": table_bytes(table),
                     f"video/{CAMERA}.mp4": encoder.close(),
                     f"tags/{CAMERA}.json": json.dumps([{"7": [[1, 2], [3, 2], [3, 4], [1, 4]]}] * N).encode(),
-                    f"targets/{CAMERA}.npz": targets_bytes(bbox=bbox),
+                    f"targets/{CAMERA}.npz": targets_bytes(bbox=bbox, point=point),
                 },
             )
     return path
@@ -163,6 +165,9 @@ def test_mirror_follows_each_episode_with_its_reflection(session, tmp_path):
     bbox = mirrored.read_targets(1, CAMERA)["bbox"]
     assert bbox[0].tolist() == [W - 10, 8, W - 2, 16]
     assert bbox[3].tolist() == [-1, -1, -1, -1]
+    point = mirrored.read_targets(1, CAMERA)["point"]
+    assert point[0].tolist() == [W - 3.5, 9.0]
+    assert point[4].tolist() == [-1, -1]
     assert mirrored.read_json(f"episodes/000001/tags/{CAMERA}.json")[0]["7"][0] == [W - 1 - 1, 2]
     first = next(decode(mirrored, video_member(1, CAMERA))).astype(int)
     assert np.abs(first - _frame(0)[:, ::-1]).mean() < 10
@@ -210,6 +215,20 @@ def test_targets_read_back_as_written(session):
     assert targets["bbox"].dtype == np.float32 and targets["bbox"].shape == (N, 4)
     with np.load(io.BytesIO(targets_bytes(bbox=targets["bbox"]))) as npz:
         assert np.array_equal(npz["bbox"], targets["bbox"])
+
+
+def test_derived_targets_keep_the_other_ops_arrays(session):
+    episode = Episode(Session(session), 0)
+    point = np.full((N, 2), 5.0, dtype=np.float32)
+    out = episode.derive_targets(CAMERA, {"point": point}, replaces=("point",), coverage={"found": N, "frames": N})
+    with np.load(io.BytesIO(out.files[f"targets/{CAMERA}.npz"])) as npz:
+        assert set(npz.files) == {"bbox", "point"}
+        assert np.array_equal(npz["bbox"], episode.targets(CAMERA)["bbox"])
+    assert out.meta["targets"][CAMERA] == {"found": N, "frames": N}
+
+    out = episode.derive_targets(CAMERA, {"point": point}, replaces=("bbox", "point"), coverage={})
+    with np.load(io.BytesIO(out.files[f"targets/{CAMERA}.npz"])) as npz:
+        assert set(npz.files) == {"point"}
 
 
 def test_cli_params_read_values_as_yaml_and_dotted_keys_nest():

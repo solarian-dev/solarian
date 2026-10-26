@@ -14,7 +14,7 @@ next action. A plugin ships:
   ``solarian.services`` entry-point group::
 
       [project.entry-points."solarian.services"]
-      sam2-tracker = "solarian_sam2_tracker.service:Sam2TrackerService"
+      sam2-tracker = "solarian_sam2.service:Sam2TrackerService"
 """
 
 from __future__ import annotations

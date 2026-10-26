@@ -323,10 +323,50 @@ class BoundingBoxData(Data):
     def _coerce_payload(self, value):
         return np.asarray(value, dtype=self.dtype).reshape(self.shape)
 
+    def overlay_box(self) -> np.ndarray:
+        """``(x0, y0, x1, y1)`` the UI draws."""
+        return np.asarray(self.value)[:4]
+
     def overlay_text(self) -> str | None:
         """What the UI writes by the box; a subclass carrying more than the
         corners says what they mean here. None writes nothing."""
         return None
+
+
+class PointData(Data):
+    """Pixel ``(x, y, visibility %)`` in the source image. All zeros = no point.
+
+    The UI draws it as a ``box_px`` square centred on the point.
+    """
+
+    dtype: Type = np.float32
+    shape: Optional[Tuple[int, ...]] = (3,)
+    payload: Optional[np.ndarray] = Field(default=None, alias="value")
+    #: Side of the square the UI draws, in source pixels.
+    box_px: int = 24
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.is_compressed and self.payload is None:
+            self.payload = np.zeros(self.shape, dtype=self.dtype)
+
+    def _coerce_payload(self, value):
+        return np.asarray(value, dtype=self.dtype).reshape(self.shape)
+
+    def overlay_box(self) -> np.ndarray:
+        """The ``box_px`` square centred on the point; all zeros for no point."""
+        value = np.asarray(self.value, dtype=np.float32)
+        if not value.any():
+            return np.zeros(4, dtype=np.int32)
+        x, y = value[:2]
+        r = self.box_px / 2
+        return np.rint([x - r, y - r, x + r, y + r]).astype(np.int32)
+
+    def overlay_text(self) -> str | None:
+        value = np.asarray(self.value)
+        if not value.any():
+            return None
+        visibility = int(round(float(value[2])))
+        return f"point {visibility}%" if visibility >= 50 else f"occluded {visibility}%"
 
 
 class MaskData(Data):
