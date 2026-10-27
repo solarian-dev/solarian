@@ -5,6 +5,7 @@ wandb
 
 # Data
 data
+!solarian/data/
 dataset
 outputs
 #models
