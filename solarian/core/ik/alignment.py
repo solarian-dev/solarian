@@ -104,6 +104,24 @@ def composed_rad(
     return ((norm + 100.0) / 200.0) * (model_hi - model_lo) + model_lo
 
 
+def offset_ticks(cal, model_lo: float, model_hi: float, delta_rad: float) -> tuple[int, float]:
+    """``(ticks, applied_rad)``: the encoder shift that adds *delta_rad* to every reading.
+
+    The same shift applies to ``range_min`` and ``range_max`` together on a
+    hard-stop joint, or to ``homing_offset`` on a continuous one -- the reading
+    is ``P - range_min`` in the first case and ``P = raw - homing_offset`` in
+    the second, so both move it the same way. Whole ticks only, so
+    *applied_rad* is the part of *delta_rad* that rounding kept.
+    """
+    span = float(_field(cal, "range_max", 0)) - float(_field(cal, "range_min", 0))
+    if span <= 0:
+        raise ValueError("calibration range is empty")
+    rad_per_tick = (float(model_hi) - float(model_lo)) / span
+    sign = 1.0 if int(_field(cal, "drive_mode", 0) or 0) else -1.0
+    ticks = int(round(sign * float(delta_rad) / rad_per_tick))
+    return ticks, sign * ticks * rad_per_tick
+
+
 # -- continuous joints: one home pose -> encoder window -----------------------
 @dataclass(frozen=True)
 class ContinuousRangeWindow:

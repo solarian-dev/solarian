@@ -14,13 +14,20 @@ tag on the table marker page they publish for download. Recording and solving
 are one command here, because a Solarian module owns its hardware for the
 lifetime of a process.
 
-Each pose is sampled with the arm held by its own servos rather than by hand.
-Torque comes off to walk the arm into position, then on to hold it while the
-hands come away, because the pose the servos hold is the one forward
-kinematics describes -- a hand-held arm sags and flexes by degrees, and
-degrees at the tag's distance are tens of mm of error. Confirm three times
-per pose: once positioned, once let go, once holding the arm again so torque
-can come off without dropping it.
+Each pose is sampled with the arm held by its own servos rather than by hand,
+because the pose the servos hold is the one forward kinematics describes -- a
+hand-held arm sags and flexes by degrees, and degrees at the tag's distance
+are tens of mm of error.
+
+By default only one pose is set by hand: an anchor looking at the tag. The arm
+then orbits the tag by itself, rotating the whole tool about the tag centre
+through a fixed pattern of tilts and rolls, and samples at each stop. That is
+a few seconds a pose instead of a walk and three confirmations, and the
+pattern spreads orientation far more evenly than hands do -- which matters,
+because the lever arm being measured is resolved by rotation between poses.
+``mode=manual`` keeps the hand-walked capture: torque off to walk the arm into
+position, on to hold it while the hands come away, and off again once a hand
+is back on it.
 
 A preview window draws the tag outline and the axes solved from it, which is
 the check worth watching: an outline only proves a quad with the right ID was
@@ -57,15 +64,20 @@ The result splits into two halves that are fixed in different places:
 
     solarian calibrate-hand-eye
 
-Overrides: ``samples=16 tag=13 marker=160.0 arm=right_arm``.
+Overrides: ``mode=auto sweep=36 tilt=30 tag=13 marker=160.0 arm=right_arm``,
+``samples=12`` for ``mode=manual``, and ``joints=fit`` to measure the arm's
+joint zeros in the same sweep (see :func:`_fit_joint_offsets`).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 import textwrap
 import time
+from collections import Counter
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -77,6 +89,8 @@ from solarian.cli.commands._calibration import (
     _opencv_bgr,
     module_running,
     pick_module,
+    returns_to_start,
+    run_control_loop,
 )
 from solarian.cli.commands._ik_common import load_module, select_ik_module
 from solarian.core.arm_module import _LATCH_JUMP_TICKS
@@ -197,6 +211,80 @@ _BAR_PROGRESS_SLACK = 1.5
 # then the first suspect, because after orientation the marker's printed
 # size is the only thing in the problem that sets a distance.
 _SCALE_SUSPECT_FACTOR = 1.0
+# Soft-L1 scale for _refine, in metres of residual (rotation enters through the
+# tag lever, so the same scale applies to it). Below it the loss is least
+# squares; a misdetection tens of mm out is down-weighted instead of steering
+# the answer, inside every jackknife solve as well as the main one.
+_ROBUST_SCALE_M = 0.01
+
+# Automatic sweep. Poses per sweep, counting the taught anchor.
+_SWEEP_POSES = 36
+# Largest orbit tilt off the anchor's line of sight. The lever arm is resolved
+# by rotation between poses, so spread is what narrows the error bar; past
+# about 30 deg the tag foreshortens and a wrist this size runs out of joint.
+_SWEEP_TILT_DEG = 30.0
+# Spin about the line of sight, cycled across targets. Roll keeps the tag in
+# the middle of the frame and is the cheapest rotation the arm has to give.
+_SWEEP_ROLLS_DEG = (-40.0, -20.0, 0.0, 20.0, 40.0)
+# Metres nearer (-) and further (+) from the tag than the anchor, cycled
+# across targets; see _orbit_targets for why one distance is not enough.
+_SWEEP_RADIAL_M = (-0.08, 0.0, 0.08)
+# joints=fit: a joint zero is resolved by how differently the joints are bent
+# between poses, so the sweep is longer and tilts further than the hand-eye
+# solve alone needs.
+_JOINT_SWEEP_POSES = 48
+_JOINT_SWEEP_TILT_DEG = 40.0
+# A fitted joint zero is written only when its standard error is this small.
+# Not tighter: shoulder_lift, elbow_flex and wrist_flex share one pitch axis,
+# so their sum is pinned far better than each alone (simulating 48 planned
+# poses at 0.3 deg of tag noise gives 0.3-0.7 deg apiece while the camera
+# comes out within 1 mm; a real SO-106 run gave 0.4-0.6 deg against offsets
+# of up to 5 deg), and an eyeballed home is off by degrees.
+_OFFSET_STDERR_MAX_DEG = 1.0
+# Per-pose residual past which the arm's kinematics, not the tag, is the likely
+# cause: a real SO-106 fits to 2.6 mm rms with fitted zeros, 6-7 without.
+_KINEMATIC_RESIDUAL_MM = 5.0
+# |scale - 1| past this many standard errors, and past _SCALE_FLOOR, is a
+# distance scale the fit has actually resolved rather than noise.
+_SCALE_SIGMAS = 3.0
+_SCALE_FLOOR = 0.02
+# A tag seen this obliquely has foreshortened corners whose error grows fast.
+_MAX_VIEW_DEG = 60.0
+# Fingertips above the tag plane, which is the table.
+_TCP_CLEARANCE_M = 0.05
+# How close differential IK has to land to a target for it to be visited. Loose
+# on purpose: the sample pairs the frame with the pose actually read back, so
+# a target only has to be near enough to keep the tag in view.
+_REACH_POS_M = 0.01
+_REACH_ROT_DEG = 3.0
+# Closest any two parts may come, by the robot scene's collision meshes. Those
+# are measured as convex hulls, already larger than the parts, so this is
+# margin for the arm not tracking its path exactly and for joint zeros a few
+# degrees off, not for the meshes. 2 cm drops twice the SO-106 orbit poses
+# 1.5 cm does (simulated), and the sweep is then too thin for joints=fit.
+_COLLISION_MARGIN_M = 0.015
+# Joint-space step at which the move between two targets is checked.
+_PATH_STEP_DEG = 4.0
+# Orbit candidates planned per pose wanted. From an anchor near the edge of
+# reach only 1 in 16 survives reach, view angle and the collision check (a real
+# SO-106 run kept 6 of 96), so fewer leaves a sweep, and every top-up, short.
+# Each reach check is ~25 ms of IK on a Pi 5, and half fail cheaper tests first.
+_CANDIDATES_PER_TARGET = 16
+# After a move the gravity joints keep creeping for a second or two while each
+# servo's integral term winds up against the load. A sample waits until no
+# joint has moved more than _STILL_DEG (two encoder ticks) over _STILL_WINDOW_S,
+# up to _STILL_TIMEOUT_S, after which _measure judges the pose as it is.
+_STILL_DEG = 0.18
+_STILL_WINDOW_S = 0.5
+_STILL_TIMEOUT_S = 5.0
+_STILL_POLL_S = 0.05
+# Sweep speeds, well under the arm's limits: a calibration sample is worth
+# more than the second a faster move saves, and a slow stop rings less.
+_SWEEP_SPEED_M_S = 0.08
+_SWEEP_ROT_SPEED = 0.6
+# Azimuth step between sweeps. Irrational in turns, so no later sweep lands on
+# the azimuths of an earlier one.
+_GOLDEN_ANGLE = np.pi * (3.0 - np.sqrt(5.0))
 
 
 def _pose_to_mat(pose) -> np.ndarray:
@@ -580,6 +668,7 @@ def _measure_once(
     import cv2
 
     pose_before = arm.read_pose()
+    q_before = arm._read_joints_rad()
     detections, seen = [], []
     for _ in range(_FRAMES_PER_SAMPLE):
         frame = _read_frame(camera, sensor_name, warp)
@@ -591,6 +680,7 @@ def _measure_once(
         )
         if corners is not None:
             detections.append(corners)
+    q_after = arm._read_joints_rad()
     pose_after = arm.read_pose()
 
     drift_m = float(np.linalg.norm(pose_after[:3] - pose_before[:3]))
@@ -660,11 +750,22 @@ def _measure_once(
         # the policy consumes. Identity whenever those are the same frame.
         "tx_world2cam": tx_cam2policy @ tx_world2cam,
         "pose": pose,
+        # Joint angles the pose was computed from, for the joint-zero fit. The
+        # half-difference is wrapped so a wrist read across +-pi averages to
+        # where it was, not to the far side of the circle.
+        "q": q_before + 0.5 * np.angle(np.exp(1j * (q_after - q_before))),
         "rms_px": rms_px,
         "ratio": ratio,
         "jitter_px": jitter_px,
         "tag_m": float(np.linalg.norm(tvec)),
     }, None, False
+
+
+def _gate_wh(intr) -> tuple[int, int]:
+    """Size of the cheap detection gate's copy of a frame; see :func:`_detect`."""
+    frame_w, frame_h = int(intr["DIM"][0]), int(intr["DIM"][1])
+    scale = min(1.0, _GATE_W / frame_w)
+    return round(frame_w * scale), round(frame_h * scale)
 
 
 def _collect(
@@ -699,8 +800,7 @@ def _collect(
     # Off the intrinsics rather than off a frame, so the overlay can never end
     # up scaled against a different resolution than the one being measured.
     frame_w, frame_h = int(intr["DIM"][0]), int(intr["DIM"][1])
-    gate_scale = min(1.0, _GATE_W / frame_w)
-    gate_wh = (round(frame_w * gate_scale), round(frame_h * gate_scale))
+    gate_wh = _gate_wh(intr)
     overlay_k = frame_w / _OVERLAY_REF_W
 
     # initialize() energised the arm on the way in, so this is what makes it
@@ -965,6 +1065,461 @@ def _collect(
     return samples
 
 
+def _prior_tcp2camera(path: Path, ik_tcp) -> np.ndarray:
+    """Best guess at ``tx_tcp2camera`` before this run has measured it.
+
+    Only aims the sweep, so it needs to be roughly right, not right: every
+    target rotates about where this guess puts the tag, and a few cm of error
+    there moves the tag across the frame rather than out of it. The last
+    passing run on this camera is the best guess, taken through its flange
+    transform so an ik_tcp edited since still composes correctly; UMI's
+    nominal mount, with camera and fingertip axes aligned, is the fallback.
+    """
+    try:
+        with open(path, "r") as fp:
+            data = json.load(fp)
+        if data.get("passed"):
+            gripper2camera = np.asarray(data["tx_gripper2camera"], dtype=np.float64)
+            return gripper2camera @ _offset_to_mat(ik_tcp)
+    except (OSError, ValueError, KeyError):
+        pass
+    prior = np.eye(4)
+    prior[:3, 3] = UMI_TIP_IN_CAMERA
+    return prior
+
+
+def _orbit_targets(anchor_pose, center, line_of_sight, n, max_tilt_deg, phase=0):
+    """TCP poses that orbit the whole tool rigidly about *center*.
+
+    Each target is ``Trans(P) . R . Trans(-P) . T_anchor``, then slid
+    ``radial_m`` along the rotated line of sight, so the camera keeps looking
+    at the tag. ``R`` rolls about the line of sight first -- which leaves the
+    camera where it is, spinning -- then tilts about an axis perpendicular to
+    it.
+
+    The slide cycles between nearer, level with and further than the anchor. At one
+    distance, a tag distance read a few percent off (marker size, lens
+    intrinsics) is indistinguishable from the camera sitting further along
+    its own axis, and the fit moves the camera with zero residual to show for
+    it. Several distances make the same error disagree with itself.
+
+    Azimuths are evenly spread and visited in order to keep moves short, two
+    tilts each (half and full *max_tilt_deg*). *phase* is the sweep number:
+    it turns the azimuths by the golden angle and steps the roll and distance
+    cycles, so a top-up sweep adds poses rather than repeating them.
+    """
+    sight = np.asarray(line_of_sight, dtype=np.float64)
+    sight = sight / np.linalg.norm(sight)
+    # Any direction off the sight line seeds the perpendicular pair.
+    seed = np.array([0.0, 0.0, 1.0]) if abs(sight[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+    u = np.cross(sight, seed)
+    u /= np.linalg.norm(u)
+    v = np.cross(sight, u)
+    center = np.asarray(center, dtype=np.float64)
+    anchor = _pose_to_mat(anchor_pose)
+
+    n_az = int(np.ceil(n / 2))
+    targets = []
+    for j in range(n_az):
+        azimuth = phase * _GOLDEN_ANGLE + 2.0 * np.pi * j / n_az
+        axis = np.cos(azimuth) * u + np.sin(azimuth) * v
+        for k, tilt in enumerate((0.5 * max_tilt_deg, max_tilt_deg)):
+            if len(targets) >= n:
+                break
+            roll = _SWEEP_ROLLS_DEG[(2 * j + k + phase) % len(_SWEEP_ROLLS_DEG)]
+            radial = _SWEEP_RADIAL_M[(j + k + phase) % len(_SWEEP_RADIAL_M)]
+            rot = st.Rotation.from_rotvec(np.radians(tilt) * axis) * st.Rotation.from_rotvec(
+                np.radians(roll) * sight
+            )
+            orbit = np.eye(4)
+            orbit[:3, :3] = rot.as_matrix()
+            orbit[:3, 3] = center - rot.apply(center) - radial * rot.apply(sight)
+            targets.append(
+                {
+                    "pose": _mat_to_pose(orbit @ anchor),
+                    "orbit": orbit,
+                    "tilt_deg": float(tilt),
+                    "roll_deg": float(roll),
+                    "radial_m": float(radial),
+                    "azimuth_deg": float(np.degrees(azimuth) % 360.0),
+                }
+            )
+    return targets
+
+
+def _plan_sweep(arm, anchor, prior, n, max_tilt_deg, phase, guard=None):
+    """``(targets, skipped)``: up to *n* orbit poses worth visiting, and why
+    the rest were dropped before the arm moved.
+
+    _CANDIDATES_PER_TARGET times as many candidates are generated as wanted,
+    and the survivors are thinned evenly, so filtering costs count rather than
+    coverage. With a :class:`~solarian.sim.collision.CollisionGuard`, a
+    target is also dropped
+    when the gripper would come too close to the arm or the table there, or on
+    the way to it from the target before.
+    """
+    cam_in_base = np.linalg.inv(anchor["tx_base2tcp"]) @ np.linalg.inv(prior)
+    tag_in_base = cam_in_base @ anchor["tx_world2cam"]
+    center, normal = tag_in_base[:3, 3], tag_in_base[:3, 2]
+    camera = cam_in_base[:3, 3]
+
+    skipped: Counter = Counter()
+    keep = []
+    for target in _orbit_targets(
+        anchor["pose"], center, center - camera, _CANDIDATES_PER_TARGET * n,
+        max_tilt_deg, phase,
+    ):
+        seen_from = target["orbit"][:3, :3] @ (camera - center)
+        view_deg = float(
+            np.degrees(
+                np.arccos(
+                    np.clip(abs(normal @ seen_from) / np.linalg.norm(seen_from), 0.0, 1.0)
+                )
+            )
+        )
+        if view_deg < _MIN_TILT_DEG:
+            skipped["too flat-on to the tag"] += 1
+            continue
+        if view_deg > _MAX_VIEW_DEG:
+            skipped["too oblique to the tag"] += 1
+            continue
+        pose = target["pose"]
+        if pose[2] < center[2] + _TCP_CLEARANCE_M:
+            skipped["fingertips too close to the table"] += 1
+            continue
+        achieved, blocked, q = arm.reachable_pose(pose)
+        if (
+            blocked
+            or np.linalg.norm(achieved[:3] - pose[:3]) > _REACH_POS_M
+            or _rot_between_deg(achieved, pose) > _REACH_ROT_DEG
+        ):
+            skipped["out of the arm's reach"] += 1
+            continue
+        if guard is not None and guard.clearance(q)[0] < _COLLISION_MARGIN_M:
+            skipped["the gripper would hit the arm or the table"] += 1
+            continue
+        keep.append({**target, "q": q})
+    if len(keep) > n:
+        keep = [keep[i] for i in np.unique(np.linspace(0, len(keep) - 1, n).round().astype(int))]
+    if guard is not None:
+        keep = _drop_colliding_moves(guard, anchor["q"], keep, skipped)
+    return keep, skipped
+
+
+def _drop_colliding_moves(guard, anchor_q, targets, skipped) -> list[dict]:
+    """*targets* minus those whose move in, or the final move home, collides.
+
+    The arm moves in straight Cartesian lines, which differential IK follows
+    with joints that pass close to the straight joint-space line between the
+    two ends -- so that line is what is checked, densely enough that no part
+    can slip through the margin between two steps.
+
+    The anchor was set by hand and may already sit inside the margin, by the
+    hulls if not in fact; a move may then come as close as its ends do, but
+    no closer, or nothing could ever leave the anchor.
+    """
+
+    def clear(q_from, q_to) -> bool:
+        limit = min(
+            _COLLISION_MARGIN_M, guard.clearance(q_from)[0], guard.clearance(q_to)[0]
+        )
+        steps = int(np.ceil(np.degrees(np.max(np.abs(q_to - q_from))) / _PATH_STEP_DEG))
+        return all(
+            guard.clearance(q_from + t * (q_to - q_from))[0] >= limit
+            for t in np.linspace(0.0, 1.0, steps + 1)[1:-1]
+        )
+
+    kept, here = [], anchor_q
+    for target in targets:
+        if clear(here, target["q"]):
+            kept.append(target)
+            here = target["q"]
+        else:
+            skipped["the gripper would hit the arm on the way there"] += 1
+    while kept and not clear(kept[-1]["q"], anchor_q):
+        kept.pop()
+        skipped["the gripper would hit the arm on the way there"] += 1
+    return kept
+
+
+def _teach_anchor(arm, camera, rig, max_tilt_deg):
+    """A pose set by hand, measured, or None when the user gives up.
+
+    The camera runs live throughout, with the tag's distance, view angle and
+    ambiguity drawn on it, so the user aims by what the measurement will see.
+    """
+    print(
+        "\nAnchor pose. Walk the arm until the fingers point at the tag from "
+        f"about\n0.3 m, tilted at least {_MIN_TILT_DEG:g} deg off flat-on (the "
+        "tag line turns green), with\nroom to swing "
+        f"{max_tilt_deg:g} deg every way from there. The arm then orbits the "
+        "tag by itself.\nENTER confirms and q stops, from either the window or "
+        "this shell."
+    )
+    while True:
+        if not _confirm_live(
+            camera, rig, "Take hold of the arm, then confirm to release torque.",
+            "take hold of the arm, ENTER releases torque",
+        ):
+            return None
+        arm.start_calibration_mode()
+        aimed = _confirm_live(
+            camera, rig, "Torque is OFF. Aim at the tag, then confirm while still holding it.",
+            "torque OFF - aim at the tag, ENTER holds here",
+        )
+        # Goal_Position survives the torque-off, so the hold is latched to
+        # where the arm now is, or it snaps back to the pre-free-drive goal.
+        arm.end_calibration_mode()
+        arm.enable_torque_holding()
+        if not aimed:
+            return None
+        time.sleep(_SETTLE_S)
+        if not _confirm_live(
+            camera, rig, "Torque is ON. Let go of the arm, then confirm.",
+            "holding - let go, ENTER measures",
+        ):
+            return None
+        _wait_until_still(arm)
+        sample, reason = _measure(arm, camera, *rig)
+        if sample is not None:
+            print(
+                f"  anchor: tag at {sample['tag_m']:.3f} m, reprojection "
+                f"{sample['rms_px']:.2f} px, ambiguity {sample['ratio']:.0f}"
+            )
+            return sample
+        print(f"  nothing recorded: {reason}. Re-seat the anchor.")
+
+
+def _open_preview(intr) -> bool:
+    """Open the camera window at the frame's aspect; False when there is no display."""
+    import cv2
+
+    frame_w, frame_h = int(intr["DIM"][0]), int(intr["DIM"][1])
+    scale = min(1.0, _WINDOW_W / frame_w)
+    try:
+        cv2.namedWindow(_CAM_WINDOW, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(_CAM_WINDOW, round(frame_w * scale), round(frame_h * scale))
+    except cv2.error:
+        return False
+    return True
+
+
+def _confirm_live(camera, rig, prompt: str, overlay: str) -> bool:
+    """Stream the camera until Enter, from the window or the shell. False on q.
+
+    Without a display it is a plain prompt.
+    """
+    import cv2
+
+    print(f"  {prompt}")
+    if _open_preview(rig[4]):
+        try:
+            while True:
+                key = _show_frame(
+                    camera, rig, [(overlay, (0, 255, 255)), ("q stops", (200, 200, 200))]
+                )
+                line = _shell_line()
+                if key == ord("q") or (line is not None and line.lower() == "q"):
+                    return False
+                if key in _CONFIRM_KEYS or line is not None:
+                    return True
+        except cv2.error:
+            pass
+    return input("  Enter, or q to stop: ").strip().lower() != "q"
+
+
+def _show_frame(camera, rig, lines) -> int:
+    """Draw the tag, how it reads, and *lines* on a fresh frame; the key pressed."""
+    import cv2
+
+    sensor_name, detector, tag_id, obj_pts, intr, color_mode, gate_wh, _tx, warp = rig
+    full = _opencv_bgr(_read_frame(camera, sensor_name, warp), color_mode)
+    corners, _seen = _detect(
+        cv2.cvtColor(full, cv2.COLOR_BGR2GRAY), detector, tag_id, gate_wh
+    )
+    solved = _tag_in_camera(corners, obj_pts, intr) if corners is not None else None
+    if solved is None:
+        reading = (f"tag {tag_id} not found", (0, 0, 255))
+    else:
+        rvec, tvec, _rms, ratio = solved
+        tvec = np.ravel(tvec)
+        normal = cv2.Rodrigues(np.asarray(rvec, dtype=np.float64))[0][:, 2]
+        view_deg = float(
+            np.degrees(np.arccos(np.clip(abs(normal @ tvec) / np.linalg.norm(tvec), 0.0, 1.0)))
+        )
+        usable = (
+            _MIN_TILT_DEG <= view_deg <= _MAX_VIEW_DEG and ratio >= _MIN_AMBIGUITY_RATIO
+        )
+        reading = (
+            f"tag {np.linalg.norm(tvec):.2f} m, {view_deg:.0f} deg off flat-on, "
+            f"ambiguity {ratio:.0f}",
+            (0, 255, 0) if usable else (0, 165, 255),
+        )
+    view = full.copy()
+    k = int(intr["DIM"][0]) / _OVERLAY_REF_W
+    _draw_tag(view, corners, solved, obj_pts, intr, k)
+    _draw_status(view, [reading, *lines], k)
+    cv2.imshow(_CAM_WINDOW, view)
+    return cv2.waitKey(1) & 0xFF
+
+
+def _wait_until_still(arm) -> tuple[float, bool]:
+    """``(seconds waited, settled)``: until no joint creeps past _STILL_DEG.
+
+    Joint encoders, not the camera, because they see the integral term pulling
+    a loaded joint onto its goal long after the visible ringing has stopped.
+    """
+    start = time.monotonic()
+    history: list[tuple[float, np.ndarray]] = []
+    while True:
+        now = time.monotonic()
+        history = [(t, q) for t, q in history if now - t <= _STILL_WINDOW_S]
+        history.append((now, arm._read_joints_rad()))
+        if now - start >= _STILL_WINDOW_S:
+            qs = np.stack([q for _t, q in history])
+            # Wrapped against the first read, so a wrist sitting on +-pi
+            # does not look like a full turn of motion.
+            moved = np.angle(np.exp(1j * (qs - qs[0])))
+            if np.degrees(np.max(moved.max(axis=0) - moved.min(axis=0))) <= _STILL_DEG:
+                return now - start, True
+        if now - start >= _STILL_TIMEOUT_S:
+            return now - start, False
+        time.sleep(_STILL_POLL_S)
+
+
+def _auto_sweep(
+    arm, camera, rig, anchor, prior, n, max_tilt_deg, phase, first_pose, guard=None
+):
+    """Drive the arm through an orbit about the tag, one sample per pose.
+
+    The arm is energised throughout and comes back to the anchor however
+    this exits, so the next sweep plans from the same place and the user
+    is never handed an arm parked somewhere they did not choose.
+    """
+    import cv2
+
+    targets, skipped = _plan_sweep(arm, anchor, prior, n, max_tilt_deg, phase, guard)
+    dropped = ", ".join(f"{count} {why}" for why, count in skipped.most_common())
+    print(
+        f"\nSweep of {len(targets)} poses about the tag, up to {max_tilt_deg:g} "
+        f"deg of tilt, numbered from {first_pose}."
+        + (f" Dropped before moving: {dropped}." if dropped else "")
+        + " q in the window or this shell, or Ctrl-C, stops it."
+    )
+    if not targets:
+        _para(
+            "No orbit pose survived planning. Re-seat the anchor nearer the "
+            "middle of the arm's reach, or pass a smaller tilt=<deg>."
+        )
+        return []
+
+    preview = _open_preview(rig[4])
+    samples: list[dict] = []
+    try:
+        with returns_to_start(arm, _SWEEP_SPEED_M_S):
+            for i, target in enumerate(targets, 1):
+                arm.moveL(
+                    target["pose"], speed=_SWEEP_SPEED_M_S, rot_speed=_SWEEP_ROT_SPEED
+                )
+                run_control_loop(
+                    arm, arm.last_waypoint_time - time.monotonic() + _SETTLE_S
+                )
+                waited_s, still = _wait_until_still(arm)
+                sample, reason = _measure(arm, camera, *rig)
+                label = (
+                    f"{i}/{len(targets)}: tilt {target['tilt_deg']:.0f} deg at "
+                    f"{target['azimuth_deg']:.0f}, roll {target['roll_deg']:+.0f}, "
+                    f"{target['radial_m'] * 100:+.0f} cm, "
+                    + (f"still after {waited_s:.1f} s" if still else f"still creeping at {waited_s:.0f} s")
+                )
+                if sample is None:
+                    print(f"  {label} -- skipped: {reason}.")
+                else:
+                    samples.append(sample)
+                    print(
+                        f"  pose {first_pose + len(samples) - 1} ({label}): tag at "
+                        f"{sample['tag_m']:.3f} m, reprojection "
+                        f"{sample['rms_px']:.2f} px, ambiguity {sample['ratio']:.0f}"
+                    )
+                stop = False
+                if preview:
+                    try:
+                        stop = _show_frame(
+                            camera,
+                            rig,
+                            [
+                                (f"{label}  ({len(samples)} measured)", (0, 255, 255)),
+                                ("q stops the sweep", (200, 200, 200)),
+                            ],
+                        ) == ord("q")
+                    except cv2.error:
+                        preview = False
+                line = _shell_line()
+                if stop or (line is not None and line.lower() == "q"):
+                    print("  Stopped.")
+                    break
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+    finally:
+        if preview:
+            try:
+                cv2.destroyWindow(_CAM_WINDOW)
+            except cv2.error:
+                pass
+    print(f"  {len(samples)} of {len(targets)} sweep poses measured.")
+    return samples
+
+
+def _collision_guard(arm_name, joint_names):
+    """The robot scene's collision check for *arm_name*, or None, said aloud.
+
+    The arm's own IK model has no gripper in it, so this is the only thing
+    standing between an orbit target and the camera driven into the forearm.
+    """
+    from solarian.conf import settings
+    from solarian.sim.collision import CollisionGuard
+    from solarian.utils import get_class
+
+    scene = get_class(settings.ROBOT_CLASS).scene
+    if scene is None or not any(a.module == arm_name for a in scene.attachments):
+        print(
+            f"\n  WARNING: the robot declares no scene with {arm_name} in it, so the "
+            "sweep cannot check for the gripper hitting the arm. Watch it, and "
+            "stop it with q if anything gets close."
+        )
+        return None
+    try:
+        return CollisionGuard(scene, arm_name, joint_names)
+    except Exception as exc:  # noqa: BLE001 - a broken scene must not block calibrating
+        print(
+            f"\n  WARNING: the robot scene would not load for collision checks "
+            f"({exc}). Watch the sweep, and stop it with q if anything gets close."
+        )
+        return None
+
+
+@contextmanager
+def _taken_before_release():
+    """Hold the exit until a hand is on the arm.
+
+    The automatic sweep ends energised, and leaving ``module_running`` cuts
+    torque, which drops a servo arm where it stands.
+    """
+    try:
+        yield
+    finally:
+        try:
+            input("\nTake hold of the arm, then press Enter to release torque...")
+        except (EOFError, KeyboardInterrupt):
+            print()
+
+
+def _pose_spread_deg(samples) -> np.ndarray:
+    """Standard deviation of the TCP orientations about their mean, per tool axis."""
+    rots = st.Rotation.from_rotvec(np.stack([s["pose"][3:6] for s in samples]))
+    return np.degrees((rots.mean().inv() * rots).as_rotvec().std(axis=0))
+
+
 def _solve(samples) -> tuple[np.ndarray, np.ndarray]:
     """``(tx_base2world, tx_tcp2camera)`` from the pose/board pairs.
 
@@ -1002,8 +1557,9 @@ def _refine(samples, tx_base2world, tx_tcp2camera):
     minimum rather than at it. On this rig that gap is most of the answer's
     error -- descending it halves the distance to the true fingertip offset.
 
-    Levenberg-Marquardt is monotone from a starting point this close, so the
-    result cannot be worse than what went in.
+    The loss is soft-L1 at ``_ROBUST_SCALE_M``: least squares for the
+    millimetres a healthy pose is out by, linear for a misdetection, so one
+    bad pose cannot drag every jackknife solve that contains it.
     """
     from scipy.optimize import least_squares
 
@@ -1011,29 +1567,297 @@ def _refine(samples, tx_base2world, tx_tcp2camera):
     # tag's own distance is the honest one: it is how far an orientation error
     # actually displaces the thing the camera is looking at.
     lever = float(np.mean([s["tag_m"] for s in samples]))
+    cam2world = np.linalg.inv(np.stack([s["tx_world2cam"] for s in samples]))
+    base2tcp = np.stack([s["tx_base2tcp"] for s in samples])
 
     def residual(x):
         world2base = np.linalg.inv(_pose_to_mat(x[:6]))
-        tcp2camera = _pose_to_mat(x[6:])
-        out = []
-        for s in samples:
-            err = np.linalg.inv(s["tx_world2cam"]) @ (
-                tcp2camera @ s["tx_base2tcp"] @ world2base
-            )
-            rotvec = st.Rotation.from_matrix(err[:3, :3]).as_rotvec()
-            out.append(np.concatenate([err[:3, 3], rotvec * lever]))
-        return np.concatenate(out)
+        err = cam2world @ (_pose_to_mat(x[6:]) @ base2tcp @ world2base)
+        rotvec = st.Rotation.from_matrix(err[:, :3, :3]).as_rotvec()
+        return np.concatenate([err[:, :3, 3], rotvec * lever], axis=1).ravel()
 
     fit = least_squares(
         residual,
         np.concatenate(
             [_mat_to_pose(tx_base2world), _mat_to_pose(tx_tcp2camera)]
         ),
-        method="lm",
-        xtol=1e-14,
-        ftol=1e-14,
+        method="trf",
+        loss="soft_l1",
+        f_scale=_ROBUST_SCALE_M,
+        xtol=1e-12,
+        ftol=1e-12,
     )
     return _pose_to_mat(fit.x[:6]), _pose_to_mat(fit.x[6:])
+
+
+def _distance_scale(samples) -> dict:
+    """The factor the measured tag distances fit best when it is left free.
+
+    Everything metric on the camera side rests on two inputs -- the printed
+    marker size and the lens focal length -- and both scale every tag
+    distance by the same factor. The arm's distances are independent of
+    both, so poses at more than one distance pin the factor down: the
+    solve runs again with it free, and a scale off 1 says one of those two
+    inputs is wrong. It is reported rather than applied, because the cure
+    is to fix the input, and ``marker=`` is where any scale is corrected.
+
+    ``scale`` > 1 means the true distances are longer than measured. The
+    standard error comes from the Jacobian at the solution.
+    """
+    from scipy.optimize import least_squares
+
+    tx_base2world, tx_tcp2camera = _solve(samples)
+    lever = float(np.mean([s["tag_m"] for s in samples]))
+    rot_w2c = np.stack([s["tx_world2cam"][:3, :3] for s in samples])
+    t_w2c = np.stack([s["tx_world2cam"][:3, 3] for s in samples])
+    base2tcp = np.stack([s["tx_base2tcp"] for s in samples])
+
+    def residual(x):
+        cam2world = np.tile(np.eye(4), (len(samples), 1, 1))
+        cam2world[:, :3, :3] = np.transpose(rot_w2c, (0, 2, 1))
+        cam2world[:, :3, 3] = -np.einsum("nji,nj->ni", rot_w2c, x[12] * t_w2c)
+        world2base = np.linalg.inv(_pose_to_mat(x[:6]))
+        err = cam2world @ (_pose_to_mat(x[6:12]) @ base2tcp @ world2base)
+        rotvec = st.Rotation.from_matrix(err[:, :3, :3]).as_rotvec()
+        return np.concatenate([err[:, :3, 3], rotvec * lever], axis=1).ravel()
+
+    fit = least_squares(
+        residual,
+        np.concatenate(
+            [_mat_to_pose(tx_base2world), _mat_to_pose(tx_tcp2camera), [1.0]]
+        ),
+        method="trf",
+        loss="soft_l1",
+        f_scale=_ROBUST_SCALE_M,
+        xtol=1e-12,
+        ftol=1e-12,
+    )
+    dof = max(fit.fun.size - fit.x.size, 1)
+    sigma2 = float(np.sum(fit.fun**2) / dof)
+    try:
+        cov = np.linalg.inv(fit.jac.T @ fit.jac) * sigma2
+        stderr = float(np.sqrt(max(cov[12, 12], 0.0)))
+    except np.linalg.LinAlgError:
+        stderr = float("inf")
+    scale = float(fit.x[12])
+    return {
+        "scale": scale,
+        "stderr": stderr,
+        "resolved": abs(scale - 1.0) > max(_SCALE_SIGMAS * stderr, _SCALE_FLOOR),
+        "tip_in_camera": _pose_to_mat(fit.x[6:12])[:3, 3],
+    }
+
+
+def _report_scale(scale, marker_mm: float) -> None:
+    """The fitted distance scale, and what it means when it is not 1."""
+    print(
+        f"\n  distance scale        {scale['scale']:.3f} +/- {scale['stderr']:.3f}"
+        "   (1 = marker size and lens agree with the arm)"
+    )
+    if not scale["resolved"]:
+        return
+    tip = scale["tip_in_camera"]
+    print()
+    _para(
+        f"The tag distances fit best scaled by {scale['scale']:.3f} (+/- "
+        f"{scale['stderr']:.3f}), which is not 1. Either the marker is not "
+        f"{marker_mm:.0f} mm or the lens intrinsics do not match the lens "
+        "fitted -- both scale every distance alike, and the fingertip depth "
+        "comes out wrong by about the same factor. With the scale left free "
+        f"the fingertips sit at [{tip[0]:+.4f}, {tip[1]:+.4f}, {tip[2]:+.4f}] m "
+        "in camera axes."
+    )
+    _para(
+        "Measure the black square edge to edge, and check that the mounted "
+        "lens is the one calibrate-umi-camera fitted (refocusing counts). If "
+        f"both check out, re-run with marker={marker_mm * scale['scale']:.1f}, "
+        "which corrects the distances whichever input caused it."
+    )
+
+
+def _with_joint_offsets(samples, backend, delta) -> list[dict]:
+    """The samples re-posed by forward kinematics at their joint angles + *delta*."""
+    from solarian.core.ik.diagnostics import fk
+
+    out = []
+    for s in samples:
+        pose = fk(backend, s["q"] + delta)
+        out.append({**s, "pose": pose, "tx_base2tcp": np.linalg.inv(_pose_to_mat(pose))})
+    return out
+
+
+def _fit_joint_offsets(samples, backend, fitted) -> dict:
+    """The joint zeros the camera measures, solved with both hand-eye transforms.
+
+    The tag is fixed, so every pose has to agree on one tag-in-base. A joint
+    whose zero is off by a degree bends forward kinematics differently at every
+    configuration, which no rigid camera mount can explain -- the plain solve
+    pays for it by moving the camera along its axis and leaving a rotation
+    residual. Freeing one offset per joint in *fitted* (indices into ``q``)
+    removes that. The first joint and the last cannot be among them: a base
+    yaw zero is a turn of tag-in-base, and a flange roll zero a turn of the
+    camera mount, so neither changes any residual.
+
+    ``delta`` > 0 means the joint sits further along than it reads. Standard
+    errors come from the Jacobian at the solution, as in :func:`_distance_scale`.
+    """
+    from scipy.optimize import least_squares
+
+    from solarian.core.ik.diagnostics import fk
+
+    fitted = list(fitted)
+    q = np.stack([s["q"] for s in samples])
+    tx_base2world, tx_tcp2camera = _solve(samples)
+    lever = float(np.mean([s["tag_m"] for s in samples]))
+    cam2world = np.linalg.inv(np.stack([s["tx_world2cam"] for s in samples]))
+
+    def delta_of(x):
+        delta = np.zeros(q.shape[1])
+        delta[fitted] = x[12:]
+        return delta
+
+    # Finite differences step the 12 transform parameters with the offsets
+    # held, so most residual calls repeat the forward kinematics of the last.
+    cache: dict[bytes, np.ndarray] = {}
+
+    def base2tcp_at(delta):
+        key = delta.tobytes()
+        if key not in cache:
+            if len(cache) > 32:
+                cache.clear()
+            cache[key] = np.linalg.inv(
+                np.stack([_pose_to_mat(fk(backend, qi + delta)) for qi in q])
+            )
+        return cache[key]
+
+    def residual(x):
+        world2base = np.linalg.inv(_pose_to_mat(x[:6]))
+        err = cam2world @ (_pose_to_mat(x[6:12]) @ base2tcp_at(delta_of(x)) @ world2base)
+        rotvec = st.Rotation.from_matrix(err[:, :3, :3]).as_rotvec()
+        return np.concatenate([err[:, :3, 3], rotvec * lever], axis=1).ravel()
+
+    fit = least_squares(
+        residual,
+        np.concatenate(
+            [_mat_to_pose(tx_base2world), _mat_to_pose(tx_tcp2camera), np.zeros(len(fitted))]
+        ),
+        method="trf",
+        loss="soft_l1",
+        f_scale=_ROBUST_SCALE_M,
+        x_scale="jac",
+        xtol=1e-12,
+        ftol=1e-12,
+    )
+    dof = max(fit.fun.size - fit.x.size, 1)
+    sigma2 = float(np.sum(fit.fun**2) / dof)
+    stderr = np.full(q.shape[1], np.nan)
+    try:
+        cov = np.linalg.inv(fit.jac.T @ fit.jac) * sigma2
+        stderr[fitted] = np.sqrt(np.clip(np.diag(cov)[12:], 0.0, None))
+    except np.linalg.LinAlgError:
+        stderr[fitted] = np.inf
+    delta = delta_of(fit.x)
+    before = _fit_error(samples, tx_base2world, tx_tcp2camera)
+    after = _fit_error(
+        _with_joint_offsets(samples, backend, delta),
+        _pose_to_mat(fit.x[:6]),
+        _pose_to_mat(fit.x[6:12]),
+    )
+    return {
+        "delta": delta,
+        "stderr": stderr,
+        "fitted": fitted,
+        "resolved": bool(np.all(np.degrees(stderr[fitted]) <= _OFFSET_STDERR_MAX_DEG)),
+        "residual_mm": (_rms(before[0]), _rms(after[0])),
+        "residual_deg": (_rms(before[1]), _rms(after[1])),
+    }
+
+
+def _rms(values) -> float:
+    return float(np.sqrt(np.mean(np.square(values))))
+
+
+def _offer_joint_zeros(arm, zeros) -> np.ndarray | None:
+    """Print the fitted joint zeros, and write them to the arm's yaml if they
+    are resolved and the user agrees.
+
+    Returns the offsets as written -- whole ticks, so slightly off what was
+    fitted -- or None when nothing was written. The running arm keeps the
+    calibration it connected with, so its reads stay in the old zeros for the
+    rest of this run; the caller corrects them with what this returns.
+    """
+    from dataclasses import replace
+
+    from solarian.cli.commands._ik_common import counts_per_rev_resolver
+    from solarian.core.ik.alignment import offset_ticks
+
+    names = arm._ik_joint_names()
+    limits = arm._joint_limits()
+    # Best effort: without a resolution the encoder bounds go unchecked.
+    cprs = counts_per_rev_resolver(arm) or {}
+    calibration = dict(arm.calibration)
+    applied = np.zeros(len(names))
+    off_encoder = []
+    print("\n  joint zeros, measured by the camera (+ = the joint sits further along than it reads)")
+    for i in zeros["fitted"]:
+        name = names[i]
+        cal = calibration[name]
+        lo, hi = limits[name]
+        ticks, applied[i] = offset_ticks(cal, lo, hi, zeros["delta"][i])
+        if arm.actuators[name].is_continuous:
+            calibration[name] = replace(cal, homing_offset=cal.homing_offset + ticks)
+        else:
+            calibration[name] = replace(
+                cal, range_min=cal.range_min + ticks, range_max=cal.range_max + ticks
+            )
+            cpr = cprs.get(name)
+            if calibration[name].range_min < 0 or (
+                cpr and calibration[name].range_max > cpr - 1
+            ):
+                off_encoder.append(name)
+        print(
+            f"    {name:<16}{np.degrees(zeros['delta'][i]):+6.2f} deg +/- "
+            f"{np.degrees(zeros['stderr'][i]):.2f}   ({ticks:+d} ticks)"
+        )
+    fixed = [name for i, name in enumerate(names) if i not in zeros["fitted"]]
+    print(f"    {', '.join(fixed)}: not observable from one tag, left as they are")
+    (mm_before, mm_after), (deg_before, deg_after) = zeros["residual_mm"], zeros["residual_deg"]
+    print(
+        f"    per-pose residual {mm_before:.1f} mm / {deg_before:.2f} deg rms with the "
+        f"current zeros, {mm_after:.1f} mm / {deg_after:.2f} deg with these"
+    )
+    if not zeros["resolved"]:
+        print()
+        _para(
+            f"Not written: every zero has to be known to {_OFFSET_STDERR_MAX_DEG:g} "
+            "deg or better. They are resolved by how differently the joints are "
+            "bent between poses, so re-run with the anchor nearer the middle of "
+            "the arm's reach, where more of the orbit survives planning, or with "
+            "a larger sweep=<poses>."
+        )
+        return None
+    if off_encoder:
+        print()
+        _para(
+            f"Not written: shifting {', '.join(off_encoder)} would push its range "
+            "past the end of the encoder. Re-run `solarian calibrate` for that "
+            "joint first."
+        )
+        return None
+    if input("\n  Write the corrected zeros to the arm's yaml? [y/N] ").strip().lower() != "y":
+        return None
+    # The same physical home pose, re-read in the new zeros.
+    home = {
+        name: arm._rad_to_norm(name, arm._norm_to_rad(name, value) + applied[names.index(name)])
+        if name in names
+        else value
+        for name, value in arm.cfg.home.items()
+    }
+    arm._save_calibration(calibration)
+    if home:
+        arm._save_home(home)
+    print("  Written. They take effect the next time the arm connects.")
+    return applied
 
 
 def _fit_error(samples, tx_base2world, tx_tcp2camera):
@@ -1141,8 +1965,8 @@ def _grade(trans_mm, rot_deg, uncertainty) -> dict:
     on it is what made a failed run ask for replacement poses forever.
     """
     n = int(trans_mm.size)
-    trans_rms = float(np.sqrt(np.mean(trans_mm**2)))
-    rot_rms = float(np.sqrt(np.mean(rot_deg**2)))
+    trans_rms = _rms(trans_mm)
+    rot_rms = _rms(rot_deg)
     checks = (
         (
             "offset error bar",
@@ -1202,9 +2026,16 @@ def _para(text: str, indent: str = "  ") -> None:
     )
 
 
-def _print_checks(grade) -> None:
+def _print_checks(samples, grade) -> None:
     for label, value, limit, ok in grade["checks"]:
         print(f"  {label:<22}{value:<16}{limit:<12}{'ok' if ok else 'FAIL'}")
+    # Not a check: the lever arm is resolved by rotation between poses, so a
+    # narrow spread is the usual reason a wide error bar stays wide.
+    spread = _pose_spread_deg(samples)
+    print(
+        f"  {'pose spread':<22}[{spread[0]:.0f}, {spread[1]:.0f}, {spread[2]:.0f}] "
+        "deg std about the tool axes"
+    )
 
 
 def _scale_excess(samples, grade) -> float:
@@ -1422,9 +2253,23 @@ def _ask_topup(grade) -> int | None:
             print(f"  {exc}. A count, Enter for {default}, or q to stop.")
 
 
+def _hint_joint_zeros(grade) -> None:
+    """Name the joint zeros when the residual is too big for the tag alone."""
+    if grade["trans_rms"] <= _KINEMATIC_RESIDUAL_MM:
+        return
+    print()
+    _para(
+        f"{grade['trans_rms']:.1f} mm rms per pose is more than tag noise "
+        f"explains (a calibrated arm fits to about {_KINEMATIC_RESIDUAL_MM / 2:g} "
+        "mm). The usual cause is the arm's joint zeros, which bias every pose "
+        "and that more poses only average down slowly. Re-run with joints=fit "
+        "to measure and write them."
+    )
+
+
 def _report_fail(samples, trans_mm, grade) -> None:
     _banner("CALIBRATION FAILED -- DO NOT USE THESE NUMBERS.")
-    _print_checks(grade)
+    _print_checks(samples, grade)
     print()
     if grade["stderr_mm"] > _MAX_TIP_STDERR_MM:
         _para(
@@ -1444,10 +2289,19 @@ def _report_fail(samples, trans_mm, grade) -> None:
     _diagnose(samples, trans_mm, grade)
 
 
-def _report_pass(samples, derived, grade, arm_name, ik_tcp, frame_wh) -> None:
+def _report_pass(
+    samples,
+    derived,
+    grade,
+    arm_name,
+    ik_tcp,
+    frame_wh,
+    marker_mm=_MARKER_MM,
+    rerun="solarian calibrate-hand-eye",
+) -> None:
     res = f"{frame_wh[0]}x{frame_wh[1]}"
     _banner("CALIBRATION PASSED")
-    _print_checks(grade)
+    _print_checks(samples, grade)
     print()
     axes = grade["stderr_axes_mm"]
     _para(
@@ -1459,8 +2313,9 @@ def _report_pass(samples, derived, grade, arm_name, ik_tcp, frame_wh) -> None:
     _para(
         "That is a bound on precision, not on truth. It cannot see anything "
         f"every pose shares: if the marker's black square is not "
-        f"{_MARKER_MM:.0f} mm edge to edge, the offsets below are wrong by "
-        "that same percentage and this error bar stays just as tight."
+        f"{marker_mm:g} mm edge to edge, the offsets below are wrong by "
+        "that same percentage and this error bar stays just as tight. The "
+        "same goes for the arm's joint zeros, which joints=fit measures."
     )
     # The one failure a passing fit can be hiding, so it is said here rather
     # than only on the failure path.
@@ -1505,10 +2360,26 @@ def _report_pass(samples, derived, grade, arm_name, ik_tcp, frame_wh) -> None:
 
     print("\n=== what to do with this ===")
     step = 1
+    move = -delta
+    # Policy axes are OpenCV's on the remapped image: x right, y down -- the
+    # side the fingers are on -- and z out of the lens. The raw preview may be
+    # rotated against that image, so the directions are named by the gripper.
+    words = (
+        ("right", "left", "as you look out through the lens, fingers below"),
+        ("down, toward the fingers", "up, away from the fingers", ""),
+        ("forward, toward the fingertips", "back, away from the fingertips", ""),
+    )
     print(
         f"  {step}. Move the camera "
-        f"[{-delta[0]:+.1f}, {-delta[1]:+.1f}, {-delta[2]:+.1f}] mm along its own\n"
-        "     axes (+Z out of the lens). Moving the camera beats moving the\n"
+        f"[{move[0]:+.1f}, {move[1]:+.1f}, {move[2]:+.1f}] mm along its own axes:"
+    )
+    for axis, value, (plus, minus, note) in zip("XYZ", move, words):
+        print(
+            f"       {axis} {value:+5.1f} mm  {plus if value >= 0 else minus}"
+            + (f"  ({note})" if note else "")
+        )
+    print(
+        "     Moving the camera beats moving the\n"
         "     fingertips: it also makes the fingers look the right size in\n"
         "     frame, and the policy uses its own fingertips as a metric\n"
         "     reference (training and eval both mask with gripper=True,\n"
@@ -1528,7 +2399,11 @@ def _report_pass(samples, derived, grade, arm_name, ik_tcp, frame_wh) -> None:
         )
     step += 1
     print(
-        f"  {step}. Re-run this command. The edit landed if the difference above\n"
+        f"  {step}. Re-run to check:\n\n"
+        f"       {rerun}\n\n"
+        "     joints=fit is not needed again: the zeros it writes stay in the\n"
+        "     arm's yaml and every run uses them, until `solarian calibrate`\n"
+        "     redoes the arm. The edit landed if the difference above\n"
         f"     drops under about {max(grade['stderr_mm'] * 3.0, 5.0):.0f} mm and the "
         "rotation under its floor. If it\n"
         "     does not move, the change did not reach the running config."
@@ -1573,6 +2448,7 @@ def _write_failed_record(
                 "poses": [
                     {
                         "pose": [float(v) for v in s["pose"]],
+                        "q": [float(v) for v in s["q"]],
                         "tx_world2cam": s["tx_world2cam"].tolist(),
                         "residual_mm": float(trans_mm[i]),
                         "residual_deg": float(rot_deg[i]),
@@ -1605,25 +2481,63 @@ class CalibrateHandEyeCommand(BaseCommand):
     percent, never fit-to-page, then measure the black square edge to edge and pass
     marker=<mm> if it is not 160 mm. That number sets the scale of the answer.
 
-    The arm energises on connect and then goes limp, so you pose it by hand for
-    each sample. Needs an arm with an ik_tcp and a camera whose yaml points at a
+    By default you set one anchor pose by hand, looking at the tag, and the arm
+    then orbits the tag by itself through a spread of tilts and rolls, a few
+    seconds per pose. mode=manual instead has you pose the arm by hand for every
+    sample. Needs an arm with an ik_tcp and a camera whose yaml points at a
     GoPro optical remap (`solarian calibrate-umi-camera`).
+
+    joints=fit also measures the arm's joint zeros, which `solarian calibrate`
+    can only set from a home pose matched by eye. The sweep is longer and
+    tilts further, the camera sees how the arm's model bends away from the
+    truth across it, and the corrected zeros are offered for the arm's yaml
+    before the hand-eye answer is solved against them.
     """
     params = {
         "arm": "Name of the IK arm module to measure; prompts when omitted.",
         "tag": "ArUco id of the table marker, DICT_4X4_50 (default: 13).",
         "marker": "Measured side of the marker's black square in mm (default: 160).",
-        "samples": "Poses to collect; 8 minimum, more is better (default: 12).",
+        "mode": "auto: the arm orbits the tag from one taught pose; manual: pose every sample by hand (default: auto).",
+        "sweep": "Poses per automatic sweep, anchor included (default: 36, 48 with joints=fit).",
+        "tilt": "Largest orbit tilt in degrees for the automatic sweep (default: 30, 40 with joints=fit).",
+        "joints": "fit: also measure the arm's joint zeros from the sweep and offer to write them; off (default: off).",
+        "samples": "Poses to collect in manual mode; 8 minimum (default: 12).",
     }
     examples = (
         "solarian calibrate-hand-eye",
-        "solarian calibrate-hand-eye arm=right_arm marker=158.5 samples=16",
+        "solarian calibrate-hand-eye marker=158.5 tilt=25",
+        "solarian calibrate-hand-eye joints=fit marker=159",
+        "solarian calibrate-hand-eye mode=manual arm=right_arm samples=16",
     )
 
     def handle(self, cfg) -> None:
         tag_id = int(OmegaConf.select(cfg, "tag") or _TAG_ID)
         marker_mm = float(OmegaConf.select(cfg, "marker") or _MARKER_MM)
         n_samples = max(int(OmegaConf.select(cfg, "samples") or _SAMPLES), _MIN_SAMPLES)
+        mode = str(OmegaConf.select(cfg, "mode") or "auto").lower()
+        if mode not in ("auto", "manual"):
+            print(f"mode={mode} is not a mode: auto or manual.")
+            return
+        auto = mode == "auto"
+        joints = str(OmegaConf.select(cfg, "joints") or "off").lower()
+        if joints not in ("off", "fit"):
+            print(f"joints={joints} is not an option: off or fit.")
+            return
+        fit_joints = joints == "fit"
+        if fit_joints and not auto:
+            print("joints=fit needs mode=auto: the joint zeros come out of the orbit sweep.")
+            return
+        n_sweep = max(
+            int(
+                OmegaConf.select(cfg, "sweep")
+                or (_JOINT_SWEEP_POSES if fit_joints else _SWEEP_POSES)
+            ),
+            _MIN_SAMPLES,
+        )
+        max_tilt = float(
+            OmegaConf.select(cfg, "tilt")
+            or (_JOINT_SWEEP_TILT_DEG if fit_joints else _SWEEP_TILT_DEG)
+        )
 
         arm_name, template = select_ik_module(OmegaConf.select(cfg, "arm"))
         if template.ik_tcp is None:
@@ -1675,7 +2589,13 @@ class CalibrateHandEyeCommand(BaseCommand):
             "answer, so a 4 percent printing error is a 4 percent error in "
             "the\nmeasured offset.\n"
             "Connecting the arm energises it, so keep the volume clear and a "
-            "hand on\nthe power. It goes limp as soon as the run starts.",
+            "hand on\nthe power. "
+            + (
+                "After you set one anchor pose by hand it moves by itself,\n"
+                "orbiting the tag, and it stays energised until you take it back."
+                if auto
+                else "It goes limp as soon as the run starts."
+            ),
         ):
             # Intrinsics come from the frame that actually arrived, never from
             # what the config predicted: intrinsics describing a different
@@ -1711,20 +2631,78 @@ class CalibrateHandEyeCommand(BaseCommand):
             fail_path = (
                 conf_dir / "calibrations" / f"{camera.name}_hand_eye_FAILED.json"
             )
-            with module_running(arm, "Connecting the arm...", confirm=False):
-                samples = _collect(
-                    arm,
-                    camera,
-                    sensor_name,
-                    detector,
-                    tag_id,
-                    obj_pts,
-                    intr,
-                    color_mode,
-                    tx_cam2policy,
-                    n_samples,
-                    warp,
-                )
+            rig = (
+                sensor_name,
+                detector,
+                tag_id,
+                obj_pts,
+                intr,
+                color_mode,
+                _gate_wh(intr),
+                tx_cam2policy,
+                warp,
+            )
+            with module_running(arm, "Connecting the arm...", confirm=False), (
+                _taken_before_release() if auto else nullcontext()
+            ):
+                if auto:
+                    prior = _prior_tcp2camera(
+                        conf_dir / "calibrations" / f"{camera.name}_hand_eye.json",
+                        template.ik_tcp,
+                    )
+                    guard = _collision_guard(arm_name, arm._ik_joint_names())
+                    anchor = _teach_anchor(arm, camera, rig, max_tilt)
+                    if anchor is None:
+                        return
+                    sweeps = 0
+
+                    def gather(count, first_pose):
+                        nonlocal sweeps
+                        taken = _auto_sweep(
+                            arm, camera, rig, anchor, prior, count, max_tilt,
+                            sweeps, first_pose, guard,
+                        )
+                        sweeps += 1
+                        return taken
+
+                    samples = [anchor] + gather(n_sweep - 1, 2)
+                else:
+
+                    def gather(count, first_pose):
+                        return _collect(
+                            arm,
+                            camera,
+                            sensor_name,
+                            detector,
+                            tag_id,
+                            obj_pts,
+                            intr,
+                            color_mode,
+                            tx_cam2policy,
+                            count,
+                            warp,
+                            first_pose=first_pose,
+                        )
+
+                    samples = gather(n_samples, 1)
+
+                zeros = joint_delta = written = None
+                if fit_joints and len(samples) >= _MIN_SAMPLES:
+                    fk_backend = arm.ik_backend.build()
+                    zeros = _fit_joint_offsets(
+                        samples, fk_backend, range(1, len(samples[0]["q"]) - 1)
+                    )
+                    written = _offer_joint_zeros(arm, zeros)
+                    # Solved against the fitted zeros even when they were not
+                    # written: the current ones are what the fit just showed
+                    # to be off, and they bias the camera by millimetres.
+                    joint_delta = zeros["delta"] if written is None else written
+                    samples = _with_joint_offsets(samples, fk_backend, joint_delta)
+                    if written is None:
+                        print(
+                            "  The solve below still uses the fitted zeros; only "
+                            "the arm's yaml keeps the old ones."
+                        )
                 rounds = 0
                 first = None
                 while True:
@@ -1773,6 +2751,9 @@ class CalibrateHandEyeCommand(BaseCommand):
                         break
 
                     _report_fail(samples, trans_mm, grade)
+                    _report_scale(_distance_scale(samples), marker_mm)
+                    if not fit_joints:
+                        _hint_joint_zeros(grade)
                     # The yardstick for "are extra poses working" is where
                     # this run started, so it is taken once.
                     first = first or grade
@@ -1806,20 +2787,9 @@ class CalibrateHandEyeCommand(BaseCommand):
 
                     extra = []
                     if add is not None:
-                        extra = _collect(
-                            arm,
-                            camera,
-                            sensor_name,
-                            detector,
-                            tag_id,
-                            obj_pts,
-                            intr,
-                            color_mode,
-                            tx_cam2policy,
-                            add,
-                            warp,
-                            first_pose=len(samples) + 1,
-                        )
+                        extra = gather(add, len(samples) + 1)
+                    if extra and joint_delta is not None:
+                        extra = _with_joint_offsets(extra, fk_backend, joint_delta)
                     if not extra:
                         # Under a name nothing loads: the numbers in it are
                         # the ones just refused.
@@ -1843,10 +2813,25 @@ class CalibrateHandEyeCommand(BaseCommand):
                     )
 
                 derived = _derive(tx_tcp2camera, template.ik_tcp)
-                _report_pass(
-                    samples, derived, grade, arm_name, template.ik_tcp, frame_wh
+                rerun = " ".join(
+                    ["solarian"] + [a for a in sys.argv[1:] if not a.startswith("joints=")]
                 )
+                _report_pass(
+                    samples,
+                    derived,
+                    grade,
+                    arm_name,
+                    template.ik_tcp,
+                    frame_wh,
+                    marker_mm,
+                    rerun,
+                )
+                scale = _distance_scale(samples)
+                _report_scale(scale, marker_mm)
+                if not fit_joints:
+                    _hint_joint_zeros(grade)
 
+        names = arm._ik_joint_names()
         out_path = conf_dir / "calibrations" / f"{camera.name}_hand_eye.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w") as fp:
@@ -1889,6 +2874,26 @@ class CalibrateHandEyeCommand(BaseCommand):
                         "trans_max_mm": grade["trans_max"],
                         "rot_rms_deg": grade["rot_rms"],
                         "scale_excess": _scale_excess(samples, grade),
+                        # Best-fit factor on the measured tag distances; 1
+                        # means the marker size and intrinsics agree with
+                        # the arm. Reported, not applied.
+                        "distance_scale": scale["scale"],
+                        "distance_scale_stderr": scale["stderr"],
+                        # Joint zeros fitted by joints=fit, which every
+                        # transform here is solved against; null without it.
+                        "joint_offsets_written": written is not None,
+                        "joint_offsets_deg": None
+                        if joint_delta is None
+                        else {
+                            names[i]: float(np.degrees(joint_delta[i]))
+                            for i in zeros["fitted"]
+                        },
+                        "joint_offsets_stderr_deg": None
+                        if joint_delta is None
+                        else {
+                            names[i]: float(np.degrees(zeros["stderr"][i]))
+                            for i in zeros["fitted"]
+                        },
                     },
                     "umi_tip_in_camera": UMI_TIP_IN_CAMERA.tolist(),
                     "tip_in_camera": derived["tip_in_camera"].tolist(),

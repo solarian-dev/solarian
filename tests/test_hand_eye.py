@@ -12,6 +12,9 @@ rather than hoped for.
 
 from __future__ import annotations
 
+import time
+from collections import Counter
+
 import numpy as np
 import pytest
 import scipy.spatial.transform as st
@@ -394,6 +397,414 @@ def test_refinement_beats_the_closed_form_it_starts_from():
     assert np.mean(refined) < 0.7 * np.mean(closed_form)
 
 
+def test_robust_refine_shrugs_off_a_misdetection_least_squares_follows(monkeypatch):
+    """One wrecked pose must not steer the answer.
+
+    Plain least squares pays for a misdetection by moving both transforms
+    towards it; the soft-L1 loss treats it linearly and keeps the answer
+    with the poses that agree.
+    """
+    import solarian.cli.commands.calibrate_hand_eye as mod
+
+    wrecked = _wreck([dict(s) for s in _simulate(IK_TCP, n=14, seed=9)], 0)
+    robust = _tip_error_mm(_solve(wrecked)[1])
+    # A scale this large leaves soft-L1 quadratic everywhere: least squares.
+    monkeypatch.setattr(mod, "_ROBUST_SCALE_M", 1e3)
+    plain = _tip_error_mm(_solve(wrecked)[1])
+
+    assert robust < 0.6 * plain
+
+
+def _anchor_sample(tilt_deg=30.0):
+    """A taught anchor on the simulated rig, looking down at the tag."""
+    flange_in_base = np.eye(4)
+    flange_in_base[:3, :3] = (
+        st.Rotation.from_rotvec([np.pi, 0.0, 0.0])
+        * st.Rotation.from_rotvec(np.radians(tilt_deg) * np.array([0.0, 1.0, 0.0]))
+    ).as_matrix()
+    flange_in_base[:3, 3] = [0.20, -0.05, 0.30]
+    tcp_in_base = flange_in_base @ _offset_to_mat(IK_TCP)
+    camera_in_base = flange_in_base @ CAMERA_IN_FLANGE
+    return {
+        "pose": _mat_to_pose(tcp_in_base),
+        "tx_base2tcp": np.linalg.inv(tcp_in_base),
+        "tx_world2cam": np.linalg.inv(camera_in_base) @ TAG_IN_BASE,
+    }
+
+
+_TRUE_TCP2CAMERA = np.linalg.inv(CAMERA_IN_FLANGE) @ _offset_to_mat(IK_TCP)
+
+
+def test_orbit_targets_swing_the_camera_about_the_tag_by_the_tilt_asked():
+    """Rigid rotation about the tag centre: distance kept, tilt as requested."""
+    from solarian.cli.commands.calibrate_hand_eye import (
+        _SWEEP_ROLLS_DEG,
+        _orbit_targets,
+    )
+
+    anchor = _anchor_sample()
+    camera = (np.linalg.inv(anchor["tx_base2tcp"]) @ np.linalg.inv(_TRUE_TCP2CAMERA))[:3, 3]
+    center = TAG_IN_BASE[:3, 3]
+    targets = _orbit_targets(anchor["pose"], center, center - camera, 12, 30.0)
+
+    assert len(targets) == 12
+    assert {t["tilt_deg"] for t in targets} == {15.0, 30.0}
+    assert {t["roll_deg"] for t in targets} <= set(_SWEEP_ROLLS_DEG)
+    for t in targets:
+        moved = t["orbit"][:3, :3] @ (camera - center) + center
+        assert np.linalg.norm(moved - center) == pytest.approx(
+            np.linalg.norm(camera - center)
+        )
+        # Roll spins about the sight line and leaves the camera in place, so
+        # the camera's swing about the tag is the tilt alone.
+        cos = (moved - center) @ (camera - center) / np.linalg.norm(camera - center) ** 2
+        assert np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))) == pytest.approx(
+            t["tilt_deg"], abs=1e-6
+        )
+        # The whole tool moves rigidly with it.
+        assert np.allclose(_pose_to_mat(t["pose"]), t["orbit"] @ _pose_to_mat(anchor["pose"]))
+
+
+def test_a_later_sweep_takes_new_azimuths():
+    from solarian.cli.commands.calibrate_hand_eye import _orbit_targets
+
+    args = (np.zeros(6), np.array([0.3, 0.0, 0.0]), np.array([0.3, 0.0, -0.3]), 12, 30.0)
+    first = {round(t["azimuth_deg"], 3) for t in _orbit_targets(*args, phase=0)}
+    second = {round(t["azimuth_deg"], 3) for t in _orbit_targets(*args, phase=1)}
+    assert not first & second
+
+
+class _ReachArm:
+    """reachable_pose stand-in: lands *miss_m* off every target."""
+
+    def __init__(self, miss_m=0.0, blocked=()):
+        self.miss_m = miss_m
+        self.blocked = list(blocked)
+
+    def reachable_pose(self, target):
+        achieved = np.asarray(target, dtype=float).copy()
+        achieved[0] += self.miss_m
+        # The target itself stands in for joint angles: any guard in these
+        # tests reads it as "where the arm went".
+        return achieved, self.blocked, achieved.copy()
+
+
+def test_planned_sweep_keeps_the_tag_where_the_anchor_saw_it():
+    """With a true prior, every target sees the tag centre in the same
+    direction the anchor did -- which is why a rough prior only shifts it in
+    frame -- at the anchor's distance plus the target's radial slide."""
+    from solarian.cli.commands.calibrate_hand_eye import (
+        _MAX_VIEW_DEG,
+        _SWEEP_RADIAL_M,
+        _plan_sweep,
+    )
+
+    anchor = _anchor_sample()
+    targets, skipped = _plan_sweep(_ReachArm(), anchor, _TRUE_TCP2CAMERA, 12, 30.0, 0)
+
+    assert 0 < len(targets) <= 12
+    seen = anchor["tx_world2cam"][:3, 3]
+    assert {t["radial_m"] for t in targets} == set(_SWEEP_RADIAL_M), "every distance is visited"
+    for t in targets:
+        camera_in_base = _pose_to_mat(t["pose"]) @ np.linalg.inv(_TRUE_TCP2CAMERA)
+        tag_in_camera = np.linalg.inv(camera_in_base) @ TAG_IN_BASE
+        distance = np.linalg.norm(seen) + t["radial_m"]
+        assert np.allclose(tag_in_camera[:3, 3], seen / np.linalg.norm(seen) * distance, atol=1e-9)
+        view = np.degrees(np.arccos(abs(tag_in_camera[:3, 2] @ -tag_in_camera[:3, 3]
+                                        / np.linalg.norm(tag_in_camera[:3, 3]))))
+        assert _MIN_TILT_DEG - 1e-6 <= view <= _MAX_VIEW_DEG + 1e-6
+    assert "out of the arm's reach" not in skipped
+
+
+def test_planned_sweep_drops_what_the_arm_cannot_reach():
+    from solarian.cli.commands.calibrate_hand_eye import _plan_sweep
+
+    anchor = _anchor_sample()
+    for arm in (_ReachArm(miss_m=0.05), _ReachArm(blocked=["wrist_flex"])):
+        targets, skipped = _plan_sweep(arm, anchor, _TRUE_TCP2CAMERA, 12, 30.0, 0)
+        assert targets == []
+        assert skipped["out of the arm's reach"] > 0
+
+
+def test_auto_sweep_visits_each_planned_pose_and_measures_there(monkeypatch):
+    """Headless: one move and one sample per target, back to the anchor after."""
+    import contextlib
+
+    import cv2
+
+    import solarian.cli.commands.calibrate_hand_eye as mod
+
+    class _SweepArm(_ReachArm):
+        last_waypoint_time = 0.0
+
+        def __init__(self):
+            super().__init__()
+            self.moves = []
+
+        def moveL(self, pose, **_kw):
+            self.moves.append(np.asarray(pose))
+
+    returned = []
+
+    @contextlib.contextmanager
+    def fake_return(_arm, _speed):
+        yield
+        returned.append(True)
+
+    monkeypatch.setattr(mod, "returns_to_start", fake_return)
+    monkeypatch.setattr(mod, "run_control_loop", lambda *_a, **_k: None)
+    monkeypatch.setattr(mod, "_wait_until_still", lambda _arm: (0.6, True))
+    measured = iter(range(1000))
+    monkeypatch.setattr(
+        mod,
+        "_measure",
+        lambda *_a: (
+            ({"tag_m": 0.3, "rms_px": 0.2, "ratio": 50.0}, None)
+            if next(measured) % 3
+            else (None, "tag 13 is not in this frame")
+        ),
+    )
+    monkeypatch.setattr(
+        cv2,
+        "namedWindow",
+        lambda *_a, **_k: (_ for _ in ()).throw(cv2.error("no display")),
+    )
+    monkeypatch.setattr(mod, "_shell_line", lambda: None)
+
+    arm = _SweepArm()
+    rig = (None, None, _TAG_ID, None, {"DIM": FRAME_WH}, "bgr", (640, 360), np.eye(4), None)
+    samples = mod._auto_sweep(
+        arm, None, rig, _anchor_sample(), _TRUE_TCP2CAMERA, 12, 30.0, 0, 2
+    )
+
+    planned, _ = mod._plan_sweep(_ReachArm(), _anchor_sample(), _TRUE_TCP2CAMERA, 12, 30.0, 0)
+    assert len(arm.moves) == len(planned)
+    # Every third measurement is refused and skipped, not retried.
+    assert len(samples) == len(planned) - len(range(0, len(planned), 3))
+    assert returned == [True]
+
+
+class _WallGuard:
+    """CollisionGuard stand-in: clearance is how far coordinate 0 sits below a wall."""
+
+    def __init__(self, wall):
+        self.wall = wall
+        self.checked = []
+
+    def clearance(self, q):
+        self.checked.append(np.asarray(q, dtype=float).copy())
+        return self.wall - float(q[0]), "test / wall"
+
+
+def test_planned_sweep_drops_targets_the_gripper_would_hit_something_at():
+    from solarian.cli.commands.calibrate_hand_eye import _COLLISION_MARGIN_M, _plan_sweep
+
+    anchor = {**_anchor_sample(), "q": _anchor_sample()["pose"]}
+    free, _ = _plan_sweep(_ReachArm(), anchor, _TRUE_TCP2CAMERA, 12, 30.0, 0)
+    xs = sorted(t["pose"][0] for t in free)
+    wall = float(np.median(xs)) + _COLLISION_MARGIN_M
+
+    guard = _WallGuard(wall)
+    guarded, skipped = _plan_sweep(_ReachArm(), anchor, _TRUE_TCP2CAMERA, 12, 30.0, 0, guard)
+
+    assert guarded and skipped["the gripper would hit the arm or the table"] > 0
+    assert all(guard.clearance(t["q"])[0] >= _COLLISION_MARGIN_M for t in guarded)
+
+
+def test_a_target_is_dropped_when_the_move_to_it_passes_through_something():
+    """Both ends clear, the middle not: only the path check can see it."""
+    from solarian.cli.commands.calibrate_hand_eye import _drop_colliding_moves
+
+    class _Bump:
+        def clearance(self, q):
+            return (0.0 if 0.4 < q[0] < 0.6 else 0.05), "bump"
+
+    targets = [{"q": np.array([0.3, 0.0])}, {"q": np.array([0.9, 0.0])},
+               {"q": np.array([0.2, 0.0])}]
+    skipped = Counter()
+    kept = _drop_colliding_moves(_Bump(), np.zeros(2), targets, skipped)
+
+    # 0 -> 0.3 is clear; 0.3 -> 0.9 crosses the bump; 0.3 -> 0.2 and home are clear.
+    assert [t["q"][0] for t in kept] == [0.3, 0.2]
+    assert skipped["the gripper would hit the arm on the way there"] == 1
+
+
+def test_the_move_home_is_checked_too():
+    from solarian.cli.commands.calibrate_hand_eye import _drop_colliding_moves
+
+    class _Bump:
+        def clearance(self, q):
+            return (0.0 if 0.4 < q[0] < 0.6 else 0.05), "bump"
+
+    kept = _drop_colliding_moves(
+        _Bump(), np.zeros(2), [{"q": np.array([0.3, 0.0])}, {"q": np.array([0.9, 0.0])}],
+        Counter(),
+    )
+    assert [t["q"][0] for t in kept] == [0.3]
+
+
+def test_an_anchor_inside_the_margin_can_still_be_left():
+    """The hulls may call a hand-set anchor too close; moves away are fine as
+    long as they never get closer than it."""
+    from solarian.cli.commands.calibrate_hand_eye import _drop_colliding_moves
+
+    class _Funnel:
+        def clearance(self, q):
+            return 0.002 + 0.1 * abs(q[0]), "funnel"
+
+    kept = _drop_colliding_moves(_Funnel(), np.zeros(1), [{"q": np.array([0.5])}], Counter())
+    assert len(kept) == 1
+
+
+def test_confirm_live_falls_back_to_a_prompt_without_a_display(monkeypatch):
+    from solarian.cli.commands import calibrate_hand_eye as mod
+
+    monkeypatch.setattr(mod, "_open_preview", lambda intr: False)
+    rig = (None, None, 13, None, {"DIM": (640, 480)}, None, None, None, None)
+    answers = iter(["", "q"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert mod._confirm_live(None, rig, "go", "go")
+    assert not mod._confirm_live(None, rig, "go", "go")
+
+
+def test_wait_until_still_waits_out_a_creeping_joint(monkeypatch):
+    import solarian.cli.commands.calibrate_hand_eye as mod
+
+    monkeypatch.setattr(mod, "_STILL_WINDOW_S", 0.05)
+    monkeypatch.setattr(mod, "_STILL_POLL_S", 0.005)
+    monkeypatch.setattr(mod, "_STILL_TIMEOUT_S", 1.0)
+
+    class _Creeping:
+        def __init__(self, creep_s):
+            self.start = time.monotonic()
+            self.creep_s = creep_s
+
+        def _read_joints_rad(self):
+            # 50 deg/s of creep until creep_s, then still.
+            t = min(time.monotonic() - self.start, self.creep_s)
+            return np.array([0.0, np.radians(t * 50.0)])
+
+    waited, still = mod._wait_until_still(_Creeping(0.2))
+    assert still and waited >= 0.2
+
+    monkeypatch.setattr(mod, "_STILL_TIMEOUT_S", 0.1)
+    waited, still = mod._wait_until_still(_Creeping(5.0))
+    assert not still and waited >= 0.1
+
+
+def test_collision_guard_sees_the_gripper_folded_into_the_arm():
+    """On the real SO-106 + umi-slim meshes: the home pose is clear, and a
+    wrist folded back drives the gripper into the arm."""
+    pytest.importorskip("solarian_so106")
+    pytest.importorskip("solarian_umi_slim")
+    from solarian.sim import ModuleAttachment, SceneConfig
+    from solarian.sim.collision import CollisionGuard
+    from solarian_so106 import ARM_MJCF_PATH
+    from solarian_umi_slim import MJCF_FEETECH_PATH
+
+    scene = SceneConfig(attachments=[
+        ModuleAttachment(module="right_arm", mjcf=ARM_MJCF_PATH, parent_body="world",
+                         pos=[0.0, -0.2, 0.0], prefix="right/"),
+        ModuleAttachment(module="right_gripper", mjcf=MJCF_FEETECH_PATH,
+                         parent_site="right/flange", child_site="flange",
+                         prefix="right_gripper/"),
+    ])
+    names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_yaw", "wrist_roll"]
+    guard = CollisionGuard(scene, "right_arm", names)
+
+    home, _ = guard.clearance(np.zeros(6))
+    folded, where = guard.clearance(np.radians([0.0, 0.0, 0.0, 170.0, 0.0, 0.0]))
+    assert home > 0.02
+    assert folded < 0.0 and "right_gripper/" in where
+
+
+def test_prior_falls_back_to_umi_nominal_without_a_passing_run(tmp_path):
+    from solarian.cli.commands.calibrate_hand_eye import _prior_tcp2camera
+
+    nominal = _prior_tcp2camera(tmp_path / "missing.json", IK_TCP)
+    assert np.allclose(nominal[:3, 3], UMI_TIP_IN_CAMERA)
+    assert np.allclose(nominal[:3, :3], np.eye(3))
+
+    import json
+
+    gripper2camera = np.linalg.inv(CAMERA_IN_FLANGE)
+    failed = tmp_path / "failed.json"
+    failed.write_text(
+        json.dumps({"passed": False, "tx_gripper2camera": gripper2camera.tolist()})
+    )
+    assert np.allclose(_prior_tcp2camera(failed, IK_TCP)[:3, 3], UMI_TIP_IN_CAMERA)
+
+    passed = tmp_path / "passed.json"
+    passed.write_text(
+        json.dumps({"passed": True, "tx_gripper2camera": gripper2camera.tolist()})
+    )
+    assert np.allclose(_prior_tcp2camera(passed, IK_TCP), _TRUE_TCP2CAMERA)
+    # Composed with today's ik_tcp, not whatever the saved run declared.
+    longer = FrameOffset(pos=(0.0, -0.0157, 0.2257), quat=(1.0, 0.0, 0.0, 0.0))
+    assert np.allclose(
+        _prior_tcp2camera(passed, longer)[:3, 3] - _TRUE_TCP2CAMERA[:3, 3],
+        _TRUE_TCP2CAMERA[:3, :3] @ [0.0, 0.0, 0.02],
+    )
+
+
+def _sweep_samples(scale, n=36):
+    """Samples from a planned sweep on the simulated rig, with every measured
+    tag distance multiplied by *scale* -- a misprinted marker or a wrong
+    focal length, as the camera side sees it."""
+    from solarian.cli.commands.calibrate_hand_eye import _plan_sweep
+
+    anchor = _anchor_sample()
+    targets, _ = _plan_sweep(_ReachArm(), anchor, _TRUE_TCP2CAMERA, n, 30.0, 0)
+    out = []
+    for pose in [anchor["pose"]] + [t["pose"] for t in targets]:
+        tcp = _pose_to_mat(pose)
+        world2cam = np.linalg.inv(tcp @ np.linalg.inv(_TRUE_TCP2CAMERA)) @ TAG_IN_BASE
+        world2cam[:3, 3] *= scale
+        out.append(
+            {
+                "tx_base2tcp": np.linalg.inv(tcp),
+                "tx_world2cam": world2cam,
+                "pose": pose,
+                "rms_px": 0.3,
+                "ratio": 50.0,
+                "tag_m": float(np.linalg.norm(world2cam[:3, 3])),
+            }
+        )
+    return out
+
+
+def test_distance_scale_names_a_misread_distance_the_orbit_cannot_hide():
+    """A distance read 10 percent short moves the camera along its own axis.
+
+    At a single orbit distance that is invisible -- zero residual -- so the
+    sweep alternates distances and the scale is fitted free. It has to come
+    back as the factor that was applied, and the fingertip depth with it.
+    """
+    from solarian.cli.commands.calibrate_hand_eye import _distance_scale
+
+    truth = _distance_scale(_sweep_samples(1.0))
+    assert truth["scale"] == pytest.approx(1.0, abs=1e-4)
+    assert not truth["resolved"]
+
+    short = _distance_scale(_sweep_samples(0.9))
+    assert short["scale"] == pytest.approx(1.0 / 0.9, rel=1e-3)
+    assert short["resolved"]
+    assert np.allclose(short["tip_in_camera"], _TRUE_TCP2CAMERA[:3, 3], atol=2e-4)
+
+    # Fixed: the scale-blind solve really is pulled off along the lens axis.
+    biased = _solve(_sweep_samples(0.9))[1][:3, 3]
+    assert biased[2] < _TRUE_TCP2CAMERA[2, 3] - 0.01
+
+
+def test_report_scale_suggests_the_marker_that_corrects_it(capsys):
+    from solarian.cli.commands.calibrate_hand_eye import _distance_scale, _report_scale
+
+    _report_scale(_distance_scale(_sweep_samples(0.9)), 160.0)
+    out = " ".join(capsys.readouterr().out.split())
+    assert "distance scale 1.111" in out
+    assert "marker=177.8" in out
+
+
 def test_rot_between_deg_measures_the_angle_between_orientations():
     from solarian.cli.commands.calibrate_hand_eye import _rot_between_deg
 
@@ -686,10 +1097,10 @@ def test_dropping_an_outlier_recovers_a_clean_fit():
     kept = [s for i, s in enumerate(wrecked) if i not in grade["outliers"]]
     assert _verdict(kept)["passed"]
 
-    # The drop is worth making: it is millimetres on the answer, not a
-    # tidier-looking residual.
-    assert _tip_error_mm(_solve(wrecked)[1]) > 2.0
-    assert _tip_error_mm(_solve(kept)[1]) < 0.5
+    # The drop is worth making: the robust loss blunts a wrecked pose but
+    # still leaves about a millimetre on the answer that dropping removes.
+    assert _tip_error_mm(_solve(wrecked)[1]) > 0.5
+    assert _tip_error_mm(_solve(kept)[1]) < 0.1
 
 
 def test_the_error_bar_sees_the_damage_a_bad_pose_does():
@@ -874,7 +1285,7 @@ def test_passing_report_prints_both_deliverables_and_the_verify_loop(capsys):
     # floor for a clean fit), and the instruction to re-run and confirm.
     assert "Move the camera" in out
     assert "quat=(" in out
-    assert "Re-run this command" in out
+    assert "Re-run to check" in out and "solarian calibrate-hand-eye" in out
     assert "Cross-check" in out
 
 
@@ -1060,6 +1471,9 @@ class _FakeArm:
         pose[0] += self.drift_m * self.reads
         pose[5] += np.radians(self.drift_deg) * self.reads
         return pose
+
+    def _read_joints_rad(self):
+        return np.zeros(6)
 
     def start_calibration_mode(self):
         self.torque.append("free")
@@ -1455,3 +1869,229 @@ def test_shell_line_reports_nothing_waiting_on_an_unselectable_stdin(monkeypatch
 
     monkeypatch.setattr("sys.stdin", _io.StringIO("ignored"))
     assert mod._shell_line() is None
+
+
+# Joint zeros off by the couple of degrees an eyeballed home pose leaves, on
+# the four joints one fixed tag can see.
+_JOINT_ERROR = np.radians([0.0, 2.0, -1.5, 2.0, -1.5, 0.0])
+_SO106_TCP = FrameOffset(pos=(0.0, 0.0, 0.19824), quat=(1.0, 0.0, 0.0, 0.0))
+
+
+def _so106_backend():
+    pytest.importorskip("solarian_so106")
+    from dataclasses import replace
+
+    from solarian_so106.arm import So106ArmModule
+
+    return replace(So106ArmModule.ik_backend, tcp_offset=_SO106_TCP).build()
+
+
+# Two joints=fit orbits on the SO-106 model about a tag flat on the table at
+# (-0.04, -0.28, 0): the two anchors first, each looking at the tag from 0.3 m
+# on opposite sides, then the 40 deg orbit targets about each that IK reached
+# (degrees, 0.1 deg rounding). Precomputed because planning them takes a
+# minute of differential IK.
+_SO106_ORBIT_DEG = np.array([
+    [-35.0, -45.0, 8.0, 105.0, 36.0, -124.0],
+    [25.0, -6.0, -27.0, 111.0, -40.0, 106.0],
+    [-55.3, -44.9, 62.0, 56.8, 60.4, -146.5],
+    [-105.4, -22.7, 38.6, 151.7, 47.4, -27.5],
+    [-70.0, -32.2, 5.6, 145.2, 54.7, -62.8],
+    [-34.9, 7.4, -11.9, 94.6, 45.7, -130.1],
+    [-6.0, 4.5, -16.6, 84.3, 12.1, -147.9],
+    [14.5, -22.5, -9.6, 98.2, -3.3, -128.9],
+    [22.2, 4.6, -0.4, 64.4, -31.6, -179.7],
+    [14.2, -43.2, 55.6, 34.3, -10.4, -148.7],
+    [56.5, -19.1, 29.3, 67.6, -52.2, -176.5],
+    [-66.7, -91.7, 36.1, 121.4, 50.0, -143.3],
+    [-14.3, -43.4, 8.9, 94.4, -4.9, 126.3],
+    [-4.6, -16.6, 6.7, 88.5, -21.0, 90.8],
+    [22.1, 16.0, -28.9, 113.9, -49.8, 72.5],
+    [45.1, 22.5, -9.9, 137.8, -72.1, 12.4],
+    [29.9, -27.2, 47.4, 44.8, -57.6, 113.2],
+    [65.1, 15.2, -7.2, 138.0, -71.5, 45.9],
+    [46.3, -24.4, 18.2, 81.4, -54.2, 134.1],
+    [115.2, -28.3, 31.4, 156.8, -38.8, -44.7],
+    [48.5, -59.2, -0.9, 132.8, -47.8, 72.7],
+    [-0.5, -33.8, 38.2, 47.3, -12.0, 158.1],
+])
+
+
+def _so106_samples(backend, joint_error, seed=0):
+    """What the joints=fit sweep measures on an SO-106 with *joint_error*.
+
+    The arm reads its joints *joint_error* short of where they are, plus 0.1
+    deg of servo noise; the camera sees the tag through the true joints with
+    0.3 deg / 0.5 mm of noise, 2 mm along the line of sight.
+    """
+    from solarian.core.ik.diagnostics import fk
+
+    rng = np.random.default_rng(seed)
+    camera_in_flange = CAMERA_IN_FLANGE.copy()
+    camera_in_flange[:3, 3] = [-0.003, -0.086, 0.008]
+    tcp2camera = np.linalg.inv(camera_in_flange) @ _offset_to_mat(_SO106_TCP)
+
+    def camera_in_base(q):
+        return _pose_to_mat(fk(backend, q)) @ np.linalg.inv(tcp2camera)
+
+    tag_in_base = np.eye(4)
+    tag_in_base[:3, :3] = st.Rotation.from_rotvec([0.0, 0.0, 0.4]).as_matrix()
+    tag_in_base[:3, 3] = [-0.04, -0.28, 0.0]
+
+    samples = []
+    for q_true in np.radians(_SO106_ORBIT_DEG):
+        world2cam = np.linalg.inv(camera_in_base(q_true)) @ tag_in_base
+        noise = np.eye(4)
+        noise[:3, :3] = st.Rotation.from_rotvec(rng.normal(0.0, np.radians(0.3), 3)).as_matrix()
+        noise[:3, 3] = rng.normal(0.0, 0.0005, 3) + [0.0, 0.0, rng.normal(0.0, 0.002)]
+        world2cam = noise @ world2cam
+        q_read = q_true - joint_error + rng.normal(0.0, np.radians(0.1), 6)
+        pose = fk(backend, q_read)
+        samples.append({
+            "tx_base2tcp": np.linalg.inv(_pose_to_mat(pose)),
+            "tx_world2cam": world2cam,
+            "pose": pose,
+            "q": q_read,
+            "rms_px": 0.3,
+            "ratio": 50.0,
+            "tag_m": float(np.linalg.norm(world2cam[:3, 3])),
+        })
+    return samples, tcp2camera[:3, 3]
+
+
+def test_joint_zeros_off_by_degrees_pull_the_camera_along_its_axis():
+    """The symptom joints=fit exists for: the plain solve has no joint zeros
+    to blame, so it moves the camera -- most of all along its own axis."""
+    backend = _so106_backend()
+    samples, tip = _so106_samples(backend, _JOINT_ERROR)
+    _, tcp2camera = _solve(samples)
+    assert abs(tcp2camera[2, 3] - tip[2]) * 1000.0 > 5.0
+
+    clean, tip = _so106_samples(backend, np.zeros(6))
+    assert np.linalg.norm(_solve(clean)[1][:3, 3] - tip) * 1000.0 < 2.0
+
+
+def test_joint_offset_fit_recovers_the_zeros_and_the_camera():
+    from solarian.cli.commands.calibrate_hand_eye import (
+        _fit_joint_offsets,
+        _with_joint_offsets,
+    )
+
+    backend = _so106_backend()
+    samples, tip = _so106_samples(backend, _JOINT_ERROR)
+    zeros = _fit_joint_offsets(samples, backend, range(1, 5))
+
+    assert zeros["delta"][0] == zeros["delta"][5] == 0.0
+    fitted = zeros["fitted"]
+    miss = np.abs(zeros["delta"] - _JOINT_ERROR)[fitted]
+    # Lift, elbow and wrist_flex share one pitch axis, so apiece they trade
+    # against each other by a few tenths while their sum -- the tool's pitch --
+    # is pinned. Every one still lands far nearer than the error it corrects.
+    assert np.all(np.degrees(miss) < 0.6)
+    assert np.all(np.degrees(zeros["stderr"][fitted]) < 1.0)
+    assert abs(np.degrees(np.sum(zeros["delta"][1:4] - _JOINT_ERROR[1:4]))) < 0.3
+    assert zeros["residual_deg"][1] < 0.5 * zeros["residual_deg"][0]
+    _, tcp2camera = _solve(_with_joint_offsets(samples, backend, zeros["delta"]))
+    assert np.linalg.norm(tcp2camera[:3, 3] - tip) * 1000.0 < 2.5
+
+
+class _ZeroArm:
+    """What _offer_joint_zeros reads off an SO-106 arm, and what it saves."""
+
+    def __init__(self):
+        from types import SimpleNamespace
+
+        from solarian.core.calibration import MotorCalibration
+
+        self.names = ["shoulder_pan", "shoulder_lift", "elbow_flex",
+                      "wrist_flex", "wrist_yaw", "wrist_roll"]
+        self.limits = {n: (-np.pi, np.pi) for n in self.names}
+        self.limits["shoulder_lift"] = (-1.7988, 1.7802)
+        self.limits["elbow_flex"] = (-1.7802, 1.5708)
+        self.calibration = {
+            n: MotorCalibration(id=i + 1, drive_mode=0, homing_offset=0,
+                                range_min=1000, range_max=3000)
+            for i, n in enumerate(self.names[:3])
+        }
+        for i, n in enumerate(self.names[3:]):
+            self.calibration[n] = MotorCalibration(
+                id=i + 4, drive_mode=int(n == "wrist_roll"), homing_offset=-414,
+                range_min=0, range_max=4095)
+        self.actuators = {
+            n: SimpleNamespace(is_continuous=n.startswith("wrist")) for n in self.names
+        }
+        self.cfg = SimpleNamespace(home={n: 0.0 for n in self.names})
+        self.saved = None
+        self.saved_home = None
+
+    def _ik_joint_names(self):
+        return self.names
+
+    def _joint_limits(self):
+        return self.limits
+
+    def _norm_to_rad(self, name, norm):
+        lo, hi = self.limits[name]
+        return (norm + 100.0) / 200.0 * (hi - lo) + lo
+
+    def _rad_to_norm(self, name, rad):
+        lo, hi = self.limits[name]
+        return (rad - lo) / (hi - lo) * 200.0 - 100.0
+
+    def _save_calibration(self, calibration):
+        self.saved = calibration
+
+    def _save_home(self, home):
+        self.saved_home = home
+
+
+def _zeros(resolved=True):
+    return {
+        "delta": np.radians([0.0, 1.0, -0.5, 2.0, -1.0, 0.0]),
+        "stderr": np.radians([np.nan, 0.2, 0.3, 0.2, 0.1, np.nan]),
+        "fitted": [1, 2, 3, 4],
+        "resolved": resolved,
+        "residual_mm": (6.0, 1.5),
+        "residual_deg": (1.8, 0.5),
+    }
+
+
+def test_unresolved_joint_zeros_are_reported_but_never_written(monkeypatch, capsys):
+    import solarian.cli.commands.calibrate_hand_eye as mod
+
+    monkeypatch.setattr("solarian.cli.commands._ik_common.counts_per_rev_resolver",
+                        lambda _arm: {})
+    monkeypatch.setattr("builtins.input", lambda *_a: pytest.fail("must not ask"))
+    arm = _ZeroArm()
+
+    assert mod._offer_joint_zeros(arm, _zeros(resolved=False)) is None
+    assert arm.saved is None and arm.saved_home is None
+    out = capsys.readouterr().out
+    assert "shoulder_lift" in out and "Not written" in out
+
+
+def test_confirmed_joint_zeros_shift_ranges_and_offsets_and_keep_home(monkeypatch):
+    import solarian.cli.commands.calibrate_hand_eye as mod
+
+    monkeypatch.setattr("solarian.cli.commands._ik_common.counts_per_rev_resolver",
+                        lambda _arm: {n: 4096 for n in _ZeroArm().names})
+    monkeypatch.setattr("builtins.input", lambda *_a: "y")
+    arm = _ZeroArm()
+    before = dict(arm.calibration)
+
+    applied = mod._offer_joint_zeros(arm, _zeros())
+
+    assert np.allclose(applied, _zeros()["delta"], atol=np.radians(0.1))
+    lift, before_lift = arm.saved["shoulder_lift"], before["shoulder_lift"]
+    assert lift.range_max - lift.range_min == before_lift.range_max - before_lift.range_min
+    assert lift.range_min < before_lift.range_min, "reading more means a lower range start"
+    assert arm.saved["wrist_flex"].homing_offset < before["wrist_flex"].homing_offset
+    assert arm.saved["wrist_flex"].range_min == 0
+    assert arm.saved["shoulder_pan"] == before["shoulder_pan"]
+    assert arm.saved["wrist_roll"] == before["wrist_roll"]
+    # The old home pose, re-read through the new zeros, is the same joint angles
+    # plus what was written.
+    for i, name in enumerate(arm.names):
+        assert arm._norm_to_rad(name, arm.saved_home[name]) == pytest.approx(
+            arm._norm_to_rad(name, 0.0) + applied[i]
+        )

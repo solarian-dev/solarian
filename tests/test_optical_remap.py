@@ -100,6 +100,39 @@ def test_identity_aligner_roundtrip_same_intrinsics():
     assert warped[int(cy), int(cx)].min() > 200
 
 
+def test_view_rotation_recovers_a_camera_tilted_on_its_mount():
+    """Outlines seen through a view pitched 4.6 deg come back onto gold."""
+    from scipy.spatial.transform import Rotation
+
+    from solarian.cli.commands.calibrate_umi_camera import _solve_view_rotation
+    from solarian_umi_skill.umi.gripper_align import RegionPolygons
+
+    intr = load_shipped_gopro_intrinsics()
+    aligner = identity_aligner(intr, intr)
+    tilt = Rotation.from_rotvec(np.radians([-4.6, -0.8, 0.1])).as_matrix()
+    tilted = Aligner(intr, intr, tilt.T, out_size=GOPRO_OUT_SIZE)
+    scale, x0 = 1080 / 224, (1920 - 1080) / 2
+
+    def seen_tilted(poly):
+        px = np.array([[x0 + x * scale, y * scale] for x, y in poly])
+        out = tilted.forward_points(px)
+        return [((u - x0) / scale, v / scale) for u, v in out]
+
+    gold = RegionPolygons(
+        orange=[[(65, 158), (93, 145), (74, 177)], [(130, 146), (148, 178), (157, 158)]],
+        white=[[(42, 169), (60, 155), (72, 175), (71, 182)]],
+    )
+    live = RegionPolygons(
+        orange=[seen_tilted(p) for p in gold.orange],
+        white=[seen_tilted(p) for p in gold.white],
+    )
+
+    rot, before, after, move = _solve_view_rotation(gold, live, aligner, (224, 224))
+    assert before > 4.0 and after < 0.5
+    assert np.degrees(np.linalg.norm(Rotation.from_matrix(rot @ tilt.T).as_rotvec())) < 0.3
+    assert np.allclose(move(live.orange[0]), gold.orange[0], atol=1.0)
+
+
 def _smooth_frame(h=1080, w=1920):
     """A gradient, so bilinear differences stay readable as a mean error."""
     yy, xx = np.mgrid[0:h, 0:w]

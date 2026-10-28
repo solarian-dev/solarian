@@ -33,10 +33,13 @@ logger = logging.getLogger("module")
 # Default moveJ speed (rad/s), matching UMI's UR5 ``moveJ(..., speed=1.05)``.
 _DEFAULT_JOINT_SPEED = 1.05
 
-# Enough solve+integrate passes for `reachable_travel` to settle against the
+# Enough solve+integrate passes for `reachable_pose` to settle against the
 # model's configuration limits, and the headroom below which a joint counts as
 # the thing that stopped it.
 _REACH_ITERATIONS = 300
+# A pass that moves no joint further than this has converged: on an SO-106
+# orbit that is 7-145 passes, landing within 0.01 mm of all 300.
+_REACH_SETTLED_RAD = 1e-5
 _LIMIT_MARGIN_RAD = np.deg2rad(1.0)
 
 # Latch agreement in raw encoder ticks. STS/SMS are 4096 ticks/turn, so 60
@@ -371,10 +374,16 @@ class ArmModule(ActuatorModule):
         The same raw ticks are written again after torque comes on, because
         some Feetech firmware ignores Goal_Position while limp. Not a new
         read: a new read after a spin has started would freeze it mid-turn.
+
+        Any trajectory from before is dropped: it ends where the arm was before
+        it went limp, and the next move would start by snapping back there.
         """
         latched = self.hold_measured_pose()
         self.enable_torque()
         self._write_joints_raw(latched)
+        self._clear_pose_interpolator()
+        self._cancel_joint_motion()
+        self._exclusive_move = False
         return latched
 
     def joint_command_delta(self, reference) -> float:
@@ -396,16 +405,35 @@ class ArmModule(ActuatorModule):
         target = np.asarray(start_pose, dtype=np.float64).copy()
         target[axis] += distance
 
+        q_now = self._read_joints_rad()
+        backend.set_q(q_now)
+        origin = float(backend.get_pose()[axis])
+        achieved, blocked, _q = self.reachable_pose(target, q_seed=q_now)
+        return float(achieved[axis]) - origin, blocked
+
+    def reachable_pose(self, target, q_seed=None) -> tuple[np.ndarray, list[str], np.ndarray]:
+        """The pose differential IK actually converges to for *target*, the
+        joints at a limit there, and the joint angles it converged to.
+
+        Seeded from the measured joints unless *q_seed* is given. A target past
+        reach never fails, it converges short, so the caller compares the
+        returned pose against what it asked for.
+        """
+        backend = self._resolve_ik_backend()
+        target = np.asarray(target, dtype=np.float64)
         # Leaves the model at the converged configuration: the control path
         # re-seeds set_q from freshly measured joints every tick, so this does
         # not leak into motion.
-        backend.set_q(self._read_joints_rad())
-        origin = float(backend.get_pose()[axis])
+        q = np.asarray(self._read_joints_rad() if q_seed is None else q_seed, dtype=np.float64)
+        backend.set_q(q)
         dt = 1.0 / max(float(self.frequency), 1.0)
-        q = np.zeros(0)
         for _ in range(_REACH_ITERATIONS):
-            q = np.asarray(backend.integrate(backend.solve(target, dt), dt), dtype=np.float64)
-            backend.set_q(q)
+            q_next = np.asarray(backend.integrate(backend.solve(target, dt), dt), dtype=np.float64)
+            backend.set_q(q_next)
+            settled = np.max(np.abs(q_next - q)) < _REACH_SETTLED_RAD
+            q = q_next
+            if settled:
+                break
 
         limits = self._joint_limits()
         blocked = [
@@ -413,7 +441,7 @@ class ArmModule(ActuatorModule):
             for name, value in zip(self._ik_joint_names(), q)
             if min(value - limits[name][0], limits[name][1] - value) < _LIMIT_MARGIN_RAD
         ]
-        return float(backend.get_pose()[axis]) - origin, blocked
+        return np.asarray(backend.get_pose(), dtype=np.float64), blocked, q
 
     def _ensure_pose_interpolator(self, t_now: float | None = None) -> None:
         if self.interp is not None:

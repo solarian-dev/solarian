@@ -429,6 +429,74 @@ def _map_overlay_click(x: int, y: int, layout: dict) -> tuple[str, int, int] | N
     return which, local_x, local_y
 
 
+def _solve_view_rotation(gold_polys, live_polys, aligner, panel_wh):
+    """``(R, rms_before_px, rms_after_px, move)`` or None without two outline pairs.
+
+    R turns GoPro-plane rays so the live outlines land on gold's: a camera
+    tilted on its mount puts every outline off by the same angle, which no
+    intrinsics can absorb but the remap's rotation can. Each gold outline is
+    paired with the nearest live one of its class, and scored by the distance
+    from every vertex to the nearest vertex of its partner, so the two traces
+    need not share a vertex count or order. *move* carries live points through
+    R, for outlines traced before it was applied.
+    """
+    import cv2
+    import numpy as np
+    from scipy.optimize import least_squares
+    from scipy.spatial.transform import Rotation
+
+    width, height = aligner.out_size
+    # UMI's crop: fit the height to the panel, keep the centred square.
+    scale = height / panel_wh[1]
+    x0 = (width - height) / 2.0
+    K, D = aligner.Kg, aligner.Dg
+
+    def rays(pts):
+        px = np.array([[x0 + x * scale, y * scale] for x, y in pts], dtype=np.float64)
+        norm = cv2.fisheye.undistortPoints(px.reshape(-1, 1, 2), K, D).reshape(-1, 2)
+        v = np.c_[norm, np.ones(len(norm))]
+        return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+    def pixels(v):
+        norm = v[:, :2] / v[:, 2:3]
+        px = cv2.fisheye.distortPoints(norm.reshape(-1, 1, 2), K, D).reshape(-1, 2)
+        return np.c_[(px[:, 0] - x0) / scale, px[:, 1] / scale]
+
+    pairs = []
+    for kind in ("orange", "white"):
+        live = getattr(live_polys, kind)
+        for gold in getattr(gold_polys, kind):
+            if live:
+                centre = np.mean(gold, axis=0)
+                partner = min(live, key=lambda p: np.linalg.norm(np.mean(p, axis=0) - centre))
+                pairs.append((np.asarray(gold, dtype=np.float64), rays(partner)))
+    if len(pairs) < 2:
+        return None
+
+    def residuals(rotvec):
+        rot = Rotation.from_rotvec(rotvec).as_matrix()
+        out = []
+        for gold, live_rays in pairs:
+            gap = np.linalg.norm(pixels(live_rays @ rot.T)[:, None] - gold[None], axis=2)
+            out.extend(gap.min(axis=1))
+            out.extend(gap.min(axis=0))
+        return np.asarray(out)
+
+    before = residuals(np.zeros(3))
+    fit = least_squares(residuals, np.zeros(3))
+    rot = Rotation.from_rotvec(fit.x).as_matrix()
+
+    def move(pts):
+        return [tuple(int(round(c)) for c in p) for p in pixels(rays(pts) @ rot.T)]
+
+    return (
+        rot,
+        float(np.sqrt(np.mean(before**2))),
+        float(np.sqrt(np.mean(fit.fun**2))),
+        move,
+    )
+
+
 def _run_overlay(
     *,
     gold,
@@ -439,8 +507,11 @@ def _run_overlay(
     remap_path: Path | None,
     capture_wh: tuple[int | None, int | None],
 ) -> None:
+    import json
+
     import cv2
     import numpy as np
+    from scipy.spatial.transform import Rotation
 
     from solarian_umi_skill.umi.compare_policy_image import (
         CONTACT_SHEET_VIEWS,
@@ -534,6 +605,7 @@ def _run_overlay(
         f"Draw on gold (left) and live (middle). Gold outlines are ghosted on live.\n"
         f"o/w class   c close   z undo vertex   x del last poly   r reset\n"
         f"f freeze live   g ghost gold   m view   s save {dump_dir / 'compare.png'}   q quit\n"
+        f"a turn the remap so the live outlines land on gold's (saves the remap)\n"
         f"Polygons: {polys_path}"
     )
     _wait_enter("Press Enter to open the live overlay. ")
@@ -640,6 +712,35 @@ def _run_overlay(
                 print(f"  freeze live {'on' if freeze_live else 'off'}")
             elif key == ord("g"):
                 ghost_gold = not ghost_gold
+            elif key == ord("a"):
+                if remap is None or pipeline.letterbox_to_square:
+                    print("  a needs an optical remap and UMI's centre crop (letterbox_to_square: false)")
+                    continue
+                solved = _solve_view_rotation(
+                    gold_polys, live_polys, remap.aligner, (gold.shape[1], gold.shape[0])
+                )
+                if solved is None:
+                    print("  a needs at least two outlines traced on both gold and live")
+                    continue
+                rot, before_px, after_px, move = solved
+                pitch, yaw, roll = Rotation.from_matrix(rot).as_rotvec(degrees=True)
+                with open(remap_path, "r") as fp:
+                    data = json.load(fp)
+                data["transform"] = (rot @ np.asarray(data["transform"], dtype=np.float64)).tolist()
+                with open(remap_path, "w") as fp:
+                    json.dump(data, fp, indent=2)
+                remap = OpticalRemap(str(remap_path), conf_dir())
+                for kind in ("orange", "white"):
+                    polys = getattr(live_polys, kind)
+                    polys[:] = [move(p) for p in polys]
+                _persist()
+                frozen_live = None
+                print(
+                    f"  view turned {pitch:+.2f} deg pitch, {yaw:+.2f} yaw, {roll:+.2f} roll: "
+                    f"outlines {before_px:.1f} -> {after_px:.1f} px rms. Saved to {remap_path}.\n"
+                    "  Live outlines were moved with it; redraw them to check. The hand-eye\n"
+                    "  axes turn with the remap, so re-run solarian calibrate-hand-eye after."
+                )
             elif key == ord("s") and shown is not None:
                 dump_dir.mkdir(parents=True, exist_ok=True)
                 out = dump_dir / "compare.png"
@@ -692,7 +793,10 @@ class CalibrateUmiCameraCommand(BaseCommand):
     In the overlay, click to trace polygons on the gold (left) and live (middle)
     panels: o/w pick the class, right-click or c closes one, z undoes a vertex,
     x deletes the last, r resets, f freezes the live frame, g ghosts the gold
-    outlines, m cycles views, s saves a contact sheet, q quits.
+    outlines, m cycles views, s saves a contact sheet, q quits. With the same
+    outlines traced on both panels, a solves the rotation that carries the live
+    ones onto gold's -- a camera tilted on its mount -- and writes it into the
+    remap's transform.
     """
     params = {
         "config": "UMI skill yaml to read camera and image flags from; a filename "

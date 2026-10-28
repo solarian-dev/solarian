@@ -288,6 +288,20 @@ def test_reachable_travel_converges_short_against_a_joint_limit():
     assert blocked == ["j"]
 
 
+def test_reachable_pose_returns_where_ik_converged_and_what_stopped_it():
+    module = _ik_arm(limit_rad=0.15)
+    target = np.zeros(6)
+    target[2] = 0.02
+    achieved, blocked, _q = module.reachable_pose(target)
+    assert achieved[2] == pytest.approx(0.015, abs=1e-4)
+    assert blocked == ["j"]
+
+    achieved, blocked, q = _ik_arm(limit_rad=1.0).reachable_pose(target)
+    assert achieved[2] == pytest.approx(0.02, abs=1e-4)
+    assert blocked == []
+    assert q == pytest.approx([0.2], abs=1e-3)
+
+
 def test_reachable_travel_handles_the_negative_direction():
     module = _ik_arm(limit_rad=0.15)
     travel, blocked = module.reachable_travel(np.zeros(6), 2, -0.02)
@@ -390,6 +404,22 @@ def test_enable_torque_holding_rewrites_the_latch_after_energising():
     module.enable_torque_holding()
     assert order == ["write", "on", "write"]
     assert written["q"] == pytest.approx([100.0, 200.0, 300.0])
+
+
+def test_enable_torque_holding_forgets_the_trajectory_from_before_free_drive():
+    """Its last point is where the arm was before going limp; the next moveL
+    must start from where the arm is now, not snap back there first."""
+    module, _written = _hold_arm(iter([np.array([100.0, 200.0, 300.0])] * 4))
+    module.enable_torque = lambda: None
+    module._write_joints_raw = lambda q: None
+    module.interp = object()
+    module.last_waypoint_time = 12.0
+    module._joint_interp = object()
+    module._exclusive_move = True
+
+    module.enable_torque_holding()
+    assert module.interp is None and module._joint_interp is None
+    assert not module._exclusive_move
 
 
 def test_hold_measured_pose_writes_raw_ticks_not_a_converted_command():
