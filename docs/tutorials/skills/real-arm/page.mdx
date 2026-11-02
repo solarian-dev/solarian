@@ -1,0 +1,74 @@
+export const metadata = {
+  title: 'On the real arm',
+  description:
+    'Calibrate the wrist lens and the hand-eye transform, then run the same pick skill on the hardware.',
+}
+
+# On the real arm
+
+The skill, the key, and the YAML do not change. Two measurements do, because a policy trained on a real wrist camera is aimed using a lens model and a camera-to-fingertip transform that simulation invented for you with `CameraMount`. Hardware has to measure them. {{ className: 'lead' }}
+
+You need the arm from [Tutorial 2](/docs/tutorials/real-robot), the inverse kinematics from [Move to a pose](/docs/tutorials/skills/move), and `ik_tcp` set to `UmiSlimFeetechModule.tcp_from_flange`. Hand-eye solves for the fingertips. Without that offset it solves for the flange and every reach is short by the length of the gripper.
+
+## The lens
+
+Stop `run-robot`. The command opens the CSI camera itself, and the robot would already be holding it.
+
+```bash
+solarian --deployment lab calibrate-umi-camera
+```
+
+It walks you through a printed checkerboard, fits a fisheye model, and writes a remap file that the camera YAML then points at. The remap is what makes this sensor's image look like the GoPro image the policy was trained on. A policy shown raw IMX477 frames will reach for an object that is not where the pixels say it is.
+
+The prompts are the procedure. Print the board at 100 percent, not fit-to-page. When the command finishes, `conf/modules/right_wrist_camera.yaml` should reference the new remap. Do not delete that block.
+
+## Hand-eye
+
+Hand-eye is where the fingertips are in the camera's frame. The policy treats that transform as a constant baked into every training episode. If yours differs, the hand converges on a point next to the object and stays there, which looks like a stubborn model.
+
+Print UMI's table marker at 100 percent. The default square is 160 mm on a side; measure yours and pass `marker=<millimetres>` if it is not. Tape it flat where the arm can see it from several angles, and do not move it during the solve.
+
+Stop `run-robot` again. This command moves the arm:
+
+```bash
+solarian --deployment lab calibrate-hand-eye
+```
+
+You set one pose by hand so the camera sees the marker. The arm then orbits the marker through a spread of tilts and rolls. It writes `conf/calibrations/right_wrist_camera_hand_eye.json` and prints what to do with the result.
+
+Read that printout. It compares the measured fingertip position, in the camera frame, with the position a UMI policy assumes. A difference of centimetres is the mount or the marker size: the policy commands deltas in tool axes, and no YAML key soaks up a camera that is bolted in the wrong place. If the printout tells you to change `ik_tcp`, put that orientation on `RightArmModule(ik_tcp=...)` and restart the robot. If it says the rotation is inside the noise, leave `ik_tcp` as the gripper's `tcp_from_flange`.
+
+Re-run `calibrate-hand-eye` after any change to the remap. The axes move with it.
+
+Details and the flags (`mode=manual` if you would rather pose every sample yourself) are in the command's `--help`. The skill does not open the JSON itself. It commands the TCP the arm publishes, which is the flange plus `ik_tcp`. The JSON is the record of the solve, and the printout is the part you act on.
+
+## The same key
+
+Put the object the checkpoint was trained to pick in front of the gripper, in view of the wrist camera. On the Pi, run the relay, the robot, and the policy server. The server has to be able to read the checkpoint path in `lab.yaml`. A path that exists only on your laptop will not.
+
+```bash
+solarian --deployment lab run-server
+solarian --deployment lab run-robot sim=false
+solarian --deployment lab run-service pick
+```
+
+`lab.yaml` needs the same two keys as localhost, with values that make sense on the Pi:
+
+```yaml
+policy_server_url: http://127.0.0.1:8001
+policy_checkpoint: /path/on/the/pi/pick.ckpt
+```
+
+The skill file stays `conf/skills/pick.yaml`. It already interpolates those keys. If the server runs on the Pi and the controller runs on the laptop, `policy_server_url` in the laptop's deployment must be the Pi's address, not `127.0.0.1`. `127.0.0.1` is correct only for the machine running `run-service`.
+
+On the laptop:
+
+```bash
+solarian --deployment lab run-controller
+```
+
+Press `4`.
+
+The arm should reach for the object and close. Press `0` for the joint home from MoveSkill if you want it to let go of the behavior and park. Keep a hand near Control-C on the robot terminal for the first few runs. A policy that was going to miss will still move at `max_speed`.
+
+If the hand consistently stops short or to the side, redo hand-eye before you retrain anything. The checkpoint did not change between simulation and this chapter. The camera did.

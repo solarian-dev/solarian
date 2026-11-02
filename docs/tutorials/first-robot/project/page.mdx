@@ -1,0 +1,149 @@
+export const metadata = {
+  title: 'Create a project',
+  description:
+    'Scaffold a Solarian project named so106, see what each file is for, and run the three processes on an empty robot.',
+}
+
+# Create a project
+
+`create-solarian` writes a project: a Python package plus a `conf/` directory. The directory name is up to you. This course uses `so106`, because that is the arm you are building. {{ className: 'lead' }}
+
+## Scaffold it
+
+From a directory where you keep code:
+
+```bash
+create-solarian so106
+cd so106
+```
+
+You should see a short tree printed, and a new `so106/` folder. The layout is:
+
+```text
+so106/
+├── conf/
+│   ├── controller.yaml          # solarian run-controller
+│   ├── robot.yaml               # solarian run-robot
+│   ├── server.yaml              # solarian run-server
+│   ├── commands/
+│   │   ├── record.yaml          # solarian record
+│   │   └── replay.yaml          # solarian replay
+│   ├── training/
+│   │   └── lerobot_act.yaml     # one example training file
+│   └── deployment/
+│       └── localhost.yaml       # addresses and device paths
+├── so106/
+│   ├── __init__.py
+│   ├── settings.py              # which classes are the robot, controller, server
+│   ├── robot.py                 # So106Robot
+│   ├── controller.py            # So106Controller
+│   ├── server.py                # So106Server
+│   ├── observation.py           # what the robot reports
+│   ├── action.py                # what the controller sends
+│   ├── modules/
+│   │   └── example_module.py    # a sketch you will replace
+│   └── dataset_ops/
+│       └── drop_short_episodes.py
+└── pyproject.toml
+```
+
+These files are:
+
+- `so106/settings.py` points Solarian at your classes. The generated values are `so106.robot.So106Robot`, `so106.controller.So106Controller`, and `so106.server.So106Server`. You rarely edit it.
+- `robot.py` is the machine: one class attribute per module. The attribute's name is the module's name everywhere else.
+- `controller.py` is the decision. Keys, and later skills, live here.
+- `server.py` is the relay. Leave the generated class alone.
+- `observation.py` and `action.py` are the schema of the messages between robot and controller. They have to name the same modules the robot declares. Solarian checks this when the classes are defined.
+- `conf/` is [Hydra](https://hydra.cc/) config. `localhost.yaml` is the only file that should contain a serial port or an IP address. The other files refer to it as `${deployment....}`, so moving the robot to another computer is a new deployment file, not a hunt through the project.
+- `pyproject.toml` makes the folder an installable package.
+
+The generated `robot.py` imports an example arm from `example_module.py`, and that example imports a Feetech servo driver you have not installed yet. For this chapter the robot is empty on purpose. Replace the three files below so the first run has nothing to connect to.
+
+`so106/robot.py`:
+
+```python
+from solarian.core import Robot
+
+
+class So106Robot(Robot):
+    pass
+```
+
+`so106/observation.py`:
+
+```python
+from solarian.core.observation import Observation
+
+
+class So106Observation(Observation):
+    pass
+```
+
+`so106/action.py`:
+
+```python
+from solarian.core.action import Action
+
+
+class So106Action(Action):
+    pass
+```
+
+You can delete `so106/modules/example_module.py` or leave it. Nothing imports it now.
+
+## Install the project
+
+The package has to be importable. From the project root:
+
+```bash
+pip install -e .
+```
+
+`-e` means editable: the next time you save `robot.py`, the installed package is already the file you saved. You do this once per environment, and again if you change `pyproject.toml`.
+
+## Run it
+
+Open three terminals in the project directory.
+
+<CodeGroup>
+
+```bash {{ title: 'Terminal 1: relay server' }}
+solarian run-server
+```
+
+```bash {{ title: 'Terminal 2: robot' }}
+solarian run-robot
+```
+
+```bash {{ title: 'Terminal 3: controller' }}
+solarian run-controller
+```
+
+</CodeGroup>
+
+What you should see:
+
+- The server starts and waits.
+- The robot connects to it and sits there. There is no hardware and no simulator yet, so this is quiet.
+- A controller window opens. It has no camera image, because the robot has no camera.
+
+Quit each process with Control-C. You will start them again every chapter.
+
+<Note>
+  Run the commands from the project root, the directory that contains <code>pyproject.toml</code>. Solarian finds <code>so106/settings.py</code> from there. From any other directory it will not know which project you mean.
+</Note>
+
+## Where the name has to match
+
+One string is about to show up in four places, and they must be identical:
+
+| Place | Example |
+| --- | --- |
+| Attribute on the robot class | `right_arm = RightArmModule()` |
+| YAML filename | `conf/modules/right_arm.yaml` |
+| Field on the observation | `right_arm = RightArmObs()` |
+| Field on the action | `right_arm = RightArmAction()` |
+
+The next chapter creates `right_arm`. If any of the four disagree, Solarian raises a `TypeError` when the class is defined, before the robot starts. That error is the useful kind: read the name it complains about and fix the one that differs.
+
+Next: [write the arm](/docs/tutorials/first-robot/arm).

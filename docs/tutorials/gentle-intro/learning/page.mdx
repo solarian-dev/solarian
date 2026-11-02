@@ -1,0 +1,60 @@
+export const metadata = {
+  title: 'Learning, and going further',
+  description:
+    'Policies trained from human demonstrations, from joint-space models to UMI, diffusion policies, and VLAs, plus a short tour of the topics to read next.',
+}
+
+# Learning, and going further
+
+So far, the "decide" step of the loop has been you, or code you wrote, choosing the next pose. The rest of this course hands that choice to a model trained on demonstrations. This chapter introduces the main kinds, then points at the topics worth reading next. {{ className: 'lead' }}
+
+## Learned policies
+
+A **policy** is the decide step as a function: an observation goes in, an action comes out. A **learned policy** is a neural network trained to imitate recordings of the task done well.
+
+<PolicySurvey />
+
+A **joint-space model** reads the recent joint positions and predicts the next ones. It replays a motion it has seen. Its only input is the joints, so if the cup has moved, it still reaches for where the cup used to be.
+
+**UMI**, the Universal Manipulation Interface, records a person doing the task with a hand-held gripper that carries a wrist camera. A model learns to imitate the recordings. It reads the wrist image and the recent hand pose, and outputs a short chunk of future hand motion in task coordinates, plus the gripper. Because it sees the scene, it reaches for the cup where the cup is. [Tutorial 3](/docs/tutorials/skills/umi) runs one. [Tutorial 4](/docs/tutorials/training) trains one.
+
+A **diffusion policy** is a way to produce that chunk of motion. It starts from random noise and refines it, step by step, into a trajectory that fits the image. The UMI policy in this course is a diffusion policy. See [Policies](/docs/policies).
+
+A **VLA**, a vision-language-action model, takes the image and a sentence, such as "pick up the red cup", and outputs the action. In Solarian a vision-language model can also sit one level higher, choosing which skill to start: that is the [AI controller](/docs/ai_controller).
+
+Notice what the policy leaves to the earlier chapters. It outputs hand poses, so inverse kinematics turns them into joints. The interpolator times the motion. PID in each servo holds the joints. The person who demonstrated the task already chose a path around the obstacles.
+
+## Going further
+
+These topics sit underneath the ideas above. Treat them as optional reading: each one is a good next step when its name shows up.
+
+**The Jacobian.** A matrix that says how fast the hand moves when each joint moves a little. One column per joint: column *i* is the hand's velocity when only joint *i* turns. Pin **Jacobian** on the figure in the [kinematics chapter](/docs/tutorials/gentle-intro/kinematics) to see one column as an arrow.
+
+**Singularities.** Configurations where the arm loses a direction of motion. Stretch the two-link arm out straight, and both joints can only swing the hand sideways; pulling it straight back toward the base is impossible. Solvers asked for that direction demand huge joint speeds, so an arm near a singularity twitches or stalls. Pin **Singularity** on the same figure.
+
+**Three ways to solve inverse kinematics.**
+
+- *Analytical:* solve the geometry on paper, as with the law of cosines on the two-link arm. Exact and fast, and specific to one arm's layout.
+- *Numerical:* guess the joints, run forward kinematics, and adjust until the hand is close enough. Works for any arm.
+- *Differential:* use the Jacobian to take a small joint step toward the target, and repeat. This is what `MinkIK` does.
+
+**Gravity compensation.** Computing, from the link masses, the torque that holds the arm up, and adding it to every command so the feedback only has to fix what the model missed. Torque-controlled arms do this. The SO-106's servos are position-controlled, and the I term in their PID does the holding instead.
+
+**Motion planning.** Searching for a path that reaches the goal without hitting anything. *Sampling-based* planners draw random configurations and connect the collision-free ones. *Optimization-based* planners start from a rough path and push it away from obstacles. Both get harder as the scene fills up and the arm gains joints.
+
+## What is still ahead
+
+The course introduces a few more Solarian ideas as it needs them:
+
+- **Plugins** are packages that add a module, a skill, or a motor driver. Tutorial 1 installs the Feetech driver and the gripper. See [Using plugins](/docs/using-plugins).
+- A **skill** is a behavior with a start and a finish: go to a pose, run a policy. [Tutorial 3](/docs/tutorials/skills).
+- A **service** is a long-running helper a skill calls, such as the process that holds a trained policy in memory.
+- A **dataset** is a collection of episodes, each one a recording of observations and actions. Recording writes episodes. Training fits a policy to them. [Tutorial 4](/docs/tutorials/training).
+
+## Where you are going
+
+You now have the words for the rest of the course: a six-joint arm, its configuration in joint and task coordinates, kinematics between them, and a loop that reads, decides, and writes.
+
+[Tutorial 1](/docs/tutorials/first-robot) creates the project and moves the SO-106 in simulation. No parts required.
+
+Next: [your first Solarian robot](/docs/tutorials/first-robot).

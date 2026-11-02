@@ -1,0 +1,31 @@
+export const metadata = {
+  title: 'Robot skills',
+  description:
+    'Replace the keyboard joint nudges with skills: one you write, MoveSkill from a plugin, and a pretrained UMI policy.',
+}
+
+# Robot skills
+
+Tutorial 1's controller *is* the behavior: every tick it sends a joint target, and a key edits that target. A skill flips that. The controller starts a behavior and gets out of the way. The behavior sends the actions. {{ className: 'lead' }}
+
+You can do this whole tutorial in simulation, right after [Tutorial 1](/docs/tutorials/first-robot). The last chapter is the real arm, and it needs [Tutorial 2](/docs/tutorials/real-robot).
+
+## Three words
+
+A **skill** is a behavior with a start and a finish. "Open the gripper." "Go to the home pose." "Run this policy until I press another key." It reads observations and returns actions, at its own rate. The controller launches it with `start_skill`. Starting a second skill that uses the same modules stops the first one, so a key press replaces the current behavior instead of stacking on it.
+
+A **service** is a process that stays up while the skill is running. The one you will start is the policy server: it loads a checkpoint once, and the skill asks it for the next motion instead of loading the model on every key press.
+
+A **policy** is the model inside that server. Observations in, a short chunk of motion out. The skill is the thing that queries it and turns the answer into actions the arm already understands. You can swap the checkpoint without rewriting the skill.
+
+That is the whole stack for the rest of the course. The reference pages are [Skills](/docs/skills), [Services](/docs/services), and [Policies](/docs/policies). This tutorial only builds one of each.
+
+## Chapters
+
+1. [A skill you write](/docs/tutorials/skills/your-own) — open the gripper, from a class in the project.
+2. [Move to a pose](/docs/tutorials/skills/move) — install MoveSkill, name a pose, and give the arm inverse kinematics so a pose can be Cartesian.
+3. [What UMI is](/docs/tutorials/skills/umi) — demonstrations, a wrist camera, a policy.
+4. [A pretrained pick](/docs/tutorials/skills/pick) — one key, one checkpoint, in simulation.
+5. [On the real arm](/docs/tutorials/skills/real-arm) — lens and hand-eye, then the same key.
+
+The keyboard from Tutorial 1 gets deleted in the first chapter. The letters stop meaning "nudge a joint" and start meaning "run this skill."

@@ -1,0 +1,111 @@
+export const metadata = {
+  title: 'Sensing and control',
+  description:
+    'The read, decide, write loop every robot runs: sensors, torque, PID, and trajectories, and how Solarian splits the loop across three processes.',
+}
+
+# Sensing and control
+
+You can now describe where an arm is and where it should go. This chapter is about getting it there: what the robot measures, how a motor holds a joint, and how a motion is timed. {{ className: 'lead' }}
+
+## The control loop
+
+Every robot, under all its machinery, repeats three steps, many times a second:
+
+1. **Read** the sensors.
+2. **Decide** what should happen next.
+3. **Write** the actuators.
+
+![Read an observation, decide in the controller or a skill, write an action.](/images/tutorials/loop.svg)
+
+The rest of this chapter walks around that loop: sensors for the read, motors and PID for the write, and trajectories for timing the motion between them.
+
+## Sensors
+
+A **sensor** turns something physical into a reading. Some readings are a single number, such as a joint angle. Some are a whole image.
+
+<SensorsFigure />
+
+- An **encoder** measures a joint angle as a count of ticks. Every servo on the SO-106 has one, so the arm always knows its own configuration.
+- A **camera** measures brightness on a grid of pixels. The camera in this course rides on the wrist and looks along the fingers, so the robot sees the object from the hand's point of view.
+- A **lidar** sweeps a beam around and measures the distance along each ray. Mobile robots use it to see the walls and obstacles around them.
+- An **ultrasonic** sensor measures a single distance, from the time a chirp takes to bounce back.
+- An **IMU** measures acceleration and rotation rate. A moving base or a legged robot uses it to stay level.
+
+The SO-106 in this course reads two of these: the joint encoders and the wrist camera.
+
+## Torque
+
+To move a joint, a motor has to twist it. **Torque** is that twist: a force times its distance from the hinge, in newton-metres.
+
+<TorqueFigure />
+
+Gravity pulls on every link, so even a still arm needs torque just to stay up. Stretched out, the weight acts on a longer lever, and the shoulder works hardest. Tucked in, the same arm needs much less. That is why the SO-106 uses its stronger servos at the shoulder, elbow, and wrist flex.
+
+## PID: holding a joint
+
+You tell a servo an angle, and it has to produce whatever torque gets the joint there and keeps it there. It measures the **error**, the commanded angle minus the measured angle, and turns that error into torque. **PID** is the classic recipe, three terms added together:
+
+- **P**, proportional: torque in proportion to the error. Far from the target it pushes hard, close to it gently. This term does the moving.
+- **D**, derivative: torque against how fast the error is changing. It brakes a fast approach, which cuts the overshoot.
+- **I**, integral: torque from the error added up over time. A small error that never goes away, such as the arm sitting a little low under its own weight, keeps growing this term until the gap closes.
+
+<PidFigure />
+
+Try the presets from left to right. **P only** swings past the target and settles short of the line, because gravity wins the last bit. **+ D** calms the swing. **+ I** closes the gap. The last three presets compare damping: underdamped crosses the target, critically damped is the fastest arrival that never crosses, and overdamped arrives later.
+
+## Trajectories
+
+Telling a joint to jump straight to a far target would slam the arm. A **trajectory** is a path with time on it: where the hand should be at each instant on the way to the goal, and how fast it may go.
+
+<TrajectoryFigure />
+
+Two separate questions hide in a trajectory:
+
+- **Which path?** The straight line to the goal can run through the table, an obstacle, or the arm itself. Choosing a path that avoids them is **planning**.
+- **How fast along it?** Given a path, choosing the timing so the arm stays within its speed and acceleration limits is **interpolation**.
+
+## In Solarian
+
+Each Solarian piece maps onto one part of the loop.
+
+**Read.** The readings arrive as an [`Observation`](/docs/observations): a typed snapshot with one group of fields per module. You write it as a small class. This one reads the six encoders and the wrist camera:
+
+```python {{ title: 'so106/observation.py' }}
+class RightArmObs(ModuleObs):
+    shoulder_pan = SensorField(So106Robot.right_arm.shoulder_pan.pos)
+    shoulder_lift = SensorField(So106Robot.right_arm.shoulder_lift.pos)
+    elbow_flex = SensorField(So106Robot.right_arm.elbow_flex.pos)
+    wrist_flex = SensorField(So106Robot.right_arm.wrist_flex.pos)
+    wrist_yaw = SensorField(So106Robot.right_arm.wrist_yaw.pos)
+    wrist_roll = SensorField(So106Robot.right_arm.wrist_roll.pos)
+
+
+class RightWristCameraObs(ModuleObs):
+    rgb_image = SensorField(So106Robot.right_wrist_camera.camera.rgb_image)
+
+
+class So106Observation(Observation):
+    right_arm = RightArmObs()
+    right_wrist_camera = RightWristCameraObs()
+```
+
+**Decide.** Solarian splits the loop across three processes:
+
+- The **robot** process owns the hardware, or the simulator. It reads the sensors and applies actions.
+- The **relay server** passes observations and actions between the other two, so the computer wired to the arm and the computer running the decisions can be different machines.
+- The **controller** process decides. In Tutorial 1 the decision is "the operator pressed a key". Later it is a skill.
+
+**Write.** Commands travel as an [`Action`](/docs/actions), the same shape written the other way. Each `FeetechServo` runs its PID inside the motor, so Solarian sends a target position and the servo produces the torque. On the SO-106 the joints that hold the arm up use a small I term, which is what lifts the sag you saw in the figure. The shoulder pan carries no constant gravity load, so it runs with I at zero, which also keeps it from chattering inside its gear backlash.
+
+**Timing.** The arm module interpolates between targets. In [Tutorial 3](/docs/tutorials/skills/move) you set its limits in the module's config:
+
+```yaml {{ title: 'conf/modules/right_arm.yaml' }}
+interpolator_type: pose
+max_speed: [0.25, 0.6]    # metres/second, radians/second
+max_accel: [0.5, 3.0]
+```
+
+The path itself comes from whoever chose the targets: you with the keyboard, a skill naming a pose, or a policy trained on human demonstrations, which already avoided the obstacles when the person did the task.
+
+Next: [learning, and going further](/docs/tutorials/gentle-intro/learning).

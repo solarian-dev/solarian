@@ -1,0 +1,60 @@
+export const metadata = {
+  title: 'Real camera',
+  description:
+    'Open the Raspberry Pi CSI camera with PiCameraModule and see the live image in the controller.',
+}
+
+# Real camera
+
+`PiCameraModule` is already on the robot. Simulation was rendering a MuJoCo camera into the same observation field. On hardware, that field is the CSI sensor. The YAML you wrote in Tutorial 1 is the one this chapter fills in. {{ className: 'lead' }}
+
+## The Pi packages
+
+On the Pi:
+
+```bash
+sudo apt install python3-picamera2
+```
+
+The virtualenv was created with `--system-site-packages` in the [computer chapter](/docs/tutorials/real-robot/computer). Without that, `import picamera2` fails inside a venv even when apt succeeded. Recreate the venv if you have to. Editable-install the project again afterward.
+
+`camera_port_right_wrist_camera: "0"` in `lab.yaml` is CSI connector 0. A second camera would be `"1"`. It is not `/dev/video0`. libcamera's index and the video-device number are not the same list.
+
+## A first frame
+
+Stop the robot if it is running. From the Pi, a one-shot check that does not involve Solarian:
+
+```bash
+rpicam-still --camera 0 -o /tmp/wrist.jpg --timeout 2000
+```
+
+Open `/tmp/wrist.jpg`. You want a picture of whatever is in front of the fingers, not a black frame and not an error about a missing camera. A missing camera is the ribbon, the connector, or the index. Swap `"0"` and `"1"` only after the ribbon is reseated. A black frame with a successful command is a lens cap or a connector that enumerated and did not start streaming; the timeout in that command is already two seconds, which is long enough for exposure to settle.
+
+The first Solarian open is slower than a still. `PiCameraModule` allows 15 seconds for configure, exposure, and the first frame. A timeout shorter than that looks like a dead camera on a cold start.
+
+## In the controller
+
+Resolution can stay 640×480 for this check. The policy later wants the sensor's real mode; that edit belongs with the UMI chapter, because it has to match the checkpoint. For "do I see the bench", 640×480 is the right picture.
+
+On the Pi:
+
+```bash
+solarian --deployment lab run-server
+solarian --deployment lab run-robot sim=false
+```
+
+On the laptop:
+
+```bash
+solarian --deployment lab run-controller
+```
+
+The controller window should show the bench, with the fingers at the edge if the mount matches the CAD. Move the wrist with `y` / `h` and the picture should pan. `[` and `]` move the fingers in frame.
+
+This image is the real sensor through the mount you built. It is not yet the image a UMI policy expects. The policy assumes a lens model and a measured transform from camera to fingertips. Both are measured in [On the real arm](/docs/tutorials/skills/real-arm), after the arm can move to a pose on its own. Joint teleop does not need them. Looking at the picture does not either.
+
+<Note>
+  **Figure to add.** The controller's live wrist image beside a photo of the same bench from behind the arm. <code>public/images/tutorials/wrist-real.png</code>.
+</Note>
+
+Tutorial 2 ends here. The project on the Pi and the project on the laptop are still Tutorial 1's project. [Tutorial 3](/docs/tutorials/skills) replaces the keyboard's joint nudges with skills, in simulation first.

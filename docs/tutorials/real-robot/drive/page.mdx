@@ -1,0 +1,55 @@
+export const metadata = {
+  title: 'Drive it',
+  description:
+    'Run the Tutorial 1 keyboard controller on the physical SO-106 with sim=false.',
+}
+
+# Drive it
+
+Clear the table. The arm should be near the home pose you matched during calibration, slack, with the supply on. {{ className: 'lead' }}
+
+On the Pi, in the project directory:
+
+<CodeGroup>
+
+```bash {{ title: 'Pi: relay' }}
+solarian --deployment lab run-server
+```
+
+```bash {{ title: 'Pi: robot' }}
+solarian --deployment lab run-robot sim=false
+```
+
+</CodeGroup>
+
+`sim=false` overrides `is_sim = True` on the class. `conf/robot.yaml` has `sim: null` so the override is accepted. If you forgot that line in Tutorial 1, add it before this command. Without it, a config value of false may not be what the class attribute says, and you will be arguing with the wrong robot.
+
+On the laptop:
+
+```bash
+solarian --deployment lab run-controller
+```
+
+The controller window opens, still without a camera image. Click it. Press `s` once.
+
+The shoulder should move a small step and hold. Press `w` to bring it back. Then the other pairs, one joint at a time, the same letters as in simulation. The gripper is `[` and `]`.
+
+What it should feel like: a short move, then a hold at the new angle. It should not hunt, buzz, or run away. A few millimetres of motion per key press at the hand is plenty for a first test. If a joint takes off, Control-C the robot process. Torque drops when the process exits. Then unplug the supply if anything is still energized.
+
+## When the direction is wrong
+
+You already answered this in calibration, and a joint can still be backward if the horn moved afterward. Do not edit `drive_mode` by guessing while torque is on. Stop the robot, run `solarian --deployment lab calibrate` again, and redo the direction step for that joint. The sim arrow is the check. Your eyes on a moving arm are a worse one.
+
+## When nothing moves
+
+- `feetech-inspect` no longer lists the ID. The adapter moved nodes after a reboot (`ttyACM0` became `ttyACM1`). Update `lab.yaml`.
+- The controller is talking to `localhost`. The deployment flag has to be on all three commands. A controller on `localhost` is a healthy process connected to nothing on the Pi.
+- `sim=false` was omitted and the Pi opened a sim window instead of the bus. Look at the robot terminal. A MuJoCo banner means you are not on hardware.
+
+The keyboard code did not change. If simulation still moves and hardware does not, the failure is the port, the deployment, or calibration, in that order.
+
+<Note>
+  **Figure to add.** A short clip of one <code>s</code> press moving the real shoulder, controller window in frame. Embed it here.
+</Note>
+
+Next: [the real camera](/docs/tutorials/real-robot/camera).

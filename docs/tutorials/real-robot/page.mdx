@@ -1,0 +1,30 @@
+export const metadata = {
+  title: 'The real robot',
+  description:
+    'Buy and assemble an SO-106, calibrate the servos, and drive the Tutorial 1 project on the hardware.',
+}
+
+# The real robot
+
+Tutorial 1 was the project. This one is the same project on a desk: printed parts, Feetech servos, a Raspberry Pi, and the keyboard you already wrote. You do not create a second codebase. `solarian run-robot sim=false` is the switch. {{ className: 'lead' }}
+
+Finish [Tutorial 1](/docs/tutorials/first-robot) first. Simulation keeps working afterward. The class attribute stays `is_sim = True`, and each real run overrides it.
+
+## Chapters
+
+1. [Parts](/docs/tutorials/real-robot/parts) — what to buy, from the hardware pages.
+2. [Assemble](/docs/tutorials/real-robot/assemble) — the arm, then the gripper and camera.
+3. [Computer](/docs/tutorials/real-robot/computer) — the Pi, the serial port, a deployment file.
+4. [Calibrate](/docs/tutorials/real-robot/calibrate) — servo ranges and direction. Not the camera yet.
+5. [Drive it](/docs/tutorials/real-robot/drive) — the keyboard, on the metal.
+6. [Real camera](/docs/tutorials/real-robot/camera) — picamera2, and the live image in the controller.
+
+## Two calibrations, on purpose
+
+`solarian calibrate` records how far each servo turns and which way is which. That is this tutorial. It makes the keyboard on the real arm match the keyboard in sim.
+
+Hand-eye calibration — where the camera sits relative to the fingertips — waits for [Tutorial 3](/docs/tutorials/skills/real-arm). A policy that reaches for something it sees is wrong without it. Joint teleop is not. Doing both in one sitting is how a working arm gets blamed on a bad policy, or the other way around.
+
+## While you work
+
+The arm can pinch and it can swing into itself. Start with a clear table, one hand on Control-C, and the other off the linkage. The first motion after torque comes on should be a small one: a single `s`, watched, then stop. The drive chapter says when to kill torque. Read it before you energize the bus.

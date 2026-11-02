@@ -1,0 +1,43 @@
+export const metadata = {
+  title: 'Datasets',
+  description:
+    'What a Solarian dataset is: episodes of observations and actions, and what a useful demonstration looks like.',
+}
+
+# Datasets
+
+A dataset is a pile of episodes. An episode is one take of the task: the wrist video, the arm and gripper readings, and the actions that were happening, from the moment you start until you say the take is over. {{ className: 'lead' }}
+
+On disk, a session the robot recorded looks like this. The full layout is [Recording](/docs/recording).
+
+```text
+datasets/pick__2026-10-28T15-04-11/
+├── session.json
+├── manifest.jsonl
+└── episodes/000000/
+    ├── episode.json
+    ├── episode.parquet
+    └── video/right_wrist_camera.rgb_image.mp4
+```
+
+`episode.parquet` is the numbers: joint positions, gripper width, actions, timestamps. The mp4 is the camera at the resolution the sensor produced, not the small crop the policy happens to want today. You can train a different crop later. You cannot invent pixels a downscale threw away.
+
+A Lumi recorder writes a different file, on purpose. It is an MP4 with the motion in a side track, the shape UMI's pipeline already accepts. [Collect](/docs/tutorials/training/collect) turns that into the session above. You do not hand-convert frames.
+
+## What a good take looks like
+
+The policy imitates what you recorded. It will also imitate the bad habits.
+
+- **One task per dataset.** "Pick up the red block" is a dataset. "Pick up the red block, and also stack cups" is two datasets that will teach a confused average.
+- **The object stays in the wrist camera.** If you can't see it, the policy can't. Start the take with the object in frame, not after a blind reach.
+- **Vary the start a little.** Same spot every time teaches a policy that only works on that spot. Shift the object a few centimetres between takes.
+- **Finish the task.** A take that stops halfway is a demonstration of stopping halfway. Drop those. The last chapter has the command.
+- **Keep the misses that you recovered from.** A take where the fingers bumped the object and then grasped it is useful. A take where you gave up is not.
+
+Fifty short, finished episodes beat five long, perfect ones. You will feel this when the first example run finishes and the second, on your own data, does not.
+
+<Note>
+  **Clip to add.** One good pick episode from the wrist camera, ten to twenty seconds, object in frame the whole time. Embed it here.
+</Note>
+
+Next: [train on an example dataset](/docs/tutorials/training/example), before you record anything.

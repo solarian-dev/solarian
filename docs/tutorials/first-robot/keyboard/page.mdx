@@ -1,0 +1,127 @@
+export const metadata = {
+  title: 'Keyboard',
+  description:
+    'Define the arm observation and action, and nudge one joint at a time from the keyboard.',
+}
+
+# Keyboard
+
+The controller's job, for now, is small. A key changes one number. Every tick, that number is sent to the arm as a joint target. {{ className: 'lead' }}
+
+The number is in the normalized range from the YAML: −100 to 100. Five units is a small bend. You are not commanding metres or radians. The module, and in simulation the `sim_range_*` mapping, turns the number into motion.
+
+## Observation
+
+`so106/observation.py` says which sensor readings the controller is allowed to see. For the arm, that is each joint's position.
+
+```python
+from solarian.core.observation import ModuleObs, Observation, SensorField
+
+from so106.robot import So106Robot
+
+
+class RightArmObs(ModuleObs):
+    shoulder_pan = SensorField(So106Robot.right_arm.shoulder_pan.pos)
+    shoulder_lift = SensorField(So106Robot.right_arm.shoulder_lift.pos)
+    elbow_flex = SensorField(So106Robot.right_arm.elbow_flex.pos)
+    wrist_flex = SensorField(So106Robot.right_arm.wrist_flex.pos)
+    wrist_yaw = SensorField(So106Robot.right_arm.wrist_yaw.pos)
+    wrist_roll = SensorField(So106Robot.right_arm.wrist_roll.pos)
+
+
+class So106Observation(Observation):
+    right_arm = RightArmObs()
+```
+
+`SensorField` points at a piece of data on the robot tree, `module.joint.pos`. The field name on the observation (`shoulder_pan`) is yours; the thing it reads is the servo. Keeping the names the same is a kindness to yourself.
+
+## Action
+
+`so106/action.py` is the command shape. Same joints, written rather than read.
+
+```python
+from solarian.core.action import Action, ActuatorField, ModuleAction
+
+from so106.robot import So106Robot
+
+
+class RightArmAction(ModuleAction):
+    shoulder_pan = ActuatorField(So106Robot.right_arm.shoulder_pan.pos)
+    shoulder_lift = ActuatorField(So106Robot.right_arm.shoulder_lift.pos)
+    elbow_flex = ActuatorField(So106Robot.right_arm.elbow_flex.pos)
+    wrist_flex = ActuatorField(So106Robot.right_arm.wrist_flex.pos)
+    wrist_yaw = ActuatorField(So106Robot.right_arm.wrist_yaw.pos)
+    wrist_roll = ActuatorField(So106Robot.right_arm.wrist_roll.pos)
+
+
+class So106Action(Action):
+    right_arm = RightArmAction()
+```
+
+If you rename a joint on the module and forget it here, the class raises `TypeError` at import. Fix the name it prints.
+
+## The controller
+
+Replace `so106/controller.py`:
+
+```python
+from solarian.core import Controller
+from solarian.core.action import ActionType
+from solarian.core.event import Event, EventType, event_handler
+
+from so106.action import So106Action
+
+# One key pair per joint: the first decreases, the second increases.
+_KEYS = {
+    "q": ("shoulder_pan", -5),
+    "a": ("shoulder_pan", 5),
+    "w": ("shoulder_lift", -5),
+    "s": ("shoulder_lift", 5),
+    "e": ("elbow_flex", -5),
+    "d": ("elbow_flex", 5),
+    "r": ("wrist_flex", -5),
+    "f": ("wrist_flex", 5),
+    "t": ("wrist_yaw", -5),
+    "g": ("wrist_yaw", 5),
+    "y": ("wrist_roll", -5),
+    "h": ("wrist_roll", 5),
+}
+
+
+class So106Controller(Controller):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.target = So106Action.zeros()
+        self.target.right_arm.action_type = ActionType.MOVE_J
+
+    @event_handler(EventType.KEY_DOWN)
+    def on_key_down(self, event: Event):
+        step = _KEYS.get(event.data["key"])
+        if step is None:
+            return
+        joint, delta = step
+        field = self.target.right_arm[joint]
+        field.value = max(-100.0, min(100.0, field.value + delta))
+
+    def control_step(self):
+        return self.target
+```
+
+`So106Action.zeros()` builds a command with every joint at 0, which is mid-travel. `MOVE_J` is the action type your arm module handles. `control_step` returns that same object every tick, so the arm is always being told a target, and a key only changes the target.
+
+Handlers run on the control thread. They do not race the loop. Hold a key and you get a stream of repeats from the keyboard; each one steps the joint by 5.
+
+The letters are in pairs down the keyboard, one pair per joint from the shoulder to the wrist:
+
+| Joint | Decrease | Increase |
+| --- | --- | --- |
+| shoulder pan | `q` | `a` |
+| shoulder lift | `w` | `s` |
+| elbow | `e` | `d` |
+| wrist flex | `r` | `f` |
+| wrist yaw | `t` | `g` |
+| wrist roll | `y` | `h` |
+
+`r` is also the key the controller uses to seal a recording. That is fine for now: you are not recording. Tutorial 4 uses a different set of keys, and this override goes away when skills take over.
+
+Next: [start the sim and move the arm](/docs/tutorials/first-robot/simulate).

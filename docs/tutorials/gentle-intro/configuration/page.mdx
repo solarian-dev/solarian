@@ -1,0 +1,114 @@
+export const metadata = {
+  title: 'Configuration and coordinates',
+  description:
+    "What a robot's configuration is, the two ways to write it down, joint coordinates and task coordinates, and the frames and rotations those numbers live in.",
+}
+
+# Configuration and coordinates
+
+To command a robot you have to write down where it is and where it should go. This chapter shows what "where the robot is" means, and the two kinds of numbers robotics uses to say it. {{ className: 'lead' }}
+
+## What a configuration is
+
+The **configuration** of a robot is a complete description of where every part of it is. Given the configuration, you could draw the robot exactly, every link in its place.
+
+For an arm that description is short. The links are rigid, so they never bend or stretch. Once you know the angle of each joint, every link follows. The configuration is one number per joint.
+
+The fewest numbers that pin down the configuration is the robot's number of degrees of freedom. That is the same count as in the [previous chapter](/docs/tutorials/gentle-intro/body), seen from the other side: each degree of freedom is one number you have to write down.
+
+## A worked example: the two-link arm
+
+Take the simplest arm that still behaves like an arm. It lies flat on a table and moves in that plane. It has two links and two revolute joints:
+
+- a **shoulder** at the base, between the table and the first link;
+- an **elbow** between the first link and the second.
+
+Both joints turn about the axis that points up out of the table. Two revolute joints, so two degrees of freedom, and the configuration is two angles. Robotics writes them as a vector **q**:
+
+**q** = (q₁, q₂)
+
+Here q₁ is the shoulder angle and q₂ is the elbow angle. Read **q** = (30°, 45°) as an instruction for drawing the arm: the first link leaves the base at 30°, and the second link leaves the elbow turned a further 45°.
+
+There is a second way to describe the same arm. You could say where the hand is: its x and its y on the table. That is also two numbers: the same arm, described in different coordinates. Those are the two kinds of coordinates this chapter is about.
+
+The SO-106 is the same idea with more joints. Six revolute joints, six degrees of freedom, so its configuration is six numbers:
+
+**q** = (`shoulder_pan`, `shoulder_lift`, `elbow_flex`, `wrist_flex`, `wrist_yaw`, `wrist_roll`)
+
+## Joint coordinates and task coordinates
+
+The figure is a three-joint arm: the SO-106's shoulder and elbow, with the wrist left off so the motion is easy to follow. It cycles between the two descriptions of one configuration.
+
+<CoordinatesFigure />
+
+**Joint coordinates** are one number per joint, the vector **q**. They are the motors' language: each number is something a motor can be told directly. "Bend the elbow 10 degrees" is a command in joint coordinates. The set of every possible **q** is called **joint space**, or configuration space.
+
+**Task coordinates** describe the end effector instead: its **position**, x, y, z, and its **orientation**, three more numbers for how it is turned. Together, position and orientation are the hand's **pose**. They are the task's language. "Put the fingertips five centimetres above the cup, pointing down" is a command in task coordinates. The set of every pose is called **task space**, or Cartesian space.
+
+| | Joint coordinates | Task coordinates |
+| --- | --- | --- |
+| Describes | each joint | the end effector |
+| Numbers on the SO-106 | 6 angles | 3 for position, 3 for orientation |
+| Natural for | motors, logging, replaying a motion | goals in the world, camera-guided motion |
+
+Both describe the same robot, so you can convert from one to the other. That conversion is **kinematics**, the subject of the [next chapter](/docs/tutorials/gentle-intro/kinematics).
+
+## Frames
+
+"x = 0.3 metres" only means something once you say from where, and along which direction. A **frame** answers both: an origin and three axes, glued to some body. In every figure in this course the axes are colored the same way: red is X, green is Y, blue is Z.
+
+<FramesFigure />
+
+The frames you will meet most:
+
+- The **base frame** is bolted to the table at the foot of the arm. Task coordinates are written in this frame.
+- A **link frame** rides on a link and moves with it. The next joint sits at a fixed place in this frame, which is why one angle is enough to place the next link.
+- The **tool frame** sits at the fingertips. A task-space command asks to put this frame at a pose in the base frame.
+- The **camera frame** sits on the wrist and looks along the fingers. A pixel in the image is a direction in this frame.
+
+A pose is always one frame described in another: how far to move, and how much to turn, to get from the base frame to the tool frame.
+
+## Writing down an orientation
+
+A position is three numbers along three axes. An orientation is also three numbers' worth of information, and there are several common ways to write it:
+
+- **Axis-angle.** Pick the axis you turn around and the angle you turn by. Pack both into one vector of three numbers: its direction is the axis, and its length is the angle in radians. Solarian uses this one.
+- **Rotation matrix.** Nine numbers in a 3×3 grid. Each column is one axis of the turned frame, written in the original frame. Easy to combine: rotating twice is multiplying two matrices.
+- **Quaternion.** Four numbers. Smooth to interpolate between two orientations, and common in simulators and model files.
+- **Euler angles**, such as roll, pitch, and yaw. Three turns about three axes, one after the other. Easy to picture, and the order of the turns matters.
+
+All four describe the same physical rotation, and libraries convert between them. Pick the one your tool expects.
+
+## In Solarian
+
+Each joint is one actuator on the module, so the six servo lines from the previous chapter are the arm's joint coordinates. A joint command is a number from −100 to 100, where 0 is the middle of the joint's travel. Calibration, in [Tutorial 2](/docs/tutorials/real-robot/calibrate), teaches each servo where its ends are. In [Tutorial 1](/docs/tutorials/first-robot) the keyboard nudges these numbers one joint at a time.
+
+Task coordinates arrive in [Tutorial 3](/docs/tutorials/skills/move), when a skill needs to name a pose. The arm module gains six more actuators, one per task coordinate:
+
+```python {{ title: 'so106/modules/right_arm.py' }}
+from solarian.core.arm_module import ArmModule
+from solarian.core.ik import CartesianIKActuator
+from solarian_feetech.actuator import FeetechServo
+
+
+class RightArmModule(ArmModule):
+    # Joint coordinates: one per servo.
+    shoulder_pan = FeetechServo(model="sts3250")
+    shoulder_lift = FeetechServo(model="sts3250")
+    elbow_flex = FeetechServo(model="sts3250")
+    wrist_flex = FeetechServo(model="sts3250")
+    wrist_yaw = FeetechServo(model="sts3215")
+    wrist_roll = FeetechServo(model="sts3215")
+
+    # Task coordinates: position in metres, rotation as axis-angle in radians.
+    x = CartesianIKActuator()
+    y = CartesianIKActuator()
+    z = CartesianIKActuator()
+    rx = CartesianIKActuator()
+    ry = CartesianIKActuator()
+    rz = CartesianIKActuator()
+```
+
+`x`, `y`, and `z` are the position of the hand in the base frame. `rx`, `ry`, and `rz` are one axis-angle vector, the orientation. A skill writes these six numbers, and the arm module converts them to the six joint commands. The gripper's configuration is a single number, the gap between the fingertips in millimetres.
+
+Next: [kinematics](/docs/tutorials/gentle-intro/kinematics).

@@ -1,0 +1,78 @@
+export const metadata = {
+  title: 'A skill you write',
+  description:
+    'Write a one-shot skill that opens the gripper, and start it from a key.',
+}
+
+# A skill you write
+
+The smallest skill that does something you can see: open the gripper, then finish. It lives in the project, the way the arm module did. {{ className: 'lead' }}
+
+Create `so106/skills.py`:
+
+```python
+from solarian.core.action import Action, ActionType
+from solarian.core.ai.system1.skill import Skill
+from solarian.core.execution import ExecutionMode
+
+
+class OpenGripperSkill(Skill):
+    # Runs on the controller's tick. A process would also work; this skill
+    # sends one command, so a process is wasted machinery.
+    execution_mode = ExecutionMode.INLINE
+
+    def control_step(self, dt):
+        self.finish()
+        gripper = self.params["gripper"]
+        return Action(
+            action_type=ActionType.MODULE_ACTION,
+            data={
+                gripper: {
+                    "action_type": ActionType.MOVE_J,
+                    "data": {"gripper": {"value": 85.0}},
+                },
+            },
+        )
+```
+
+`params` is how the skill learns the module's name. It does not hold the module object. 85 is millimetres, fully open, which is the unit `UmiSlimFeetechModule` already accepts. `finish()` marks the skill done on the same step it commands the motion. A skill that returned forever would hold the gripper and refuse to be replaced cleanly.
+
+A skill never imports `So106Robot`. The name `"right_gripper"` is the whole address. That is what lets the same class run on the controller or on the robot later.
+
+## The controller only starts it
+
+Replace `so106/controller.py`. The joint-nudge `control_step` has to go. An override of `control_step` replaces skill ticking, so a skill you start would never get a turn.
+
+```python
+from solarian.core import Controller
+from solarian.core.event import Event, EventType, event_handler
+
+from so106.skills import OpenGripperSkill
+
+
+class So106Controller(Controller):
+    skills = (OpenGripperSkill,)
+
+    @event_handler(EventType.KEY_DOWN)
+    def on_key_down(self, event: Event):
+        if event.data["key"] == "o":
+            self.start_skill(OpenGripperSkill(params={"gripper": "right_gripper"}))
+```
+
+`skills` is the list of classes this controller is willing to run. `start_skill` builds nothing for you: you construct the skill with the params you want, and it stops whatever else is commanding `right_gripper`.
+
+There is no `control_step`. The base implementation ticks the running skills and sends what they return.
+
+## Try it
+
+Restart the controller and the robot (simulation is fine). Close the fingers in your mind first: they may already be open. Press `o`.
+
+The fingers should go to fully open and the skill should exit. Press `o` again and the same thing happens; it does not toggle shut. A key starts. It does not reverse.
+
+The arm no longer nudges. That is the point of deleting `control_step`. The next chapter puts motion back, as a pose instead of a key-per-joint.
+
+<Note>
+  If <code>o</code> does nothing and the terminal is silent, the controller still has your old <code>control_step</code>. Skills do not run alongside that override. Delete it.
+</Note>
+
+Next: [move to a pose](/docs/tutorials/skills/move).

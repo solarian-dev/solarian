@@ -1,0 +1,73 @@
+export const metadata = {
+  title: 'Computer',
+  description:
+    'Set up the Raspberry Pi, the Feetech serial port, and a deployment file so the laptop controller talks to the robot.',
+}
+
+# Computer
+
+The Pi runs the relay and the robot. Your laptop runs the controller. Both use one deployment file, so they agree on the relay's address and neither file contains the other's devices. {{ className: 'lead' }}
+
+## The Pi
+
+Install Raspberry Pi OS and the same Python environment as [Installation](/docs/installation). The robot process imports the project, so the project has to be on the Pi: clone it there, or mount it. Then, on the Pi:
+
+```bash
+pip install -e .
+pip install "solarian-feetech[hardware]"
+sudo apt install python3-picamera2
+```
+
+Create the Pi's virtualenv with `--system-site-packages` so `picamera2` from apt is importable. The camera chapter is the one that opens the sensor. Installing the package now means you are not debugging apt in the middle of calibration.
+
+Plug in the USB-serial adapter with the servo supply **off**. Find the port:
+
+```bash
+ls /dev/ttyACM* /dev/ttyUSB*
+```
+
+A Feetech adapter usually appears as `/dev/ttyACM0`. Unplug it and run the command again if you are not sure which node it was. Remember the path. It is the path from the Pi, not from the laptop.
+
+## A deployment file
+
+`conf/deployment/localhost.yaml` is still the file Tutorial 1 uses, and you should leave it that way so simulation on the laptop keeps working.
+
+Copy it:
+
+```bash
+cp conf/deployment/localhost.yaml conf/deployment/lab.yaml
+```
+
+Edit `conf/deployment/lab.yaml`. The IP is the Pi, because the relay runs there. `.local` works when mDNS does.
+
+```yaml
+connection:
+  ip: robot.local
+  action_sender_port: 5555
+  action_receiver_port: 5556
+  state_sender_port: 5557
+  state_receiver_port: 5558
+  clock_sync_port: 5559
+
+actuator_port_right_arm: /dev/ttyACM0
+actuator_port_right_gripper: /dev/ttyACM0
+camera_port_right_wrist_camera: "0"
+```
+
+The arm and the gripper share one bus, so they share one path. The camera port is the CSI index.
+
+Copy the file to the Pi as well if the project is not a shared checkout. Both sides read it.
+
+## Power on, torque off
+
+Turn on the servo supply, then the Pi. You should hear nothing from the arm. The project does not enable torque until a program asks it to. If a servo twitches at plug-in and stays slack, that is the bus enumerating. If it drives to a stop and holds, unplug the supply and check you did not leave a vendor utility commanding it.
+
+From the Pi, with the project installed:
+
+```bash
+solarian feetech-inspect
+```
+
+You want IDs 1 through 7 answering. A missing ID is a servo still set to the factory ID, or a wire. Fix that before calibration. Calibration talks to the IDs in the YAML, and a silent ID looks like a dead joint.
+
+Next: [calibrate](/docs/tutorials/real-robot/calibrate).

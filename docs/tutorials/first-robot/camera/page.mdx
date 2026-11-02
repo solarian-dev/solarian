@@ -1,0 +1,115 @@
+export const metadata = {
+  title: 'The camera',
+  description:
+    'Add a Pi camera module and show the simulated wrist view in the controller.',
+}
+
+# The camera
+
+The camera is the third kind of module in this project. You wrote the arm. You installed the gripper. The camera already ships with Solarian: `PiCameraModule`, for a Raspberry Pi CSI camera. In this chapter it renders the sim view. The real sensor is [Tutorial 2](/docs/tutorials/real-robot/camera). {{ className: 'lead' }}
+
+There is no `solarian install` step.
+
+## Add the module
+
+In `so106/robot.py`:
+
+```python
+from solarian.core.picamera_module import PiCameraModule
+from solarian.sim import CameraMount, ModuleAttachment, SceneConfig
+```
+
+`CameraMount` joins the sim imports you already have. On the class:
+
+```python
+right_wrist_camera = PiCameraModule()
+```
+
+A MuJoCo camera is not part of the gripper model. You mount one onto the gripper's `camera` site, which is the CAD frame where the real lens sits. Add a `cameras` list on the `SceneConfig`:
+
+```python
+cameras=[
+    CameraMount(
+        name="right_wrist_cam",
+        site="right_gripper/camera",
+        # 180 degrees about X: the site's +Z points out of the lens,
+        # and a MuJoCo camera looks down its −Z.
+        quat=[0.0, 1.0, 0.0, 0.0],
+        fovy=90.0,
+    ),
+],
+```
+
+`site` is the gripper site after the gripper's prefix. `name` is the name the YAML will look up. `fovy` is the vertical field of view in degrees. 90 is wide enough to see the floor in front of the fingers. The real lens is wider, and Tutorial 3's calibration is what makes sim and hardware agree. For looking around, 90 is enough.
+
+## Config
+
+Add the port to `conf/deployment/localhost.yaml`. On a Pi this is the CSI index, `"0"` for the first connector, not a `/dev/video` path. Simulation ignores it.
+
+```yaml
+camera_port_right_wrist_camera: "0"
+```
+
+Create `conf/modules/right_wrist_camera.yaml`:
+
+```yaml
+camera_port: ${deployment.camera_port_right_wrist_camera}
+frequency: 30
+
+sensors:
+  camera:
+    port: ${camera_port}
+    fps: 30
+    width: 640
+    height: 480
+    type: picamera
+    sim:
+      camera: right_wrist_cam
+```
+
+`sim.camera` is the `CameraMount` name. `type: picamera` selects the Pi camera driver, which simulation replaces with the renderer. 640×480 keeps the first run light. The real camera's resolution is a later edit; the field in the observation does not change when you change the size.
+
+## Show it
+
+The controller draws every image field on the observation. Add one.
+
+In `so106/observation.py`:
+
+```python
+class RightWristCameraObs(ModuleObs):
+    rgb_image = SensorField(So106Robot.right_wrist_camera.camera.rgb_image)
+
+
+class So106Observation(Observation):
+    right_arm = RightArmObs()
+    right_gripper = RightGripperObs()
+    right_wrist_camera = RightWristCameraObs()
+```
+
+The path is `module.camera.rgb_image`: the module, then the `PiCamera` component, then its image. The field name `rgb_image` is what shows up as the window's label.
+
+A camera has no actuators. The action class does not need a field for it.
+
+## Look through it
+
+Restart the robot and the controller. The controller window should show the wrist view: the floor, and the fingers if they are in frame. Press `s` and `d` to swing the arm, and watch the picture move with it. `[` and `]` still open and close the gripper, in that same picture.
+
+<Note>
+  **Figure to add.** The controller window with the wrist image, fingers in frame. <code>public/images/tutorials/wrist-view.png</code>.
+</Note>
+
+<Note>
+  A black image usually means the mount name and <code>sim.camera</code> disagree, or the camera is looking away from the scene. The quaternion above turns the lens toward the fingers. If the picture is black with a valid name, orbit is not the problem — a MuJoCo camera looks down −Z, and a mount without that flip looks out the back of the gripper.
+</Note>
+
+## What you have
+
+| Module | Where the class lives | What you configured |
+| --- | --- | --- |
+| `right_arm` | your project, `so106/modules/right_arm.py` | joints, YAML, the arm MJCF |
+| `right_gripper` | `solarian-umi-slim` | YAML, a site-to-site attachment |
+| `right_wrist_camera` | Solarian itself, `PiCameraModule` | YAML, a `CameraMount` |
+
+The controller is still a keyboard. It reads observations and writes a joint target. That is the whole robot until [Tutorial 3](/docs/tutorials/skills), where a skill replaces `control_step`.
+
+[Tutorial 2](/docs/tutorials/real-robot) builds this same project in hardware. You can also go straight to skills and stay in simulation: Tutorial 3's real-arm chapter is the only part that needs the physical robot.

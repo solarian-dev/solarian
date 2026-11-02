@@ -10,6 +10,10 @@ An arm gets Cartesian (end-effector) control by declaring six `CartesianIKActuat
 
 IK lives in [`solarian/core/ik/`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ik) and works the same whether the module runs on hardware or in [simulation](/docs/simulation): the same MJCF describes the kinematics either way.
 
+Drag a joint slider and the hand follows. Joints to hand is forward kinematics. Inverse kinematics runs the other way: you name the hand pose, and the module finds the joints.
+
+<ManipulatorFigure bases={false} />
+
 ## The recipe
 
 Add three things to your [Module](/docs/modules):

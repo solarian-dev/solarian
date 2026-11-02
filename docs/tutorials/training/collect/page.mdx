@@ -1,0 +1,56 @@
+export const metadata = {
+  title: 'Collect',
+  description:
+    'Record pick demonstrations on Lumi, pack them, and turn the archive into a training dataset. Record on the robot when the demonstration is teleop.',
+}
+
+# Collect
+
+Record the task you want the policy to do. For this course that is the pick from Tutorial 3: object in front of the gripper, fingers close, lift a little, done. {{ className: 'lead' }}
+
+Do a handful first, watch them, then decide if the takes are worth fifty more. A bad setup recorded fifty times is a dataset of a bad setup.
+
+## On Lumi
+
+Hold the collector the way the gripper sits on the arm: camera looking along the fingers, object in frame before you start. Press the button that starts an episode. Do the pick. Stop the episode. If the take was a mess, delete it on the device before it becomes training data.
+
+The files land on the collector's card as a dataset folder: `catalog.json`, `raw_videos/`, and a camera calibration if you have run one. Copy that folder to your computer.
+
+Pack it from your laptop. The collector plugin provides the command:
+
+```bash
+solarian install lumi-collector
+```
+
+```bash
+solarian lumi pack ~/lumi/datasets/pick
+```
+
+That writes `pick.lumi.zip` next to the folder. Deleted episodes are left out. The zip is what the next command consumes, and what you would upload if you were using Solarian Base.
+
+Turn the zip into a training session. This step runs SLAM: it recovers the hand's motion from the video and the IMU, and writes the parquet-and-mp4 session `solarian train` reads. It needs Docker images the command will offer to pull. Say yes when it asks, or pass `--yes` if you already trust the images.
+
+```bash
+pip install "solarian-umi-skill[slam]"
+solarian umi-slam ~/lumi/datasets/pick.lumi.zip
+```
+
+The default output sits beside the zip: `pick.solarian.zip`. Camera defaults to `lumi` for that suffix. A failure leaves a work directory; the message names it. A success removes the work directory and keeps the zip.
+
+<Note>
+  **Clip to add.** One collected episode played back: the wrist view, the fingers closing, the object leaving the table.
+</Note>
+
+## On the robot, when the demonstration is teleop
+
+Lumi is the path for a hand-held demonstration. Sometimes you want the episode to be the robot itself, driven by you. `solarian record` cuts the same controller you already run into timed episodes. Recording is on while you teleop; `r` seals the current episode and opens the next, and delete throws the current one away. The reference is [Recording](/docs/recording).
+
+```bash
+solarian record num_episodes=20 episode_time_s=20 name=pick
+```
+
+That writes a session under the robot's dataset root, which on the Pi is the `dataset_root` in `lab.yaml`. This session is already the parquet-and-mp4 shape. It does not go through `umi-slam`. It also is not a UMI hand-held demonstration: the motion is whatever the teleop was. Use it when that is the motion you want imitated. Use Lumi when you want a hand.
+
+Either way you should be able to open one episode and answer three questions. Is the object in frame at the start? Do the fingers finish closed on it? Is the take long enough to be the task and short enough that you did not wander? If you cannot answer yes, do not train on it yet.
+
+Next: [drop the short takes and train](/docs/tutorials/training/train).

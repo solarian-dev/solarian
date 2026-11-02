@@ -1,0 +1,26 @@
+export const metadata = {
+  title: 'Train a skill',
+  description:
+    'Train a UMI policy on an example dataset, then collect your own demonstrations with a Lumi recorder and train again.',
+}
+
+# Train a skill
+
+Tutorial 3 ran someone else's checkpoint. This one makes a checkpoint, first from a dataset you did not record, then from demonstrations you did. {{ className: 'lead' }}
+
+The training command is local: `solarian train`, on the machine where you installed the trainer. [Solarian Base](/docs/solarian-base/training) can run the same config on a hosted machine. This tutorial does not. One path is enough, and the config file is the same either way.
+
+You need [Tutorial 3](/docs/tutorials/skills) through the pretrained pick, because the last step is pointing that same skill at your new file. Collecting demonstrations needs the [Lumi](/docs/tutorials/training/lumi) hardware. Training on the example dataset does not.
+
+## Chapters
+
+1. [Datasets](/docs/tutorials/training/datasets) — episodes, what a useful demonstration looks like.
+2. [An example dataset](/docs/tutorials/training/example) — train before you own a single episode.
+3. [Run your checkpoint](/docs/tutorials/training/run) — the pick skill, aimed at the file you just wrote.
+4. [Lumi](/docs/tutorials/training/lumi) — the hand-held recorder, what it is and how to build it.
+5. [Collect](/docs/tutorials/training/collect) — episodes, packed, then turned into a training set.
+6. [Train on your data](/docs/tutorials/training/train) — drop the short episodes, train, run it on the robot.
+
+## What you are producing
+
+A training run writes `models/<job_name>/checkpoints/latest.ckpt`. The skill YAML's `policy_checkpoint` points at that file. Nothing else about the controller changes. Same key as Tutorial 3. Different weights.

@@ -1,0 +1,43 @@
+export const metadata = {
+  title: 'Calibrate',
+  description:
+    'Record each SO-106 joint limit, the home pose, and the sim direction with solarian calibrate.',
+}
+
+# Calibrate
+
+Calibration writes four facts into `conf/modules/right_arm.yaml`, per joint: how far the encoder travels (`real_range_min`, `real_range_max`), where zero sits (`center_offset`), and whether the sim joint turns the same way as the metal (`drive_mode`). The gripper gets the same treatment, plus a closed pose. {{ className: 'lead' }}
+
+The long version, with the status-board screenshots, is [Calibration](/docs/modules/calibration). This page is the path through it for the arm you just built. Do it on the Pi, which is the machine the adapter is plugged into. Stop `run-robot` first. The bus can be open once.
+
+```bash
+solarian --deployment lab calibrate
+```
+
+Pick `right_arm` when it asks.
+
+## What you will be asked
+
+The command uses the same three steps as the reference page.
+
+**Joint limits.** Move every hard-stop joint through its full travel by hand, with torque off, while the status board shows MIN / POS / MAX. Wrist roll on this arm is continuous: it is printed and skipped, because it has no stop. If a joint's travel crosses the encoder seam at 4095→0, the command stops and tells you to refit that horn at mid-travel. Do it. No offset fixes a seam. The servo computes "goal minus present" without wrapping, so a goal on the other side of the seam drives into the stop.
+
+**Home.** The sim window opens at the model's zero pose, which is not a live copy of your arm. Move the real arm until it matches that picture. That pose is mid-travel for the joints that have stops. Leave a few degrees of room each way.
+
+**Direction.** The sim starts following the real arm. A red arrow marks one hinge at a time. Move that joint. If the sim goes the other way, answer N and the command flips `drive_mode`.
+
+Answer ENTER / Y / N in the sim window. The terminal accepts them too.
+
+When it finishes, look at `conf/modules/right_arm.yaml`. Each joint should now have `real_range_min`, `real_range_max`, `center_offset`, and `drive_mode`. Those numbers belong to your arm. Someone else's YAML will not. A `home:` block is the normalized pose you matched. It is not the `home` pose Tutorial 3's move skill will use. Same word, different file.
+
+## The gripper
+
+Run `solarian --deployment lab calibrate` again and pick `right_gripper`. Grippers stop after the limit sweep plus one physical closed pose: fingers together, then confirm. The range lands on `gripper` in `right_gripper.yaml`.
+
+Fingertip spacing is not linear in encoder counts. After the arm moves well, `solarian calibrate-gripper-ranges` records a table from a ruler so that "40" means 40 millimetres. You can teleop without that table. A policy that opens to a width in millimetres should not. The command's prompts are the procedure; the reference is the gripper section of [Calibration](/docs/modules/calibration).
+
+<Note>
+  <code>solarian calibrate-arm</code> and <code>solarian calibrate-gripper</code> are a different measurement. They time the loop (speed and latency) and write <code>max_speed</code> and <code>action_latency</code>. Skip them until a skill is moving the arm in Cartesian space. Joint teleop does not use those numbers.
+</Note>
+
+Next: [drive the real arm](/docs/tutorials/real-robot/drive).

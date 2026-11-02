@@ -1,0 +1,41 @@
+export const metadata = {
+  title: 'Assemble',
+  description:
+    'Assemble the SO-106 arm, then the UMI-slim gripper and the wrist camera.',
+}
+
+# Assemble
+
+Build the arm before you worry about software. The calibration command assumes the horns are on the shafts the way the video shows, because that is what keeps each joint's travel off the encoder seam. {{ className: 'lead' }}
+
+## The arm
+
+Follow the assembly video from the base up: shoulder pan, shoulder lift, elbow, wrist flex, wrist yaw, wrist roll. Each servo gets an ID before it is buried in plastic. The IDs in your `conf/modules/right_arm.yaml` are already 1 through 6, in that joint order. `solarian calibrate-servo` sets the ID, resets the position registers, and parks the shaft at mid-encoder so you can fit the horn with the joint at mid-travel. Do it one servo at a time, alone on the bus. Two servos at the same ID will both answer. The steps are in [Calibration](/docs/modules/calibration).
+
+<Note>
+  **Video to add.** Assembling the SO-106, base to wrist, including setting each servo ID. Embed the URL here when the cut exists.
+</Note>
+
+A few checks while you still have the bench clear:
+
+- The shoulder and elbow move without the next link forcing them into a stop.
+- No wire crosses a hinge in a way that goes tight at mid-travel. Mid-travel is where calibration parks the arm.
+- The flange at the wrist is free. The gripper bolts to it, and the site named `flange` in the model is that face.
+
+## The gripper
+
+Print the UMI-slim Feetech parts and mount the gripper servo as ID 7, the id in `right_gripper.yaml`. Bolt the gripper's flange to the arm's flange. The fingers should point the way they do in the sim window. If they point backward, you rotated the mate 180 degrees; the camera chapter will make that obvious, and it is easier to fix now.
+
+<Note>
+  **Video to add.** Mounting UMI-slim on the SO-106 flange, ID 7, fingers in the sim orientation.
+</Note>
+
+## The camera
+
+Seat the HQ camera on the gripper's camera mount, CSI ribbon to the Pi. Connector 0 is `camera_port` `"0"`. Note which way the ribbon leaves the module: a twist in the cable is a twist in the image, and Tutorial 3's lens calibration assumes the camera is mounted as drawn.
+
+<Note>
+  **Figure to add.** The finished arm on the bench, gripper and camera mounted, next to a still of the sim robot in the same pose. <code>public/images/tutorials/so106-bench.png</code>.
+</Note>
+
+Do not power the servo bus yet. The [computer chapter](/docs/tutorials/real-robot/computer) is the first time the adapter is plugged in, and [calibrate](/docs/tutorials/real-robot/calibrate) is the first time the servos move under torque.

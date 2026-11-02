@@ -1,0 +1,37 @@
+export const metadata = {
+  title: 'Run your checkpoint',
+  description:
+    'Point the Tutorial 3 pick skill at the checkpoint you just trained and run it with the same key.',
+}
+
+# Run your checkpoint
+
+The controller does not change. `4` still starts `UMISkill` with `conf/skills/pick.yaml`. The only edit is which file the policy server loads. {{ className: 'lead' }}
+
+In `conf/deployment/localhost.yaml`:
+
+```yaml
+policy_checkpoint: models/pick_example/checkpoints/latest.ckpt
+```
+
+That path is relative to the project root, which is where you launch the server. Restart the server so it reads the new value. A server left up from Tutorial 3 is still holding the old checkpoint.
+
+```bash
+solarian run-service pick
+```
+
+Restart the robot and the controller if they are not already up. Simulation is the right place to look at a smoke-test checkpoint: press `1` for the reach pose, confirm the cube is in the wrist image, press `4`.
+
+What you should see depends on the run. A one-epoch smoke test may only twitch. A full run on the example dataset should move toward the object the dataset contains. If the dataset's object is not a red cube, swap the scene's geom for something shaped like the demonstrations, or accept that the policy is hunting for an object you did not put in frame.
+
+Press `0` to take the arm back. That is still MoveSkill. The policy skill stops because both command `right_arm`.
+
+## When the server will not start
+
+The checkpoint path is wrong, or you started the server from a directory that is not the project. `models/pick_example/...` is relative. From anywhere else it does not exist, and the message says so.
+
+The skill YAML does not contain the path. It contains `${deployment.policy_checkpoint}`. Editing `pick.yaml` to a hardcoded path works once and then breaks on the Pi, which is why the deployment file is the place.
+
+On the real robot, set `policy_checkpoint` in `lab.yaml` to a path the Pi can read. Copy the `models/pick_example` directory there, or train on the Pi if you enjoy waiting. Then the same `4`, with `sim=false`, from [On the real arm](/docs/tutorials/skills/real-arm).
+
+Next: build a recorder so the next dataset is yours. [Lumi](/docs/tutorials/training/lumi).

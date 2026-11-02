@@ -1,0 +1,128 @@
+export const metadata = {
+  title: "The robot's body",
+  description:
+    'Links, joints, end effectors, and degrees of freedom, with the six-joint SO-106 as the example, and the Solarian classes that describe a robot.',
+}
+
+# The robot's body
+
+A robot arm is a chain of rigid parts moved by motors. This chapter names the parts and counts the ways they can move. By the end you can read the SO-106 as a list of six joints, which is exactly how Solarian describes it. {{ className: 'lead' }}
+
+## Links, joints, and the end effector
+
+A **manipulator** is a chain of rigid **links** connected by **joints**. The first link is the **base**, usually bolted to a table. Each joint moves every link after it. The last link carries the **end effector**: the part that touches the world.
+
+<ManipulatorFigure />
+
+The figure moves on its own. Move a slider to take over a joint. The base buttons put the same arm on wheels or legs, which makes it a mobile manipulator. The end effector buttons swap what the arm carries.
+
+What goes on the end depends on the job:
+
+- A **gripper** closes on an object. The simplest is a **parallel gripper**, two fingers that slide toward each other. This course uses one.
+- A **hand** has several fingers. It holds more shapes and needs many more motors.
+- A **tool** does one job: a screwdriver, a suction cup, a pen.
+
+A camera often rides next to the gripper, so the robot sees what its hand sees.
+
+## Degrees of freedom
+
+A **degree of freedom** (DoF) is one independent way to move. A box floating in space has six: it can slide along x, y, and z, and it can rotate about x, y, and z.
+
+<DofFigure />
+
+A joint connects two links and keeps only some of those motions. The two kinds you meet most:
+
+- A **revolute** joint is a hinge. It keeps one rotation, and its value is an angle.
+- A **prismatic** joint is a slide. It keeps one translation, and its value is a distance.
+
+An arm's elbow is a revolute joint. The fingers of a parallel gripper slide on prismatic joints:
+
+<JointTypesFigure />
+
+Each of these joints adds one degree of freedom to the chain. Count the joints and you have counted the arm's degrees of freedom.
+
+## Motors and servos
+
+Every joint needs something to drive it. That part is the **actuator**, and on small arms it is an electric motor.
+
+A bare motor only spins: fast, with little force, and blind to its own angle. A **servo** puts three more parts in the same box as the motor:
+
+- a **gearbox**, which trades speed for force;
+- a **sensor**, often a magnetic **encoder**, which measures the angle of the output shaft;
+- a small **controller**, which runs the motor until the sensor reads the angle you asked for.
+
+<ServoFigure />
+
+The controller compares the target with the encoder's reading and powers the motor according to the error. A large error gets full power. As the output closes in, the error shrinks, the power drops, and the output settles on the target.
+
+So you send a servo a target angle, and it moves there and holds. It also reports the angle it reached, which is how the robot knows its own pose. [Sensing and control](/docs/tutorials/gentle-intro/control) looks inside that loop.
+
+A servo drives one joint. Its body is bolted to one link, and its output shaft turns the next link. On the SO-106 every joint has its own servo.
+
+## The SO-106: six joints
+
+The SO-106 is the arm this course uses. Here is its real simulation model, the same MuJoCo file Solarian loads, with the UMI Slim gripper mounted on the end. Each slider drives one joint, the way a command to its servo would.
+
+<So106Figure />
+
+The arm and the gripper are two separate pieces of hardware, bolted together at the arm's **flange**, the mounting plate at the end of the wrist. Solarian models them the same way: two modules, `right_arm` and `right_gripper`, each with its own servos. A different gripper means a different gripper module, and the arm module stays as it is.
+
+The arm has six revolute joints, from the base out to the wrist:
+
+| Joint | Motion |
+| --- | --- |
+| `shoulder_pan` | turns the whole arm left and right |
+| `shoulder_lift` | raises and lowers the upper arm |
+| `elbow_flex` | bends the elbow |
+| `wrist_flex` | tilts the hand up and down |
+| `wrist_yaw` | swings the hand sideways |
+| `wrist_roll` | spins the hand around its own axis |
+
+Six revolute joints give the arm six degrees of freedom. The gripper adds a seventh motion, the gap between the fingers, driven by its own servo.
+
+### Why six
+
+To pick something up, the hand has to arrive at a **position**, three numbers, and at an **orientation**, three more. A cup handle, a screw, and a block that has to face the camera all care about the orientation.
+
+With three joints the arm can reach a point, and the hand arrives turned however the arm happens to fold. With six joints the arm can choose the point and the orientation together. That is why six is the standard count for a manipulator. Arms with seven or more degrees of freedom exist. The extra joints let them reach the same pose in more than one way, which helps on a crowded table.
+
+## In Solarian
+
+The whole machine is a [`Robot`](/docs/robots). Each piece of hardware on it is a [`Module`](/docs/modules): the arm, the gripper, the camera. A module has its own control loop and its own config file.
+
+A module declares its joints as class attributes, one per motor. Here is the arm you write in [Tutorial 1](/docs/tutorials/first-robot/arm), with the six joints from the table:
+
+```python {{ title: 'so106/modules/right_arm.py' }}
+from solarian.core.module import Module
+from solarian_feetech.actuator import FeetechServo
+
+
+class RightArmModule(Module):
+    shoulder_pan = FeetechServo(model="sts3250")
+    shoulder_lift = FeetechServo(model="sts3250")
+    elbow_flex = FeetechServo(model="sts3250")
+    wrist_flex = FeetechServo(model="sts3250")
+    wrist_yaw = FeetechServo(model="sts3215")
+    wrist_roll = FeetechServo(model="sts3215")
+```
+
+Each `FeetechServo` is one servo, so each line is one joint. `sts3250` and `sts3215` are two Feetech servo models: the stronger one carries the shoulder, elbow, and wrist flex.
+
+The gripper follows the same pattern. It ships in a plugin, so you install it instead of writing it. Its module declares a single servo:
+
+```python {{ title: 'solarian_umi_slim/umi_slim_feetech.py' }}
+class UmiSlimFeetechModule(GripperModule):
+    gripper = FeetechServo(model="sts3215")
+```
+
+The robot lists its modules the same way:
+
+```python {{ title: 'so106/robot.py' }}
+class So106Robot(Robot):
+    right_arm = RightArmModule()
+    right_gripper = UmiSlimFeetechModule()
+```
+
+The attribute names, `right_arm` and `right_gripper`, are the names you use from then on: in config files, in commands, and in recorded data.
+
+Next: [configuration and coordinates](/docs/tutorials/gentle-intro/configuration).

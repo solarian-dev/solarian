@@ -1,0 +1,47 @@
+export const metadata = {
+  title: 'A gentle intro to robotics',
+  description:
+    'The basic ideas of robot manipulation, from joints and coordinates to sensors, control, and learned policies. The start of the tutorial series.',
+}
+
+# A gentle intro to robotics
+
+Before you build a robot, it helps to know the words. This tutorial is a short tour of the ideas the rest of the course uses, one chapter at a time, each with a figure you can play with. Nothing here needs hardware. {{ className: 'lead' }}
+
+## Two problems: locomotion and manipulation
+
+Most of robotics is one of two problems.
+
+**Locomotion** is moving the robot itself, on wheels, tracks, or legs. It answers the question *how do I get there?* A warehouse cart driving to a shelf, a four-legged robot climbing stairs, and a vacuum mapping a living room are all locomotion. **Navigation**, choosing the route and knowing where you are along it, belongs to the same family.
+
+**Manipulation** is changing the world with a hand. Grasping, placing, pushing, turning, using a tool. It answers the question *what do I do with this object?* Picking a cup off a table, folding a shirt, and tightening a screw are all manipulation.
+
+Some robots do both: an arm on a wheeled base, or on a legged body. That is a **mobile manipulator**.
+
+## Why Solarian starts with manipulation
+
+Locomotion is largely solved. Legged robots trained with reinforcement learning in simulation walk over rough ground, recover from a push, and climb stairs. Wheeled robots build a map, locate themselves on it, and plan a route through a building. You can buy both today.
+
+Manipulation is still a work in progress, and it is the hardest open problem in robotics. Every object has its own shape, weight, and friction. The hand has to touch the world, and contact is hard to predict. A grasp a few millimetres off slips. A task that looks trivial to a person, such as loading a dishwasher, hides hundreds of these small decisions.
+
+So Solarian focuses on manipulation first: an arm, a gripper, a camera, and the tools to teach them a task from demonstrations.
+
+## The robot in this course
+
+![The SO-106 arm](/hardware/so106/media/cover.png)
+
+Every tutorial uses the same robot: the [SO-106](/hardware/so106), a six-joint desktop arm built from Feetech servos, with a [UMI-slim](/hardware/umi-slim) two-finger gripper and a camera on the wrist. You build it in simulation first, so you can follow the whole course before you own any parts.
+
+## The chapters
+
+Each chapter is one idea, a figure, and the Solarian code that holds the idea. Drag a figure to orbit it, scroll to zoom, and use the buttons under it to pause or switch views.
+
+1. [The robot's body](/docs/tutorials/gentle-intro/body). Links, joints, end effectors, and degrees of freedom, with the SO-106 as the example.
+2. [Configuration and coordinates](/docs/tutorials/gentle-intro/configuration). How to write down where the robot is, as joint angles or as a hand pose, and the frames those numbers live in.
+3. [Kinematics](/docs/tutorials/gentle-intro/kinematics). Converting between joint angles and hand poses, and the space the hand can reach.
+4. [Sensing and control](/docs/tutorials/gentle-intro/control). The control loop, sensors, how a motor holds a joint, and how motion is timed.
+5. [Learning, and going further](/docs/tutorials/gentle-intro/learning). Policies trained from demonstrations, and the topics to read next.
+
+Already know the basics? Skip ahead to [Your first Solarian robot](/docs/tutorials/first-robot) and come back when a word shows up. The [glossary](/docs/glossary) is the longer list.
+
+Next: [the robot's body](/docs/tutorials/gentle-intro/body).

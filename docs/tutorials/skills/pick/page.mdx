@@ -1,0 +1,88 @@
+export const metadata = {
+  title: 'A pretrained pick',
+  description:
+    'Install UMISkill, point it at a pick checkpoint, and run it in simulation with one key.',
+}
+
+# A pretrained pick
+
+One skill, one checkpoint, one key. The checkpoint picks an object the wrist camera can see. In simulation that object is a cube in the scene. On the real arm it is whatever the checkpoint was trained to pick, which the last chapter sets up. {{ className: 'lead' }}
+
+## Install
+
+```bash
+solarian install umi-skill
+```
+
+That installs `solarian-umi-skill` and copies `conf/skills/umi.yaml` and the training files under `conf/training/`. Leave the training files for Tutorial 4. The skill file is the one this chapter edits.
+
+Copy it so the example config stays untouched:
+
+```bash
+cp conf/skills/umi.yaml conf/skills/pick.yaml
+```
+
+`conf/skills/pick.yaml` already points at the arm, the gripper, and `right_wrist_camera`. It reads the policy server URL and the checkpoint path from the deployment, so a laptop and the Pi can disagree without editing the skill.
+
+Add two lines to `conf/deployment/localhost.yaml`:
+
+```yaml
+policy_server_url: http://127.0.0.1:8001
+policy_checkpoint: null
+```
+
+<Note>
+  **Checkpoint to add.** A published pick checkpoint, a file path the policy server can read. Set <code>policy_checkpoint</code> to that path. Until the file is published, the service in the next section will refuse to start, and the rest of this page is still the wiring it will use.
+</Note>
+
+`server.port` in `pick.yaml` is 8001, matching the URL. `server.checkpoint` is `${deployment.policy_checkpoint}`. You should not hard-code a laptop path into the skill file.
+
+## Something to pick
+
+Add a cube to `assets/scene.xml`, inside `<worldbody>`, so the wrist camera has an object in frame when the arm is at the reach pose:
+
+```xml
+<body name="cube" pos="0.25 0.0 0.02">
+  <freejoint/>
+  <geom type="box" size="0.02 0.02 0.02" rgba="0.9 0.2 0.2 1" mass="0.05"/>
+</body>
+```
+
+Restart the robot after saving. Press `1` so the arm is at `reach`, and confirm the cube shows up in the controller's wrist image. If it does not, nudge `pos` until it does. A policy cannot pick what the camera does not see. This cube is a stand-in. A checkpoint trained on a different object will not develop a taste for red cubes just because you put one in the scene. It will do whatever it did in its training data, aimed at whatever is in frame.
+
+## Start the policy server
+
+The skill does not load the checkpoint. A service does, and it has to be running first. From the project root, with `policy_checkpoint` set:
+
+```bash
+solarian run-service pick
+```
+
+`pick` is `conf/skills/pick.yaml`, the same way `solarian run-service` takes the other skill configs. The terminal should stay up and print that it is listening. A missing checkpoint fails here, before the arm moves. That is the failure you want.
+
+## The key
+
+In `so106/controller.py`:
+
+```python
+from solarian_umi_skill import UMISkill
+```
+
+Add `UMISkill` to the `skills` tuple, and a key:
+
+```python
+elif key == "4":
+    self.start_skill(UMISkill(params={"config": "pick.yaml"}))
+```
+
+`config` is the filename in `conf/skills/`, not a full path. Restart the controller. With the server up and the robot in sim, press `4`.
+
+The gripper should open, then the arm should move toward the object in the wrist image, and the fingers should close if the checkpoint's behavior gets that far. Press `0` to preempt it and go home. `start_skill` stops the policy skill because both command the arm.
+
+Click-to-track, masks, and a second model that follows a point are how some checkpoints are told *which* object. This chapter does not use them. The checkpoint is one task, and the scene has one object. The reference for targets is the skill config's `targets:` block, when you outgrow a single object.
+
+<Note>
+  If the arm jitters in place and the wrist image is frozen, the controller and the robot disagree about <code>is_sim</code>, or the camera field is missing from the observation. The policy is looking at whatever <code>rgb_image</code> contains. A black image is a confident policy aimed at nothing.
+</Note>
+
+Next, on hardware: [the real arm](/docs/tutorials/skills/real-arm).
