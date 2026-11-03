@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Drive it',
   description:
-    'Run the Tutorial 1 keyboard controller on the physical SO-106 with sim=false.',
+    'Run the Tutorial 2 keyboard controller on the physical SO-106 with sim=false.',
 }
 
 # Drive it
@@ -22,7 +22,7 @@ solarian --deployment lab run-robot sim=false
 
 </CodeGroup>
 
-`sim=false` overrides `is_sim = True` on the class. `conf/robot.yaml` has `sim: null` so the override is accepted. If you forgot that line in Tutorial 1, add it before this command. Without it, a config value of false may not be what the class attribute says, and you will be arguing with the wrong robot.
+`sim=false` overrides `is_sim = True` on the class. `conf/robot.yaml` has `sim: null` so the override is accepted. If you forgot that line in Tutorial 2, add it before this command. Without it, a config value of false may not be what the class attribute says, and you will be arguing with the wrong robot.
 
 On the laptop:
 

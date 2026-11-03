@@ -1,22 +1,26 @@
 export const metadata = {
   title: 'Kinematics',
   description:
-    'Forward and inverse kinematics, when to use each, why inverse kinematics can have two answers or none, the workspace, and the solver Solarian uses.',
+    'What kinematics is, forward and inverse kinematics, why inverse kinematics can have two answers or none, the reachable and dexterous workspace, and how Solarian computes both directions.',
 }
 
 # Kinematics
 
-The motors speak joint coordinates. The task speaks hand poses. **Kinematics** is the conversion between the two, using only the shape of the arm: its link lengths and joint axes. {{ className: 'lead' }}
+**Kinematics** is the geometry of a robot's motion: where every part of the robot is, worked out from how far each joint has turned. Masses and forces stay out of it, and only the shape of the arm counts: its link lengths and joint axes. The motors speak joint coordinates and the task speaks hand poses, and kinematics converts between the two. {{ className: 'lead' }}
 
 ## Two directions
 
-<KinematicsFigure />
+**Forward kinematics** (FK) takes the joint angles and returns the hand pose in task coordinates. Walk out along the chain: the shoulder pan turns everything above it, the shoulder lift tilts the upper arm, the elbow bends the forearm, and the three wrist joints turn the gripper. Where the fingertips end up is the pose of the tool frame. One set of angles always gives exactly one pose.
 
-The figure is the two-link arm from the [previous chapter](/docs/tutorials/gentle-intro/configuration). The card at the top shows what goes in and what comes out. Pin **Forward** or **Inverse** to stay on one beat.
+Move the joints of the SO-106 below. The white rods are the chain FK walks along, from the base frame through each link frame to the tool frame, and the equation underneath is the function itself, recomputed as you move.
 
-**Forward kinematics** (FK) takes the joint angles and returns the hand pose. Walk out along the chain: the first link leaves the base at q₁, the second leaves the elbow at q₂ more, and the end of the second link is the hand. One set of angles always gives exactly one pose.
+<ForwardKinematicsFigure />
 
 **Inverse kinematics** (IK) goes the other way. It takes a hand pose and returns joint angles that put the hand there. It answers the question a task actually asks: *which way do I turn each motor to reach that cup?*
+
+Here the pose is the input. **Drag the gripper, turn it with the rings, or set the six task coordinates with the sliders, and IK returns the joint angles**.
+
+<InverseKinematicsFigure />
 
 ## When you use each
 
@@ -34,23 +38,49 @@ Use **inverse kinematics** when the goal is a place in the world:
 
 ## Two answers, or none
 
-Forward kinematics is a formula. Inverse kinematics is a search, and the figure's **Inverse** beat shows why that search can surprise you.
+Forward kinematics is a formula. Inverse kinematics is a search, and the figure above shows why that search can surprise you.
 
-**More than one answer.** The faded arm reaches the same target with the elbow bent the other way. Both are correct. A six-joint arm can have several such folds for one pose, and the solver has to pick one, usually the one closest to where the arm already is.
+**More than one answer.** For most targets the right side of the equation is a set with several entries, and each faint arm is one of them: the elbow bent up or down, the wrist turned over. All of them put the tool frame on the same pose. The solver has to pick one, usually the one closest to where the arm already is. The figure does the same while you drag, so the arm keeps its fold until you pick another answer.
 
-**No answer.** A target past the reach of the stretched arm has no solution at all. Neither does a target the joint limits keep the arm from turning toward.
+**No answer.** Press **Out of reach**. A target past the reach of the stretched arm has no solution at all, so the set is empty. Neither does a target the joint limits keep the arm from turning toward. The figure then shows the closest the arm gets, and the amber gap is what is left over.
 
 ## The workspace
 
-The **workspace** is every position the hand can reach. Pin **Workspace** to see it as a cloud. The link lengths set its outer edge, which is the arm stretched out. Joint limits carve pieces away from there.
+The **workspace** is the set of places the hand can get to. Robotics draws it at two levels of demand.
 
-A target inside the cloud can still be out of reach at the orientation you ask for. Position and orientation share the same six joints, so a far reach usually leaves the wrist fewer ways to turn. For the SO-106, the workspace is a region around its base roughly as big as the arm itself.
+The **reachable workspace** is every position the tool frame can reach in at least one orientation. The link lengths set its outer edge, which is the arm stretched out. Joint limits carve pieces away from there. The green cloud below is the SO-106's reachable workspace.
+
+<WorkspaceFigure />
+
+The **dexterous workspace** is every position the tool frame can reach in every orientation: the gripper can arrive there pointing down, sideways, up, or any way in between. It always sits inside the reachable workspace, and it is much smaller. Position and orientation share the same six joints, so a far reach uses up the freedom the wrist needs to turn. Near the white edge the arm is straight and the gripper can only point outward along it: those positions are reachable, and they lie outside the dexterous workspace.
+
+Every orientation is a strict demand, and joint limits shrink the dexterous workspace further, so on most arms it is a small region. In practice you ask a looser question: can the hand reach this position in the orientations the task needs, such as pointing straight down for a pick from above? Place the objects of a task toward the middle of the reachable workspace, where the wrist has room to turn, and keep the edge for reaching out.
 
 ## In Solarian
 
-Solarian computes inverse kinematics with `MinkIK`, a solver that reads the arm's MuJoCo model file. The link lengths, joint axes, and joint limits live in that file, so the solver and the simulator always agree on the arm's shape. The solver takes small steps from the arm's current joints toward the target, which keeps it on the fold the arm is already in.
+Both directions run on the arm's MuJoCo model file. The link lengths, joint axes, and joint limits live in that file, so the kinematics, the simulator, and the 3D figures in this course all agree on the arm's shape.
 
-In [Tutorial 3](/docs/tutorials/skills/move) you add it to the arm module, next to the six task-coordinate actuators:
+### Forward kinematics
+
+Reading `x`, `y`, `z`, `rx`, `ry`, `rz` from the arm module runs forward kinematics. The module reads the six joint positions from the servos and converts them from the −100 to 100 command range to radians, using the joint limits in the model. MuJoCo then walks the chain, as in the first figure: each link's pose is the pose of the link before it, moved by the fixed offset to the next joint written in the model, then turned by that joint's angle. The pose of the `flange` at the end of the wrist, plus the fixed offset to the fingertips, is the hand pose. It comes back as a position in metres and an axis-angle vector in radians. That is a handful of matrix products, so it runs on every read.
+
+### Inverse kinematics, in small steps
+
+Writing those six numbers runs inverse kinematics. `MinkIK` sets up [mink](https://github.com/kevinzakka/mink), a library that solves **differential IK**: inverse kinematics in small steps.
+
+Full IK asks which joint angles put the hand on the target. Differential IK asks a smaller question: from where the arm is now, which small turn of each joint moves the hand toward the target? For small turns the answer is close to linear. Each joint, turned a little, moves the hand a little in one direction, and that direction depends on the arm's current shape. Stack those directions side by side, one column per joint and six rows for the pose, and you have the **Jacobian**, which MuJoCo computes from the model. With it, one step is a linear problem: find the joint speeds whose combined hand motion best closes the gap to the target.
+
+mink solves each step as a small optimization problem, with the joint limits from the model as hard bounds, and balances three terms in it:
+
+- The **frame task** pulls the tool frame onto the target. `position_cost` and `orientation_cost` weigh the two halves of the pose against each other when both cannot be met exactly.
+- A weak **posture task** pulls toward the home configuration. When several joint motions are equally good, it picks the one that stays closest to home.
+- **Damping** keeps each step small near a singularity, such as the stretched-out arm along the white edge, where the Jacobian loses a direction and an undamped step would demand huge joint speeds.
+
+Each time a skill writes the six task coordinates, the arm module reads the joints, takes a step, feeds the new joints back into the model, and steps again: up to 12 steps, stopping once the hand is within 0.1 mm and about 0.06° of the target. It then sends the joint angles, held inside the joint limits, to the servos. A target far from the hand takes several control ticks to reach.
+
+Every step starts from the joints the arm has now, so the solver returns the answer on the fold the arm is already in. The figure above searches from many starting points to show every answer; Solarian follows the one the arm is on. To switch fold, from elbow up to elbow down, move the arm in joint coordinates first.
+
+In [Tutorial 4](/docs/tutorials/skills/move) you add the solver to the arm module, next to the six task-coordinate actuators:
 
 ```python {{ title: 'so106/modules/right_arm.py' }}
 from solarian.core.arm_module import ArmModule
@@ -79,8 +109,6 @@ class RightArmModule(ArmModule):
     )
 ```
 
-`frame="flange"` is the frame the solver aims: the mounting plate at the end of the wrist. The fingertips sit a fixed distance past it. That offset is the tool frame from the previous chapter, and the gripper module already knows it, so the arm takes it as `ik_tcp` when the robot is built. `position_cost` and `orientation_cost` weigh the two halves of the pose against each other when the solver cannot satisfy both exactly.
-
-Every time a skill writes `x`, `y`, `z`, `rx`, `ry`, `rz`, the arm module runs this solver and sends the resulting joint angles to the servos. The reference page is [Inverse kinematics](/docs/ik).
+`frame="flange"` is the frame the solver aims: the mounting plate at the end of the wrist. The fingertips sit a fixed distance past it. That offset is the tool frame from the previous chapter, and the gripper module already knows it, so the arm takes it as `ik_tcp` when the robot is built. `position_cost` and `orientation_cost` are the frame-task weights above. The reference page is [Inverse kinematics](/docs/ik).
 
 Next: [sensing and control](/docs/tutorials/gentle-intro/control).

@@ -1,17 +1,17 @@
 export const metadata = {
   title: 'Simulation',
   description:
-    'Run any Solarian robot in a MuJoCo simulation by flipping a switch: set is_sim = True and declare a scene. No separate SimRobot, SimModule, or SimServo classes — the same modules, servos, cameras, and YAML drive both real hardware and sim.',
+    'Run any Solarian robot in a MuJoCo simulation by flipping a switch: set is_sim = True and declare a scene. The same modules, servos, cameras and YAML drive both real hardware and sim. Covers scenes, attaching module models, simulated servos and cameras, and building models from Onshape.',
 }
 
 # Simulation
 
 Running a robot in simulation is a **switch, not a rewrite**. Take your existing [`Robot`](/docs/robots), set `is_sim = True`, give it a `scene`, and the framework runs every [Module](/docs/modules) inside a shared MuJoCo world instead of on hardware — same [Observation](/docs/observations)/[Action](/docs/actions) schemas, same transport, same control loop. {{ className: 'lead' }}
 
-There are **no** `SimRobot`, `SimModule`, or `SimServo` classes. Your real modules, servos, and cameras run unchanged; the only extra input the sim needs is a `scene` describing the environment and how each module's MuJoCo model attaches, plus `sim_joint` / `sim_range_*` on each servo (cameras still use a `sim:` block).
+There are **no** `SimRobot`, `SimModule`, `SimServo` or `SimCamera` classes. Your real modules, servos, and cameras run unchanged; the only extra input the sim needs is a `scene` describing the environment and how each module's MuJoCo model attaches, plus `sim_joint` / `sim_range_*` on each servo and a `sim:` block on each camera.
 
 <Note>
-  MuJoCo and the other simulation dependencies live in the `[sim]` extra (`mujoco`, `mink`). They are imported lazily inside the sim code paths, so `import solarian` never requires them — only running a robot with `is_sim = True` does. Install with <code>pip install "solarian[sim]"</code>.
+  MuJoCo and the other simulation dependencies live in the `[sim]` extra (`mujoco`, `mink`, `onshape-to-robot`). They are imported lazily inside the sim code paths, so `import solarian` never requires them — only running a robot with `is_sim = True` does. Install with <code>pip install "solarian[sim]"</code>.
 </Note>
 
 ## Flip the switch
@@ -37,7 +37,23 @@ class MyRobot(Robot):
     )
 ```
 
-That's the whole difference from a real robot. See [Sim Robots](/docs/sim-robots) for the full anatomy and [Scenes](/docs/scenes) for building the world.
+That's the whole difference from a real robot. The [scene](#scenes) builds the world, [attaching modules](#attaching-modules) places each module's model in it, and [simulated servos](#simulated-servos) and [cameras](#simulated-cameras) map each component onto a joint or a camera of that model.
+
+<Properties>
+  <Property name="is_sim" type="bool">
+    Class attribute, default <code>False</code>. When true, <code>connect</code>/<code>start</code>/<code>disconnect</code> use the MuJoCo path instead of hardware.
+  </Property>
+  <Property name="scene" type="SceneConfig">
+    Required when <code>is_sim</code> is true (a clear error is raised otherwise). See <a href="#scenes">Scenes</a>.
+  </Property>
+  <Property name="view" type="bool">
+    Show a live overview window while running. Overridable at runtime with the <code>SOLARIAN_SIM_VIEW</code> env var (<code>1</code>/<code>0</code>). Best-effort: with no display available the sim runs headless.
+  </Property>
+</Properties>
+
+<Note>
+  The module attribute name (<code>arm</code>) is still the canonical module ID — it keys <code>conf/modules/arm.yaml</code>, the Observation/Action schemas, and the <code>module</code> field of each <code>ModuleAttachment</code>. Nothing about the schema changes between real and sim.
+</Note>
 
 ## Choosing real vs sim at run time
 
@@ -59,49 +75,13 @@ img_compression_quality: 70
 sim: null   # null defers to the robot class's is_sim; override with sim=true/false
 ```
 
-<Properties>
-  <Property name="is_sim" type="bool">
-    Robot class attribute (default <code>False</code>). Run modules in MuJoCo instead of on hardware.
-  </Property>
-  <Property name="scene" type="SceneConfig">
-    Required when <code>is_sim</code>. Describes the environment and how each module's MJCF attaches. See <a href="/docs/scenes">Scenes</a>.
-  </Property>
-  <Property name="view" type="bool">
-    Show a live overview window while running. Overridable at runtime with the <code>SOLARIAN_SIM_VIEW</code> env var (<code>1</code>/<code>0</code>). Best-effort: with no display available the sim runs headless.
-  </Property>
-</Properties>
-
-## Same YAML, `sim_joint` / `sim_range_*`
-
-Real and simulated robots read the **same** `conf/modules/<module>.yaml` files. Deployment fields (`id`, `port`) are ignored in sim; `sim_joint` / `sim_range_*` on each actuator supply the MuJoCo mapping and are ignored on hardware:
-
-```yaml
-# conf/modules/arm.yaml
-actuators:
-  shoulder_pan:
-    id: 1
-    port: ${actuator_port}
-    sim_joint: "arm/shoulder_pan"   # MJCF joint name (after the attach prefix)
-    sim_range_min: -1.91986         # radians mapped to -100
-    sim_range_max: 1.91986          # radians mapped to +100
+```python
+# solarian/core/robot.py — resolution in Robot.__init__
+cfg_sim = getattr(cfg, "sim", None)
+self.is_sim = type(self).is_sim if cfg_sim is None else bool(cfg_sim)
 ```
 
-See [Sim Servos & Cameras](/docs/sim-components) for the full servo mapping, virtual joints, and simulated cameras.
-
-## How it works
-
-When `is_sim` is set, [`Robot.connect()`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py) delegates to [`solarian/sim/runtime.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/runtime.py) instead of opening hardware buses:
-
-```text
-Robot.connect()  (is_sim)
-   │
-   ├── compose_scene(scene)              → a single MuJoCo MjModel
-   ├── MujocoWorldServer.start()         → physics process (owns MjModel/MjData)
-   ├── BusClient per (module, port)      → proxy each module's I/O to the world
-   └── module.connect()                  → modules attach to their BusClient
-```
-
-The `MujocoWorldServer` owns one composed `MjModel`/`MjData`, steps the physics in real time, and answers each module's read/write/render requests over a pipe — exactly the same `BusClient`/`BusServer` protocol hardware modules use when several of them share one serial port. Because the module subprocesses, observation sender, and control loop are all inherited unchanged from [`Robot`](/docs/robots), a real leader arm can drive a simulated follower with zero schema or transport changes.
+So one class serves both: hard-code `is_sim = True` for a sim-first project and run `sim=false` for the occasional hardware run, or leave it `False` and opt in with `sim=true`.
 
 ## Running the stack
 
@@ -113,10 +93,619 @@ solarian run-robot sim=true         # the simulated robot
 solarian run-controller             # unchanged controller (keyboard, leader arm, policy...)
 ```
 
+## How it works
+
+When `is_sim` is set, [`Robot`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py) delegates to [`solarian/sim/runtime.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/runtime.py) instead of opening hardware buses. The hardware lifecycle from [Robots](/docs/robots) is preserved; only the bus layer changes:
+
+```text
+MyRobot(cfg)            # resolves is_sim; requires `scene`
+   │
+   ├── connect()        # compose scene → launch MujocoWorldServer →
+   │                    #   inject a BusClient proxy per (module, port) →
+   │                    #   module.connect()
+   ├── initialize()     # module.initialize() on every module (unchanged)
+   └── start()          # the world server is the sole "bus server";
+                        #   fork module processes, start observation sender,
+                        #   run control_loop()
+```
+
+- **`connect()`** calls `sim_connect(self)`: it composes the scene into one `MjModel`, starts a single [`MujocoWorldServer`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/mujoco_world.py) that owns the physics, and injects a `BusClient` proxy for every `(module, port)` so each module's I/O is routed to the world instead of a serial port. If `view` is on, a `SimViewer` window process is started too.
+- **`initialize()`** runs each module's `initialize()` against the live world.
+- **`start()`** registers the world server as the only bus server, then forks the module subprocesses, starts the observation sender thread, and enters the control loop — identical to hardware from here on.
+- **`disconnect()`** tears down the viewer, then the world server (it is listed in `self._bus_servers`) and the base robot.
+
+The `MujocoWorldServer` owns one composed `MjModel`/`MjData`, steps the physics in real time, and answers each module's read/write/render requests over a pipe — exactly the same `BusClient`/`BusServer` protocol hardware modules use when several of them share one serial port. Because the module subprocesses, observation sender, and control loop are all inherited unchanged from [`Robot`](/docs/robots), a real leader arm can drive a simulated follower with zero schema or transport changes.
+
+## Scenes
+
+A **scene** describes the MuJoCo world the robot lives in: the environment (floor, lights, objects), how each module's MJCF model attaches into it, any extra cameras, and physics options. It is a plain declarative [`SceneConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/configs.py) you set on the robot:
+
+```python
+from solarian.sim import SceneConfig, ModuleAttachment, CameraMount
+
+scene = SceneConfig(
+    world_mjcf="assets/scene.xml",
+    attachments=[
+        ModuleAttachment(module="arm", mjcf="assets/arm.xml", prefix="arm/"),
+    ],
+    cameras=[
+        CameraMount(name="wrist_cam", parent_body="arm/gripper",
+                    pos=[0.0, -0.05, 0.02], quat=[1, 0, 0, 0], fovy=70.0),
+    ],
+    timestep=0.002,
+)
+```
+
+<Properties>
+  <Property name="world_mjcf" type="str | None">
+    MJCF for the environment (ground, lights, manipulable objects). If <code>None</code>, a <a href="#the-default-world">minimal ground+light world</a> is generated for you.
+  </Property>
+  <Property name="attachments" type="list[ModuleAttachment]">
+    One entry per module MJCF to attach into the world. See <a href="#attaching-modules">Attaching modules</a>.
+  </Property>
+  <Property name="cameras" type="list[CameraMount]">
+    Extra MuJoCo cameras added to composed bodies (e.g. a wrist camera). See <a href="#mounting-cameras">Mounting cameras</a>.
+  </Property>
+  <Property name="timestep" type="float | None">
+    Override the physics timestep (seconds). e.g. <code>0.002</code> = 500 Hz.
+  </Property>
+  <Property name="gravity" type="list[float] | None">
+    Override gravity, e.g. <code>[0, 0, -9.81]</code>.
+  </Property>
+  <Property name="show_frames" type="bool">
+    Draw coordinate-frame triads in the overview viewer: the world frame at the origin and the end-effector frame of every arm that declares an <a href="/docs/ik">IK backend</a>. Default <code>True</code>.
+  </Property>
+  <Property name="show_cameras" type="bool">
+    Draw a wireframe frustum for every mounted camera in the overview viewer. Default <code>True</code>.
+  </Property>
+</Properties>
+
+### How composition works
+
+Scenes are built **programmatically** with MuJoCo's `MjSpec` API — not with XML `<include>`/`<attach>` tags — by [`compose_scene()`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/scene.py):
+
+```python
+# solarian/sim/scene.py (excerpt)
+world = _load_spec(scene.world_mjcf)              # environment (or default world)
+
+for att in scene.attachments:
+    child = mujoco.MjSpec.from_file(resolve_mjcf(att.mjcf))
+    parent = _find_body(world, att.parent_body)   # "world" → worldbody
+    frame = parent.add_frame(pos=att.pos, quat=att.quat)
+    world.attach(child, frame=frame, prefix=att.prefix)   # prefix namespaces names
+
+for cam in scene.cameras:
+    body = _find_body(world, cam.parent_body)
+    body.add_camera(name=cam.name, pos=cam.pos, quat=cam.quat, fovy=cam.fovy)
+
+model = world.compile()                           # single MjModel for the whole scene
+```
+
+The compiled `MjModel` is handed to the `MujocoWorldServer`, which owns it and serves every module's I/O.
+
+### The default world {{ id: 'the-default-world' }}
+
+If `world_mjcf` is `None`, `compose_scene` generates a minimal world — a skybox, a grid floor plane, and a directional light — so you can bring up a robot before authoring an environment:
+
+```python
+scene = SceneConfig(
+    attachments=[ModuleAttachment(module="arm", mjcf="assets/arm.xml", prefix="arm/")],
+)  # world_mjcf omitted → default floor + light
+```
+
+A custom `world_mjcf` is a normal MuJoCo XML with your ground, lighting, and any free-floating objects (a manipulable cube, props, fixtures) the robot interacts with. The robot itself is **not** part of the world MJCF — it is attached at runtime from the module models.
+
+## Attaching modules
+
+A scene's `attachments` list controls how each module's MuJoCo model is placed into the world. Each [`ModuleAttachment`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/configs.py) attaches one module's MJCF sub-model to a body of the (already-composed) scene:
+
+```python
+ModuleAttachment(
+    module="arm",
+    mjcf="assets/arm.xml",
+    parent_body="world",
+    pos=[0.0, 0.0, 0.0],
+    quat=[1.0, 0.0, 0.0, 0.0],
+    prefix="arm/",
+)
+```
+
+<Properties>
+  <Property name="module" type="str">
+    The robot's module attribute name this MJCF belongs to (e.g. <code>"arm"</code>).
+  </Property>
+  <Property name="mjcf" type="str">
+    Path to the module's <code>.xml</code>, or the name of a <code>robot_descriptions</code> module (e.g. <code>"so_arm101_mj_description"</code>). See <a href="#resolving-mjcf-paths">Resolving MJCF paths</a>.
+  </Property>
+  <Property name="parent_body" type="str">
+    Body in the scene to attach to. <code>"world"</code> (default) attaches to the worldbody. Ignored when <code>parent_site</code> is set.
+  </Property>
+  <Property name="parent_site" type="str | None">
+    Site/frame already in the composed scene to mate against (e.g. <code>"right/side_bracket"</code>). Requires <code>child_site</code>.
+  </Property>
+  <Property name="child_site" type="str | None">
+    Site/frame in the child MJCF (unprefixed) that should coincide with <code>parent_site</code> (e.g. <code>"side_bracket"</code>). Requires <code>parent_site</code>.
+  </Property>
+  <Property name="pos" type="list[float]">
+    Attachment position <code>[x, y, z]</code> in metres (body mode), or an optional offset in the parent-site frame (site-mate mode).
+  </Property>
+  <Property name="quat" type="list[float]">
+    Attachment orientation as a quaternion <code>[w, x, y, z]</code> (body mode), or an optional offset in the parent-site frame (site-mate mode).
+  </Property>
+  <Property name="prefix" type="str">
+    Name prefix applied to every joint / actuator / camera in the child model. This is the namespacing mechanism that lets multiple modules coexist.
+  </Property>
+</Properties>
+
+### The prefix connects the MJCF to your YAML
+
+`prefix` namespaces the attached model, so a joint named `shoulder_pan` in `arm.xml` becomes `arm/shoulder_pan` in the composed world. Each servo's `sim_joint` in the module YAML must reference the **prefixed** name:
+
+```yaml
+# conf/modules/arm.yaml
+actuators:
+  shoulder_pan:
+    # ... hardware fields ...
+    sim_joint: "arm/shoulder_pan"   # matches prefix="arm/"
+    sim_range_min: -1.91986
+    sim_range_max: 1.91986
+```
+
+### Mating two frames (site-mate mode)
+
+When both modules export a matching Onshape frame (a `<site>` in MJCF), attach by coinciding those sites instead of hand-tuning `pos`/`quat` against a body origin:
+
+```python
+ModuleAttachment(module="right_arm", mjcf="assets/so106.xml", prefix="right/"),
+ModuleAttachment(
+    module="right_gripper",
+    mjcf=UMI_SLIM_MJCF,
+    parent_site="right/side_bracket",  # already prefixed by the arm attach
+    child_site="side_bracket",         # unprefixed name in the gripper MJCF
+    prefix="right_gripper/",
+)
+```
+
+`pos`/`quat` remain available as a fine offset relative to the parent site after the mate.
+
+### Resolving MJCF paths {{ id: 'resolving-mjcf-paths' }}
+
+Every `mjcf` reference (the world and each attachment) is resolved by [`resolve_mjcf()`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/scene.py), in order:
+
+1. An **absolute path** that exists.
+2. A path **relative to `SOLARIAN_PROJECT_PATH`** (set automatically by the CLI to your project root) — this is the usual case, e.g. `"assets/arm.xml"`.
+3. A path relative to the current working directory.
+4. Otherwise, treated as a **`robot_descriptions` module name** (e.g. `"so_arm101_mj_description"`), using its `MJCF_PATH`.
+
+This means you can attach a community model without shipping any files:
+
+```python
+ModuleAttachment(module="arm", mjcf="so_arm101_mj_description", prefix="arm/")
+```
+
+A [plugin](/docs/plugins) that ships its own model uses option 1: it exposes an absolute `MJCF_PATH` from its package, so a project attaches it without copying the model into `assets/`. See [Shipping the model inside a plugin](#shipping-the-model-inside-a-plugin).
+
+### Bimanual (and multi-module) setups
+
+Attaching two copies of the same arm is just two attachments with different prefixes and offsets — the prefixes keep their identically named joints distinct:
+
+```python
+class Bimanual(Robot):
+    is_sim = True
+    left_arm = ArmModule()
+    right_arm = ArmModule()
+
+    scene = SceneConfig(
+        world_mjcf="assets/scene.xml",
+        attachments=[
+            ModuleAttachment(module="left_arm",  mjcf="assets/arm.xml",
+                             pos=[0.0, 0.2, 0.0],  prefix="left/"),
+            ModuleAttachment(module="right_arm", mjcf="assets/arm.xml",
+                             pos=[0.0, -0.2, 0.0], prefix="right/"),
+        ],
+    )
+```
+
+`left_arm`'s YAML then maps `sim_joint: "left/shoulder_pan"`, `right_arm`'s maps `sim_joint: "right/shoulder_pan"`, and so on. Internally the world server keys every component as `"{module}/{component}"`, so even without prefixes the two modules stay separate — but a prefix is required so their MJCF joint **names** don't collide in the compiled model.
+
+## Simulated servos
+
+In simulation your ordinary [Components](/docs/modules#components) — the same `FeetechServo`, `OpenCVCamera`, etc. used on hardware — are driven by the MuJoCo world instead of a bus. Each module's port bus is transparently replaced by a `BusClient` proxy to the shared `MujocoWorldServer`, so the component's own `bus_class` (Feetech, OpenCV, …) is simply never used.
+
+At connect time the framework walks every component and infers its MuJoCo role from its type:
+
+- a [`Camera`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/camera.py) → renders a **MuJoCo camera** (see [Simulated cameras](#simulated-cameras));
+- any other [`Actuator`](/docs/modules#components) (a servo/motor) → drives a **MuJoCo joint + actuator**;
+- a [`CartesianIKActuator`](/docs/ik) → **skipped** (it is not a MuJoCo joint; it is resolved by the module's IK wrapper over the joint bus).
+
+Each component is keyed as `"{module}/{component}"` in the world, so identically named servos on different modules stay distinct.
+
+Declare the servo exactly as you would for hardware and add flat `sim_*` fields on [`ActuatorConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py). Real and simulated robots read the **same** `conf/modules/<module>.yaml`: deployment fields (`id`, `port`) are ignored in sim, and the `sim_*` fields are ignored on hardware. The MuJoCo actuator name defaults to the same string as `sim_joint`:
+
+```yaml
+# conf/modules/arm.yaml
+actuators:
+  shoulder_pan:
+    id: 1                # hardware fields — ignored in sim
+    port: ${actuator_port}
+    sim_joint: "arm/shoulder_pan"   # MJCF joint (after the attach prefix)
+    sim_range_min: -1.91986         # radians mapped to the low end of `mode`
+    sim_range_max: 1.91986          # radians mapped to the high end of `mode`
+    sim_drive_mode: 0               # 1 to invert direction
+```
+
+<Properties>
+  <Property name="sim_joint" type="str | None">
+    MJCF joint the servo reads and writes. The MuJoCo actuator name is the same string. <a href="#virtual-servos">Virtual servos</a> omit this field.
+  </Property>
+  <Property name="sim_range_min" type="float">
+    Radians mapped to the low end of the servo's normalized command space.
+  </Property>
+  <Property name="sim_range_max" type="float">
+    Radians mapped to the high end.
+  </Property>
+  <Property name="sim_drive_mode" type="int">
+    Set to <code>1</code> to invert direction (mirrors a flipped hardware servo).
+  </Property>
+</Properties>
+
+The world server maps the servo's normalized command space (e.g. `mode: range_m100_100` → `[-100, 100]`) onto `[range_min, range_max]` radians on write, and back on read. A `write` sets the MuJoCo actuator `ctrl` target and a `read` returns the present joint position — so the physics loop tracks targets just like a real servo running its own control loop.
+
+<Note>
+  Keep <code>sim_range_min</code>/<code>sim_range_max</code> equal to the joint's actual MJCF limits (<code>jnt_range</code>). A mismatch silently skews every normalized ↔ radian conversion. The so106 tests assert the YAML ranges match the model, and <a href="#models-from-onshape"><code>onshape-export --update-yaml</code></a> keeps them in sync.
+</Note>
+
+### Virtual servos {{ id: 'virtual-servos' }}
+
+Omit `sim_joint` to make a servo **virtual**: it holds the last commanded value and echoes it back on read, without touching physics. This is useful when your Observation/Action schema has a joint that the chosen MJCF model doesn't physically simulate:
+
+```yaml
+    # no sim_joint → virtual: echoes the commanded value
+    sim_range_min: -1.57
+    sim_range_max: 1.57
+```
+
+## Simulated cameras
+
+A camera renders a named MuJoCo camera instead of capturing from a device. Use the ordinary [`OpenCVCameraModule`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/opencv_module.py) and add a `sim:` block ([`SimSensorConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py)) naming the camera:
+
+```yaml
+# conf/modules/wrist_camera.yaml
+sensors:
+  camera:
+    port: ${camera_port}   # hardware — ignored in sim
+    fps: 30
+    width: 1920
+    height: 1080
+    resize_width: 480
+    resize_height: 270
+    type: opencv
+    sim:
+      camera: wrist_cam    # a MuJoCo camera name (mounted via CameraMount)
+```
+
+<Properties>
+  <Property name="camera" type="str | None">
+    Name of the MuJoCo camera to render, mounted onto a body via <a href="#mounting-cameras"><code>CameraMount</code></a>.
+  </Property>
+  <Property name="distortion" type="FisheyeDistortionConfig | None">
+    Optional calibrated fisheye distortion applied to the rendered frames. See <a href="#matching-a-real-lens">Matching a real lens</a>.
+  </Property>
+</Properties>
+
+The render resolution follows `resize_width`/`resize_height` (falling back to `width`/`height`), so the observation buffer is sized identically to the real camera — the schema doesn't change between real and sim.
+
+### Mounting cameras {{ id: 'mounting-cameras' }}
+
+`CameraMount`, in the scene's `cameras` list, adds a MuJoCo camera to any body in the composed scene, including a body contributed by a module (using its prefix):
+
+<Properties>
+  <Property name="name" type="str">
+    Camera name. A simulated camera's <code>sim.camera</code> field references this.
+  </Property>
+  <Property name="parent_body" type="str">
+    Body to attach to, e.g. <code>"arm/gripper"</code> for a wrist camera.
+  </Property>
+  <Property name="pos" type="list[float]">Camera position on the body.</Property>
+  <Property name="quat" type="list[float]">Camera orientation quaternion.</Property>
+  <Property name="fovy" type="float">Vertical field of view in degrees (default 58).</Property>
+</Properties>
+
+### Matching a real lens (fisheye distortion) {{ id: 'matching-a-real-lens' }}
+
+MuJoCo renders a rectilinear (pinhole) image. If your real camera is a fisheye (e.g. a GoPro), add a `distortion` block so the sim frames match the real lens — important when training on mixed real/sim data. The intrinsics `K` and coefficients `D` come from `cv2.fisheye.calibrate` and are rescaled from the calibration resolution to the render resolution automatically ([`solarian/sim/distortion.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/distortion.py)):
+
+```yaml
+    sim:
+      camera: wrist_cam
+      distortion:
+        K: [[1000.0, 0.0, 960.0], [0.0, 1000.0, 540.0], [0.0, 0.0, 1.0]]
+        D: [0.1, 0.01, 0.0, 0.0]
+        calib_width: 1920
+        calib_height: 1080
+        render_scale: 2.0   # supersample the pinhole render before the remap
+```
+
+## Models from Onshape
+
+Each module's MJCF model can come straight from an **Onshape assembly**. `solarian onshape-export` pulls the CAD through [onshape-to-robot](https://onshape-to-robot.readthedocs.io), then cleans the raw export into an *attachable* MuJoCo model you can drop into a scene. The whole process is driven by a single `config.json`, so once an assembly is set up, re-exporting after a CAD change is one command — and the recipe is version-controlled next to the meshes. It is the pipeline used to build the SO-106 arm and its gripper.
+
+```bash
+solarian onshape-export <assembly_dir>              # full export (needs network)
+solarian onshape-export <assembly_dir> --clean-only # re-run only the clean stage
+solarian onshape-export <assembly_dir> --keys-file path/to/keys.txt
+solarian onshape-export <assembly_dir> --update-yaml conf/modules/right_arm.yaml
+```
+
+`<assembly_dir>` is a directory containing a `config.json`. The command writes the cleaned, attachable MJCF (by default to the project's `assets/`, see `output_xml`) and prints where it landed.
+
+<Properties>
+  <Property name="--clean-only" type="flag">
+    Skip the Onshape API call and re-run only the clean stage on the previously-exported raw MJCF. Fast iteration on cleaning options (density, self-collision) without re-hitting the network.
+  </Property>
+  <Property name="--keys-file" type="path">
+    File with <code>ONSHAPE_ACCESS_KEY</code>/<code>ONSHAPE_SECRET_KEY</code> lines, loaded into the environment if the keys aren't already set. When omitted, the command tries <code>onshape_keys.txt</code> then <code>.env</code> in the current directory.
+  </Property>
+  <Property name="--update-yaml" type="path">
+    After export, also sync joint ranges from the cleaned MJCF into this module conf (<code>sim_range_min</code>/<code>sim_range_max</code>). Matches actuators by key name or by the bare name of <code>sim_joint</code> (attach prefixes like <code>right/</code> are stripped). Actuators without <code>sim_joint</code> / <code>sim_range_min</code> are left alone. <code>config.json</code> <code>{'joint_properties.*.limits'}</code> are always rewritten from the CAD mate limits, with or without this flag.
+  </Property>
+</Properties>
+
+### Credentials
+
+onshape-to-robot reads credentials from the environment. Create an API key pair at [dev-portal.onshape.com/keys](https://dev-portal.onshape.com/keys) and either export them:
+
+```bash
+export ONSHAPE_API=https://cad.onshape.com   # the command defaults this for you
+export ONSHAPE_ACCESS_KEY=your_access_key
+export ONSHAPE_SECRET_KEY=your_secret_key
+```
+
+…or drop them in a git-ignored keys file that the command loads automatically — either `onshape_keys.txt` or a project `.env`:
+
+```text
+# .env  (or onshape_keys.txt)
+ONSHAPE_ACCESS_KEY=your_access_key
+ONSHAPE_SECRET_KEY=your_secret_key
+```
+
+### The `config.json`
+
+The file is the ordinary [onshape-to-robot config](https://onshape-to-robot.readthedocs.io/en/latest/config.html) (which assembly to pull, joint limits, `output_format: mujoco`) **plus** a `solarian` block that describes how to turn the raw export into an attachable Solarian model:
+
+```json
+{
+    "document_id": "d60e2cd05d40533c485d06e9",
+    "workspace_id": "361314ab0f218f78e02b4966",
+    "element_id": "f8420291ebade3c3ad36c733",
+    "output_format": "mujoco",
+    "output_filename": "so106_raw",
+    "assets_directory": "meshes",
+    "robot_name": "so106",
+    "joint_properties": {
+        "shoulder_pan":  {"range": true},
+        "shoulder_lift": {"range": true},
+        "elbow_flex":    {"range": true},
+        "wrist_flex":    {"range": true},
+        "wrist_yaw":     {"range": true},
+        "wrist_roll":    {"range": true}
+    },
+    "solarian": {
+        "dof_mates": ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_yaw", "wrist_roll"],
+        "base_dof": "shoulder_pan",
+        "output_xml": "../so106.xml",
+        "meshdir": "so106_description/meshes",
+        "density": 1400
+    }
+}
+```
+
+A tool TCP is a named Frame in Onshape on the **gripper** assembly (call it `tcp`). onshape-to-robot exports it as a `<site>`; IK tracks that site after the gripper is attached. Do not invent a synthetic site in `config.json`.
+
+<Note>
+  You can point at the assembly with a single <code>"url"</code> field (the Onshape tab URL) instead of <code>document_id</code>/<code>workspace_id</code>/<code>element_id</code> — onshape-to-robot parses the IDs out of it.
+</Note>
+
+<Note>
+  Joint limits flow <strong>CAD → MJCF → config.json</strong>. On export, any stale <code>joint_properties.*.limits</code> are ignored so Onshape mate limits win; after cleaning, those CAD limits are written back into <code>config.json</code> (and into the module yaml when you pass <code>--update-yaml</code>). Set <code>solarian.prefer_config_limits: true</code> only if you intentionally want config.json to override the assembly.
+</Note>
+
+### The `solarian` block
+
+Parsed into [`SolarianExportSpec`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/onshape.py). Every field has a default that reproduces the SO-106 arm's behaviour:
+
+<Properties>
+  <Property name="dof_mates" type="list[str]">
+    CAD names of the revolute/prismatic mates to expose as actuated joints. onshape-to-robot only treats a mate as a joint when its name starts with <code>dof_</code>; rather than renaming mates in the CAD, the command renames these on the fly in the API responses.
+  </Property>
+  <Property name="base_dof" type="str | None">
+    Root the kinematic tree at the body of this DOF that no other DOF touches (the mechanism's base), so the model attaches to the world / a parent body at its base rather than at the tool. <code>None</code> keeps onshape-to-robot's default root.
+  </Property>
+  <Property name="drop_unmated_links" type="bool">
+    Drop links that carry no mate — free-floating duplicate shells the CAD sometimes surfaces. Default <code>true</code>; keeps the export a single connected mechanism.
+  </Property>
+  <Property name="output_xml" type="str | None">
+    Where to write the cleaned MJCF, relative to the assembly dir. Default <code>../&lt;robot_name&gt;.xml</code> (the project <code>assets/</code>).
+  </Property>
+  <Property name="meshdir" type="str | None">
+    <code>meshdir</code> written into the cleaned MJCF (relative to <code>output_xml</code>). Defaults to the assembly's assets directory.
+  </Property>
+  <Property name="density" type="float">
+    Uniform density (kg/m³) used to infer link mass/inertia from the collision meshes, since the CAD assigns no materials. Default <code>1400</code> (~1 kg for an SO-ARM-sized part).
+  </Property>
+  <Property name="attach" type="bool">
+    Drop the base <code>&lt;freejoint&gt;</code> so the model attaches rigidly into a scene. Default <code>true</code>.
+  </Property>
+  <Property name="strip_inertials" type="bool">
+    Remove the placeholder inertials and infer mass/inertia from geometry at <code>density</code>. Default <code>true</code>.
+  </Property>
+  <Property name="self_collision" type="bool">
+    Let the mechanism's own links collide with each other. Default <code>false</code>: full-link collision meshes overlap by design at every joint and MuJoCo does not auto-exclude parent/child contacts, so self-collision produces permanent interpenetrations that fight the actuators.
+  </Property>
+  <Property name="prefer_config_limits" type="bool">
+    When <code>false</code> (default), ignore stale <code>joint_properties.*.limits</code> during the Onshape pull so mate limits from the assembly win, then rewrite those limits in <code>config.json</code> from the cleaned MJCF. Set <code>true</code> only to keep config.json as an intentional override of CAD.
+  </Property>
+</Properties>
+
+### How the export works
+
+The pipeline ([`solarian/sim/onshape.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/onshape.py)) has two stages:
+
+```text
+solarian onshape-export <dir>
+   │
+   ├── Stage 1: raw export  (Onshape API + network)
+   │     ├── clear joint_properties.*.limits     (CAD mate limits win)
+   │     ├── rename dof_mates → dof_<name>       (so o2r treats them as joints)
+   │     ├── root the tree at base_dof
+   │     ├── drop unmated (free-floating) links
+   │     └── write <output_filename>.xml + STL meshes
+   │
+   ├── Stage 2: clean       (no network)
+   │     ├── drop the base <freejoint>            (attach)
+   │     ├── strip inertials + infer mass/inertia (density)
+   │     ├── set meshdir, non-self-colliding geoms
+   │     └── write output_xml
+   │
+   └── Sync limits: MJCF → config.json (+ module yaml with --update-yaml)
+```
+
+**Raw export.** onshape-to-robot pulls the assembly and writes a raw MJCF plus one STL per part. Two things it doesn't do out of the box are patched in for the duration of the export (and cleanly restored afterward): exposing your chosen mates as joints, and rooting the kinematic tree at the base so the model hangs off its mount rather than its tool.
+
+**Clean.** The raw model is a free-floating body with placeholder inertials and no materials. The clean stage makes it *attachable*: it drops the base free joint, lets the compiler infer mass and inertia from the collision meshes at a fixed `density`, repoints `meshdir`, makes the mechanism non-self-colliding, and adds the optional end-effector site. Re-run just this stage with `--clean-only` while tuning those knobs.
+
+### Worked example: adding a gripper
+
+The export gives you an MJCF. Wiring it into a robot is the same as for any model: [attach it](#attaching-modules) with a `ModuleAttachment` and map each servo with [`sim_joint` / `sim_range_*`](#simulated-servos). The SO-106 gripper is a separate assembly with a single **prismatic** jaw mate. Its `config.json` differs from the arm only in the `solarian` block:
+
+```json
+{
+    "url": "https://cad.onshape.com/documents/.../w/.../e/...",
+    "output_format": "mujoco",
+    "output_filename": "umi_slim_gripper_raw",
+    "assets_directory": "meshes",
+    "robot_name": "umi_slim_gripper",
+    "joint_properties": { "jaw": {"limits": [0.0, 0.037], "range": true} },
+    "solarian": {
+        "dof_mates": ["jaw"],
+        "base_dof": "jaw",
+        "output_xml": "../umi_slim_gripper.xml",
+        "meshdir": "umi_slim_gripper_description/meshes",
+        "density": 1400
+    }
+}
+```
+
+Export it, attach it to the arm's wrist body, and give its servo `sim_joint` / `sim_range_*`:
+
+```bash
+solarian onshape-export assets/umi_slim_gripper_description --update-yaml conf/modules/right_gripper.yaml
+```
+
+```python
+    right_gripper = GripperModule()
+
+    scene = SceneConfig(
+        attachments=[
+            ModuleAttachment(module="right_arm", mjcf="assets/so106.xml", prefix="right/"),
+            ModuleAttachment(
+                module="right_gripper",
+                mjcf="assets/umi_slim_gripper.xml",
+                parent_body="right/so100_6dof_wrist_roll_to_gripper",  # the arm flange
+                prefix="right_gripper/",
+            ),
+        ],
+    )
+```
+
+```yaml
+# conf/modules/right_gripper.yaml
+actuators:
+  gripper:
+    id: 7
+    sim_joint: "right_gripper/jaw"
+    sim_range_min: 0.0
+    sim_range_max: 0.037
+```
+
+### Tips & gotchas
+
+- **Mate names.** `dof_mates` are the *CAD mate* names in Onshape (before the `dof_` prefixing). The resulting MJCF joint/actuator name is the bare mate name, then the attach `prefix`.
+- **Rooting.** If the model attaches by the wrong end (e.g. hangs from the tool), set `base_dof` to the DOF at the base of the chain.
+- **Mesh order is nondeterministic.** Re-exporting can reorder the `<mesh>` asset lines with no functional change; this is cosmetic.
+- **Byproducts.** onshape-to-robot caches part metadata (`.part` files) and may write a `scene.xml` wrapper next to the raw export; meshes for dropped unmated links are also downloaded. Only the cleaned `output_xml` and the referenced meshes matter — git-ignore the rest.
+
+## Shipping the model inside a plugin
+
+The worked example above keeps the model in the project's own `assets/`. When the module instead ships as a [plugin package](/docs/plugins) — reused across projects — its MJCF should travel **with the package**. That way every project that installs the plugin gets the model, and there is a single source of truth with no copy to drift out of sync (edit the density in one place, not one-per-project). This is how the [`solarian-umi-slim`](https://github.com/solarian-dev/solarian/tree/main/plugins/solarian-umi-slim) gripper works.
+
+**1. Keep the assets inside the package.** Point `output_xml` at an `assets/` directory *inside* the importable package, so the export writes there instead of into a project:
+
+```text
+solarian-umi-slim/
+├── pyproject.toml
+└── solarian_umi_slim/            # the importable package
+    ├── __init__.py
+    └── assets/
+        ├── umi_slim.xml          # the attachable model (output_xml)
+        └── umi_slim_description/
+            ├── config.json       # the export recipe
+            └── meshes/*.stl      # meshes, resolved relative to umi_slim.xml
+```
+
+**2. Expose the path from the package.** MuJoCo resolves a model's `meshdir` relative to the MJCF file itself, so a scene only needs the absolute path to `umi_slim.xml`. Publish it from the package `__init__.py`:
+
+```python
+# solarian_umi_slim/__init__.py
+from pathlib import Path
+
+#: Simulation assets shipped inside the package.
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+#: Absolute path to the attachable gripper MJCF.
+MJCF_PATH = str(ASSETS_DIR / "umi_slim.xml")
+```
+
+`MJCF_PATH` is an absolute path derived from the *installed* package location, so it is correct on any machine — no hardcoded paths, and no copy of the model in the consuming project.
+
+**3. Attach it by importing the path.** `ModuleAttachment.mjcf` accepts an [absolute path](#resolving-mjcf-paths), so pass `MJCF_PATH` straight through:
+
+```python
+from solarian_umi_slim import MJCF_PATH as UMI_SLIM_MJCF
+
+ModuleAttachment(
+    module="right_gripper",
+    mjcf=UMI_SLIM_MJCF,                                   # loaded from the installed plugin
+    parent_body="right/so100_6dof_wrist_roll_to_gripper",  # the arm flange
+    prefix="right_gripper/",
+)
+```
+
+### Making sure the assets are packaged
+
+Meshes and MJCF are **not** Python files, so setuptools leaves them out of a built wheel unless you declare them — and then `MJCF_PATH` breaks for anyone who `pip install`s the plugin (it still works from an editable/source checkout, which is why this is easy to miss). Two requirements:
+
+- The `assets/` directory must live **inside** the importable package (`solarian_umi_slim/assets/`, as above). Data outside the package can't be shipped as importable package data.
+- Declare the files as [`package-data`](https://setuptools.pypa.io/en/latest/userguide/datafiles.html) in `pyproject.toml`. Ship only the runtime files — leave out the onshape-export byproducts (`*_raw.xml`, `scene.xml`, `meshes/*.part`):
+
+```toml
+[tool.setuptools.package-data]
+solarian_umi_slim = [
+    "assets/umi_slim.xml",
+    "assets/umi_slim_description/config.json",
+    "assets/umi_slim_description/meshes/*.stl",
+]
+```
+
+Then verify the build actually contains them before publishing:
+
+```bash
+python -m build --wheel
+unzip -l dist/*.whl | grep assets   # expect umi_slim.xml + meshes/*.stl, and no *.part / *_raw.xml
+```
+
 ## See also
 
-- [Sim Robots](/docs/sim-robots) — the `is_sim`/`scene` switch and attaching modules.
-- [Scenes](/docs/scenes) — building the MuJoCo world from module MJCF.
-- [Sim Servos & Cameras](/docs/sim-components) — `sim_joint` / `sim_range_*` on servos and the `sim:` block on cameras.
-- [IK](/docs/ik) — Cartesian control that works in real and sim alike.
 - [Robots](/docs/robots) / [Modules](/docs/modules) — the classes you reuse unchanged.
+- [Inverse Kinematics](/docs/ik) — Cartesian control that works in real and sim alike; IK tracks the gripper's CAD `tcp` site, and the arm's end-effector frame is drawn in the viewer.
+- [Plugins](/docs/plugins) — packaging a module (and its model) as a reusable plugin.
+- [Calibration](/docs/modules/calibration) — keeping the model's joint ranges equal to the real arm's.

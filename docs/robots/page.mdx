@@ -10,7 +10,7 @@ A **Robot** is the on-robot node in the Solarian three-node architecture. It run
 
 - Owning the hardware (every [Module](/docs/modules) is spawned as its own OS process by the robot).
 - Receiving incoming [Actions](/docs/actions) from the relay server.
-- Routing each action to either the right module's action queue or a robot-level [`@action_handler`](/docs/action-types).
+- Routing each action to either the right module's action queue or a robot-level [`@action_handler`](/docs/actions#registering-handlers).
 - Publishing the latest [Observation](/docs/observations) back out to the relay server at the configured frame rate.
 
 Defined in [`solarian/core/robot.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py).
@@ -107,7 +107,7 @@ Action received
                                      on the Robot subclass and call it
 ```
 
-You can declare robot-level handlers for custom action types — see [Action Types](/docs/action-types):
+You can declare robot-level handlers for custom action types — see [Custom action types](/docs/actions#custom-action-types):
 
 ```python
 from solarian.core import Robot
@@ -143,6 +143,5 @@ If two modules share a hardware port (for example, a serial bus with multiple Dy
 - [Server](/docs/servers) — the relay node sitting between robots and controllers.
 - [Controllers](/docs/controllers) — how to send actions and consume observations.
 - [Project Configs](/docs/project-configs) — the conventions that bind YAML files to module attributes.
-- [Action Types](/docs/action-types) — declaring custom routes for non-standard actions.
-- [Simulation](/docs/simulation) / [Sim Robots](/docs/sim-robots) — run the same robot in MuJoCo with `is_sim = True`.
-- [Scenes](/docs/scenes) — build the MuJoCo world your simulated robot lives in.
+- [Actions](/docs/actions#custom-action-types) — declaring custom routes for non-standard actions.
+- [Simulation](/docs/simulation) — run the same robot in MuJoCo with `is_sim = True`, in a [scene](/docs/simulation#scenes) you build.

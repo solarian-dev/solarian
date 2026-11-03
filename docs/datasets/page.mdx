@@ -1,95 +1,354 @@
 export const metadata = {
-  title: 'Dataset Formats',
+  title: 'Datasets',
   description:
-    'The three archives Solarian Base opens: a Solarian recording session (.solarian.zip), a LeRobot v2.1 export (.zip), and a UMI replay buffer (.zarr.zip). The format is read from the archive contents.',
+    'The Solarian dataset format: a recording session of episodes, each one parquet table of every signal at its own rate and one mp4 per camera. How it is laid out, how ops derive new versions of it without copying, and the other formats Solarian Base opens.',
 }
 
-# Dataset formats
+# Datasets
 
-Solarian Base opens three kinds of dataset. Each is one compressed file, and the format is read from what is inside the archive, so a renamed file is still recognised. {{ className: 'lead' }}
+A dataset is a collection of **episodes**: demonstrations of a task, each one a synchronised record of everything the robot sensed, everything it was commanded, and what its cameras saw. Solarian stores one as a **session**: the directory the robot writes while you teleoperate, which is also the format every dataset op reads and writes. {{ className: 'lead' }}
 
-Only the entry names are consulted. A single directory wrapped around the whole tree, which is what an archiver adds when you archive a folder, is ignored. Anything nested further is left as it is.
+A session is never edited. Curating it (deleting bad takes, splitting a pick from its place, tracking an object, mirroring) makes a new *version* that stores only what changed and reads the rest through from its parent. A training set is the last step, exported from whichever version you settle on.
 
-## Solarian (`.solarian.zip`)
+## What is in an episode
 
-A [recording session](/docs/recording), zipped. This is the dataset the robot wrote: one mp4 per camera at archive resolution, and one parquet of every signal at its own rate.
+An episode answers three questions for every instant of a take, and each answer lives in its own file:
+
+- **What did the robot sense and do?** One row in `episode.parquet` per module update, with every observation and action as a column. Each signal keeps the rate its hardware ran at; nothing is resampled until export.
+- **What did the cameras see?** One mp4 per camera, at archive resolution, before any lens remap or downscale. The table stores a frame index into it, not pixels.
+- **Is the take usable?** `episode.json`, written when the episode is sealed: its length, status, task, measured rates and running statistics, so you can choose episodes without opening a table.
+
+What ties the episodes of a session together is `session.json`: the robot's structure, the column schema with units, and the camera geometry. It is written once, when the session starts, so every episode in it has the same columns and cameras.
+
+## A session on disk
+
+Here is a real one: an [SO-106](/docs/tutorials/first-robot) with a wrist camera, recorded with [`solarian record`](/docs/recording#recording-a-session).
+
+```text
+datasets/So106Robot__2026-09-25T18-43-28/
+├── session.json                         robot, schema, cameras, video settings
+├── manifest.jsonl                       one line per sealed episode
+└── episodes/
+    ├── 000000/
+    │   ├── episode.json                 8 KB
+    │   ├── episode.parquet              92 KB: 1626 rows, 41 columns
+    │   └── video/
+    │       └── right_wrist_camera.image.mp4   8.9 MB: 974 frames at 1014x760
+    ├── 000001/
+    └── ...
+```
+
+Episode directories are numbered from `000000`. A camera is named `<module>.<field>`, after the observation field it fills, so this robot's camera is `right_wrist_camera.image`.
+
+### `session.json`
+
+```json
+{
+  "solarian_version": "0.1.1",
+  "robot": { "modules": { "right_arm": { ... }, "right_gripper": { ... } }, ... },
+  "task": "stack the cups",
+  "fps": 30.0,
+  "cameras": {
+    "right_wrist_camera.image": {
+      "width": 1014,
+      "height": 760,
+      "color_mode": "rgb",
+      "source_fps": 30.0,
+      "sensor_mode": "2028x1520",
+      "optical_remap": "conf/calibrations/right_wrist_camera_gopro_remap.json",
+      "observation_resize": [1014, 760],
+      "remap_size": [960, 540]
+    }
+  },
+  "video": { "codec": "libx264", "crf": 20, "keyint": 120, "preset": "veryfast", "pix_fmt": "yuv420p" },
+  "schema": {
+    "t": { "data_class": "TimestampData", "dtype": "float64", "unit": "s" },
+    "obs.right_arm.x": { "data_class": "PosData", "dtype": "float32", "unit": "m", "mid": 0.35, "high": 0.45 },
+    "obs.right_gripper.aperture_mm": { "data_class": "PosData", "dtype": "float32", "unit": "mm" },
+    "cam.right_wrist_camera.image.frame_index": { "data_class": "ImageData", "dtype": "int32", "unit": null },
+    "act.right_arm.x": { "data_class": "PosData", "dtype": "float32", "unit": "m" },
+    ...
+  },
+  "obs_fields": { "right_arm": ["shoulder_pan", ..., "x", "y", "z", "rx", "ry", "rz"], "right_gripper": [...] },
+  "act_fields": { "right_arm": [...], "right_gripper": ["gripper"] }
+}
+```
+
+The camera entry is what makes the archive reusable. The video is stored raw, so the lens remap (`optical_remap`) and the policy's input size are recorded beside it and applied at export. Recalibrate the camera and re-export, and old sessions pick up the new geometry.
+
+The schema is derived from your project's [observations](/docs/observations) and [actions](/docs/actions), never hand-written: add a joint and the next session has a column for it. Each column carries its `data_class`, unit, and the warning bands Solarian Base colours plots with.
+
+### `episode.parquet`
+
+Column names say where a value came from:
+
+<Properties>
+  <Property name="t" type="float64, s">
+    Seconds since the episode started. One per row.
+  </Property>
+  <Property name="wall_ts" type="float64, s">
+    The robot's synced wall clock when the row was written.
+  </Property>
+  <Property name="obs.&lt;module&gt;.&lt;field&gt;" type="float32 or bool">
+    An observation, e.g. <code>obs.right_arm.shoulder_pan</code> or <code>obs.right_gripper.aperture_mm</code>.
+  </Property>
+  <Property name="obs.&lt;module&gt;.ts" type="float64, s">
+    When that module's values were read. One per module, since one bus read fills every field of it.
+  </Property>
+  <Property name="cam.&lt;camera&gt;.frame_index" type="int32">
+    The mp4 frame showing that instant. <code>cam.&lt;camera&gt;.capture_ts</code> is when it was captured.
+  </Property>
+  <Property name="act.&lt;module&gt;.&lt;field&gt;" type="float32">
+    The action the robot received, e.g. <code>act.right_arm.x</code>. Empty (NaN) until the first one arrives.
+  </Property>
+</Properties>
+
+A row is written whenever *any* module publishes, and a module that did not update carries its previous value forward. Eight consecutive rows of the episode above:
+
+```text
+     t       obs.right_arm.x   obs.right_gripper.aperture_mm   cam.….frame_index   act.right_arm.x
+  10.5817        -0.1416                 78.7677                     314               -0.1439
+  10.5906        -0.1416                 78.7677                     315               -0.1439
+  10.5978        -0.1416                 78.7677                     315               -0.1439
+  10.6163        -0.1422                 78.7677                     315               -0.1439
+  10.6292        -0.1422                 78.7677                     316               -0.1439
+  10.6419        -0.1422                 78.9004                     316               -0.1439
+  10.6895        -0.1428                 78.9004                     317               -0.1472
+  10.6989        -0.1428                 78.9004                     318               -0.1472
+```
+
+The arm reported at 16.5 Hz in this take, the gripper at 42.7 Hz and the camera at 25 Hz, so each column changes on its own cadence: that is why the episode has 1626 rows but only 974 video frames. A table sampled at one fixed rate would have discarded the faster signals. The per-module `ts` columns tell you how stale each value is; export resamples everything onto one grid once a target rate is chosen.
+
+### `episode.json`
+
+```json
+{
+  "index": 0,
+  "start_ts": 1790372667.769,
+  "end_ts": 1790372700.300,
+  "n_rows": 1626,
+  "status": "ok",
+  "task": "stack the cups",
+  "n_frames": { "right_wrist_camera.image": 974 },
+  "video_coverage": { "right_wrist_camera.image": 0.9918 },
+  "dropped_frames": { "right_wrist_camera.image": 0 },
+  "measured_hz": { "right_arm": 16.5, "right_gripper": 42.7, "right_wrist_camera": 25.1 },
+  "stats": {
+    "obs.right_arm.shoulder_pan": { "min": -18.58, "max": 31.78, "sum": 14272.17, "sumsq": 414617.6, "count": 1626 },
+    ...
+  }
+}
+```
+
+Only `ok` episodes are read by ops and training; an episode whose video failed to seal is marked `video_failed` and skipped. `stats` holds running sums rather than means, so normalisation over a whole dataset is a sum over episodes rather than a pass over every row. `video_coverage` is the fraction of frame slots backed by a distinct capture; well below 1 means the camera, or its clock, could not keep up.
+
+### `manifest.jsonl`
+
+One line per sealed episode, appended and fsynced as each one finishes:
+
+```json
+{"episode":0,"sealed_at":1790372700.48,"status":"ok","bytes":9390832,"n_rows":1626,"duration":32.53,"transfer":{"state":"pending"},"upload":{"state":"pending"}}
+```
+
+It is the ledger that transfer and upload resume from after a crash. A `dropped` line is a take the operator threw away.
+
+### Files ops add
+
+Ops can add members to an episode beside the table and videos. Built-in ops and tracking plugins write two:
+
+<Properties>
+  <Property name="targets/&lt;camera&gt;.npz" type="tracking">
+    Per frame, an object's bounding box, bit-packed mask, or tracked point, in video pixels. Written by <code>track</code> (SAM 2) and <code>track_point</code> (TAPNext).
+  </Property>
+  <Property name="tags/&lt;camera&gt;.json" type="fiducials">
+    Per frame, the corners of each visible marker tag.
+  </Property>
+</Properties>
+
+## Reading a session
+
+`Session` opens a directory, a `.solarian.zip` or a version the same way, by member path:
+
+```python
+from solarian.core.recording.archive import Session, video_member
+
+session = Session("datasets/So106Robot__2026-09-25T18-43-28")
+session.cameras                     # ['right_wrist_camera.image']
+session.meta["schema"]              # session.json, parsed
+
+for index in session.episodes():    # the sealed, ok episodes
+    meta = session.episode_meta(index)
+    table = session.read_table(index).to_pandas()
+    video = session.locate(video_member(index, "right_wrist_camera.image"))
+    print(index, meta["n_rows"], table["obs.right_arm.x"].iloc[-1], video)
+```
+
+`solarian dataset info` prints the same summary from the shell: episodes, frames, tracking coverage per camera, and the ops the session was derived through.
+
+```bash
+solarian dataset info datasets/So106Robot__2026-09-25T18-43-28
+```
+
+## `.solarian.zip`
+
+A session zipped is still a session. Zip the directory to move or upload it:
 
 ```bash
 zip -r cup_stacking.solarian.zip datasets/cup_stacking__2026-09-22T19-04-11
 ```
 
+Videos, tables and `.npz` files are stored uncompressed inside the zip, as they are compressed already, so an mp4 decodes straight out of the archive without extracting it. The wrapping directory an archiver adds is ignored, and a 7z of the same tree is read the same way.
+
+Uploading a session to Solarian Base skips export. The irreversible choices (a target rate, a policy resolution, a warped image) stay undecided until you make them with [`solarian export-dataset`](/docs/recording#exporting-a-training-set).
+
+## Versions
+
+A version is a session directory with one more file, `version.json`, that names its parent sessions and, for each of its episodes, the parent episode it starts from. Only the members the op wrote are stored in the version; everything else is read through from the parent, recursively.
+
 ```text
-cup_stacking.solarian.zip
-├── session.json
+versions/04-track/
+├── version.json                         parents, the op and its params, episode sources
 ├── manifest.jsonl
 └── episodes/000000/
-    ├── episode.json
-    ├── episode.parquet
-    └── video/<module>.<field>.mp4
+    ├── episode.json                     always stored, with the op's metadata merged in
+    └── targets/
+        └── right_wrist_camera.image.npz the one file track added
 ```
 
-<Properties>
-  <Property name="session.json" type="required">
-    Schema, camera geometry, and the robot structure. Present in every session, including one that was started and never recorded.
-  </Property>
-  <Property name="episodes/&lt;index&gt;/episode.parquet" type="required">
-    The episode table. A session with <code>session.json</code> and no episode parquet is a session that recorded nothing, and is refused.
-  </Property>
-  <Property name="manifest.jsonl" type="ledger">
-    Which episodes sealed. A <code>dropped</code> line is a take the operator threw away.
-  </Property>
-</Properties>
+`version.json` records where each episode came from and which op made it:
 
-A 7z of the same tree is read the same way. The `.solarian.zip` suffix is the name to give it, so a person can tell it from the other two zips.
-
-Uploading a session skips export. The irreversible choices — a target rate, a policy resolution, a warped image — stay in the session until you decide them with [`solarian export-dataset`](/docs/recording#exporting-a-training-set).
-
-## LeRobot (`.zip`)
-
-A [LeRobot](https://github.com/huggingface/lerobot) v2.1 dataset, which is what `solarian export-dataset` writes and what `solarian train` reads. Row *i* is the state at `i / fps`, and each camera is one mp4 per episode.
-
-```text
-lerobot.zip
-├── meta/info.json
-├── meta/episodes.jsonl
-├── meta/episodes_stats.jsonl
-├── meta/tasks.jsonl
-├── data/chunk-000/episode_000000.parquet
-└── videos/chunk-000/observation.images.<camera>/episode_000000.mp4
+```json
+{
+  "format": 1,
+  "parents": ["../03-split-pick-place-pick"],
+  "op": {
+    "name": "track", "kind": "map", "source": "plugin:solarian-sam2",
+    "params": { "camera": "right_wrist_camera.image", "model": "tiny" },
+    "host": "turing", "started_at": 1792620560.75, "finished_at": 1792621012.30
+  },
+  "episodes": [{ "src": [0, 0] }, { "src": [0, 1] }, ...]
+}
 ```
 
-`meta/info.json` is the signature. The rest of `meta/` and the chunk directories are what a complete export contains; an archive that has the info file and nothing else is still recognised as LeRobot.
-
-## UMI (`.zarr.zip`)
-
-A [UMI](https://umi-gripper.github.io/) replay buffer: one [Zarr](https://zarr.dev/) store packed into a zip. Episodes are slices of shared arrays, bounded by `meta/episode_ends`, rather than a directory per episode. Frames live in an array, so there are no video files.
-
-```text
-demo.zarr.zip
-├── data/
-│   ├── camera0_rgb
-│   ├── robot0_eef_pos
-│   ├── robot0_eef_rot_axis_angle
-│   └── robot0_gripper_width
-└── meta/
-    └── episode_ends
-```
-
-The store is recognised by its own metadata: a `.zgroup` or `.zarray` (Zarr v2), a `zarr.json` (Zarr v3), or a `meta/episode_ends` array. Camera and pose names vary by collection setup; the ones above are the UMI names Solarian Base looks for first.
+So deleting episodes costs a few JSON files and tracking an object costs one npz per episode, however large the videos are. Ops that change pixels, like `mirror` and `split-pick-place`, store the new videos and nothing else. `Session` resolves the layers, so code reading a version cannot tell it from a flat session. Flattening one into a standalone session, or a `.solarian.zip`, copies every member in and writes a `lineage.json` recording the ops it went through.
 
 ## Dataset ops
 
-A recorded session is never edited. Deleting episodes, splitting a pick from its place, mirroring or tracking an object makes a new version, and the versions over one session live in a **computed dataset**: a directory with a `computed.json` that records every op, its params and every per-episode redo, so the dataset can be rebuilt from its source.
+An op takes one or more sessions and writes new ones. It comes in one of four kinds, named after what one input episode becomes:
 
-```bash
-solarian dataset new data/cups data/cups-curated
-solarian dataset apply data/cups-curated delete-episodes --param 'episodes=[3, 7]'
-solarian dataset apply data/cups-curated drop-short-episodes --param min_frames=60
-solarian dataset log data/cups-curated
-solarian dataset export data/cups-curated cups-curated.solarian.zip
+<Properties>
+  <Property name="FILTER" type="episode or nothing">
+    Keeps or drops whole episodes. <code>delete-episodes</code> drops episodes by index, or every one without tracking targets for a camera.
+  </Property>
+  <Property name="MAP" type="one episode, changed">
+    Replaces or adds members of each episode. <code>track</code> (from <code>solarian-sam2</code>) writes a box and mask per frame; <code>track_point</code> (from <code>solarian-tapnext</code>) a point.
+  </Property>
+  <Property name="EXPAND" type="any number of episodes">
+    Writes into one or more named outputs. <code>split-pick-place</code> cuts each episode at its return to home into a <code>pick</code> and a <code>place</code> output; <code>mirror</code> follows each episode with its left-right mirror, flipping videos, reflecting poses and mirroring targets.
+  </Property>
+  <Property name="COMBINE" type="several sessions into one">
+    <code>merge</code> concatenates the episodes of two or more sessions with the same cameras, keeping the columns they all have.
+  </Property>
+</Properties>
+
+`solarian dataset ops` lists what is installed, and `solarian dataset describe <op>` prints an op's parameters as JSON Schema:
+
+```text
+$ solarian dataset ops
+delete-episodes      filter   Delete episodes  (builtin)
+merge                combine  Merge datasets  (builtin)
+mirror               expand   Mirror left-right  (builtin)
+split-pick-place     expand   Split into pick and place -> pick, place  (builtin)
+track                map      Track an object [gpu]  (plugin:solarian-sam2)
 ```
 
-A version is named `<nn>-<op>` and addressed as `data/cups-curated@02-drop-short-episodes`. With `--review` or `--online`, a map or filter op leaves its version open, so each episode can be redone, kept or dropped, and accepted. Ops build only on closed versions. Solarian Base does the same from a computed dataset's page, where the review plays each episode forwards or backwards.
+### Running one op
+
+`solarian dataset run` applies an op once. Parameters are `--param key=value`, with the value read as YAML so numbers, lists and mappings mean what they look like:
+
+```bash
+solarian dataset run delete-episodes data/cups --param 'episodes=[3, 7]'
+solarian dataset run split-pick-place data/cups --param axis=z --param tol=0.005
+solarian dataset run merge data/cups-monday data/cups-tuesday -o data/cups-all
+```
+
+The output defaults to `<session>-<op>` beside the input (`data/cups-delete-episodes`), with `-<output>` appended for an op that writes several, and is a version of its input. An output path ending in `.zip`, or `--flat`, stores every member instead.
+
+### Computed datasets
+
+Curation is rarely one op. A **computed dataset** is a directory that groups every version built over one source session, and records each op, its parameters and every per-episode redo in `computed.json`. That file is the dataset's recipe: `rebuild` replays it from the source.
+
+```text
+data/cups-curated/
+├── computed.json
+└── versions/
+    ├── 01-merge/
+    ├── 02-delete-episodes/
+    ├── 03-split-pick-place-pick/
+    ├── 03-split-pick-place-place/
+    ├── 04-track/
+    └── 05-mirror/
+```
+
+Versions are named `<nn>-<op>` and addressed as `<dir>@<version>`; `@source` is the source session. `apply` builds on the version you name, or on the only leaf of the tree if you name none.
+
+Here is a full pass over two days of cup stacking, ending in a pick-only training set:
+
+```bash
+# Start over Monday's session, and merge in Tuesday's.
+solarian dataset new datasets/cups_monday data/cups-curated
+solarian dataset apply data/cups-curated merge --with datasets/cups_tuesday
+
+# Drop two bad takes found while watching them in Solarian Base.
+solarian dataset apply data/cups-curated delete-episodes --param 'episodes=[3, 7]'
+
+# Cut each take into its pick and its place. The tree now has two leaves.
+solarian dataset apply data/cups-curated split-pick-place
+
+# Track the cup on the pick half, reviewing every episode.
+solarian dataset apply data/cups-curated@03-split-pick-place-pick track --online \
+  --param camera=right_wrist_camera.image --param 'prompt={frame: 0, point: [512, 400]}'
+solarian dataset redo data/cups-curated@04-track 4 --param 'prompt={frame: -1, point: [730, 711]}'
+solarian dataset accept data/cups-curated@04-track 4
+solarian dataset close data/cups-curated@04-track
+
+# Double the data by mirroring, then flatten it to train on.
+solarian dataset apply data/cups-curated@04-track mirror
+solarian dataset export data/cups-curated@05-mirror cups-pick.solarian.zip
+```
+
+`log` shows the tree, with each version's state, episode count and parameters:
+
+```text
+$ solarian dataset log data/cups-curated
+cups_monday  (source)
+└─ 01-merge  closed, 120 episodes  {}
+   └─ 02-delete-episodes  closed, 118 episodes  {"episodes": [3, 7]}
+      ├─ 03-split-pick-place-pick  closed, 118 episodes  {}
+      │  └─ 04-track  closed, 118 episodes, 118/118 reviewed  {"camera": "right_wrist_camera.image", ...}
+      │     └─ 05-mirror  closed, 236 episodes  {}
+      └─ 03-split-pick-place-place  closed, 118 episodes  {}
+```
+
+A version you no longer want goes with everything built on it:
+
+```bash
+solarian dataset drop data/cups-curated@05-mirror
+solarian dataset rebuild data/cups-curated data/cups-curated-v2   # replay the recipe from the source
+```
+
+### Reviewing a version
+
+Map and filter ops are often wrong on a few episodes: a tracker loses the object, a threshold drops a good take. Apply one with `--review` and its version stays **open**: every episode is processed, then you go through them, redo the ones that are wrong with different parameters, and accept the rest. `--online` processes nothing up front, so each episode is done when you reach it.
+
+```bash
+solarian dataset redo data/cups-curated@04-track 12 --param 'prompt={frame: 30, bbox: [400, 300, 620, 520]}'
+solarian dataset redo data/cups-curated@04-track 17 --drop     # leave this episode out
+solarian dataset accept data/cups-curated@04-track 12
+solarian dataset close data/cups-curated@04-track
+```
+
+On a filter version, `redo --keep` and `--drop` overrule the op's decision for one of the parent's episodes. Ops only build on closed versions, so nothing a version reads through to can change under it. Solarian Base runs the same review from a computed dataset's page, playing each episode forwards or backwards as you decide.
 
 ### Writing an op
 
@@ -126,6 +385,41 @@ class DropShortEpisodesOp(DatasetOp):
         return episode.n_rows >= params.min_frames
 ```
 
-A `FILTER` keeps or drops whole episodes. A `MAP` implements `map(episode, params, ctx)` and returns `episode.derive(files, **meta)` with only the members it adds or replaces; the rest is read through from the parent version. `EXPAND` writes several outputs, as `split-pick-place` does, and `COMBINE` merges sessions. The `Params` model is the op's form: Solarian Base renders it from its JSON Schema, and `--param` is checked against it.
+An `Episode` gives the op its `meta` (the parsed `episode.json`), `table()`, `video(camera)`, `targets(camera)` and any other member by path. A `MAP` op implements `map(episode, params, ctx)` and returns `episode.derive(files, **meta)` with only the members it adds or replaces; the runner stores those and reads the rest through from the parent:
+
+```python
+import pyarrow.compute as pc
+from pydantic import BaseModel, Field
+
+from solarian.core.recording.archive import TABLE_FILE, column_stats, table_bytes
+from solarian.datasets import DatasetOp, Episode, OpContext, OpKind
+
+COLUMN = "obs.right_gripper.aperture_mm"
+
+
+class ClipApertureParams(BaseModel):
+    high: float = Field(default=80.0, description="Millimetres. Readings above this are clipped to it.")
+
+
+class ClipApertureOp(DatasetOp):
+    title = "Clip gripper aperture"
+    kind = OpKind.MAP
+    Params = ClipApertureParams
+
+    def map(self, episode: Episode, params: ClipApertureParams, ctx: OpContext):
+        table = episode.table()
+        clipped = pc.min_element_wise(table[COLUMN], params.high).cast(table[COLUMN].type)
+        table = table.set_column(table.column_names.index(COLUMN), COLUMN, clipped)
+        return episode.derive({TABLE_FILE: table_bytes(table)},
+                              stats=column_stats(table, episode.meta["stats"]))
+```
+
+The version stores one new `episode.parquet` and `episode.json` per episode; the videos stay in the parent.
+
+`EXPAND` implements `expand` and yields `(output, episode)` pairs, and `COMBINE` implements `combine` over every input in `ctx.inputs`. The `Params` model is the op's form: Solarian Base renders it from its JSON Schema, and `--param` is checked against it.
 
 `solarian dataset ops` lists every op with where it came from: `builtin`, `plugin:<package>` or `project:<path>`. A project op with the name of a built-in or plugin op takes its place. A file that fails to import is listed with its error, and the other ops still load. To share an op across projects, move the file into a plugin and add one `solarian.dataset_ops` entry point; `solarian create-plugin op <name>` scaffolds one.
+
+## Other formats
+
+Solarian Base also opens two formats from outside Solarian, to browse and compare, recognised from the archive's contents rather than its name: a [LeRobot](https://github.com/huggingface/lerobot) v2.1 dataset zipped (`meta/info.json` is its signature, and it is what `solarian export-dataset` writes for training), and a [UMI](https://umi-gripper.github.io/) replay buffer packed as a `.zarr.zip`. Both are already resampled to one rate and, in UMI's case, stored as frame arrays rather than video, so dataset ops and versions work on Solarian sessions only.

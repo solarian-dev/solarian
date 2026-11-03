@@ -1,70 +1,146 @@
 export const metadata = {
-  title: 'Keyboard',
+  title: 'The Controller',
   description:
-    'Define the arm observation and action, and nudge one joint at a time from the keyboard.',
+    'Write the SO-106 controller: subclass Controller, react to keys with event handlers, and send a joint target every tick from control_step.',
 }
 
-# Keyboard
+# The Controller
 
-The controller's job, for now, is small. A key changes one number. Every tick, that number is sent to the arm as a joint target. {{ className: 'lead' }}
+The controller is the program that decides what the robot does. It runs a loop, and on every tick it turns what has happened since the last tick into one action for the robot. This chapter writes a controller where each key nudges one joint of the arm. {{ className: 'lead' }}
 
-The number is in the normalized range from the YAML: −100 to 100. Five units is a small bend. You are not commanding metres or radians. The module, and in simulation the `sim_range_*` mapping, turns the number into motion.
+The keyboard is the input device here because every computer has one. A controller can read any other hardware the same way: a joystick or gamepad, a space mouse that moves the hand in six directions at once, or a leader arm, a second arm you move by hand while the robot copies its joints. Each of those becomes a module on the controller, the way the keyboard already is one, and the controller reads it in the same two places this chapter uses: its event handlers and `control_step`.
 
-## Observation
+## What a controller is
 
-`so106/observation.py` says which sensor readings the controller is allowed to see. For the arm, that is each joint's position.
+A controller is a Python class that extends Solarian's `Controller`. The scaffold already created yours, an empty `So106Controller` in `so106/controller.py`, and `so106/settings.py` points `CONTROLLER_CLASS` at it. `solarian run-controller` imports that class, builds it with the settings from `conf/controller.yaml`, and starts its loop.
 
-```python
-from solarian.core.observation import ModuleObs, Observation, SensorField
+The base class does the plumbing: it connects to the relay server, receives every observation the robot sends, and runs the loop. Your subclass fills in two kinds of methods:
 
-from so106.robot import So106Robot
+- **Event handlers** react to things that happen, such as a key going down.
+- **`control_step`** returns the action to send, once per tick.
 
+Each tick of the loop runs the same steps, in the same order:
 
-class RightArmObs(ModuleObs):
-    shoulder_pan = SensorField(So106Robot.right_arm.shoulder_pan.pos)
-    shoulder_lift = SensorField(So106Robot.right_arm.shoulder_lift.pos)
-    elbow_flex = SensorField(So106Robot.right_arm.elbow_flex.pos)
-    wrist_flex = SensorField(So106Robot.right_arm.wrist_flex.pos)
-    wrist_yaw = SensorField(So106Robot.right_arm.wrist_yaw.pos)
-    wrist_roll = SensorField(So106Robot.right_arm.wrist_roll.pos)
-
-
-class So106Observation(Observation):
-    right_arm = RightArmObs()
+```text
+1. collect events from the controller's modules, and run every matching event handler
+2. update the controller's own modules, such as the keyboard
+3. call control_step()
+4. send what it returned to the robot
+5. wait for the next tick, fps times per second
 ```
 
-`SensorField` points at a piece of data on the robot tree, `module.joint.pos`. The field name on the observation (`shoulder_pan`) is yours; the thing it reads is the servo. Keeping the names the same is a kindness to yourself.
+`fps` comes from `conf/controller.yaml`, and the scaffold sets it to 30. Handlers run first, so `control_step` always sees what this tick's keys changed.
 
-## Action
+## Open a controller window
 
-`so106/action.py` is the command shape. Same joints, written rather than read.
+Keys reach the controller through its front end, the UI. The default is the terminal, which shows telemetry and reads characters as you type. This course uses a window instead: it receives real key presses and releases, and from [the camera chapter](/docs/tutorials/first-robot/camera) on it shows the wrist camera's picture. Add this line to `conf/controller.yaml`:
 
-```python
-from solarian.core.action import Action, ActuatorField, ModuleAction
-
-from so106.robot import So106Robot
-
-
-class RightArmAction(ModuleAction):
-    shoulder_pan = ActuatorField(So106Robot.right_arm.shoulder_pan.pos)
-    shoulder_lift = ActuatorField(So106Robot.right_arm.shoulder_lift.pos)
-    elbow_flex = ActuatorField(So106Robot.right_arm.elbow_flex.pos)
-    wrist_flex = ActuatorField(So106Robot.right_arm.wrist_flex.pos)
-    wrist_yaw = ActuatorField(So106Robot.right_arm.wrist_yaw.pos)
-    wrist_roll = ActuatorField(So106Robot.right_arm.wrist_roll.pos)
-
-
-class So106Action(Action):
-    right_arm = RightArmAction()
+```yaml {{ title: 'conf/controller.yaml' }}
+ui: pygame
 ```
 
-If you rename a joint on the module and forget it here, the class raises `TypeError` at import. Fix the name it prints.
+## Hold a target
 
-## The controller
+The controller keeps one action for the whole run: the joint target the arm should be at. Keys change it, and every tick sends it. Create it when the controller is built, in `so106/controller.py`:
 
-Replace `so106/controller.py`:
+```python {{ title: 'so106/controller.py' }}
+from solarian.core import Controller
+from solarian.core.action import ActionType
 
-```python
+from so106.action import So106Action
+
+
+class So106Controller(Controller):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.target = So106Action.zeros()
+        self.target.right_arm.action_type = ActionType.MOVE_J
+```
+
+The lines that matter:
+
+- **`super().__init__(*args, **kwargs)`** lets the base class set up its connection and modules first. Anything you add comes after it.
+- **`So106Action.zeros()`** builds an action from the schema of the previous chapter, with every field at 0. For the arm, 0 is the middle of each joint's travel.
+- **`action_type = ActionType.MOVE_J`** gives the arm's part of the action its meaning: go to these joint targets. It is the type the arm module's `@action_handler` accepts.
+
+## React to keys: event handlers
+
+An **event** is a record of something that happened at one instant: a key went down, a key came up, an image was clicked. Modules produce events. Every controller carries a keyboard module, and it emits a `KEY_DOWN` event when a key is pressed and a `KEY_UP` when it is released.
+
+An **event handler** is a method that Solarian calls with each event of the type it names. You mark it with the `@event_handler` decorator. Solarian collects the events at the start of each tick and calls the handlers on the controller's own loop, one event at a time and in the order they happened. A handler can therefore change `self.target` freely, because `control_step` runs only after every handler of the tick has returned.
+
+This handler maps twelve keys to the six joints. Add it to `so106/controller.py`:
+
+```python {{ title: 'so106/controller.py' }}
+from solarian.core import Controller
+from solarian.core.action import ActionType
+from solarian.core.event import Event, EventType, event_handler
+
+from so106.action import So106Action
+
+# One key pair per joint: the first decreases, the second increases.
+_KEYS = {
+    "q": ("shoulder_pan", -5),
+    "a": ("shoulder_pan", 5),
+    "w": ("shoulder_lift", -5),
+    "s": ("shoulder_lift", 5),
+    "e": ("elbow_flex", -5),
+    "d": ("elbow_flex", 5),
+    "r": ("wrist_flex", -5),
+    "f": ("wrist_flex", 5),
+    "t": ("wrist_yaw", -5),
+    "g": ("wrist_yaw", 5),
+    "y": ("wrist_roll", -5),
+    "h": ("wrist_roll", 5),
+}
+
+
+class So106Controller(Controller):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.target = So106Action.zeros()
+        self.target.right_arm.action_type = ActionType.MOVE_J
+
+    @event_handler(EventType.KEY_DOWN)
+    def on_key_down(self, event: Event):
+        step = _KEYS.get(event.data["key"])
+        if step is None:
+            return
+        joint, delta = step
+        field = self.target.right_arm[joint]
+        field.value = max(-100.0, min(100.0, field.value + delta))
+```
+
+The lines that matter:
+
+- **`@event_handler(EventType.KEY_DOWN)`** registers `on_key_down` for key presses. The method name is yours.
+- **`event.data["key"]`** is the key, as a lowercase character. Every event also carries `event.source`, the module that emitted it, and `event.timestamp`, when it happened.
+- **`self.target.right_arm[joint]`** is one joint's field in the target action, and **`field.value`** is its number. The handler moves it 5 units and clamps it to −100…100, the joint's full travel.
+
+Each press moves a joint one step of 5, a small bend. Holding a key still gives one step: the keyboard module reports the press once, so press again to move further.
+
+Several handlers can share an event type, and all of them run, the base class's first. `Controller` brings three key handlers of its own, and they keep working next to yours: space stops every running skill, `r` starts and stops a recording, and delete throws the current recording away.
+
+## Send it every tick: control_step
+
+`control_step` is the method the loop calls once per tick, right after the handlers. It takes no arguments and returns the action to send to the robot. Return `None` and the tick sends nothing; the controller still tells the robot the link is alive.
+
+This controller's decision is already made by the time `control_step` runs, so it returns the target. Add it to the class:
+
+```python {{ title: 'so106/controller.py' }}
+    def control_step(self):
+        return self.target
+```
+
+Sending the same target 30 times a second keeps the arm commanded at all times: a key changes where the arm should be, and the very next tick carries the new target to the robot. A control step can also compute its action from scratch. `self.last_observation` holds the newest observation from the robot, so a controller can read the arm's measured joints and decide from those.
+
+The base class has its own `control_step`, which runs [skills](/docs/tutorials/skills) and sends what they produce. Defining yours replaces it, which is what a hand-written controller wants. In Tutorial 4 you delete this method and let skills drive the arm.
+
+## The whole file
+
+Put together, `so106/controller.py` is the key table and a class with three methods:
+
+```python {{ title: 'so106/controller.py' }}
 from solarian.core import Controller
 from solarian.core.action import ActionType
 from solarian.core.event import Event, EventType, event_handler
@@ -107,11 +183,7 @@ class So106Controller(Controller):
         return self.target
 ```
 
-`So106Action.zeros()` builds a command with every joint at 0, which is mid-travel. `MOVE_J` is the action type your arm module handles. `control_step` returns that same object every tick, so the arm is always being told a target, and a key only changes the target.
-
-Handlers run on the control thread. They do not race the loop. Hold a key and you get a stream of repeats from the keyboard; each one steps the joint by 5.
-
-The letters are in pairs down the keyboard, one pair per joint from the shoulder to the wrist:
+The letters run in pairs down the keyboard, one pair per joint from the shoulder to the wrist:
 
 | Joint | Decrease | Increase |
 | --- | --- | --- |
@@ -122,6 +194,6 @@ The letters are in pairs down the keyboard, one pair per joint from the shoulder
 | wrist yaw | `t` | `g` |
 | wrist roll | `y` | `h` |
 
-`r` is also the key the controller uses to seal a recording. That is fine for now: you are not recording. Tutorial 4 uses a different set of keys, and this override goes away when skills take over.
+`r` also reaches the base class's recording handler. The base `control_step` is the one that sends recording requests, and yours replaces it, so `r` only moves the wrist for now. In Tutorial 4 skills take over the keys, and this table goes away.
 
 Next: [start the sim and move the arm](/docs/tutorials/first-robot/simulate).

@@ -1,14 +1,14 @@
 export const metadata = {
   title: 'Plugins',
   description:
-    'Plugins are standalone solarian-<name> packages that extend Solarian with hardware drivers, whole robots, skills, policies, and CLI commands — discovered through entry points, with zero changes to the core framework.',
+    'Plugins are standalone solarian-<name> packages that extend Solarian with hardware drivers, modules, robots, skills, policies, dataset ops and CLI commands. Install one with solarian install, or scaffold your own with solarian create-plugin and publish it to PyPI.',
 }
 
 # Plugins
 
 Solarian's core framework ships almost no batteries: no hardware drivers, no policies, no robot definitions. Everything that talks to real hardware or adds a capability lives in a standalone **plugin package** named `solarian-<name>`. This keeps the core slim and lets anyone publish and share extensions independently. {{ className: 'lead' }}
 
-This page explains what a plugin is and the kinds you can build. Browse published packages in the [Plugin Directory](/plugins), see [Using Plugins](/docs/using-plugins) to install and wire one into a project, and [Creating Plugins](/docs/creating-plugins) to scaffold and publish your own.
+This page covers what a plugin is, the official ones to start from, how to install and use one, and how to write and publish your own. Browse every published package in the [Plugin Directory](/plugins).
 
 ## What is a plugin?
 
@@ -17,7 +17,7 @@ A Solarian plugin is a normal, `pip`-installable Python package that follows two
 1. Its distribution name is prefixed **`solarian-`** (e.g. `solarian-feetech`).
 2. It imports under the matching snake_case module name (e.g. `solarian_feetech`).
 
-Beyond that, it just provides one or more Solarian classes — an `Actuator`, a `Bus`, a `Module`, a `Robot`, a `Skill`, a policy `Trainer`/`PolicyServer`, or a CLI command — and (optionally) advertises them through **entry points** so Solarian can discover them automatically.
+Beyond that, it just provides one or more Solarian classes — an `Actuator`, a `Bus`, a `Module`, a `Robot`, a `Skill`, a policy `Trainer`/`PolicyServer`, a dataset op, or a CLI command — and (optionally) advertises them through **entry points** so Solarian can discover them automatically.
 
 <Note>
   There is no mandatory "register me" call. Direct imports always work: `from solarian_feetech.actuator import FeetechServo`. Entry points are what make a plugin *discoverable* — so `solarian install`, the `AIController`, and `solarian train` can find your classes by name without the user importing anything.
@@ -25,52 +25,441 @@ Beyond that, it just provides one or more Solarian classes — an `Actuator`, a 
 
 ## Kinds of plugins
 
-A single package can ship any combination of these. The type determines which files you write and which entry-point groups the classes register under.
+A single package can ship any combination of these. The kind determines which files you write and which entry-point groups the classes register under.
 
 <Properties>
   <Property name="Hardware — actuator / sensor">
-    A driver for a motor, servo, or sensor plus the <a href="/docs/core">Bus</a> that speaks its protocol. Registers under <code>solarian.actuators</code> / <code>solarian.actuator_buses</code> (or <code>solarian.sensors</code> / <code>solarian.sensor_buses</code>). Example: <code>solarian-feetech</code>, <code>solarian-dynamixel</code>.
+    A driver for a motor, servo, or sensor plus the <a href="/docs/modules#buses">Bus</a> that speaks its protocol. Example: <code>solarian-feetech</code>, <code>solarian-dynamixel</code>.
   </Property>
   <Property name="Module">
-    An opinionated <a href="/docs/modules">Module</a> that composes actuators/sensors into a ready-to-use unit (an arm, a gripper), usually with a bundled <code>templates/modules/</code> config. Registers under <code>solarian.modules</code>. Example: <code>solarian-ur5</code>, <code>solarian-umi-slim</code>.
+    An opinionated <a href="/docs/modules">Module</a> that composes actuators/sensors into a ready-to-use unit (an arm, a gripper), usually with a bundled <code>templates/modules/</code> config. Example: <code>solarian-ur5</code>, <code>solarian-umi-slim</code>.
   </Property>
   <Property name="Robot">
-    A full <a href="/docs/robots">Robot</a> definition wiring several modules together. Registers under <code>solarian.robots</code>.
+    A full <a href="/docs/robots">Robot</a> definition wiring several modules together.
   </Property>
   <Property name="Skill">
-    A self-contained <a href="/docs/skills">Skill</a> behavior the <a href="/docs/ai_controller">AI Controller</a> can orchestrate. Registers under <code>solarian.skills</code> and is auto-discovered by any <code>AIController</code>. Example: <code>solarian-umi-skill</code>.
+    A self-contained <a href="/docs/skills">Skill</a> behavior the <a href="/docs/ai_controller">AI Controller</a> can orchestrate, auto-discovered by any <code>AIController</code>. Example: <code>solarian-umi-skill</code>.
   </Property>
   <Property name="Policy">
-    A trainable model: a <code>Trainer</code> (for <code>solarian train</code>) and/or a <code>PolicyServer</code> a skill calls over HTTP. Registers under <code>solarian.trainers</code> and <code>solarian.services</code> (and often <code>solarian.skills</code>). Example: <code>solarian-policy-diffusion</code>. See <a href="/docs/policies">Policies</a>.
+    A trainable model: a <code>Trainer</code> (for <code>solarian train</code>) and/or a <code>PolicyServer</code> a skill calls over HTTP. Example: <code>solarian-policy-diffusion</code>. See <a href="/docs/policies">Policies</a>.
+  </Property>
+  <Property name="Dataset op">
+    A <a href="/docs/datasets#dataset-ops">dataset op</a> that <code>solarian dataset</code> can run on any project.
   </Property>
   <Property name="Command">
-    A custom <code>solarian</code> subcommand. Registers under <code>solarian.commands</code>. Example: <code>solarian feetech-set-id</code> shipped by <code>solarian-feetech</code>.
+    A custom <code>solarian</code> subcommand. Example: <code>solarian feetech-set-id</code> shipped by <code>solarian-feetech</code>.
   </Property>
 </Properties>
 
-## Entry-point groups
+### Entry-point groups {{ id: 'entry-point-groups' }}
 
-Discovery is powered by standard Python entry points read via `importlib.metadata`. Each plugin type maps to one or more groups:
+Discovery is powered by standard Python entry points read via `importlib.metadata`. Each kind maps to one or more groups, and [`solarian create-plugin`](#creating-a-plugin) scaffolds the type in the second column:
 
-| Plugin type | Entry-point group(s) | Discovered by |
-| --- | --- | --- |
-| Actuator | `solarian.actuators`, `solarian.actuator_buses` | config `type:` resolution |
-| Sensor | `solarian.sensors`, `solarian.sensor_buses` | config `type:` resolution |
-| Module | `solarian.modules` | `solarian install` |
-| Robot | `solarian.robots` | project wiring |
-| Skill | `solarian.skills` | `AIController` |
-| Policy | `solarian.trainers`, `solarian.services` (+ `solarian.skills`) | `solarian train`, `run-service` |
-| Service | `solarian.services` | `run-service`, `modal-serve` |
-| Command | `solarian.commands` | `solarian` CLI |
+| Kind | `create-plugin` type | Entry-point group(s) | Discovered by |
+| --- | --- | --- | --- |
+| Actuator | `actuator` | `solarian.actuators`, `solarian.actuator_buses` | config `type:` resolution |
+| Sensor | `sensor` | `solarian.sensors`, `solarian.sensor_buses` | config `type:` resolution |
+| Module | `module` | `solarian.modules` | `solarian install` |
+| Robot | `robot` | `solarian.robots` | project wiring |
+| Skill | (part of `policy`) | `solarian.skills` | `AIController` |
+| Policy | `policy` | `solarian.trainers`, `solarian.services`, `solarian.skills` | `solarian train`, `run-service` |
+| Service | (part of `policy`) | `solarian.services` | `run-service` |
+| Dataset op | `op` | `solarian.dataset_ops` | `solarian dataset` |
+| Command | `command` | `solarian.commands` | `solarian` CLI |
 
-## Available plugins
+## Core plugins
 
-Browse every published listing — official and community — in the [Plugin Directory](/plugins). The ones to start with are on [Core Plugins](/docs/core-plugins). You can also [submit a plugin](/plugins/submit) for review.
+These are the official plugins most projects start from. Each name links to its page in the [Plugin Directory](/plugins), where you can also find community plugins and [submit your own](/plugins/submit) for review.
 
+**Actuators**
+
+- [solarian-feetech](/plugins/solarian-feetech) — Feetech servos (STS3215, SCS) and the bus that talks to them, plus a `feetech-set-id` command.
+- [solarian-dynamixel](/plugins/solarian-dynamixel) — Dynamixel servos (XL330, XM430, and the rest) and the DynamixelBus.
+- [solarian-robstride](/plugins/solarian-robstride) — Robstride actuators and the bus that drives them.
+
+**Arms and grippers**
+
+- [solarian-ur5](/plugins/solarian-ur5) — Universal Robots UR5 arm module, in joint space and Cartesian space.
+- [solarian-so106](/plugins/solarian-so106) — SO-106 follower arm module.
+- [solarian-umi-slim](/plugins/solarian-umi-slim) — UMI slim gripper module, including the MuJoCo model used in simulation.
+
+**Skills and policies**
+
+- [solarian-move-skill](/plugins/solarian-move-skill) — Move to a named pose. Poses live in `conf/skills/move.yaml`; add one there and start the skill with that name.
+- [solarian-umi-skill](/plugins/solarian-umi-skill) — Run a UMI diffusion policy. Each policy is a yaml in `conf/`; start `UMISkill` with that filename.
+- [solarian-policy-diffusion](/plugins/solarian-policy-diffusion) — Trains and serves the diffusion policy that `UMISkill` calls.
+
+## Installing a plugin
+
+Plugins are ordinary `pip` packages, so the baseline is always `pip install solarian-<name>`. But most plugins need a config file and a reference in your code, so [`solarian install`](/docs/commands#project-commands) does three things:
+
+```bash
+solarian install feetech
+```
+
+1. **Installs the package** into the current Python environment. A short name is prefixed, so `feetech` installs `solarian-feetech`. PyPI is tried first; if the project is not published, the command looks for `solarian-feetech/` in the current folder and then under `plugins/`.
+2. **Copies the default config** into `conf/` when the destination is absent. A file in the package's `templates/` directory keeps its folder and name (`templates/skills/move.yaml` → `conf/skills/move.yaml`, `templates/modules/feetech.yaml` → `conf/modules/feetech.yaml`).
+3. **Records the dependency** — adds `solarian-feetech>=0.1.0` to the project's `pyproject.toml`.
+
+The Robot attribute has to match that filename. A second instance (a left arm and a right arm from one plugin) is a copy of the yaml under the new name.
+
+### Attach it to your Robot
+
+`solarian install` never edits your Python — you import the class and attach it yourself:
+
+```python
+from solarian.core import Robot
+from solarian_ur5.module import UR5ArmModule
+
+class MyRobot(Robot):
+    ur5 = UR5ArmModule()   # reads conf/modules/ur5.yaml
+```
+
+Then edit `conf/modules/ur5.yaml` to set ports, servo IDs, frequency, and calibration paths for your hardware. See [Project Configs](/docs/project-configs).
+
+### From a local path
+
+Pass a path to skip PyPI and install that directory editable:
+
+```bash
+solarian install plugins/solarian-umi-slim
+```
+
+### Checking what's installed
+
+Plugins are regular distributions, so normal tooling works:
+
+```bash
+pip show solarian-feetech          # metadata + version
+pip list | grep solarian-          # every installed Solarian plugin
+```
+
+## Using skills, policies and commands
+
+Hardware and module plugins are used by attaching their classes to your Robot. The other kinds are picked up by the part of Solarian that runs them.
+
+### Skill plugins
+
+[Skill](/docs/skills) plugins use the same install. Any package that advertises a `solarian.skills` entry point is **auto-discovered** by every [`AIController`](/docs/ai_controller) — Solarian reads the entry points via `importlib.metadata` at startup and merges them into `available_skills`. You can also import the class and start it yourself:
+
+```python
+from solarian_move_skill import MoveSkill
+from solarian_umi_skill import UMISkill
+
+MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"})
+UMISkill(params={"config": "cup_arrange.yaml"})
+```
+
+`pose` is any name under `poses:` in `conf/skills/move.yaml`, which `solarian install solarian-move-skill` creates from the plugin's template when the file is not already there. `config` is a yaml in `conf/`. `solarian install solarian-umi-skill` copies `templates/umi.yaml` to `conf/skills/umi.yaml`; copy that file for each policy.
+
+Class-attribute skills you declare on your controller take priority over a discovered skill of the same name, so you can still override one by declaring it explicitly.
+
+`UMISkill` reads the checkpoint and the rest of its parameters from the file you passed. `arm`, `gripper`, and `camera` live in that file too:
+
+```yaml
+# conf/skills/cup_arrange.yaml — one UMI policy
+policy_server_url: http://localhost:8001
+server:
+  service: diffusion-policy
+  checkpoint: data/models/cup_wild_vit_l_1img.ckpt
+  port: 8001
+arm: right_arm
+gripper: right_gripper
+camera: right_wrist_camera
+```
+
+### Policy plugins
+
+[Policy](/docs/policies) plugins ship the trainer and the server a skill calls over HTTP, registered as a [service](/docs/services). Install the plugin (with the extra you need), then use the CLI:
+
+```bash
+pip install "solarian-policy-diffusion[serve]"   # torch, etc. for inference
+# or [train] to train, [modal] for cloud training with solarian modal-train
+
+# serve the checkpoint a skill conf names in its server: block
+solarian run-service cup_arrange
+
+# or any checkpoint, with the service directly
+solarian run-service diffusion-policy --checkpoint <checkpoint.ckpt> --port 8001
+```
+
+Trainers register under `solarian.trainers`, so `solarian train` can select them by name (`model.type=diffusion`). See [Training](/docs/training).
+
+### Command plugins
+
+A plugin can add its own `solarian` subcommand via the `solarian.commands` entry-point group. Once the package is installed, the command shows up in `solarian --help`:
+
+```bash
+# shipped by solarian-feetech
+solarian feetech-set-id
+```
+
+## Mixing plugins in one module
+
+Because each `Actuator` binds its own `bus_class`, a single [Module](/docs/modules) can mix drivers from different plugins. Actuators that share a port share a bus instance; the rest each get their own:
+
+```python
+from solarian.core.module import Module
+from solarian_feetech.actuator import FeetechServo
+from solarian_dynamixel.actuator import DynamixelServo
+
+class MixedArmModule(Module):
+    shoulder = FeetechServo(id=1, model="sts3215")
+    elbow = FeetechServo(id=2, model="sts3215")
+    gripper = DynamixelServo(id=1, model="xl330-m077")
+```
+
+## Creating a plugin
+
+You can write a plugin by hand, but the fastest start is the built-in scaffolder, which lays down a correct package layout and wires the entry points for you:
+
+```bash
+solarian create-plugin <type> <name> [--force]
+```
+
+`<type>` is one of `actuator`, `sensor`, `module`, `robot`, `command`, `policy`, or `op` (see [Entry-point groups](#entry-point-groups) for what each registers). `<name>` is the short name (`feetech`) or the full `solarian-feetech` — either way you get the same normalized package.
+
+```bash
+solarian create-plugin actuator feetech
+```
+
+This creates:
+
+```text
+solarian-feetech/
+├── .gitignore
+├── pyproject.toml          # wired with the right entry points
+├── README.md
+└── solarian_feetech/
+    ├── __init__.py
+    ├── actuator.py         # <ClassPrefix>Servo stub
+    └── bus.py              # <ClassPrefix>Bus stub
+```
+
+<Note>
+  Re-run `create-plugin` with a different `<type>` and the **same name** to add a component type to an existing plugin. Base files (`pyproject.toml`, `README.md`, `__init__.py`) are never overwritten, and new entry points are merged idempotently — so `create-plugin module feetech` adds a module to `solarian-feetech` without clobbering the actuator you already have. Use `--force` to regenerate the component source stubs.
+</Note>
+
+Then install it editable and implement the stubs:
+
+```bash
+cd solarian-feetech
+pip install -e .
+```
+
+### Naming convention
+
+The scaffolder normalizes names so the three forms always line up:
+
+| Input | Distribution | Import package | Class prefix |
+| --- | --- | --- | --- |
+| `feetech` | `solarian-feetech` | `solarian_feetech` | `Feetech` |
+| `umi-slim` | `solarian-umi-slim` | `solarian_umi_slim` | `UmiSlim` |
+
+## Writing a hardware plugin
+
+An actuator plugin ships two classes: the `Actuator`/`Servo` (declares its `Data` channels and binds a bus) and the `Bus` (speaks the wire protocol). This is the whole of `solarian-feetech`:
+
+```python
+# solarian_feetech/actuator.py
+from solarian.core.servo import Servo
+from solarian.core.data import PosData, SpeedData
+
+from solarian_feetech.bus import FeetechBus
+
+class FeetechServo(Servo):
+    bus_class = FeetechBus     # which bus talks to this hardware
+    pos = PosData()            # a writable + readable position channel
+    speed = SpeedData()
+```
+
+The bus subclasses `ActuatorBus` (or `SensorBus`) and implements the [bus contract](/docs/modules#the-bus-contract) — `connect`, `disconnect`, `read`, `write`, torque control, calibration:
+
+```python
+# solarian_feetech/bus.py
+from solarian.core.component_bus import ActuatorBus
+
+class FeetechBus(ActuatorBus):
+    def connect(self): ...
+    def disconnect(self): ...
+    def read(self, data_type, names, normalize=True): ...
+    def write(self, values, normalize=True): ...
+    def enable_torque(self, names): ...
+    def disable_torque(self, names): ...
+```
+
+The generated `pyproject.toml` wires both:
+
+```toml
+[project.entry-points."solarian.actuators"]
+feetech = "solarian_feetech.actuator:FeetechServo"
+
+[project.entry-points."solarian.actuator_buses"]
+feetech = "solarian_feetech.bus:FeetechBus"
+```
+
+### Sensors
+
+A sensor plugin has the same shape, using `Sensor` + `SensorBus`:
+
+```python
+from solarian.core.sensor import Sensor
+from solarian.core.data import ImageData
+from solarian_camera.sensor_bus import CameraBus
+
+class RGBCamera(Sensor):
+    bus_class = CameraBus
+    rgb_image = ImageData(shape=(480, 640, 3))
+```
+
+The bus implements `read(ImageData, [...])` by grabbing a frame from V4L2 / AVFoundation / RealSense / whatever the sensor needs. It registers under `solarian.sensors` / `solarian.sensor_buses`.
+
+## Writing a module plugin
+
+A module plugin composes actuators/sensors into a ready-to-use unit and ships a default config in `templates/modules/`. `solarian-umi-slim` is a parallel gripper driven by a single Feetech servo — note it depends on `solarian-feetech` rather than reimplementing the driver:
+
+```python
+# solarian_umi_slim/module.py
+from solarian.core.gripper_module import GripperConfig, GripperModule
+from solarian.core.data import PosData
+from solarian_feetech.actuator import FeetechServo
+
+class UmiSlimConfig(GripperConfig):
+    aperture_closed_mm: float = 0.0                  # straight-line fallback
+    aperture_open_mm: float = 85.0                   # until a table is measured
+
+class UmiSlimModule(GripperModule):
+    config_class = UmiSlimConfig
+    scalar_actuator = "gripper"
+    gripper = FeetechServo(model="sts3215")          # one logical actuator
+
+    def initialize(self):
+        super().initialize()
+        self.disable_torque()
+        self.configure_components({"Operating_Mode": 0, "P_Coefficient": 32})
+        self.enable_torque()
+
+    def control_step(self):
+        ...                            # per-tick control logic
+```
+
+Its `pyproject.toml` declares the module entry point and the dependency:
+
+```toml
+[project]
+dependencies = ["solarian>=0.1.0", "solarian-feetech>=0.1.0"]
+
+[project.entry-points."solarian.modules"]
+umi-slim = "solarian_umi_slim.module:UmiSlimModule"
+```
+
+### Bundle a default config
+
+Ship the config under `templates/`, in the folder of the `conf/` directory that reads it, so [`solarian install`](#installing-a-plugin) can seed it: `templates/modules/<name>.yaml` becomes `conf/modules/<name>.yaml`, a skill's `templates/skills/move.yaml` becomes `conf/skills/move.yaml`, and a service's `templates/services/bbox_tracker.yaml` becomes `conf/services/bbox_tracker.yaml`. Keep the module's tunables here:
+
+```yaml
+# solarian_umi_slim/templates/modules/umi_slim.yaml
+port: /dev/ttyUSB0
+frequency: 30
+aperture_closed_mm: 0.0
+aperture_open_mm: 85.0
+actuators:
+  gripper:
+    id: 1
+    port: ${port}
+    sim_joint: "gripper/left_manifold_to_rail"
+    sim_range_min: 0
+    sim_range_max: 0.0545
+```
+
+### Ship data files (models, configs)
+
+Non-Python files (config templates, MuJoCo models, meshes) must be declared as package data so they travel with the wheel. `solarian-umi-slim` ships its simulation model this way:
+
+```toml
+[tool.setuptools.package-data]
+solarian_umi_slim = [
+    "templates/modules/*.yaml",
+    "assets/umi_slim.xml",
+    "assets/umi_slim_description/meshes/*.stl",
+]
+```
+
+Bundling the MJCF inside the package means `MJCF_PATH` resolves from the installed location, so every project that installs the plugin gets the model with no copying. See [Shipping the model inside a plugin](/docs/simulation#shipping-the-model-inside-a-plugin).
+
+## Writing a skill or policy plugin
+
+An AI plugin usually comes in two halves (they can be separate packages):
+
+- A **skill plugin** — the behavior. `solarian-umi-skill` ships a `UMISkill` that only *calls* a policy over HTTP. The yaml in `params["config"]` says which checkpoint and which modules:
+
+```toml
+[project.entry-points."solarian.skills"]
+umi = "solarian_umi_skill.skill:UMISkill"
+```
+
+- A **policy plugin** — the trainable model. `solarian-policy-diffusion` ships a `Trainer` (for `solarian train`), a `PolicyServer`, and a `Service` that registers the server so `solarian run-service` can serve a checkpoint, with heavy ML deps kept behind optional extras so merely *discovering* the plugin doesn't pull in PyTorch:
+
+```toml
+[project.optional-dependencies]
+serve = ["torch", "torchvision", "diffusers", "timm", ...]
+train = ["torch", "accelerate", "wandb", ...]
+
+[project.entry-points."solarian.trainers"]
+diffusion = "solarian_policy_diffusion.trainer:DiffusionTrainer"
+
+[project.entry-points."solarian.services"]
+diffusion-policy = "solarian_policy_diffusion.service:DiffusionPolicyService"
+```
+
+`solarian create-plugin policy <name>` scaffolds the stubs at once — `trainer.py`, `policy_server.py`, `service.py` and `skill.py` — and registers the `solarian.trainers`, `solarian.services` and `solarian.skills` entry points. See [Skills](/docs/skills) and [Policies](/docs/policies) for the class contracts.
+
+## Writing a command plugin
+
+A command plugin adds a `solarian` subcommand. Subclass `BaseCommand`, register it, and declare the `solarian.commands` entry point:
+
+```python
+from omegaconf import DictConfig
+from solarian.cli.base import BaseCommand, CommandRegistry
+
+@CommandRegistry.register('feetech-set-id')
+class SetIdCommand(BaseCommand):
+    category = "Utilities"
+    help = "Assign an ID to a Feetech servo."
+
+    def handle(self, cfg: DictConfig) -> None:
+        ...
+```
+
+`category` is the heading `solarian --help` groups the command under. Set `uses_config = False` when it needs no project yaml. Override `parse_args` to accept positionals or flags: store the parsed values on `self` and read them from `handle`. The default forwards every token to Hydra as a `key=value` override.
+
+```toml
+[project.entry-points."solarian.commands"]
+feetech-set-id = "solarian_feetech.commands.set_id:SetIdCommand"
+```
+
+See [Authoring a custom command](/docs/commands#authoring-a-custom-command) for config classes and lazy registration.
+
+## Publishing to PyPI
+
+A plugin is a standard package, so publishing is standard too:
+
+1. Set a real `name` (`solarian-<name>`), `version`, and metadata in `pyproject.toml`, and list `solarian>=0.1.0` in `dependencies`.
+2. Put your classes in the `solarian_<name>` package and confirm the entry points point at them.
+3. Declare any non-Python files under `[tool.setuptools.package-data]` so they ship in the wheel.
+4. Build and upload:
+
+```bash
+python -m build
+twine upload dist/*
+```
+
+Users then install with `solarian install solarian-<name>`, and you can [submit it](/plugins/submit) to the Plugin Directory.
 
 ## See also
 
-- [Using Plugins](/docs/using-plugins) — install, configure, and attach a plugin.
-- [Creating Plugins](/docs/creating-plugins) — scaffold, build, and publish your own.
-- [Modules](/docs/modules) — the consumer of every actuator/sensor in a plugin.
-- [Components & Buses](/docs/core) — the `Component` / `Bus` / `Data` contracts a hardware plugin implements.
+- [Plugin Directory](/plugins) — every published plugin, official and community.
+- [Modules](/docs/modules) — the class a module plugin subclasses, and the [Component](/docs/modules#components) and [Bus](/docs/modules#buses) contracts a hardware plugin implements.
+- [Data classes](/docs/observations#data-classes) — the `Data` channels a component declares.
+- [CLI](/docs/commands#project-commands) — full `install` reference.
+- [Project Configs](/docs/project-configs) — what `install` copies into `conf/`.

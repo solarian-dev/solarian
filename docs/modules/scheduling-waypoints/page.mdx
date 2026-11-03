@@ -30,7 +30,7 @@ Yaml selects the interpolator with `interpolator_type`. [`ArmModule`](https://gi
 
 Do **not** run a second interpolator in the skill/controller for the same stream — that double-smooths and adds lag. Forward policy waypoints straight onto the module.
 
-Go-to and streaming moves are different action types: `MOVE_L` / `MOVE_J` (`moveL` / `moveJ`, duration from `max_speed`) and `SERVO_L` / `SERVO_J` (adaptive drive horizon). See [Motion actions](/docs/action-types#waypoint-params).
+Go-to and streaming moves are different action types: `MOVE_L` / `MOVE_J` (`moveL` / `moveJ`, duration from `max_speed`) and `SERVO_L` / `SERVO_J` (adaptive drive horizon). See [Motion actions](/docs/actions#waypoint-params).
 
 ## Yaml
 
@@ -85,7 +85,7 @@ interpolator_type: pose
 max_speed: [0.25, 0.6]   # m/s, rad/s
 ```
 
-See [Adding a New Arm](/docs/ik/adding-an-arm) for the full SO-106 contract.
+See [Adding a new arm](/docs/ik#adding-a-new-arm) for the full SO-106 contract.
 
 ### Scheduling from a controller
 
@@ -171,6 +171,6 @@ Diffusion (and similar) policies emit a chunk of absolute target times. For each
 ## See also
 
 - [Modules](/docs/modules) — process loop, config, handlers
-- [Action Types](/docs/action-types) — `SCHEDULE_L` / `SCHEDULE_J`
-- [Adding a New Arm](/docs/ik/adding-an-arm) — full MinkIK pose contract (SO-106)
+- [Motion actions](/docs/actions#waypoint-params) — `SCHEDULE_L` / `SCHEDULE_J`
+- [Adding a new arm](/docs/ik#adding-a-new-arm) — full MinkIK pose contract (SO-106)
 - [Inverse Kinematics](/docs/ik) — Cartesian actuators and `IKActuatorBus`

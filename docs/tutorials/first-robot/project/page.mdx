@@ -19,7 +19,7 @@ cd so106
 
 You should see a short tree printed, and a new `so106/` folder. The layout is:
 
-```text
+<FileTree tree={`
 so106/
 ├── conf/
 │   ├── controller.yaml          # solarian run-controller
@@ -34,7 +34,7 @@ so106/
 │       └── localhost.yaml       # addresses and device paths
 ├── so106/
 │   ├── __init__.py
-│   ├── settings.py              # which classes are the robot, controller, server
+│   ├── settings.py              # which classes to run
 │   ├── robot.py                 # So106Robot
 │   ├── controller.py            # So106Controller
 │   ├── server.py                # So106Server
@@ -45,11 +45,11 @@ so106/
 │   └── dataset_ops/
 │       └── drop_short_episodes.py
 └── pyproject.toml
-```
+`} />
 
 These files are:
 
-- `so106/settings.py` points Solarian at your classes. The generated values are `so106.robot.So106Robot`, `so106.controller.So106Controller`, and `so106.server.So106Server`. You rarely edit it.
+- `so106/settings.py` tells Solarian which classes are your robot, controller, and server.
 - `robot.py` is the machine: one class attribute per module. The attribute's name is the module's name everywhere else.
 - `controller.py` is the decision. Keys, and later skills, live here.
 - `server.py` is the relay. Leave the generated class alone.
@@ -146,4 +146,4 @@ One string is about to show up in four places, and they must be identical:
 
 The next chapter creates `right_arm`. If any of the four disagree, Solarian raises a `TypeError` when the class is defined, before the robot starts. That error is the useful kind: read the name it complains about and fix the one that differs.
 
-Next: [write the arm](/docs/tutorials/first-robot/arm).
+Next: [build the robot](/docs/tutorials/first-robot/arm).

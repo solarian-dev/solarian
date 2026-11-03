@@ -1,14 +1,14 @@
 export const metadata = {
-  title: 'Sensing and control',
+  title: 'The control loop',
   description:
-    'The read, decide, write loop every robot runs: sensors, torque, PID, and trajectories, and how Solarian splits the loop across three processes.',
+    'The read, decide, write loop every robot runs: the sensors that read, the actuators and torque that write, and the control that turns a goal into motion.',
 }
 
-# Sensing and control
+# The control loop
 
-You can now describe where an arm is and where it should go. This chapter is about getting it there: what the robot measures, how a motor holds a joint, and how a motion is timed. {{ className: 'lead' }}
+You can now describe where an arm is and where it should go. This chapter is about getting it there: what the robot measures, what moves it, and how a controller turns a goal into motion. {{ className: 'lead' }}
 
-## The control loop
+## Read, decide, write
 
 Every robot, under all its machinery, repeats three steps, many times a second:
 
@@ -16,33 +16,81 @@ Every robot, under all its machinery, repeats three steps, many times a second:
 2. **Decide** what should happen next.
 3. **Write** the actuators.
 
-![Read an observation, decide in the controller or a skill, write an action.](/images/tutorials/loop.svg)
+<ControlLoopFigure />
 
-The rest of this chapter walks around that loop: sensors for the read, motors and PID for the write, and trajectories for timing the motion between them.
+The rest of this chapter walks around that loop: sensors for the read, actuators for the write, and control for the decision that connects them.
 
 ## Sensors
 
-A **sensor** turns something physical into a reading. Some readings are a single number, such as a joint angle. Some are a whole image.
+A **sensor** turns something physical into a number the computer can use. Some sensors return a single number, such as a joint angle. Some return thousands, such as an image. Two questions sort every sensor on a robot.
+
+### What it measures: proprioceptive or exteroceptive
+
+- A **proprioceptive** sensor measures the robot itself: its joint angles, its speed, how it is tilted, where it is. The word comes from the sense that lets you touch your nose with your eyes closed.
+- An **exteroceptive** sensor measures the world around the robot: what is in front of it, how far away a wall is, where the cup is.
+
+A robot needs both. Proprioception tells it the shape of its own body. Exteroception tells it where that body is relative to everything else.
+
+### How it measures: passive or active
+
+- A **passive** sensor reads energy that is already there: light that enters a camera, the magnetic field of a magnet on a shaft, a radio signal from a satellite.
+- An **active** sensor sends out its own energy, such as a laser pulse or a radio wave, and measures what comes back. It works in the dark and measures distance directly, and it spends power doing so.
 
 <SensorsFigure />
 
-- An **encoder** measures a joint angle as a count of ticks. Every servo on the SO-106 has one, so the arm always knows its own configuration.
-- A **camera** measures brightness on a grid of pixels. The camera in this course rides on the wrist and looks along the fingers, so the robot sees the object from the hand's point of view.
-- A **lidar** sweeps a beam around and measures the distance along each ray. Mobile robots use it to see the walls and obstacles around them.
-- An **ultrasonic** sensor measures a single distance, from the time a chirp takes to bounce back.
-- An **IMU** measures acceleration and rotation rate. A moving base or a legged robot uses it to stay level.
+### What each sensor returns
 
-The SO-106 in this course reads two of these: the joint encoders and the wrist camera.
+- An **encoder** measures the angle of a shaft. The Feetech servos on the SO-106 read a magnet on the output shaft and report a count from 0 to 4095 per turn, which becomes the joint angle. Every joint has one, so the arm always knows its own configuration.
+- An **IMU**, an inertial measurement unit, measures acceleration along three axes and turn rate around three axes. Standing still, the accelerometer reads gravity, so the IMU knows which way is down. A legged robot or a drone uses it to stay level.
+- A **GPS** receiver listens to satellites and computes its own position on Earth, as latitude and longitude, to within a few metres. It needs the open sky, so it serves robots that work outdoors. It reports the robot's own position, so it is usually grouped with the proprioceptive sensors.
+- A **camera** measures the brightness and color of light on a grid of pixels. One image is height × width × 3 numbers, one each for red, green, and blue. Two cameras side by side, a **stereo** pair, recover depth by comparing the two views. An **RGB-D** camera adds a depth value to every pixel, measured with its own projected light, which makes it an active sensor.
+- A **lidar** spins a laser and times each pulse's return. It returns one distance per angle, hundreds of them per turn, which together outline the walls and obstacles around it. Mobile robots and cars use it to build maps.
+- A **radar** does the same with radio waves. It returns the range of each target, and from the shift in the echo's frequency it also measures how fast the target is moving. Radio passes through rain, fog, and dust, which is why cars carry radar.
 
-## Torque
+The SO-106 in this course reads two of these: the joint encoders, proprioceptive, and a wrist camera, exteroceptive. That pair is enough to learn a task: the encoders tell the policy where the arm is, and the camera shows it where the object is.
 
-To move a joint, a motor has to twist it. **Torque** is that twist: a force times its distance from the hinge, in newton-metres.
+## Actuators
+
+An **actuator** is the part that moves a joint. It takes a command, a voltage or a target, and turns stored energy into motion.
+
+### Types of actuators
+
+- An **electric motor** turns current into rotation. It is clean, precise, and easy to control from a computer, so almost every arm and most mobile robots use one. **Brushed DC** motors are cheap and simple. **Brushless** motors are stronger for their size and last longer. **Stepper** motors move in fixed small steps, which suits 3D printers.
+- A **servo** packs an electric motor with a gearbox, an encoder, and a small controller in one box. You send a target angle, and it moves there and holds. [The robot's body](/docs/tutorials/gentle-intro/body) shows the inside of one. The SO-106 is built from Feetech servos.
+- A **quasi-direct-drive** actuator pairs a large brushless motor with a small gear ratio. It is fast, and it can feel forces pushed back through the joint, so it suits legged robots and arms that touch people. Solarian has a plugin for [Robstride](https://github.com/solarian-dev/solarian-robstride) motors of this kind.
+- **Hydraulic** actuators push with pressurised oil. They give the most force for their weight, and they drive excavators and some large humanoids.
+- **Pneumatic** actuators push with compressed air. They are light and naturally springy, and they drive many industrial grippers and soft robots.
+
+### Torque
+
+To move a joint, an actuator has to twist it. **Torque** is that twist: a force times its distance from the hinge, measured in newton-metres. One newton pushing on a lever one metre long is one newton-metre.
 
 <TorqueFigure />
 
 Gravity pulls on every link, so even a still arm needs torque just to stay up. Stretched out, the weight acts on a longer lever, and the shoulder works hardest. Tucked in, the same arm needs much less. That is why the SO-106 uses its stronger servos at the shoulder, elbow, and wrist flex.
 
-## PID: holding a joint
+A gearbox trades speed for torque. A motor alone spins fast and twists weakly. Behind a gear ratio of 100 to 1, the output turns 100 times slower and twists about 100 times harder, minus what friction takes. Small servos use high ratios to hold an arm up. Quasi-direct-drive actuators keep the ratio low, so they stay fast and feel what the joint touches.
+
+## Control
+
+**Control** is the decide step. Given where the robot should be and where its sensors say it is, the controller chooses the next command for the actuators.
+
+Control that never checks the result is **open loop**: run the motor for one second and hope the joint arrived. Control that measures the result and corrects the difference is **closed loop**, or **feedback** control. Every joint on the SO-106 runs closed loop, because each servo reads its own encoder.
+
+Control usually comes in layers. An upper layer plans a motion through time, a **trajectory**. A lower layer, much faster, makes each joint follow it, often with a **PID** controller.
+
+### Trajectories
+
+Telling a joint to jump straight to a far target would slam the arm. A **trajectory** is a path with time on it: where the hand should be at each instant on the way to the goal, and how fast it may go.
+
+<TrajectoryFigure />
+
+Two separate questions hide in a trajectory:
+
+- **Which path?** The straight line to the goal can run through the table, an obstacle, or the arm itself. Choosing a path that avoids them is **planning**.
+- **How fast along it?** Given a path, choosing the timing so the arm stays within its speed and acceleration limits is **interpolation**.
+
+### PID: holding a joint
 
 You tell a servo an angle, and it has to produce whatever torque gets the joint there and keeps it there. It measures the **error**, the commanded angle minus the measured angle, and turns that error into torque. **PID** is the classic recipe, three terms added together:
 
@@ -54,16 +102,14 @@ You tell a servo an angle, and it has to produce whatever torque gets the joint 
 
 Try the presets from left to right. **P only** swings past the target and settles short of the line, because gravity wins the last bit. **+ D** calms the swing. **+ I** closes the gap. The last three presets compare damping: underdamped crosses the target, critically damped is the fastest arrival that never crosses, and overdamped arrives later.
 
-## Trajectories
+### Other controllers
 
-Telling a joint to jump straight to a far target would slam the arm. A **trajectory** is a path with time on it: where the hand should be at each instant on the way to the goal, and how fast it may go.
+PID is the workhorse, and it is far from the only option. A few names you will meet:
 
-<TrajectoryFigure />
-
-Two separate questions hide in a trajectory:
-
-- **Which path?** The straight line to the goal can run through the table, an obstacle, or the arm itself. Choosing a path that avoids them is **planning**.
-- **How fast along it?** Given a path, choosing the timing so the arm stays within its speed and acceleration limits is **interpolation**.
+- **Feedforward** adds the torque a model predicts the motion needs, such as the torque to hold up the arm's weight, so the feedback term only corrects what the model missed.
+- **Impedance control** makes a joint behave like a spring and damper around its target, so the arm gives way when it touches something.
+- **Model predictive control** simulates the next fraction of a second for many candidate commands, and sends the first step of the best one, again on every tick.
+- A **learned policy** replaces the upper layer with a neural network trained from examples. It reads the sensors and outputs the next targets, and PID in the servos still follows them. [Policies and learning](/docs/tutorials/gentle-intro/learning) covers these.
 
 ## In Solarian
 
@@ -94,11 +140,11 @@ class So106Observation(Observation):
 
 - The **robot** process owns the hardware, or the simulator. It reads the sensors and applies actions.
 - The **relay server** passes observations and actions between the other two, so the computer wired to the arm and the computer running the decisions can be different machines.
-- The **controller** process decides. In Tutorial 1 the decision is "the operator pressed a key". Later it is a skill.
+- The **controller** process decides. In Tutorial 2 the decision is "the operator pressed a key". Later it is a skill.
 
 **Write.** Commands travel as an [`Action`](/docs/actions), the same shape written the other way. Each `FeetechServo` runs its PID inside the motor, so Solarian sends a target position and the servo produces the torque. On the SO-106 the joints that hold the arm up use a small I term, which is what lifts the sag you saw in the figure. The shoulder pan carries no constant gravity load, so it runs with I at zero, which also keeps it from chattering inside its gear backlash.
 
-**Timing.** The arm module interpolates between targets. In [Tutorial 3](/docs/tutorials/skills/move) you set its limits in the module's config:
+**Timing.** The arm module interpolates between targets. In [Tutorial 4](/docs/tutorials/skills/move) you set its limits in the module's config:
 
 ```yaml {{ title: 'conf/modules/right_arm.yaml' }}
 interpolator_type: pose
@@ -108,4 +154,4 @@ max_accel: [0.5, 3.0]
 
 The path itself comes from whoever chose the targets: you with the keyboard, a skill naming a pose, or a policy trained on human demonstrations, which already avoided the obstacles when the person did the task.
 
-Next: [learning, and going further](/docs/tutorials/gentle-intro/learning).
+Next: [policies and learning](/docs/tutorials/gentle-intro/learning).

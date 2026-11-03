@@ -51,10 +51,8 @@ Learn the building blocks of every Solarian project.
   <a href="/docs/servers" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Server →</a>
   <a href="/docs/observations" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Observations →</a>
   <a href="/docs/actions" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Actions →</a>
-  <a href="/docs/action-types" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Action Types →</a>
   <a href="/docs/settings" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Settings →</a>
   <a href="/docs/project-configs" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Configs →</a>
-  <a href="/docs/core" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Components & Buses →</a>
 </div>
 
 ## AI {{ anchor: false }}
@@ -73,9 +71,9 @@ Plan, decide, and act autonomously with the dual-process AI stack.
 Extend Solarian with `solarian-<name>` packages: hardware drivers, whole robots, skills, policies, and CLI commands.
 
 <div className="not-prose my-8 grid grid-cols-1 gap-x-8 gap-y-4 text-sm sm:grid-cols-2 xl:grid-cols-3">
-  <a href="/docs/plugins" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Plugins Overview →</a>
-  <a href="/docs/using-plugins" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Using Plugins →</a>
-  <a href="/docs/creating-plugins" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Creating Plugins →</a>
+  <a href="/docs/plugins" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Plugins →</a>
+  <a href="/docs/plugins#installing-a-plugin" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Installing a plugin →</a>
+  <a href="/docs/plugins#creating-a-plugin" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Creating a plugin →</a>
 </div>
 
 ## Simulation {{ anchor: false }}
@@ -83,11 +81,10 @@ Extend Solarian with `solarian-<name>` packages: hardware drivers, whole robots,
 Run any robot in a MuJoCo world by flipping a switch — same modules, servos, and YAML.
 
 <div className="not-prose my-8 grid grid-cols-1 gap-x-8 gap-y-4 text-sm sm:grid-cols-2 xl:grid-cols-3">
-  <a href="/docs/simulation" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Simulation Overview →</a>
-  <a href="/docs/sim-robots" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Sim Robots →</a>
-  <a href="/docs/scenes" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Scenes →</a>
-  <a href="/docs/sim-components" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Sim Servos & Cameras →</a>
-  <a href="/docs/onshape-models" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Onshape → Sim Models →</a>
+  <a href="/docs/simulation" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Simulation →</a>
+  <a href="/docs/simulation#scenes" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Scenes →</a>
+  <a href="/docs/simulation#simulated-servos" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Simulated Servos & Cameras →</a>
+  <a href="/docs/simulation#models-from-onshape" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Models from Onshape →</a>
   <a href="/docs/ik" className="text-zinc-700 hover:text-emerald-600 dark:text-zinc-300 dark:hover:text-emerald-400">Inverse Kinematics →</a>
 </div>
 
@@ -103,23 +100,23 @@ One project, followed from an empty folder to a robot that learns a task.
 
 <div className="not-prose my-8 grid grid-cols-1 gap-6 sm:grid-cols-2">
   <a href="/docs/tutorials/gentle-intro" className="group rounded-2xl border border-zinc-900/5 bg-zinc-50 p-6 transition hover:border-emerald-500/30 hover:bg-emerald-50/30 dark:border-white/5 dark:bg-white/2.5 dark:hover:border-emerald-400/30 dark:hover:bg-emerald-400/5">
-    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">0. Gentle intro to robotics</h3>
+    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">1. Gentle intro to Robotics</h3>
     <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Joints, poses, cameras, and the control loop — and the Solarian object each one becomes.</p>
   </a>
   <a href="/docs/tutorials/first-robot" className="group rounded-2xl border border-zinc-900/5 bg-zinc-50 p-6 transition hover:border-emerald-500/30 hover:bg-emerald-50/30 dark:border-white/5 dark:bg-white/2.5 dark:hover:border-emerald-400/30 dark:hover:bg-emerald-400/5">
-    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">1. Your first Solarian robot</h3>
+    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">2. Your first Solarian robot</h3>
     <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Scaffold a project, write an arm, and drive it in simulation with the keyboard.</p>
   </a>
   <a href="/docs/tutorials/real-robot" className="group rounded-2xl border border-zinc-900/5 bg-zinc-50 p-6 transition hover:border-emerald-500/30 hover:bg-emerald-50/30 dark:border-white/5 dark:bg-white/2.5 dark:hover:border-emerald-400/30 dark:hover:bg-emerald-400/5">
-    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">2. The real robot</h3>
+    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">3. The real robot</h3>
     <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Build the SO-106, calibrate the servos, and run the same keyboard on the hardware.</p>
   </a>
   <a href="/docs/tutorials/skills" className="group rounded-2xl border border-zinc-900/5 bg-zinc-50 p-6 transition hover:border-emerald-500/30 hover:bg-emerald-50/30 dark:border-white/5 dark:bg-white/2.5 dark:hover:border-emerald-400/30 dark:hover:bg-emerald-400/5">
-    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">3. Robot skills</h3>
+    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">4. Robot skills</h3>
     <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Write a skill, install a move skill, and run a pretrained UMI policy.</p>
   </a>
   <a href="/docs/tutorials/training" className="group rounded-2xl border border-zinc-900/5 bg-zinc-50 p-6 transition hover:border-emerald-500/30 hover:bg-emerald-50/30 dark:border-white/5 dark:bg-white/2.5 dark:hover:border-emerald-400/30 dark:hover:bg-emerald-400/5">
-    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">4. Train a skill</h3>
+    <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">5. Train a skill</h3>
     <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Train on an example dataset, collect your own with Lumi, and run the result.</p>
   </a>
 </div>

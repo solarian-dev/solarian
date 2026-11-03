@@ -1,14 +1,14 @@
 export const metadata = {
   title: 'The real robot',
   description:
-    'Buy and assemble an SO-106, calibrate the servos, and drive the Tutorial 1 project on the hardware.',
+    'Buy and assemble an SO-106, calibrate the servos, and drive the Tutorial 2 project on the hardware.',
 }
 
 # The real robot
 
-Tutorial 1 was the project. This one is the same project on a desk: printed parts, Feetech servos, a Raspberry Pi, and the keyboard you already wrote. You do not create a second codebase. `solarian run-robot sim=false` is the switch. {{ className: 'lead' }}
+Tutorial 2 was the project. This one is the same project on a desk: printed parts, Feetech servos, a Raspberry Pi, and the keyboard you already wrote. You do not create a second codebase. `solarian run-robot sim=false` is the switch. {{ className: 'lead' }}
 
-Finish [Tutorial 1](/docs/tutorials/first-robot) first. Simulation keeps working afterward. The class attribute stays `is_sim = True`, and each real run overrides it.
+Finish [Tutorial 2](/docs/tutorials/first-robot) first. Simulation keeps working afterward. The class attribute stays `is_sim = True`, and each real run overrides it.
 
 ## Chapters
 
@@ -23,7 +23,7 @@ Finish [Tutorial 1](/docs/tutorials/first-robot) first. Simulation keeps working
 
 `solarian calibrate` records how far each servo turns and which way is which. That is this tutorial. It makes the keyboard on the real arm match the keyboard in sim.
 
-Hand-eye calibration — where the camera sits relative to the fingertips — waits for [Tutorial 3](/docs/tutorials/skills/real-arm). A policy that reaches for something it sees is wrong without it. Joint teleop is not. Doing both in one sitting is how a working arm gets blamed on a bad policy, or the other way around.
+Hand-eye calibration — where the camera sits relative to the fingertips — waits for [Tutorial 4](/docs/tutorials/skills/real-arm). A policy that reaches for something it sees is wrong without it. Joint teleop is not. Doing both in one sitting is how a working arm gets blamed on a bad policy, or the other way around.
 
 ## While you work
 

@@ -18,7 +18,7 @@ This installs `solarian-move-skill` and copies `conf/skills/move.yaml` the first
 
 `MoveSkill` reads `poses[name]`, sends one `MOVE_J`, and finishes when a timeout elapses. The module drives the path. The skill does not interpolate.
 
-Your arm module from Tutorial 1 already handles `MOVE_J` by writing the joint values. So the plugin skill works on the class you wrote, before any kinematics.
+Your arm module from Tutorial 2 already handles `MOVE_J` by writing the joint values. So the plugin skill works on the class you wrote, before any kinematics.
 
 ## A key for home
 
@@ -84,7 +84,7 @@ Restart the controller. `0` tucks, `1` reaches. If `1` raises `KeyError` naming 
 
 Joint poses were enough for `home` and `reach`. A policy does not speak in joint angles. It speaks in where the fingertips should be: `x, y, z` and three rotations. Inverse kinematics is the arm module turning that into joints.
 
-Replace `so106/modules/right_arm.py`. The hand-written `MOVE_J` handler has to go. `ArmModule` already implements it, and a second handler on the subclass would hide that one. `ArmModule` also needs the joint limits from the kinematics model, which is why this arrives now and not in Tutorial 1.
+Replace `so106/modules/right_arm.py`. The hand-written `MOVE_J` handler has to go. `ArmModule` already implements it, and a second handler on the subclass would hide that one. `ArmModule` also needs the joint limits from the kinematics model, which is why this arrives now and not in Tutorial 2.
 
 ```python
 from solarian.core.arm_module import ArmModule
@@ -156,6 +156,6 @@ Do the same six lines on `RightArmObs`, with `SensorField`. The observation is h
 
 Restart the robot and the controller. `0` and `1` should still move the arm. They are joint poses, and `ArmModule` handles `MOVE_J` itself now. If they don't, the old `_handle_move_j` is still on the class.
 
-The contract you just implemented is the one in [Adding a New Arm](/docs/ik/adding-an-arm): joint servos, six Cartesian actuators, a `MinkIK` backend, and `interpolator_type: pose`. The reference has the rest of the fields. You have enough for a policy to ask for a hand pose.
+The contract you just implemented is the one in [Adding a new arm](/docs/ik#adding-a-new-arm): joint servos, six Cartesian actuators, a `MinkIK` backend, and `interpolator_type: pose`. The reference has the rest of the fields. You have enough for a policy to ask for a hand pose.
 
 Next: [what UMI is](/docs/tutorials/skills/umi).

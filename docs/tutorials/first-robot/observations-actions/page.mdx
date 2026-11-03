@@ -1,0 +1,105 @@
+export const metadata = {
+  title: 'Observations & Actions',
+  description:
+    'What observations and actions are, why every Solarian project defines them, and how to write the ones for the SO-106 arm.',
+}
+
+# Observations & Actions
+
+The robot and the controller are separate programs, often on separate computers. They talk in two kinds of messages: **observations**, what the robot reports, and **actions**, what the controller asks it to do. This chapter defines both for the arm. {{ className: 'lead' }}
+
+## What they are
+
+An **observation** is a snapshot of the robot's sensors at one instant. For the arm, it is the position of each of the six joints. The robot sends one every tick, the relay server forwards it, and the controller always reads the newest.
+
+An **action** is a command for the next instant. For the arm, it is a target for each of the six joints. The controller sends one every tick, and the robot hands each part of it to the module it names.
+
+```text
+robot  ── observation ──▶  server  ──▶  controller
+robot  ◀──── action ─────  server  ◀──  controller
+```
+
+Both are classes you write, one file each: `so106/observation.py` and `so106/action.py`. The scaffold created them empty in [Create a project](/docs/tutorials/first-robot/project).
+
+## Why they matter
+
+**They are the contract between the two programs.** Each is a typed schema: which modules, which fields, what type and unit each field has. The robot and the controller import the same two classes, so both sides agree on every message. Solarian checks the classes against the robot when Python defines them, so a misspelled module fails at import, before anything reaches the network.
+
+**They set what the controller sees and commands.** The robot reads and sends the sensor fields the observation declares. The action accepts the fields it declares and rejects any other. Adding a camera picture to the controller, two chapters from now, is one new line in the observation.
+
+**They are the dataset.** A recording stores the observation and the action of every tick, side by side. In [Tutorial 5](/docs/tutorials/training) a policy learns from exactly those pairs: given this observation, send this action. The trained policy then runs with the same two classes. Whatever the observation includes is everything the policy will know about the robot.
+
+## Define the observation
+
+The observation lists, module by module, which readings the robot sends. For the arm that is each joint's position. Replace `so106/observation.py`:
+
+```python {{ title: 'so106/observation.py' }}
+from solarian.core.observation import ModuleObs, Observation, SensorField
+
+from so106.robot import So106Robot
+
+
+class RightArmObs(ModuleObs):
+    shoulder_pan = SensorField(So106Robot.right_arm.shoulder_pan.pos)
+    shoulder_lift = SensorField(So106Robot.right_arm.shoulder_lift.pos)
+    elbow_flex = SensorField(So106Robot.right_arm.elbow_flex.pos)
+    wrist_flex = SensorField(So106Robot.right_arm.wrist_flex.pos)
+    wrist_yaw = SensorField(So106Robot.right_arm.wrist_yaw.pos)
+    wrist_roll = SensorField(So106Robot.right_arm.wrist_roll.pos)
+
+
+class So106Observation(Observation):
+    right_arm = RightArmObs()
+```
+
+The lines that matter:
+
+- **`class RightArmObs(ModuleObs)`** groups the readings of one module. Each module with sensors you care about gets one of these.
+- **`SensorField(So106Robot.right_arm.shoulder_pan.pos)`** points at one piece of data on the robot, read as a path: the module `right_arm`, its servo `shoulder_pan`, and that servo's position `pos`. The field takes its type and unit from that data: a normalized position from −100 to 100, the same range the arm's YAML set.
+- **`shoulder_pan =`** is the field's name in the observation. It is yours to choose. Using the joint's own name keeps every later reading easy to follow.
+- **`right_arm = RightArmObs()`** attaches the group to the observation. This name has to equal the module's attribute on the robot.
+
+## Define the action
+
+The action has the same shape, for the opposite direction: the same six joint positions, written by the controller instead of read from the servos. Replace `so106/action.py`:
+
+```python {{ title: 'so106/action.py' }}
+from solarian.core.action import Action, ActuatorField, ModuleAction
+
+from so106.robot import So106Robot
+
+
+class RightArmAction(ModuleAction):
+    shoulder_pan = ActuatorField(So106Robot.right_arm.shoulder_pan.pos)
+    shoulder_lift = ActuatorField(So106Robot.right_arm.shoulder_lift.pos)
+    elbow_flex = ActuatorField(So106Robot.right_arm.elbow_flex.pos)
+    wrist_flex = ActuatorField(So106Robot.right_arm.wrist_flex.pos)
+    wrist_yaw = ActuatorField(So106Robot.right_arm.wrist_yaw.pos)
+    wrist_roll = ActuatorField(So106Robot.right_arm.wrist_roll.pos)
+
+
+class So106Action(Action):
+    right_arm = RightArmAction()
+```
+
+The lines that matter:
+
+- **`class RightArmAction(ModuleAction)`** is the command for one module. The robot delivers it to that module, and only to that module.
+- **`ActuatorField(So106Robot.right_arm.shoulder_pan.pos)`** points at the same data the observation reads. Here it is a target: the controller sets its value, and the module writes it to the servo.
+- **`right_arm = RightArmAction()`** routes the group. Like the observation, the name has to equal the module's attribute on the robot.
+
+The schema fixes which numbers an action carries. What the module does with them is the **action type**, chosen each time the controller builds an action. The controller in the next chapter sets `MOVE_J`, the type the arm's `@action_handler` accepts: go to these joint targets.
+
+## How one command travels
+
+Every piece written so far takes part in a single keypress:
+
+1. The controller builds a `So106Action`, sets `right_arm.action_type` to `MOVE_J`, and changes `right_arm.shoulder_lift.value`.
+2. The relay server forwards it to the robot.
+3. The robot hands the `right_arm` part to `RightArmModule`, whose `MOVE_J` handler keeps the six targets as its goal.
+4. The module's `control_step` writes the goal to the servos, 50 times a second.
+5. The servos move. The robot reads their new positions into a `So106Observation` and sends it back.
+
+If a name on either class differs from the robot, the import fails and the message names the field. Fix the name it prints. The [project page](/docs/tutorials/first-robot/project#where-the-name-has-to-match) lists the four places the module name has to match.
+
+Next: [the controller](/docs/tutorials/first-robot/keyboard).

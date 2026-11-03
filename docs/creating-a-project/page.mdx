@@ -61,7 +61,7 @@ pip install -e .
 
 ## 2. Add a hardware module
 
-Solarian hardware drivers ship as standalone `solarian-<name>` packages. [`solarian install`](/docs/using-plugins#install-a-plugin) installs the plugin and copies its default YAML config into your project's `conf/` directory.
+Solarian hardware drivers ship as standalone `solarian-<name>` packages. [`solarian install`](/docs/plugins#installing-a-plugin) installs the plugin and copies its default YAML config into your project's `conf/` directory.
 
 ```bash
 solarian install ur5
@@ -73,7 +73,7 @@ This installs `solarian-ur5` and creates `conf/modules/ur5.yaml` from the plugin
 mv conf/modules/ur5.yaml conf/modules/arm.yaml
 ```
 
-See [Core Plugins](/docs/core-plugins) for the drivers to start with.
+See [Core Plugins](/docs/plugins#core-plugins) for the drivers to start with.
 
 Edit `myrobot/robot.py` to attach the module:
 
@@ -142,7 +142,7 @@ class MyrobotController(Controller):
 
 Handlers run on the control thread when the tick drains, so they never race the control loop. For keys you *hold* rather than tap, read `self.held_keys` in `control_step` instead.
 
-See [Controllers](/docs/controllers) for the full lifecycle, [Events](/docs/events) for other input devices, and [Action Types](/docs/action-types) for the enum.
+See [Controllers](/docs/controllers) for the full lifecycle, [Events](/docs/events) for other input devices, and [Action types](/docs/actions#action-types) for the enum.
 
 ## 5. Run the three nodes
 
@@ -177,7 +177,7 @@ In the controller window, press `a` and `d` to nudge `shoulder_pan`. You should 
 ## Where to go next
 
 - **Calibrate the hardware** with `solarian calibrate` before first `run-robot` on a real arm or gripper — see [Calibration](/docs/modules/calibration).
-- **Add more modules** with `solarian install <plugin>` — see [Core Plugins](/docs/core-plugins).
+- **Add more modules** with `solarian install <plugin>` — see [Core Plugins](/docs/plugins#core-plugins).
 - **Record a dataset** of teleoperated demonstrations: `solarian record`.
 - **Curate it** with dataset ops, your own included: `solarian add-op <name>` writes one into `dataset_ops/` — see [Dataset ops](/docs/datasets#dataset-ops).
 - **Replace the controller** with a learned policy, served with `solarian run-service <skill conf>` and driven by a skill, or with the [AI Controller](/docs/ai_controller) for VLM-driven control.

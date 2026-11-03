@@ -150,7 +150,7 @@ These send `START_SERVICE` / `STOP_SERVICE` actions. The relay applies one itsel
 
 A skill whose `execution_place` is `SERVER` runs on the relay rather than the robot. The controller's `START_SKILL` names the place; the relay intercepts it, runs the skill against the observations it relays (including the fields it computes), and sends the skill's actions to the robot with the controller's. Its status rows reach the controller the same way a robot skill's do. Set `host_skills: false` to forward every `START_SKILL` to the robot instead.
 
-Running a skill on the relay keeps it beside the server-side processors it reads; running it on the robot avoids the relay hop for every action. Which is faster depends on the link, so the placement is configuration: see [Skills](/docs/skills#where-the-skill-runs-executionplace-and-executionmode).
+Running a skill on the relay keeps it beside the server-side processors it reads; running it on the robot avoids the relay hop for every action. Which is faster depends on the link, so the placement is configuration: see [Skills](/docs/skills#where-the-skill-runs-execution-place-and-execution-mode).
 
 ## Running the server
 

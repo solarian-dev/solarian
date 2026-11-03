@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Actions',
   description:
-    'Action is the typed schema of every command sent to the robot. It groups per-module ModuleAction subclasses, carries an action type that controls routing, and is the same object you record, replay, and emit from policies.',
+    'Action is the typed schema of every command sent to the robot. It groups per-module ModuleAction subclasses and carries an integer action type that decides how the robot routes it: into a module queue as a motion, to a skill, or to an @action_handler you declare.',
 }
 
 # Actions
@@ -14,8 +14,8 @@ Defined in [`solarian/core/action.py`](https://github.com/solarian-dev/solarian/
 
 An `Action` is a top-level container that carries:
 
-- An **action type** (`action.action_type`) — an integer that tells the robot how to dispatch the action (see [Action Types](/docs/action-types)).
-- For `MODULE_ACTION`, a dictionary of [`ModuleAction`](#moduleaction) instances keyed by module name.
+- An **action type** (`action.action_type`), an integer that tells the robot how to dispatch the action (see [Action types](#action-types)).
+- For `MODULE_ACTION`, a dictionary of [`ModuleAction`](#module-action) instances keyed by module name.
 - For other action types, an arbitrary `data` dictionary that's forwarded as-is.
 
 ```text
@@ -45,7 +45,14 @@ class ArmAction(ModuleAction):
     wrist_roll = ActuatorField(MyRobot.arm.wrist_roll.pos)
 ```
 
-Each `ActuatorField` carries the dtype/shape of its bound `Data` so that values are validated and shaped correctly at runtime.
+Each `ActuatorField` carries the dtype/shape of its bound `Data` so that values are validated and shaped correctly at runtime. The field name (`shoulder_pan`) must match the actuator name on the module.
+
+Use the introspection helpers if you need to walk the schema:
+
+```python
+ArmAction.get_actuator_fields_spec()
+# {'shoulder_pan': ActuatorField(...), 'shoulder_lift': ActuatorField(...), ...}
+```
 
 ## Action
 
@@ -61,28 +68,9 @@ class MyAction(Action):
 
 `MyAction` knows how to serialize to a dict, validate incoming data, and produce a zero-initialized example via `MyAction.zeros()`.
 
-## Declaring actuator fields
-
-An `ActuatorField` binds an action field to a single `Data` point on a `Robot`:
-
-```python
-from solarian.core.action import ActuatorField
-
-class ArmAction(ModuleAction):
-    shoulder_pan = ActuatorField(MyRobot.arm.shoulder_pan.pos)
-    # the field name (`shoulder_pan`) must match the actuator name on the module
-```
-
-Use the introspection helpers if you need to walk the schema:
-
-```python
-ArmAction.get_actuator_fields_spec()
-# {'shoulder_pan': ActuatorField(...), 'shoulder_lift': ActuatorField(...), ...}
-```
-
 ## Building an action
 
-The recommended pattern is to start from `MyAction.zeros()` and overwrite the fields you care about:
+Start from `MyAction.zeros()` and overwrite the fields you care about:
 
 ```python
 from solarian.core.action import ActionType
@@ -97,9 +85,11 @@ action.gripper.pos.value = 0.0
 
 `MyAction.zeros()` walks every declared `ModuleAction` and `ActuatorField`, allocates the right `Data` subtype for each, and returns a fully populated container with `action_type=STOP`.
 
+A [skill](/docs/skills) does not use the typed schema. It builds the envelope itself, keyed by module **name**, with the motion type per module; see [Motion actions](#waypoint-params).
+
 ## Sending actions from a controller
 
-Inside `Controller.control_step()`, return an `Action` and Solarian will serialize and push it for you:
+A controller sends whatever its `control_step()` returns. By default that is the merge of what its running [skills](/docs/skills) emitted; [override it](/docs/controllers#writing-control-step-yourself) to return your own:
 
 ```python
 class MyController(Controller):
@@ -112,14 +102,211 @@ class MyController(Controller):
 
 The controller's control loop runs at `cfg.fps`. Each return value goes out over the action socket as a single msgpack-encoded message.
 
+## Action types
+
+`ActionType` is a lightweight integer-style class (not a true `IntEnum`, so it supports subclass extension without enum-validation conflicts):
+
+```python
+class ActionType:
+    STOP             = 0
+    MODULE_ACTION    = 1
+    RESTART_PUT      = 3
+    START_SKILL      = 4
+    STOP_SKILL       = 5
+    SCHEDULE_L       = 8
+    SCHEDULE_J       = 9
+    MOVE_L           = 10
+    MOVE_J           = 11
+    SERVO_L          = 12
+    SERVO_J          = 13
+    START_SERVICE    = 17
+    STOP_SERVICE     = 18
+    CUSTOM_START     = 100
+```
+
+<Properties>
+  <Property name="STOP" type="int = 0">
+    Tells a module to stop its run loop. The default <code>_dispatch_action</code> handles it by returning <code>False</code>.
+  </Property>
+  <Property name="MODULE_ACTION" type="int = 1">
+    The most common type. The action carries one or more <code>ModuleAction</code> sub-actions in <code>action.data</code>; the robot pushes each one onto the corresponding module's <code>action_queue</code>.
+  </Property>
+  <Property name="RESTART_PUT" type="int = 3">
+    Resets a module's internal <code>put</code> timing — used when the controller resynchronizes the rate.
+  </Property>
+  <Property name="START_SKILL" type="int = 4">
+    Start a registered skill by name, carrying <code>{'{"skill": name, "params": {...}}'}</code>. Module names the skill writes live in <code>params["arm"]</code> / <code>params["gripper"]</code>. One shape for two channels: on the <code>skill_command_queue</code> it asks the controller to start the skill, and on the wire to the robot it asks the robot to. The direction is the channel's, not the type's. Never forwarded to a module.
+  </Property>
+  <Property name="STOP_SKILL" type="int = 5">
+    The counterpart to <code>START_SKILL</code>, carrying just the name.
+  </Property>
+  <Property name="START_SERVICE / STOP_SERVICE" type="int = 17 / 18">
+    Start or stop the processor behind a calculated field, carrying <code>{'{"module": name, "field": name, "params": {...}}'}</code>. The relay applies it when it computes that field and forwards it to the robot otherwise; the robot hands it to the owning module. Sent by <code>Controller.start_service</code> / <code>stop_service</code>; see <a href="/docs/services">Services</a>.
+  </Property>
+  <Property name="CUSTOM_START" type="int = 100">
+    The first integer reserved for user-defined action types. Anything <code>&gt;= 100</code> is yours.
+  </Property>
+</Properties>
+
+## Motion actions {{ id: 'waypoint-params' }}
+
+Inside a `MODULE_ACTION`, each module's entry carries its own type, naming the module primitive it calls. **L** is Cartesian (pose interpolator, arms only). **J** is configuration space: joints on an arm, a scalar on a gripper.
+
+<Properties>
+  <Property name="SCHEDULE_L / SCHEDULE_J" type="int = 8 / 9">
+    Timestamped waypoint. The caller owns arrival time; the interpolator blends the point in. Policy chunks use this.
+  </Property>
+  <Property name="MOVE_L / MOVE_J" type="int = 10 / 11">
+    Speed-limited go-to (<code>moveL</code> / <code>moveJ</code>). Duration is distance / <code>max_speed</code>. Optional <code>params.speed</code> overrides the module limit; it is not a mode switch.
+  </Property>
+  <Property name="SERVO_L / SERVO_J" type="int = 12 / 13">
+    Streaming target (<code>servoL</code> / <code>servoJ</code>) over the module's adaptive drive horizon. Leader follow uses <code>SERVO_J</code>.
+  </Property>
+  <Property name="speed" type="float | None">
+    Optional override on <code>MOVE_*</code>: <code>moveJ</code> in rad/s (or gripper units/s), <code>moveL</code> in m/s. <code>None</code> or omitted uses the module default / <code>cfg.max_speed</code>.
+  </Property>
+  <Property name="rot_speed" type="float">
+    Rotational limit for <code>MOVE_L</code>, in rad/s.
+  </Property>
+  <Property name="frame" type="str = 'world'">
+    On <code>MOVE_L</code>, <code>{'"ee"'}</code> composes the Cartesian payload as a delta in the current end-effector frame before moving.
+  </Property>
+</Properties>
+
+A [skill](/docs/skills) builds this envelope itself, keyed by module **name**. Modules interpret actions; they do not manufacture them for someone else, which is what lets the same skill run on the controller or on the robot — a name crosses a link, a `Module` object cannot.
+
+```python
+# Streaming follow: module owns a short horizon.
+Action(
+    action_type=ActionType.MODULE_ACTION,
+    data={
+        "right_arm": {
+            "action_type": ActionType.SERVO_J,
+            "data": joint_fields,
+        },
+        "right_gripper": {
+            "action_type": ActionType.SERVO_J,
+            "data": grip_fields,
+        },
+    },
+)
+
+# Exclusive go-to: duration from max_speed.
+Action(
+    action_type=ActionType.MODULE_ACTION,
+    data={
+        "right_arm": {
+            "action_type": ActionType.MOVE_J,
+            "data": joint_fields,
+            "params": {"frame": "world"},
+        }
+    },
+)
+```
+
+See [Scheduling Waypoints](/docs/modules/scheduling-waypoints) for how arm and gripper modules execute them.
+
 ## How the robot routes actions
 
 When the robot receives an `Action`, it looks at `action.action_type`:
 
-- `ActionType.MODULE_ACTION` (`= 1`) — for each `ModuleAction` in `action`, push it onto the corresponding `module.action_queue` (a shared-memory queue). The module's run loop drains the queue each tick and writes to its actuators.
-- Any other type — look up `Robot.action_handlers[action_type]` (built from `@action_handler`-decorated methods on the `Robot` subclass) and dispatch.
+```text
+Action received
+   │
+   ├── MODULE_ACTION          → push each module's entry onto that
+   │                            module.action_queue (shared memory)
+   ├── START_SKILL / STOP_SKILL → start or stop a robot-side skill by name
+   │
+   └── anything else           → look up @action_handler(action_type)
+                                 on the Robot subclass and call it
+```
 
-For per-module routing of non-`MODULE_ACTION` types, the same `@action_handler` decorator works on `Module` subclasses; the action ends up in the queue and the module dispatches it. See [Action Types](/docs/action-types) for the full list.
+The module's run loop drains its queue each tick and dispatches each entry by its own type: a motion type to the module's interpolator, a custom type to the module's `@action_handler`.
+
+## Custom action types
+
+To add your own action types, subclass `ActionType` and define class attributes whose values are `>= ActionType.CUSTOM_START`:
+
+```python
+from solarian.core.action import ActionType
+
+class MyActionType(ActionType):
+    OPEN_GRIPPER  = ActionType.CUSTOM_START + 0
+    CLOSE_GRIPPER = ActionType.CUSTOM_START + 1
+    HOMING        = ActionType.CUSTOM_START + 2
+```
+
+Solarian's `ActionType.__init_subclass__` validates each value at import time:
+
+- Any value below `CUSTOM_START` that conflicts with a built-in raises `ValueError(f"{name}={val} conflicts with reserved range")`.
+- Each new value is registered in `ActionType._registry` so `ActionType.name_of(value)` returns a friendly label.
+
+You can declare as many subclasses as you like across plugins; each adds its own entries to the shared registry.
+
+### Registering handlers {{ id: 'registering-handlers' }}
+
+Use the `@action_handler` decorator to bind a method to an action type. The decorated method must return `bool` — `True` to keep the loop running, `False` to stop the module/robot.
+
+On a **`Module`**, for actions placed on that module's queue:
+
+```python
+from solarian.core.module import Module
+from solarian.core.action import action_handler, ModuleAction
+
+class GripperModule(Module):
+    @action_handler(MyActionType.OPEN_GRIPPER)
+    def _on_open(self, action: ModuleAction, t_now: float) -> bool:
+        self.write_actuators({"pos": 1.0})
+        return True
+
+    @action_handler(MyActionType.CLOSE_GRIPPER)
+    def _on_close(self, action: ModuleAction, t_now: float) -> bool:
+        self.write_actuators({"pos": 0.0})
+        return True
+```
+
+On a **`Robot`**, for actions whose type isn't `MODULE_ACTION`. Useful for fan-out commands, one incoming action that affects several modules:
+
+```python
+from solarian.core import Robot
+from solarian.core.action import action_handler
+
+class MyRobot(Robot):
+    arm = ArmModule()
+    gripper = GripperModule()
+
+    @action_handler(MyActionType.HOMING)
+    def _on_homing(self, action, t_now) -> bool:
+        for module in self.modules.values():
+            module.action_queue.put(MoveToHomeAction(...))
+        return True
+```
+
+### Sending a custom action
+
+Set `action.action_type` and put your payload in `action.data`. Custom action types use the raw `data` dict; `Action.zeros()` and the per-module path don't apply:
+
+```python
+from solarian.core.action import Action
+
+class MyController(Controller):
+    def control_step(self) -> Action:
+        if self.want_to_home:
+            self.want_to_home = False
+            action = Action()
+            action.action_type = MyActionType.HOMING
+            action.data = {"speed": 0.5}
+            return action
+        return super().control_step()
+```
+
+A skill cannot send one: skills command modules, so a skill's non-`MODULE_ACTION` return is dropped with a warning. Starting skills and custom commands are the host's call.
+
+### Naming conventions
+
+- **Use a subclass per logical group of actions.** One per plugin or per high-level capability (`GripperActionType`, `NavigationActionType`, …) keeps namespaces clean.
+- **Always offset from `CUSTOM_START`.** The reserved range catches collisions early.
+- **Keep handler return values explicit.** A `True` keeps the loop alive; a `False` is interpreted as "stop this module" (or "stop this robot" at the robot level). Don't let a handler accidentally fall through to `None`.
 
 ## Compression and serialization
 
@@ -129,8 +316,8 @@ You generally don't compress actions explicitly — they're small enough that JP
 
 ## See also
 
-- [Action Types](/docs/action-types) — built-in types and how to add your own.
-- [Observations](/docs/observations) — the counterpart that flows the other way.
+- [Observations](/docs/observations) — the counterpart that flows the other way, and the <code>Data</code> classes both are built from.
 - [Modules](/docs/modules) — where actions are dispatched on the robot side.
+- [Scheduling Waypoints](/docs/modules/scheduling-waypoints) — pose and scalar motion on arm and gripper modules.
 - [Controllers](/docs/controllers) — where actions are produced.
-- [Core](/docs/core) — the <code>Data</code> and <code>ActuatorField</code> reference.
+- [Skills](/docs/skills) — skills emit module actions into the controller's queues.

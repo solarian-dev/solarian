@@ -12,7 +12,7 @@ Defined in [`solarian/core/ai/system1/skill.py`](https://github.com/solarian-dev
 
 ## Anatomy
 
-A `Skill` is an abstract class — not a `Process`. How it is scheduled is a separate property (see [ExecutionPlace and ExecutionMode](#where-the-skill-runs-executionplace-and-executionmode)). It owns:
+A `Skill` is an abstract class — not a `Process`. How it is scheduled is a separate property (see [ExecutionPlace and ExecutionMode](#where-the-skill-runs-execution-place-and-execution-mode)). It owns:
 
 - A reference to the shared **observation ring buffers** (read-only).
 - A per-module **action queue** for each module it commands — the one channel out.
@@ -85,7 +85,7 @@ A step reads its own attributes and its own [config](#configuration), never its 
 
 A step returns intent; the host decides where it goes. Return a single `Action`, a list (a chunk of future waypoints), or `None` to do nothing this tick.
 
-A skill builds the [envelope](/docs/action-types#waypoint-params) itself, keyed by module **name**, and one action may carry several modules — `dispatch` splits it per module anyway, so that is one fewer thing for the host to merge:
+A skill builds the [envelope](/docs/actions#waypoint-params) itself, keyed by module **name**, and one action may carry several modules — `dispatch` splits it per module anyway, so that is one fewer thing for the host to merge:
 
 ```python
 def control_step(self, dt):
@@ -355,6 +355,6 @@ solarian run-service diffusion-policy --checkpoint <checkpoint.ckpt> --port 8001
 ## See also
 
 - [AI Controller](/docs/ai_controller) — the orchestrator that spawns and coordinates skills.
-- [Action Types](/docs/action-types) — used by remote (`ROBOT`/`SERVER`) skills.
+- [Action types](/docs/actions#action-types) — used by remote (`ROBOT`/`SERVER`) skills.
 - [Modules](/docs/modules) — the per-module action queues skills push into.
 - [Observations](/docs/observations) — the shared buffers skills read from.

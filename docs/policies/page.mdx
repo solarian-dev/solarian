@@ -46,7 +46,7 @@ solarian run-service umi_target --checkpoint models/pick/checkpoints/latest.ckpt
 solarian run-service diffusion-policy --checkpoint cup.ckpt --port 8001
 ```
 
-To serve it on a cloud GPU instead, `solarian modal-serve umi_target` deploys it on your Modal account, and Solarian Base serves the checkpoints its training jobs wrote from **Models**. See [Services](/docs/services#serving-on-modal) and [Services, Policies & Models](/docs/solarian-base/endpoints).
+To serve it on a cloud GPU instead, Solarian Base serves the checkpoints its training jobs wrote from **Models**. See [Services, Policies & Models](/docs/solarian-base/endpoints).
 
 ## Policy plugins
 

@@ -8,7 +8,7 @@ export const metadata = {
 
 By the end of this tutorial you have a simulated robot: a six-joint arm you wrote yourself, a gripper installed from a plugin, and a wrist camera whose picture shows up in the controller. You move it with the keyboard. No hardware yet. {{ className: 'lead' }}
 
-![SO-106, the arm this tutorial builds](/hardware/so106/media/cover.png)
+<CompleteRobotFigure />
 
 The project is called `so106`, and every later tutorial continues it. Do the chapters in order. Each one ends with something you can see.
 
@@ -32,12 +32,13 @@ create-solarian --help
 ## What you will add, and in which order
 
 1. An empty project, and a tour of the files. [Create a project](/docs/tutorials/first-robot/project).
-2. The arm, written in the project: six joints, a config file, a MuJoCo model. [The arm](/docs/tutorials/first-robot/arm).
-3. A keyboard controller. [Keyboard](/docs/tutorials/first-robot/keyboard).
-4. The sim window, and the arm actually moving. [Move it](/docs/tutorials/first-robot/simulate).
-5. A gripper from a plugin, mounted on the flange. [The gripper](/docs/tutorials/first-robot/gripper).
-6. A camera, and its picture in the controller. [The camera](/docs/tutorials/first-robot/camera).
+2. The robot and its first module, the arm: six joints, a config file, a MuJoCo model in a scene. [The Robot](/docs/tutorials/first-robot/arm).
+3. The messages between robot and controller. [Observations & Actions](/docs/tutorials/first-robot/observations-actions).
+4. A controller you drive with the keyboard. [The Controller](/docs/tutorials/first-robot/keyboard).
+5. The sim window, and the arm actually moving. [Move it](/docs/tutorials/first-robot/simulate).
+6. A gripper from a plugin, mounted on the flange. [The gripper](/docs/tutorials/first-robot/gripper).
+7. A camera, and its picture in the controller. [The camera](/docs/tutorials/first-robot/camera).
 
-Three ideas are worth having before the first command. A **module** is one device (arm, gripper, camera). A **plugin** is a package that ships a module or a driver you did not write. The **three processes** — relay server, robot, controller — are how a Solarian app runs, even when all three are on your laptop. [Tutorial 0](/docs/tutorials/gentle-intro) is the longer version of the robotics words.
+Three ideas are worth having before the first command. A **module** is one device (arm, gripper, camera). A **plugin** is a package that ships a module or a driver you did not write. The **three processes** — relay server, robot, controller — are how a Solarian app runs, even when all three are on your laptop. [Tutorial 1](/docs/tutorials/gentle-intro) is the longer version of the robotics words.
 
 You will keep three terminals open for the rest of the course. Get used to restarting the robot and the controller after a code change. The server can stay up.

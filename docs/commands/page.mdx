@@ -65,7 +65,7 @@ solarian install <package-or-path>
 
 Installs a plugin into the current Python environment, adds it to the project's `pyproject.toml`, and copies its config template into `conf/` when that file is not already there. A name is resolved on PyPI first (`ur5` installs `solarian-ur5`). If PyPI has no such project, the command looks in the current directory and then in `plugins/`. A path installs that directory editable and skips PyPI.
 
-`templates/<folder>/<file>.yaml` is copied to `conf/<folder>/<file>.yaml`, so a module plugin's `templates/modules/ur5.yaml` lands at `conf/modules/ur5.yaml`, and the attribute on your `Robot` has to match that filename. See [Using Plugins](/docs/using-plugins) and [Project Configs](/docs/project-configs).
+`templates/<folder>/<file>.yaml` is copied to `conf/<folder>/<file>.yaml`, so a module plugin's `templates/modules/ur5.yaml` lands at `conf/modules/ur5.yaml`, and the attribute on your `Robot` has to match that filename. See [Installing a plugin](/docs/plugins#installing-a-plugin) and [Project Configs](/docs/project-configs).
 
 ```bash
 solarian install solarian-move-skill
@@ -237,7 +237,7 @@ Writes the calibration values from YAML into the controller hardware.
 solarian run-service <conf_or_service> [--checkpoint PATH] [--host HOST] [--port PORT] [server args...]
 ```
 
-Runs a [service](/docs/services): a tracker, a depth model, or a [policy](/docs/policies) server. Name a conf in `conf/services/` or `conf/skills/` with a `server:` block to run the server it describes, with its checkpoint, port and args, or name an installed service to run it with your own. `--checkpoint`, `--host` and `--port` override the conf, and every other argument goes to the server after the conf's `args`. So `solarian run-service bbox_tracker` starts the SAM 2 tracker `conf/services/bbox_tracker.yaml` calls, `solarian run-service umi_target --checkpoint models/pick/checkpoints/latest.ckpt` the diffusion policy `conf/skills/umi_target.yaml` drives, and `solarian run-service sam2-tracker --model small` the tracker with your arguments. An unknown name lists the installed services. To serve on Modal or Solarian Base instead, see [Serving on Modal](/docs/services#serving-on-modal).
+Runs a [service](/docs/services): a tracker, a depth model, or a [policy](/docs/policies) server. Name a conf in `conf/services/` or `conf/skills/` with a `server:` block to run the server it describes, with its checkpoint, port and args, or name an installed service to run it with your own. `--checkpoint`, `--host` and `--port` override the conf, and every other argument goes to the server after the conf's `args`. So `solarian run-service bbox_tracker` starts the SAM 2 tracker `conf/services/bbox_tracker.yaml` calls, `solarian run-service umi_target --checkpoint models/pick/checkpoints/latest.ckpt` the diffusion policy `conf/skills/umi_target.yaml` drives, and `solarian run-service sam2-tracker --model small` the tracker with your arguments. An unknown name lists the installed services. To serve on Solarian Base's GPUs instead, see [Services, Policies & Models](/docs/solarian-base/endpoints).
 
 ### `run-server`
 
@@ -339,7 +339,7 @@ Detects and lists every camera available to the system (V4L2 on Linux, AVFoundat
 solarian onshape-export <assembly_dir> [--clean-only] [--keys-file PATH] [--update-yaml PATH]
 ```
 
-Exports an Onshape CAD assembly into an attachable MuJoCo (MJCF) model for [simulation](/docs/simulation). `<assembly_dir>` holds a `config.json` describing the assembly and a `solarian` block controlling the export. With `--update-yaml conf/modules/<module>.yaml`, joint ranges from the cleaned MJCF are synced into that module conf's `sim_range_min`/`sim_range_max` and into `config.json` `joint_properties.*.limits`. See [Onshape → Sim Models](/docs/onshape-models) for the full workflow. Part of the `[sim]` extra.
+Exports an Onshape CAD assembly into an attachable MuJoCo (MJCF) model for [simulation](/docs/simulation). `<assembly_dir>` holds a `config.json` describing the assembly and a `solarian` block controlling the export. With `--update-yaml conf/modules/<module>.yaml`, joint ranges from the cleaned MJCF are synced into that module conf's `sim_range_min`/`sim_range_max` and into `config.json` `joint_properties.*.limits`. See [Models from Onshape](/docs/simulation#models-from-onshape) for the full workflow. Part of the `[sim]` extra.
 
 ### `shell`
 

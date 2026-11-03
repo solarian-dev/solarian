@@ -8,7 +8,7 @@ export const metadata = {
 
 The skill, the key, and the YAML do not change. Two measurements do, because a policy trained on a real wrist camera is aimed using a lens model and a camera-to-fingertip transform that simulation invented for you with `CameraMount`. Hardware has to measure them. {{ className: 'lead' }}
 
-You need the arm from [Tutorial 2](/docs/tutorials/real-robot), the inverse kinematics from [Move to a pose](/docs/tutorials/skills/move), and `ik_tcp` set to `UmiSlimFeetechModule.tcp_from_flange`. Hand-eye solves for the fingertips. Without that offset it solves for the flange and every reach is short by the length of the gripper.
+You need the arm from [Tutorial 3](/docs/tutorials/real-robot), the inverse kinematics from [Move to a pose](/docs/tutorials/skills/move), and `ik_tcp` set to `UmiSlimFeetechModule.tcp_from_flange`. Hand-eye solves for the fingertips. Without that offset it solves for the flange and every reach is short by the length of the gripper.
 
 ## The lens
 

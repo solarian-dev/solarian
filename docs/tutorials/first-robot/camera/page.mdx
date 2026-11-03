@@ -6,7 +6,7 @@ export const metadata = {
 
 # The camera
 
-The camera is the third kind of module in this project. You wrote the arm. You installed the gripper. The camera already ships with Solarian: `PiCameraModule`, for a Raspberry Pi CSI camera. In this chapter it renders the sim view. The real sensor is [Tutorial 2](/docs/tutorials/real-robot/camera). {{ className: 'lead' }}
+The camera is the third kind of module in this project. You wrote the arm. You installed the gripper. The camera already ships with Solarian: `PiCameraModule`, for a Raspberry Pi CSI camera. In this chapter it renders the sim view. The real sensor is [Tutorial 3](/docs/tutorials/real-robot/camera). {{ className: 'lead' }}
 
 There is no `solarian install` step.
 
@@ -40,7 +40,7 @@ cameras=[
 ],
 ```
 
-`site` is the gripper site after the gripper's prefix. `name` is the name the YAML will look up. `fovy` is the vertical field of view in degrees. 90 is wide enough to see the floor in front of the fingers. The real lens is wider, and Tutorial 3's calibration is what makes sim and hardware agree. For looking around, 90 is enough.
+`site` is the gripper site after the gripper's prefix. `name` is the name the YAML will look up. `fovy` is the vertical field of view in degrees. 90 is wide enough to see the floor in front of the fingers. The real lens is wider, and Tutorial 4's calibration is what makes sim and hardware agree. For looking around, 90 is enough.
 
 ## Config
 
@@ -110,6 +110,6 @@ Restart the robot and the controller. The controller window should show the wris
 | `right_gripper` | `solarian-umi-slim` | YAML, a site-to-site attachment |
 | `right_wrist_camera` | Solarian itself, `PiCameraModule` | YAML, a `CameraMount` |
 
-The controller is still a keyboard. It reads observations and writes a joint target. That is the whole robot until [Tutorial 3](/docs/tutorials/skills), where a skill replaces `control_step`.
+The controller is still a keyboard. It reads observations and writes a joint target. That is the whole robot until [Tutorial 4](/docs/tutorials/skills), where a skill replaces `control_step`.
 
-[Tutorial 2](/docs/tutorials/real-robot) builds this same project in hardware. You can also go straight to skills and stay in simulation: Tutorial 3's real-arm chapter is the only part that needs the physical robot.
+[Tutorial 3](/docs/tutorials/real-robot) builds this same project in hardware. You can also go straight to skills and stay in simulation: Tutorial 4's real-arm chapter is the only part that needs the physical robot.

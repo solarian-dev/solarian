@@ -1,40 +1,63 @@
 export const metadata = {
-  title: 'The arm',
+  title: 'The Robot',
   description:
-    'Write an SO-106 arm module from scratch: six Feetech joints, a module config, and a MuJoCo model attached in simulation.',
+    'Build the SO-106 robot: write its first module, the arm, declare it on the robot class, and place the arm model in a MuJoCo scene.',
 }
 
-# The arm
+# The Robot
 
-The arm is the module you write yourself. A plugin will not do this chapter for you. You declare the six joints, tell Solarian which serial IDs they will have on the real bus, and attach a ready-made MuJoCo model so simulation has a body to draw. {{ className: 'lead' }}
+The robot is the program that owns the hardware. It talks to every motor and sensor, reports what they measure, and carries out the actions the controller sends. This chapter writes the robot class, its first module, the six-joint arm, and the scene where simulation gives that arm a body. {{ className: 'lead' }}
 
-![Exploded view of the SO-106](/hardware/so106/media/sketch-1.png)
+## What a robot is
 
-The geometry — links, meshes, joint limits — is a CAD export. You are not asked to model it. The class that *uses* the model is the lesson.
+A robot is a Python class that extends Solarian's `Robot`. The scaffold already created yours, an empty `So106Robot` in `so106/robot.py`, and `so106/settings.py` points `ROBOT_CLASS` at it. `solarian run-robot` imports that class, builds it with the settings from `conf/robot.yaml`, and starts it.
 
-## Install the servo driver
+The base class does the plumbing: it connects to the relay server, runs every device, and moves messages between the devices and the controller. Once started, the robot does the same work for the whole run:
 
-The joints are Feetech serial-bus servos. The driver is a plugin; the arm module is yours.
+```text
+1. connect every module, to the simulator or to the hardware
+2. start each module's own loop, at the rate in its YAML
+3. read the modules and send the controller an observation
+4. hand each action the controller sends to the modules it names
+```
+
+Your subclass says what the robot is made of, in three pieces:
+
+- A **module** is one device: the arm, the gripper, a camera. Its class lists the device's components, its actuators and sensors, and says what to do with a command.
+- The **robot** class names its modules, one class attribute each. The attribute name, `right_arm` here, is the module's name everywhere else in the project.
+- The **scene** is the simulated world: a floor, a light, and the MuJoCo model of each module, mounted where the real device stands.
+
+<RobotDiagram />
+
+By the end of this tutorial `So106Robot` carries all three modules in the diagram. This chapter builds the first one, adds it to the robot, and mounts its model in the scene. The gripper and the camera follow the same three steps in their own chapters.
+
+## First module: robot arm
+
+The arm module is a Python class with one attribute per servo and a method that writes commands to them. Solarian calls that method on the module's own loop, and the same class drives the MuJoCo joints in simulation and the Feetech bus on hardware.
+
+### Install the servo driver
+
+The SO-106's joints are Feetech serial-bus servos. Their driver ships as a plugin, so install it first:
 
 ```bash
 solarian install feetech
 ```
 
-That installs `solarian-feetech` and adds it to your `pyproject.toml`. It does not create a module config. Feetech is a servo, not an arm.
+That installs `solarian-feetech` and adds it to your `pyproject.toml`. It brings the `FeetechServo` actuator class the arm uses. The arm module itself stays in your project.
 
-On the machine that will later be wired to the bus, the hardware extra installs the vendor SDK:
+On the machine that will later be wired to the bus, the hardware extra adds the vendor SDK:
 
 ```bash
 pip install "solarian-feetech[hardware]"
 ```
 
-Simulation does not need it. The module class imports without the SDK. Install the extra when you build the [real robot](/docs/tutorials/real-robot).
+Simulation runs without it, so leave it for the [real robot](/docs/tutorials/real-robot).
 
-## Declare the joints
+### Declare the joints
 
-Create `so106/modules/right_arm.py`:
+The module class declares the six servos and handles one kind of command: a full set of joint targets. Create `so106/modules/right_arm.py`:
 
-```python
+```python {{ title: 'so106/modules/right_arm.py' }}
 from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.module import Module
 from solarian_feetech.actuator import FeetechServo
@@ -63,68 +86,28 @@ class RightArmModule(Module):
             self.write_actuators(self._goal)
 ```
 
-Each class attribute is one servo. The name is the joint's name in observations, actions, and YAML. The model string picks the Feetech product: STS3250 on the joints that carry the arm, STS3215 on yaw and roll. That matches the [SO-106 hardware](/hardware/so106).
+The lines that matter:
 
-This module does not know about poses or inverse kinematics. A `MOVE_J` action is six numbers, and `control_step` writes them to the servos. In simulation those servos are the MuJoCo joints. On hardware they are the bus. The class does not branch on which.
+- **`shoulder_pan = FeetechServo(model="sts3250")`** declares one servo. The attribute name is the joint's name in observations, actions, and YAML. The model string picks the Feetech product: STS3250 on the four joints that carry the arm's weight, STS3215 on wrist yaw and roll. That matches the [SO-106 hardware](/hardware/so106).
+- **`initialize`** runs once, when the module connects. It starts the module with no goal, so the arm holds still until a command arrives.
+- **`@action_handler(ActionType.MOVE_J)`** registers `_handle_move_j` for joint commands. A `MOVE_J` action carries six numbers, one per joint, and the handler keeps them as the current goal. Returning `True` keeps the module running.
+- **`control_step`** runs on the module's own loop, at the rate in its YAML, and writes the goal to the servos. In simulation those servos are MuJoCo joints, and on hardware they are the bus. The class reads the same either way.
 
-`initialize` runs once when the module connects. `control_step` runs at the rate in the YAML.
+This module works purely in joint coordinates. Poses and inverse kinematics come in [Tutorial 4](/docs/tutorials/skills).
 
-## Attach it to the robot
+### Configure the module
 
-`so106/robot.py`:
+Every module has a YAML file named after its attribute on the robot, in `conf/modules/`. It gives each servo its bus address and its range of travel. The attribute will be `right_arm`, so the file is `conf/modules/right_arm.yaml`.
 
-```python
-from solarian.core import Robot
-from solarian.sim import ModuleAttachment, SceneConfig
+The file reads the serial port from the deployment, so add one to `conf/deployment/localhost.yaml`. Simulation ignores it, and Tutorial 3 points it at the real adapter:
 
-from so106.modules.right_arm import RightArmModule
-
-
-class So106Robot(Robot):
-    # Simulation until Tutorial 2. `sim: null` in conf/robot.yaml lets a
-    # single run override this with `solarian run-robot sim=false`.
-    is_sim = True
-    view = True
-
-    right_arm = RightArmModule()
-
-    scene = SceneConfig(
-        world_mjcf="assets/scene.xml",
-        attachments=[
-            ModuleAttachment(
-                module="right_arm",
-                mjcf="assets/so106/so106.xml",
-                parent_body="world",
-                pos=[0.0, -0.2, 0.0],
-                prefix="right/",
-            ),
-        ],
-        timestep=0.002,
-    )
-```
-
-`prefix="right/"` renames the model's joints inside the scene, so `shoulder_pan` becomes `right/shoulder_pan`. The YAML has to use the prefixed name. The prefix is what lets a second arm exist later without the joint names colliding.
-
-Add this line to `conf/robot.yaml`, next to `fps`:
-
-```yaml
-# null defers to the class attribute. Override with sim=true or sim=false.
-sim: null
-```
-
-## The module config
-
-Solarian loads `conf/modules/<attribute>.yaml`. The attribute is `right_arm`, so the file is `conf/modules/right_arm.yaml`.
-
-The deployment file has to grow a port for it, even though simulation ignores the port. Add this to `conf/deployment/localhost.yaml`:
-
-```yaml
+```yaml {{ title: 'conf/deployment/localhost.yaml' }}
 actuator_port_right_arm: /dev/ttyUSB0
 ```
 
-Then the module file:
+Then the module file, one block per joint:
 
-```yaml
+```yaml {{ title: 'conf/modules/right_arm.yaml' }}
 actuator_port: ${deployment.actuator_port_right_arm}
 frequency: 50
 
@@ -173,13 +156,37 @@ actuators:
     sim_range_max: 3.1416
 ```
 
-`id` is the servo's address on the Feetech bus. You will set those IDs for real in Tutorial 2. `mode: range_m100_100` is the normalized command: −100 is one end of travel, 100 is the other, 0 is the middle. `sim_range_min` and `sim_range_max` are that same travel in radians, copied from the MuJoCo joint limits. Simulation maps one range onto the other. Hardware uses a calibration you have not recorded yet, and ignores `sim_*`.
+The lines that matter:
 
-`frequency: 50` is the module's own loop, in hertz. The controller will run slower. They do not have to match.
+- **`frequency: 50`** is the rate of the module's loop, in hertz: how often `control_step` writes the goal. The controller runs at its own, slower rate, and the two are independent.
+- **`id`** is the servo's address on the Feetech bus. You set those IDs on the real servos in Tutorial 3.
+- **`mode: range_m100_100`** makes every command a normalized number: −100 is one end of the joint's travel, 100 is the other, and 0 is the middle.
+- **`sim_joint`** names the MuJoCo joint this servo drives. The `right/` in front is the prefix the scene gives the arm, further down this page.
+- **`sim_range_min`** and **`sim_range_max`** are that same travel in radians, copied from the model's joint limits. Simulation maps −100…100 onto them. Hardware uses a calibration instead, recorded in Tutorial 3, and ignores the `sim_*` lines.
 
-## The MuJoCo model
+## Add the arm to the robot
 
-The model is published with the [`solarian-so106`](https://github.com/solarian-dev/solarian-so106) package. Copy it into the project. You are copying data, not installing the arm class — that class is the file you just wrote. `solarian-so106` is the maintained version of the same module, for when you would rather not keep the class in the project.
+The robot class is where the module joins the machine. One class attribute creates the module, and its name, `right_arm`, ties together the YAML file above, the observation and action fields of the next chapter, and every log line about the arm. Replace the empty class in `so106/robot.py`:
+
+```python {{ title: 'so106/robot.py' }}
+from solarian.core import Robot
+
+from so106.modules.right_arm import RightArmModule
+
+
+class So106Robot(Robot):
+    right_arm = RightArmModule()
+```
+
+When the robot starts, Solarian finds `right_arm`, loads `conf/modules/right_arm.yaml` into it, connects it, and runs its loop. A second arm later is one more line with another name, such as `left_arm = LeftArmModule()`.
+
+## Place the arm in the scene
+
+In simulation the module needs a body: the arm's MuJoCo model, standing in a world with a floor. This section copies the model into the project, writes a small world around it, and tells the robot where the arm stands in that world.
+
+### Copy the arm model
+
+The model is published with the [`solarian-so106`](https://github.com/solarian-dev/solarian-so106) package. Copy its assets folder into the project. This copies data only: the module class is the file you just wrote. `solarian-so106` also ships a maintained version of the same module, for projects that would rather install it than keep it.
 
 ```bash
 git clone --depth 1 https://github.com/solarian-dev/solarian-so106.git /tmp/solarian-so106
@@ -187,13 +194,15 @@ mkdir -p assets
 cp -R /tmp/solarian-so106/solarian_so106/assets assets/so106
 ```
 
-You should now have `assets/so106/so106.xml` and a `so106_description/` folder of meshes beside it. The XML's mesh path is relative to the XML, so those two have to stay together.
+You should now have `assets/so106/so106.xml` and a `so106_description/` folder of meshes beside it. The XML finds its meshes by a path relative to itself, so keep the two together.
 
-The arm model has a site named `flange` at the wrist. The gripper will bolt to it in a later chapter. Leave it alone.
+The arm model has a site named `flange` at the wrist. The gripper bolts to it in a later chapter.
 
-The scene around the arm is yours, and it is small. Create `assets/scene.xml`:
+### Write the world
 
-```xml
+The world around the arm holds what every scene shares: a floor and a light. Create `assets/scene.xml`:
+
+```xml {{ title: 'assets/scene.xml' }}
 <mujoco model="so106_scene">
   <compiler angle="radian"/>
   <visual>
@@ -212,10 +221,61 @@ The scene around the arm is yours, and it is small. Create `assets/scene.xml`:
 </mujoco>
 ```
 
-A floor and a light. The arm is attached by `ModuleAttachment`, not pasted into this file. That split is what lets the same arm model move to another scene.
+The arm stays out of this file. The robot attaches it in Python, which keeps the arm model reusable in any other scene.
+
+### Attach the arm
+
+The robot class carries the scene, and the scene lists one attachment per module that has a body. Each attachment says which model belongs to which module and where it is mounted, the same way you would bolt the real arm to a table. Extend `So106Robot`:
+
+```python {{ title: 'so106/robot.py' }}
+from solarian.core import Robot
+from solarian.sim import ModuleAttachment, SceneConfig
+
+from so106.modules.right_arm import RightArmModule
+
+
+class So106Robot(Robot):
+    # Simulation until Tutorial 3. `sim: null` in conf/robot.yaml lets a
+    # single run override this with `solarian run-robot sim=false`.
+    is_sim = True
+    view = True
+
+    right_arm = RightArmModule()
+
+    scene = SceneConfig(
+        world_mjcf="assets/scene.xml",
+        attachments=[
+            ModuleAttachment(
+                module="right_arm",
+                mjcf="assets/so106/so106.xml",
+                parent_body="world",
+                pos=[0.0, -0.2, 0.0],
+                prefix="right/",
+            ),
+        ],
+        timestep=0.002,
+    )
+```
+
+The lines that matter:
+
+- **`is_sim = True`** runs the robot in MuJoCo. The servos become the model's joints, and the module class does not change.
+- **`view = True`** opens a window that draws the simulation.
+- **`world_mjcf`** is the world you just wrote.
+- **`module="right_arm"`** pairs the attachment with the module of that name, so the module's servos drive this model's joints.
+- **`parent_body="world"`** and **`pos=[0.0, -0.2, 0.0]`** bolt the arm's base to the world, 20 cm along −Y from the origin, on the floor.
+- **`prefix="right/"`** renames the model's joints inside the scene, so `shoulder_pan` becomes `right/shoulder_pan`. That is why the YAML's `sim_joint` lines carry the prefix. It also lets a second arm join later without its joint names colliding.
+- **`timestep=0.002`** steps the physics at 500 Hz.
+
+Last, let the command line override `is_sim`. Add this line to `conf/robot.yaml`, next to `fps`:
+
+```yaml {{ title: 'conf/robot.yaml' }}
+# null defers to the class attribute. Override with sim=true or sim=false.
+sim: null
+```
 
 <Note>
-  Do not start the robot yet if you want the next page's keys to be the first thing you try. Starting it now is fine too: the sim window should show the arm at mid-travel, and nothing should move, because the controller still does nothing. A missing <code>so106.xml</code> fails at startup with a file error. A <code>sim_joint</code> that does not match the prefixed model name fails when the world is built, and the message names the joint.
+  You can start the robot now. The sim window should show the arm at mid-travel, holding still, because nothing sends it a command yet. A missing <code>so106.xml</code> fails at startup with a file error. A <code>sim_joint</code> that does not match the prefixed model name fails when the world is built, and the message names the joint.
 </Note>
 
-Next: [the keyboard](/docs/tutorials/first-robot/keyboard).
+Next: [observations and actions](/docs/tutorials/first-robot/observations-actions).

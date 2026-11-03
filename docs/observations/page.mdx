@@ -12,7 +12,7 @@ Defined in [`solarian/core/observation.py`](https://github.com/solarian-dev/sola
 
 ## What is an Observation?
 
-An `Observation` is a top-level container of [`ModuleObs`](#moduleobs) instances, one per [Module](/docs/modules) on your robot. Each `ModuleObs` in turn is a container of typed [`Data`](/docs/core) values — the actual sensor readings.
+An `Observation` is a top-level container of [`ModuleObs`](#module-obs) instances, one per [Module](/docs/modules) on your robot. Each `ModuleObs` in turn is a container of typed [`Data`](#data-classes) values — the actual sensor readings.
 
 ```text
 Observation
@@ -112,6 +112,93 @@ Leave out `execution_place=` to read it from an `execution_place:` key in the co
 
 See [Server](/docs/servers) for the relay-side processor lifecycle.
 
+<Properties>
+  <Property name="ExecutionPlace.SERVER" type="server">
+    Run on the relay server (typical for vision models that need a beefy machine). Robots never see the field.
+  </Property>
+  <Property name="ExecutionPlace.ROBOT" type="robot">
+    Run on the robot itself, in the owning module's process (typical for low-latency processing of high-rate sensor data). The relay and controllers receive the result.
+  </Property>
+</Properties>
+
+No host builds `CONTROLLER` processors.
+
+## Data classes
+
+A `Data` is the typed wrapper around every value that flows through Solarian. Sensor reads return `Data` instances; actuator writes accept them; observations and [actions](/docs/actions) are containers of them. A [component](/docs/modules#components) declares its channels as `Data` class attributes, and a `SensorField` or `ActuatorField` binds to one of those.
+
+Defined in [`solarian/core/data.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/data.py). All `Data` subclasses are Pydantic models, so they validate on construction and serialize cleanly.
+
+Every `Data` carries:
+
+<Properties>
+  <Property name="value" type="property">
+    The actual payload. Auto-uncompresses on read if the data is currently compressed.
+  </Property>
+  <Property name="timestamp" type="float">
+    Unix-epoch timestamp recorded when the value was sampled.
+  </Property>
+  <Property name="dtype" type="type">
+    Python type of the payload (<code>float</code>, <code>bool</code>, <code>np.uint8</code>, …).
+  </Property>
+  <Property name="shape" type="tuple | None">
+    For tensor-valued data; <code>None</code> for scalars.
+  </Property>
+  <Property name="path" type="(module, component, field)">
+    Set automatically when used as a class-attribute descriptor on a <code>Component</code>.
+  </Property>
+  <Property name="is_compressed" type="bool">
+    Whether the payload is currently in compressed (bytes) form.
+  </Property>
+</Properties>
+
+The built-in subclasses:
+
+<Properties>
+  <Property name="PosData" type="float">
+    Joint or linear position. Default value 0.0.
+  </Property>
+  <Property name="SpeedData" type="float">
+    Joint or linear velocity.
+  </Property>
+  <Property name="TorqueEnableData" type="bool">
+    Whether torque is enabled on a servo.
+  </Property>
+  <Property name="ImageData" type="np.ndarray">
+    HxWxC uint8 image. Compresses to JPEG on the wire (requires <code>opencv-python</code>).
+  </Property>
+  <Property name="BoundingBoxData" type="np.ndarray">
+    Axis-aligned box <code>(x0, y0, x1, y1)</code> in source-image pixels, int32 of shape <code>(4,)</code>. All zeros means no box.
+  </Property>
+  <Property name="TimestampData" type="float">
+    Wall-clock timestamp.
+  </Property>
+</Properties>
+
+### Custom `Data` subclasses
+
+Define your own when you need a typed channel that isn't covered by the built-ins:
+
+```python
+from solarian.core.data import Data
+from pydantic import Field
+
+class IMUData(Data):
+    dtype: type = float
+    shape: tuple = (6,)   # (ax, ay, az, gx, gy, gz)
+    payload: list[float] = Field(default_factory=lambda: [0.0]*6, alias="value")
+```
+
+Then attach it to a sensor:
+
+```python
+class IMUSensor(Sensor):
+    bus_class = IMUBus
+    imu = IMUData()
+```
+
+`IMUSensor.imu` becomes the `Data` reference you bind to a `SensorField` in your `ModuleObs`.
+
 ## Reading an observation
 
 In a controller, the latest observation is always available as `self.last_observation`, protected by `self.observation_lock`:
@@ -142,7 +229,7 @@ print(obs.to_dict())
 
 ## Compression and serialization
 
-Each `Data` subclass knows how to compress itself for the wire. `ImageData` uses JPEG; the generic `Data` falls back to `zlib + pickle`. The relay-bound code path is roughly:
+Each `Data` subclass picks its codec with `_default_codec()`: `ImageData` uses JPEG via OpenCV, and everything else falls back to `zlib + pickle`. Compression is opt-in: the framework calls `obs.compress()` before sending, and the consumer's lazy `.value` access decompresses on first read. The relay-bound code path is roughly:
 
 ```text
 robot:        obs.compress()  →  msgpack(obs.to_dict())  →  ZMQ
@@ -156,5 +243,4 @@ This means the controller pays the JPEG decode only for fields it actually reads
 
 - [Actions](/docs/actions) — the counterpart that flows the other way.
 - [Modules](/docs/modules) — where the underlying sensor data lives.
-- [Core](/docs/core) — the <code>Data</code>, <code>SensorField</code>, and <code>CalculatedField</code> reference.
 - [Server](/docs/servers) — running <code>CalculatedField</code>s on the relay.

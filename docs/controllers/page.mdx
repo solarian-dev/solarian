@@ -1,58 +1,57 @@
 export const metadata = {
   title: 'Controllers',
   description:
-    'A Controller decides what the robot should do next. Subclass it to implement keyboard teleop, leader-arm teleop, a learned policy, or anything else that produces an Action from an Observation.',
+    'A Controller is the node that decides what the robot does. Subclass it, register it, and either start Skills (teleop, a move to a named pose, a learned policy) and let the base class merge what they emit, or override control_step() and build each Action yourself.',
 }
 
 # Controllers
 
-A **Controller** is the node that *decides* what the robot does. It receives [Observations](/docs/observations) from the relay server, computes the next [Action](/docs/actions), and sends it back. Anything that can produce an action — a teleoperator, a hard-coded script, a learned policy, an LLM-driven planner — is a controller. {{ className: 'lead' }}
+A **Controller** is the deciding node in the Solarian three-node architecture. It runs on your laptop or workstation, next to the operator, and is responsible for: {{ className: 'lead' }}
+
+- Receiving [Observations](/docs/observations) from the relay server and keeping the latest one available.
+- Turning input into decisions: [events](/docs/events) from a keyboard, a gamepad, a leader arm, a click on a camera image, or the [AI Controller](/docs/ai_controller)'s think process.
+- Running [Skills](/docs/skills), or your own `control_step()`, and sending the resulting [Action](/docs/actions) to the robot at a fixed rate.
+- Owning any controller-side hardware, such as a leader arm or an input device.
 
 Defined in [`solarian/core/controller.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/controller.py).
 
-There are two ways to produce that action. **Declaratively**, by starting [Skills](/docs/skills) and letting the base `control_step()` merge whatever they emit each tick — this is the usual path. Or **imperatively**, by overriding `control_step()` yourself, which is what the rest of this page shows.
-
 ## Defining a Controller
 
-Subclass `Controller` and implement `control_step()`:
+Subclass `Controller`. Like a [Robot](/docs/robots), it is declared with class attributes: the skills it can start by name, and any controller-side [modules](/docs/modules).
 
 ```python
 from solarian.core import Controller
-from solarian.core.action import ActionType
-from myrobot.action import MyAction
+from solarian_move_skill import MoveSkill
+
+from myrobot.modules.leader_arm import LeaderArmModule
+from myrobot.skills import CartesianTeleopSkill
+
 
 class MyController(Controller):
-    def control_step(self) -> MyAction:
-        action = MyAction.zeros()
-        action.action_type = ActionType.MODULE_ACTION
-        # ... fill in action.arm.shoulder_pan.value, etc. ...
-        return action
+    skills = (CartesianTeleopSkill, MoveSkill)
+    leader_arm = LeaderArmModule()
+
+    def on_start(self):
+        self.start_skill(CartesianTeleopSkill(params={"arm": "right_arm", "gripper": "right_gripper"}))
 ```
 
-The framework calls `control_step()` at `cfg.fps` Hz. Whatever it returns is serialized and pushed to the relay server. An override that does not call `super().control_step()` replaces skill orchestration entirely, so nothing a running skill emits reaches the robot. It loses only skill orchestration — event dispatch and the observation snapshot happen in the loop *around* `control_step()`, so your `@event_handler` methods still run.
+No `__init__` and no loop to write. `Controller.__init__` opens the sockets to the relay, discovers the controller-side modules, and builds the observation buffers every skill reads from.
 
-The latest observation is always available as `self.last_observation`, protected by `self.observation_lock` (Solarian's state-receiver thread overwrites it as new observations arrive).
-
-```python
-class MyController(Controller):
-    def control_step(self) -> MyAction:
-        with self.observation_lock:
-            obs = self.last_observation
-        action = MyAction.zeros()
-        action.action_type = ActionType.MODULE_ACTION
-        action.arm.shoulder_pan.value = obs.arm.shoulder_pan_pos.value + 0.01
-        return action
-```
+<Note>
+  Unlike <code>Robot</code>, <code>Controller</code> is not a singleton. <code>solarian run-controller</code> builds exactly one per process from <code>CONTROLLER_CLASS</code>, and nothing references it at import time the way schemas reference <code>MyRobot.arm</code>, so a test can construct its own.
+</Note>
 
 ## Registering your Controller class
 
-Set `CONTROLLER_CLASS` in your project's [`settings.py`](/docs/settings):
+Solarian needs to know which `Controller` subclass to instantiate when `solarian run-controller` runs. Set it in your project's [`settings.py`](/docs/settings), next to the robot:
 
 ```python
+ROBOT_CLASS = 'myrobot.robot.MyRobot'
 CONTROLLER_CLASS = 'myrobot.controller.MyController'
+SERVER_CLASS = 'myrobot.server.MyServer'
 ```
 
-`solarian run-controller` reads this, imports the class, and instantiates it with the `ControllerConfig` parsed from `conf/controller.yaml`.
+The CLI reads `CONTROLLER_CLASS`, imports it, and feeds it the `ControllerConfig` parsed from `conf/controller.yaml`.
 
 ## Configuration
 
@@ -76,7 +75,7 @@ Mapped to [`ControllerConfig`](https://github.com/solarian-dev/solarian/blob/mai
 
 <Properties>
   <Property name="fps" type="int">
-    Rate at which <code>control_step()</code> runs (System 1 / control loop).
+    Rate of the control loop: how often <code>control_step()</code> runs and an action goes out.
   </Property>
   <Property name="tps" type="int">
     Rate at which the AI Controller's <code>ThinkProcess</code> runs (System 2). Ignored by plain controllers.
@@ -85,10 +84,10 @@ Mapped to [`ControllerConfig`](https://github.com/solarian-dev/solarian/blob/mai
     If <code>True</code>, skip the OpenCV display loop and run the controller from a stdin loop instead.
   </Property>
   <Property name="connection" type="ConnectionConfig">
-    ZMQ ports and IPs.
+    ZMQ ports and IPs, read from <code>conf/deployment/&lt;name&gt;.yaml</code>. See <a href="/docs/servers">Server</a>.
   </Property>
   <Property name="modules" type="dict[str, ModuleConfig]">
-    Per-module configuration for any modules attached to the controller (e.g. leader arms used for teleop).
+    Per-module configuration for the controller-side modules, inline here rather than in <code>conf/modules/&lt;name&gt;.yaml</code>.
   </Property>
   <Property name="policy_path" type="str">
     Path to a policy checkpoint the AI Controller loads. A skill's policy server reads its own, from the <code>server:</code> block of its conf; see <a href="/docs/services#the-server-block">Services</a>.
@@ -100,57 +99,256 @@ Mapped to [`ControllerConfig`](https://github.com/solarian-dev/solarian/blob/mai
 
 ## Lifecycle
 
-When `solarian run-controller` runs, the framework calls:
+When you run `solarian run-controller`, the framework calls these methods in order:
 
 ```text
 Controller(cfg)            # __init__ — opens ZMQ sockets, builds shared memory
    │
-   ├── connect()           # connect any controller-side modules (leader arms, etc.)
+   ├── connect()           # connect controller-side modules (leader arm, input devices)
    ├── initialize()        # one-time setup hook
    └── start()             # spawn _state_receiver thread, control_loop thread,
                            # optional pynput keyboard listener, then on_start(),
                            # then display_loop() (or _headless_loop in headless mode)
 ```
 
-The control loop is split into:
+Three threads run from then on:
 
-- **`_state_receiver`** (thread) — pulls every incoming `Observation` off the SUB socket and updates `self.last_observation` under a lock.
-- **`control_loop`** (thread) — runs the tick below at `cfg.fps`, serializes the returned `Action`, and pushes it to the relay server.
-- **`display_loop`** (main thread) — opens an OpenCV window per camera and renders the most recent observation. In `headless` mode this is replaced by a stdin loop.
+- **`_state_receiver`** pulls every incoming `Observation` off the SUB socket and updates `self.last_observation` under a lock.
+- **`control_loop`** runs the tick below at `cfg.fps`, serializes the returned `Action`, and pushes it to the relay server.
+- **`display_loop`** (main thread) opens a window per camera and renders the most recent observation. In `headless` mode it is replaced by a stdin loop.
 
-## The tick
-
-Every iteration of `control_loop` does the same three things in the same order:
+Every tick of `control_loop` does the same three things in the same order:
 
 ```text
 _drain_events()               # collect events from local modules, run @event_handlers
 _tick_local_modules()         # tick inline modules, so they publish observations
-control_step()                # decide — by default, merge what the skills emit
+control_step()                # decide — by default, step the skills and merge what they emit
 ```
 
 Draining first, on the control thread, is what makes input deterministic: handlers never run on a device callback thread, and every skill on the tick sees the same events and the same observations.
 
-## Keyboard input
+## Two ways to decide
 
-Keyboard is a [module](/docs/modules), not a special case in the controller. Every controller has one, and it turns key transitions into [events](/docs/events):
+What `control_step()` returns is what the robot does. There are two ways to produce it:
+
+- **Declaratively**, by starting [Skills](/docs/skills). A skill is a self-contained behaviour (teleop, a move to a named pose, a policy) that emits actions for the modules it commands. The base `control_step()` steps every running skill and merges what they emit. This is what most controllers do.
+- **Imperatively**, by overriding `control_step()` and building every `Action` yourself. This is the lower-level path: nothing between you and the robot, and nothing done for you.
+
+## Driving the robot with skills
+
+### Starting a skill
+
+A controller built on skills does not implement `control_step()` at all. It decides *which* skill runs and *when*: on start-up, and in response to events. Any input device is a module that emits events, so the trigger can be a key, a button on a gamepad or a leader arm, a foot pedal, or a click on a camera image. The keyboard is just the device every controller has:
 
 ```python
 from solarian.core.event import Event, EventType, event_handler
 
+
 class MyController(Controller):
-    STEP = 0.05
+    skills = (CartesianTeleopSkill, MoveSkill)
+
+    def on_start(self):
+        self.start_skill(CartesianTeleopSkill(params={"arm": "right_arm", "gripper": "right_gripper"}))
 
     @event_handler(EventType.KEY_DOWN)
-    def on_key_down(self, event: Event):
-        if event.data["key"] == 'a':
-            self.target.arm.shoulder_pan.value -= self.STEP
-        elif event.data["key"] == 'q':
-            self.events["exit_early"] = True
+    def start_bound_skill(self, event: Event):
+        match event.data.get("key"):
+            case "t":
+                self.start_skill(CartesianTeleopSkill(params={"arm": "right_arm", "gripper": "right_gripper"}))
+            case "h":
+                self.start_skill(MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"}))
+
+    @event_handler(EventType.BUTTON_DOWN)
+    def home_on_pedal(self, event: Event):
+        if event.data.get("button") == "pedal":
+            self.start_skill(MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"}))
 ```
 
-Handlers fire **once per physical key transition** — OS auto-repeat is filtered out by the module — and run on the control thread when the controller drains, not on the pynput listener thread.
+A skill is constructed with the module **names** it commands (`arm`, `gripper`) and handed to `start_skill()`. Which input starts which skill is application policy, so it lives in your own `@event_handler` rather than in a framework-level binding table. Skills can also be started without any handler: by name from the GUI's skill bar, or by the think process, which is what the `skills` tuple is for.
 
-For *continuous* input, don't count key events; ask what is held right now:
+An input only ever *starts*. `start_skill()` stops whatever already holds the modules the new skill commands, including an earlier instance of the same skill, so pressing `h` twice re-runs the move rather than leaving the arm with nothing driving it. When the move finishes, nothing takes the arm back until something starts teleop again. `space` on the keyboard is the one binding the framework claims, and it stops every skill.
+
+### Using a skill from a plugin
+
+Many skills are already written and ship as plugins. [`solarian-move-skill`](/docs/tutorials/skills/move) moves an arm to a named pose:
+
+```bash
+solarian install solarian-move-skill
+```
+
+That installs the package, adds it to `pyproject.toml` and copies its config to `conf/skills/move.yaml`. The poses are yours to edit there, because they are calibration numbers for your robot, not code:
+
+```yaml
+# conf/skills/move.yaml
+poses:
+  home:
+    right_arm:
+      shoulder_pan: 0.0
+      shoulder_lift: -65.0
+      elbow_flex: 92.0
+      wrist_flex: 9.5
+      wrist_yaw: 0.0
+      wrist_roll: 0.0
+    right_gripper:
+      gripper: 85.0
+```
+
+Then import the class and start it, as above:
+
+```python
+from solarian_move_skill import MoveSkill
+
+self.start_skill(MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"}))
+```
+
+A plugin declares its skill under the `solarian.skills` entry point, so an installed skill is in the controller's registry even when it is not listed in `skills`: the think process and the GUI's skill bar can start it by name. `solarian-umi-skill` (a diffusion policy) and `solarian-place-skill` (place a held object at a clicked point) are started the same way.
+
+### Writing your own skill
+
+When no plugin does what you need, write the skill in your project. A skill subclasses `Skill` and implements `control_step(dt)`, which reads observations and returns actions. This one lifts the end effector straight up by `dz` metres from wherever it is, and finishes once it gets there:
+
+```python
+# myrobot/skills/lift_skill.py
+import time
+
+from solarian.core.action import Action, ActionType
+from solarian.core.ai.system1.skill import Skill
+from solarian.core.execution import ExecutionMode
+
+POSE_FIELDS = ("x", "y", "z", "rx", "ry", "rz")
+
+
+class LiftSkill(Skill):
+    execution_mode = ExecutionMode.INLINE   # cheap: ticked on the controller's own loop
+    tolerance_m = 0.002
+    timeout_s = 3.0
+
+    def setup(self):
+        self._goal_z = None
+        self._deadline = 0.0
+
+    def control_step(self, dt):
+        obs = self.observations[self.params["arm"]].latest()
+        if obs is None:
+            return None                     # no pose reported yet
+        if self._goal_z is not None:
+            if abs(obs["z"].value - self._goal_z) <= self.tolerance_m or time.monotonic() > self._deadline:
+                self.finish()
+            return None
+
+        pose = {name: obs[name].value for name in POSE_FIELDS}
+        self._goal_z = pose["z"] + float(self.params.get("dz", 0.05))
+        self._deadline = time.monotonic() + self.timeout_s
+        return Action(
+            action_type=ActionType.MODULE_ACTION,
+            data={
+                self.params["arm"]: {
+                    "action_type": ActionType.MOVE_L,
+                    "data": {name: {"value": v} for name, v in {**pose, "z": self._goal_z}.items()},
+                    "params": {"frame": "world"},
+                }
+            },
+        )
+```
+
+The skill addresses the arm by name and builds the action itself; it never holds a `Module`. Add it to `skills` and bind it to an input like any other:
+
+```python
+class MyController(Controller):
+    skills = (CartesianTeleopSkill, MoveSkill, LiftSkill)
+
+    @event_handler(EventType.KEY_DOWN)
+    def start_bound_skill(self, event: Event):
+        match event.data.get("key"):
+            case "u":
+                self.start_skill(LiftSkill(params={"arm": "right_arm", "dz": 0.05}))
+```
+
+[Skills](/docs/skills) covers the rest: what a step can read, returning chunks of waypoints, reporting status, per-project config in `conf/skills/`, and packaging a skill as a plugin. The [skills tutorial](/docs/tutorials/skills) builds several on the SO-106, starting with [a one-shot skill you write](/docs/tutorials/skills/your-own).
+
+### A skill's lifecycle
+
+From the controller's side, every skill goes through the same stages, whoever started it:
+
+```text
+LiftSkill(params={...})       built by your handler, or by name (skill bar, think process)
+   │
+start_skill(skill)            stop every running skill that commands the same modules
+   │
+   ├── remote (ROBOT/SERVER)  send START_SKILL; that host runs the stages below
+   │
+   ├── wire it up             observations, an event inbox, one action queue per module
+   ├── setup()                INLINE: here, on the control thread
+   │                          PROCESS / THREAD: in its runner, which reports RUNNING
+   │
+   ├── step, repeatedly       events drained, dt measured, then control_step(dt);
+   │                          what it returns goes onto its module queues, and the
+   │                          tick merges every skill's queues into one action
+   │
+   └── ends                   finish()                      → COMPLETED
+                              stop_skill(), preempted, space → STOPPED
+                              an exception                  → FAILED
+                                then teardown(), always
+```
+
+A few consequences worth knowing:
+
+- **How often it steps.** An `INLINE` skill is stepped by the controller's tick, so at `cfg.fps`. A `PROCESS` or `THREAD` skill runs its own loop at the skill's `frequency`, and the tick only collects what it queued.
+- **Ending is state, not a return value.** `finish()` marks the skill done and it stops after the current step, so the step that finishes can still return a final action.
+- **`teardown()` gets the last word.** Anything it dispatches, such as a stop for a motion the skill started, is still sent after the skill is removed.
+- **Remote skills are stopped by asking.** For a skill on the robot or the relay, `stop_skill()` sends `STOP_SKILL` and repeats it until the robot's status confirms, since a single message can be replaced on the conflated link. Until then, the skill still counts as holding its modules.
+- **Status.** A skill in its own process or thread publishes `RUNNING`, then `COMPLETED`, `STOPPED` or `FAILED`, to the skill status buffer the think process and the GUI read. See [Reporting status](/docs/skills#reporting-status).
+
+### Why skills
+
+Writing the same behaviour inside `control_step()` works, but a skill gives you three things for free.
+
+**Encapsulation.** The behaviour, its state, its tunable config (`conf/skills/<config_name>.yaml`) and the moment it is done (`finish()`) live in one class. The controller only decides *when*. Because each skill declares the modules it commands, two skills on different modules run side by side, a teleop on the arm and a policy on a second arm say, and the controller merges what they emit into one message per tick. A skill that needs the same modules preempts the old one cleanly, without a state machine in your controller.
+
+**Reuse.** The same class starts from a key or a pedal in one project, from the GUI's skill bar, from the think process picking it by name, or from another project entirely once it ships in a plugin. `LiftSkill` above knows nothing about which robot or which input runs it.
+
+**Placement.** Where a skill runs is a property of the skill, not of your controller. `ExecutionPlace` decides the runtime: `CONTROLLER`, `ROBOT` (next to the hardware, with no network between the decision and the motors) or `SERVER` (a relay with a GPU). `ExecutionMode` decides how it is scheduled there: `PROCESS`, `THREAD` or `INLINE`. `start_skill()` reads them and either runs the skill locally or sends a `START_SKILL` to the host that should. A config-driven skill can move without a code change:
+
+```yaml
+# conf/skills/place_object.yaml
+execution_place: ${deployment.policy_execution_place}
+```
+
+A hand-written `control_step()` always runs on the controller, at the controller's `fps`, and anything above (preemption, merging, finishing, running elsewhere) is yours to build.
+
+## Writing `control_step()` yourself
+
+For full control, override `control_step()` and return the action yourself:
+
+```python
+from solarian.core import Controller
+from solarian.core.action import ActionType
+from myrobot.action import MyAction
+
+class MyController(Controller):
+    def control_step(self) -> MyAction:
+        action = MyAction.zeros()
+        action.action_type = ActionType.MODULE_ACTION
+        # ... fill in action.arm.shoulder_pan.value, etc. ...
+        return action
+```
+
+The framework calls `control_step()` at `cfg.fps` Hz. Whatever it returns is serialized and pushed to the relay server.
+
+The latest observation is always available as `self.last_observation`, protected by `self.observation_lock` (Solarian's state-receiver thread overwrites it as new observations arrive):
+
+```python
+class MyController(Controller):
+    def control_step(self) -> MyAction:
+        with self.observation_lock:
+            obs = self.last_observation
+        action = MyAction.zeros()
+        action.action_type = ActionType.MODULE_ACTION
+        action.arm.shoulder_pan.value = obs.arm.shoulder_pan_pos.value + 0.01
+        return action
+```
+
+Continuous input is read as state rather than counted as events. With the keyboard, ask what is held right now; `held_keys` is recomputed when the tick drains its events, so it is stable for the whole step:
 
 ```python
 def control_step(self) -> MyAction:
@@ -160,44 +358,58 @@ def control_step(self) -> MyAction:
     return self.target
 ```
 
-`held_keys` is state, so it is an observation, recomputed at drain time and stable for the whole tick.
-
-<Note>
-  If <code>pynput</code> isn't available (rare — it's pulled in by Solarian's base install), the global listener silently no-ops and the controller still works for non-keyboard inputs. A GUI window feeds the same module directly and needs no listener at all.
-</Note>
-
-Other input devices — a joystick, a SpaceMouse, a foot pedal — are modules too, emitting their own event types. Nothing in the controller has to change to accept one.
-
-## Starting skills
-
-A skill is something you construct and hand to `start_skill()`. Which key starts which skill is application policy, so it lives in your own `@event_handler` rather than in a framework-level binding table:
+An override that does not call `super().control_step()` replaces skill orchestration entirely, so nothing a running skill emits reaches the robot. It loses only that: event dispatch and the observation snapshot happen in the loop *around* `control_step()`, so your `@event_handler` methods still run. To keep skills and drive the robot yourself only while none is running, call the base first:
 
 ```python
-class MyController(Controller):
-    # Only a registry: what the think process may pick from, and what a
-    # START_SKILL name resolves to.
-    skills = (TeleopSkill, MoveSkill)
-
-    def on_start(self):
-        self._start_teleop()
-
-    def _start_teleop(self):
-        self.start_skill(TeleopSkill(arm=ARM, gripper=GRIPPER))
-
-    @event_handler(EventType.KEY_DOWN)
-    def start_bound_skill(self, event: Event):
-        match event.data.get("key"):
-            case "t":
-                self._start_teleop()
-            case "h":
-                self.start_skill(MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"}))
+def control_step(self):
+    action = super().control_step()
+    if action is None and not self.running_skills:
+        action = self.my_idle_action()
+    return action
 ```
 
-A key press only ever *starts*. `start_skill()` stops whatever already holds the modules the new skill commands, including an earlier instance of the same skill, so pressing `h` twice re-runs the move rather than leaving the arm with nothing driving it. `space` is the one key the framework claims, and it stops everything; nothing resumes on its own afterwards, so an operator who wants teleop back presses the key that starts it.
+The base call also sends what the controller queued itself (a `START_SKILL` for a remote skill, a `START_SERVICE`), so call it on every tick rather than only when skills are running.
+
+## Input devices
+
+Every input device is a [module](/docs/modules) that turns what happens on it into [events](/docs/events), and continuous state into observations. The controller handles them all the same way, so adding a gamepad or a pedal changes nothing in it but the handlers you write.
+
+<Properties>
+  <Property name="KEY_DOWN / KEY_UP" type="keyboard">
+    <code>data["key"]</code>. Every controller has a keyboard module; held keys are in <code>self.held_keys</code>.
+  </Property>
+  <Property name="BUTTON_DOWN / BUTTON_UP" type="buttons">
+    <code>data["button"]</code>. A gamepad, a foot pedal, a button on a leader arm.
+  </Property>
+  <Property name="CLICK" type="camera image">
+    <code>data["point"]</code>, <code>data["module"]</code>, <code>data["field"]</code>: a click on a displayed image, in captured pixels.
+  </Property>
+  <Property name="CUSTOM_START + n" type="your own">
+    Any project or plugin can declare event types for its own device. See <a href="/docs/events#event-types">Event types</a>.
+  </Property>
+</Properties>
+
+The keyboard shows how all of them behave:
+
+```python
+from solarian.core.event import Event, EventType, event_handler
+
+class MyController(Controller):
+    @event_handler(EventType.KEY_DOWN)
+    def on_key_down(self, event: Event):
+        if event.data["key"] == 'q':
+            self.events["exit_early"] = True
+```
+
+Handlers fire **once per transition** (the keyboard module filters out OS auto-repeat) and run on the control thread when the controller drains, not on the device's callback thread. Running skills receive the same events in `self.events`, and read continuous state such as held keys from the device's observation, so a teleop skill needs nothing forwarded by the controller.
+
+<Note>
+  If <code>pynput</code> isn't available (rare — it's pulled in by Solarian's base install), the global keyboard listener silently no-ops and the controller still works with every other input. A GUI window feeds the same keyboard module directly and needs no listener at all.
+</Note>
 
 ## Controller-side modules
 
-A `Controller` can also attach hardware `Module` instances as class attributes. This is how leader-arm teleoperation works: the *controller* hardware (a small follower arm you wave around) is itself a Solarian module that streams positions, which the controller then turns into actions for the *real* robot.
+Input devices are one kind of controller-side module; a **leader arm** is another. It is a small arm you move by hand, and a Solarian module that streams its joint positions, which the controller turns into actions for the *real* robot. Attach it as a class attribute, as on a `Robot`:
 
 ```python
 class TeleopController(Controller):
@@ -212,11 +424,13 @@ class TeleopController(Controller):
         return action
 ```
 
+The SO-106 project does the same as a skill, `LeaderFollowSkill`, constructed with `params={"leader": "leader_arm", "arm": "right_arm", ...}`, so leader follow is one more skill that preempts teleop rather than a different controller.
+
 Read them from the module's [`ObservationBuffer`](/docs/glossary#observationbuffer) rather than calling `read_sensors()` yourself — a blocking serial read inside the control tick costs you the tick, and costs it once per reader. The buffer reads the hardware once, when `_tick_local_modules()` runs, and every reader after that is cheap.
 
-`self.observations` is one mapping from module name to buffer covering both sides, so a controller-side leader arm and a robot-side follower are read the same way. See [Skills](/docs/skills) for what a skill does with it.
+`self.observations` is one mapping from module name to buffer covering both sides, so a controller-side leader arm and a robot-side follower are read the same way.
 
-Controller-side modules read their config from `cfg.modules[name]` (i.e. inline under `controller.yaml` rather than from `conf/modules/<name>.yaml`).
+Controller-side modules read their config from `cfg.modules[name]`, inline under `controller.yaml`, rather than from `conf/modules/<name>.yaml`.
 
 ## Lifecycle hooks you can override
 
@@ -231,14 +445,15 @@ Controller-side modules read their config from `cfg.modules[name]` (i.e. inline 
     Any number of methods, on any event type. Called on the control thread as the tick drains. See <a href="/docs/events">Events</a>.
   </Property>
   <Property name="control_step()">
-    Compute and return the next <code>Action</code>. The base implementation merges what the running skills emit, so overriding it is optional.
+    Compute and return the next <code>Action</code>. The base implementation steps the running skills and merges what they emit, so overriding it is optional.
   </Property>
 </Properties>
 
 ## See also
 
+- [Skills](/docs/skills) — writing, configuring and placing the behaviours a controller starts.
+- [Robots](/docs/robots) — the node that receives your actions and owns the hardware.
 - [Server](/docs/servers) — what sits between your controller and the robot.
-- [Robots](/docs/robots) — what receives your actions on the other side.
 - [Events](/docs/events) — how input reaches your handlers and your skills.
-- [Actions](/docs/actions) — the schema you return from <code>control_step()</code>.
+- [Actions](/docs/actions) — the schema you return from <code>control_step()</code>, and the action types.
 - [AI Controller](/docs/ai_controller) — the dual-process VLM-driven controller built on top of <code>Controller</code>.

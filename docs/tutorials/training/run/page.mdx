@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Run your checkpoint',
   description:
-    'Point the Tutorial 3 pick skill at the checkpoint you just trained and run it with the same key.',
+    'Point the Tutorial 4 pick skill at the checkpoint you just trained and run it with the same key.',
 }
 
 # Run your checkpoint
@@ -14,7 +14,7 @@ In `conf/deployment/localhost.yaml`:
 policy_checkpoint: models/pick_example/checkpoints/latest.ckpt
 ```
 
-That path is relative to the project root, which is where you launch the server. Restart the server so it reads the new value. A server left up from Tutorial 3 is still holding the old checkpoint.
+That path is relative to the project root, which is where you launch the server. Restart the server so it reads the new value. A server left up from Tutorial 4 is still holding the old checkpoint.
 
 ```bash
 solarian run-service pick

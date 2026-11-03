@@ -10,9 +10,13 @@ A reference for robotics terms you'll see across the docs and the Solarian-speci
 
 ## Robotics terms
 
+### ACT (Action Chunking Transformer)
+
+An imitation-learning policy that predicts a chunk of the next *k* actions at once with a transformer, and averages overlapping chunks with temporal ensembling. `solarian-policy-lerobot` trains it with the `lerobot_act` trainer. See [Policies and learning](/docs/tutorials/gentle-intro/learning#act-the-action-chunking-transformer).
+
 ### Actuator
 
-A hardware component that produces motion or force — a motor, a servo, a linear stage, a gripper. In Solarian, an `Actuator` is a [Component](/docs/core) attached as a class attribute on a [Module](/docs/modules).
+A hardware component that produces motion or force — a motor, a servo, a linear stage, a gripper. In Solarian, an `Actuator` is a [Component](/docs/modules#components) attached as a class attribute on a [Module](/docs/modules).
 
 ### Body
 
@@ -20,7 +24,7 @@ A rigid mechanical link in a robot's structure. In Solarian, "body" is used info
 
 ### Bus
 
-The physical or logical channel a host computer uses to talk to one or more hardware devices: a USB serial bus, a CAN bus, a Dynamixel bus, an Ethernet socket. In Solarian, a [`ComponentBus`](/docs/core) is the Python object that wraps this protocol.
+The physical or logical channel a host computer uses to talk to one or more hardware devices: a USB serial bus, a CAN bus, a Dynamixel bus, an Ethernet socket. In Solarian, a [`ComponentBus`](/docs/modules#buses) is the Python object that wraps this protocol.
 
 ### Calibration
 
@@ -38,6 +42,10 @@ The repeating sequence of *read sensors → decide action → write actuators*. 
 
 An independent axis of motion. A 6-DoF arm can position its end effector in any pose; a 1-DoF gripper can only open or close.
 
+### Diffusion policy
+
+A policy that generates a short trajectory of actions by starting from random noise and removing predicted noise step by step, conditioned on the observation. It learns the whole distribution of demonstrated actions, so each sample commits to one way of doing the task. The UMI policy in the tutorials is one. See [Policies and learning](/docs/tutorials/gentle-intro/learning#learning-a-distribution).
+
 ### End effector
 
 The tip of a manipulator — the gripper, the tool, the camera. Cartesian-space targets typically refer to the end-effector pose.
@@ -53,6 +61,10 @@ How often a loop runs, in Hz. Solarian uses `frequency` for module loops and `fp
 ### Gripper
 
 A simple end effector with one or two DoFs that grasps objects. Often packaged as its own [Module](/docs/modules) (e.g. `solarian-umi-gripper`).
+
+### Imitation learning / Behavior cloning
+
+Learning a policy from demonstrations: a person does the task, the robot records observations and actions, and a network learns to output the demonstrated action for each observation. Behavior cloning is its simplest form, plain supervised learning on (observation, action) pairs. [Tutorial 5](/docs/tutorials/training) records demonstrations and trains one.
 
 ### Inverse kinematics (IK)
 
@@ -70,6 +82,14 @@ A representation of a robot's configuration as a vector of joint values, one per
 
 The geometry of motion — how joint values map to end-effector poses (forward kinematics) and back (inverse kinematics).
 
+### Markov decision process (MDP)
+
+The standard model of a decision problem: states, actions, dynamics that give the next state from the current state and action, and a reward. *Markov* means the next state depends only on the current state and action. A robot sees observations, a part of the state, so its real problem is partially observed. See [Policies and learning](/docs/tutorials/gentle-intro/learning#states-observations-and-actions).
+
+### Policy
+
+The decide step of the control loop as a function: an observation goes in, an action comes out. A policy is either written by a person as code or learned as a neural network from data. In Solarian a policy runs behind a [`PolicyServer`](/docs/policies) that skills call.
+
 ### Pose
 
 A combined position + orientation, usually `(x, y, z, rx, ry, rz)` or a 4×4 transformation matrix.
@@ -78,13 +98,17 @@ A combined position + orientation, usually `(x, y, z, rx, ry, rz)` or a 4×4 tra
 
 A robot's sense of its own state — joint positions, joint velocities, end-effector pose. Distinct from exteroception (cameras, force sensors).
 
+### Reinforcement learning (RL)
+
+Learning a policy from reward by trial and error: the policy acts, a reward scores the result, and training changes the policy to collect more total reward, the *return*. Most robot RL trains in simulation and transfers the policy to hardware. See [Policies and learning](/docs/tutorials/gentle-intro/learning#reinforcement-learning-for-robotics).
+
 ### Sensor
 
-A hardware component that produces data — a camera, an IMU, a force sensor, an encoder. In Solarian, a `Sensor` is a [Component](/docs/core) attached to a [Module](/docs/modules).
+A hardware component that produces data — a camera, an IMU, a force sensor, an encoder. In Solarian, a `Sensor` is a [Component](/docs/modules#components) attached to a [Module](/docs/modules).
 
 ### Servo
 
-A device that combines an actuator and a sensor in one package — a motor that knows its own position. Solarian's [`Servo`](/docs/core) class inherits from both `Actuator` and `Sensor`.
+A device that combines an actuator and a sensor in one package — a motor that knows its own position. Solarian's [`Servo`](/docs/modules#components) class inherits from both `Actuator` and `Sensor`.
 
 ### Teleoperation (teleop)
 
@@ -92,11 +116,15 @@ A controller-driven mode where a human directly drives the robot — via keyboar
 
 ### Trajectory / Waypoint
 
-A trajectory is a time-parameterized path through configuration space; a waypoint is a single point on that path. Solarian's modules support waypoint scheduling via `ActionType.SCHEDULE_L` / `SCHEDULE_J` and a built-in `TrajectoryInterpolator` (pose or scalar). See [Scheduling Waypoints](/docs/modules/scheduling-waypoints).
+A trajectory is a time-parameterized path through configuration space; a waypoint is a single point on that path. Solarian's modules support waypoint scheduling via `ActionType.SCHEDULE_L` / `SCHEDULE_J` and a built-in `TrajectoryInterpolator` (pose or scalar). See [Scheduling Waypoints](/docs/modules/scheduling-waypoints). In learning, a trajectory also names a recorded sequence of observations and actions, *o₀, a₀, o₁, a₁, …*; an episode in a dataset is one.
 
 ### Vision-Language Model (VLM)
 
 A multimodal model that consumes images and text and returns text. Used by Solarian's [AI Controller](/docs/ai_controller) to decide which skills to start or stop.
+
+### Vision-Language-Action model (VLA)
+
+A [VLM](#vision-language-model-vlm) trained further to output robot actions: camera images, an instruction, and the joint state go in, and actions come out, either as action tokens or as a continuous chunk from an action expert. See [Policies and learning](/docs/tutorials/gentle-intro/learning#vlas-vision-language-action-models).
 
 ## Solarian terms
 
@@ -106,7 +134,7 @@ The typed schema of a single command sent from the controller to the robot each 
 
 ### Action handler
 
-A method decorated with `@action_handler(action_type)` on a [Robot](/docs/robots) or [Module](/docs/modules). The framework dispatches incoming actions to the matching handler. See [Action Types](/docs/action-types).
+A method decorated with `@action_handler(action_type)` on a [Robot](/docs/robots) or [Module](/docs/modules). The framework dispatches incoming actions to the matching handler. See [Registering handlers](/docs/actions#registering-handlers).
 
 ### Action queue
 
@@ -114,11 +142,11 @@ A queue per module, implemented as `ModuleActionQueue`. On the [Robot](/docs/rob
 
 ### Action type
 
-An integer tag on every [Action](/docs/actions) that controls how it's dispatched. Built-ins are `STOP`, `MODULE_ACTION`, `MOVE_*`, `SERVO_*`, `SCHEDULE_*`, `RESTART_PUT`, plus `START_SKILL` and `STOP_SKILL`, which serve both the think process → controller channel and the controller → robot one. Custom types live at `>= ActionType.CUSTOM_START`. See [Action Types](/docs/action-types).
+An integer tag on every [Action](/docs/actions) that controls how it's dispatched. Built-ins are `STOP`, `MODULE_ACTION`, `MOVE_*`, `SERVO_*`, `SCHEDULE_*`, `RESTART_PUT`, plus `START_SKILL` and `STOP_SKILL`, which serve both the think process → controller channel and the controller → robot one. Custom types live at `>= ActionType.CUSTOM_START`. See [Action types](/docs/actions#action-types).
 
 ### `ActuatorBus`
 
-An [`ComponentBus`](/docs/core) subclass that adds `write()`, `enable_torque()`, `disable_torque()`, and calibration writing. One per hardware port.
+A [`ComponentBus`](/docs/modules#buses) subclass that adds `write()`, `enable_torque()`, `disable_torque()`, and calibration writing. One per hardware port.
 
 ### `ActuatorField`
 
@@ -142,7 +170,7 @@ A [`SensorBus`](#sensorbus) whose reads are frames. Adds the archive tap — eve
 
 ### Component
 
-The smallest addressable unit of hardware: an [Actuator](#actuator), a [Sensor](#sensor), or a [Servo](#servo). Defined in [Core](/docs/core).
+The smallest addressable unit of hardware: an [Actuator](#actuator), a [Sensor](#sensor), or a [Servo](#servo). See [Components](/docs/modules#components).
 
 ### `ComponentBus`
 
@@ -158,7 +186,7 @@ Pydantic model for `conf/controller.yaml` (`fps`, `tps`, `system2_*`, `policy_pa
 
 ### `Data`
 
-The Pydantic-typed wrapper around every value flowing through Solarian. Subclasses include `PosData`, `SpeedData`, `ImageData`, `BoundingBoxData`, `TimestampData`. See [Core](/docs/core).
+The Pydantic-typed wrapper around every value flowing through Solarian. Subclasses include `PosData`, `SpeedData`, `ImageData`, `BoundingBoxData`, `TimestampData`. See [Data classes](/docs/observations#data-classes).
 
 ### `ExecutionPlace`
 
@@ -206,9 +234,9 @@ Pydantic model for `conf/modules/<module_name>.yaml` (`frequency`, `actuators`, 
 
 ### Observation
 
-The typed schema of every sensor reading the robot publishes per frame. Groups [`ModuleObs`](#moduleobs) instances by module name. See [Observations](/docs/observations).
+The typed schema of every sensor reading the robot publishes per frame. Groups [`ModuleObs`](/docs/observations#module-obs) instances by module name. See [Observations](/docs/observations).
 
-### `ObservationBuffer`
+### `ObservationBuffer` {{ id: 'observationbuffer' }}
 
 Every module's history of recent observations, and the one place a skill reads state from. Backed by shared memory when the module runs in its own process, by a plain in-process ring when it runs inline on its host. Read the newest sample with `latest()` or a window with `last_k(n)`.
 
@@ -234,7 +262,7 @@ The machinery that actually schedules a [Module](/docs/modules) or [Skill](/docs
 
 ### `SensorBus`
 
-A [`ComponentBus`](/docs/core) subclass for sensors. Sensors that produce frames use [`CameraBus`](#camerabus) below it.
+A [`ComponentBus`](/docs/modules#buses) subclass for sensors. Sensors that produce frames use [`CameraBus`](#camerabus) below it.
 
 ### `SensorField`
 

@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Services',
   description:
-    'A service is a model served over HTTP that a calculated observation field or a skill calls, such as a click-to-track bounding box or a policy. Run it with solarian run-service, on Modal, or on Solarian Base.',
+    'A service is a model served over HTTP that a calculated observation field or a skill calls, such as a click-to-track bounding box or a policy. Run it locally with solarian run-service.',
 }
 
 # Services
@@ -65,7 +65,7 @@ server:
   </Property>
 </Properties>
 
-`solarian run-service`, a skill's managed server, `solarian modal-serve` and [Solarian Base](/docs/solarian-base/endpoints) all resolve this one block, so they cannot disagree on what a conf serves.
+`solarian run-service`, a skill's managed server and [Solarian Base](/docs/solarian-base/endpoints) all resolve this one block, so they cannot disagree on what a conf serves.
 
 ## Running a service
 
@@ -76,6 +76,8 @@ solarian run-service sam2-tracker --model small       # an installed service, wi
 ```
 
 Name a conf (its name, filename or path) to run the server its `server:` block describes, or an installed service to run it with your own arguments. `--checkpoint`, `--host` and `--port` override the conf; every other argument goes to the server, after the conf's `args`. A name that matches both a service conf and a skill conf is an error that lists both. `sam2-tracker` downloads the chosen SAM 2.1 checkpoint into `--checkpoint-dir` when the file is not already there.
+
+The server runs in the foreground until you stop it with Ctrl+C. Point the conf's URL key at it, here `bbox_tracker_url` in your deployment, as `http://<host>:8765` (`http://localhost:8765` when the robot or relay runs on the same machine).
 
 Every server answers `GET /health` and `GET /info`, plus its own routes, and stamps each response with `X-Server-Ms`, the time it spent, so a client can tell network time from compute.
 
@@ -149,20 +151,6 @@ A policy server is a `ServiceServer` with one standard API, so a skill drives di
 
 Its `Service` sets `checkpoint_arg`, which makes it a service that takes a checkpoint: what `run-service` and Base call a policy. See [Policies](/docs/policies) for writing one.
 
-## Serving on Modal
-
-`solarian modal-serve`, from the `solarian-modal` plugin, deploys the server `run-service` would start as a persistent Modal web endpoint, on your own Modal account:
-
-```bash
-solarian modal-serve bbox_tracker --label bbox-tracker
-solarian modal-serve umi_target --label pick --checkpoint /data/outputs/pick/checkpoints/latest.ckpt
-solarian modal-serve stop pick
-```
-
-The endpoint is at `https://<workspace>--<label>.modal.run`, and the label keeps that URL across redeploys. It scales to zero after `--scaledown` seconds idle (300 by default) unless `--min-containers 1` keeps it warm, runs on `--gpu T4` by default (`none` for CPU), and requires the bearer token when `SOLARIAN_ENDPOINT_TOKEN` is set where you run the command. Set the conf's URL key, here `bbox_tracker_url`, to the URL it prints.
-
-[Solarian Base](/docs/solarian-base/endpoints) runs the same command for you, on its own Modal account, and writes the URLs and the token into the robot's connection file.
-
 ## Writing a service
 
 ```python
@@ -190,7 +178,7 @@ class MyService(Service):
     default_port = 8770
 ```
 
-`ServiceClient` wraps the HTTP calls, with the bearer token and connect retries, and `solarian.utils.wire` encodes numpy arrays in JSON payloads. `Service.checkpoint_arg` names the server's flag for a checkpoint (`--input` for a policy), and `Service.modal_spec()` the image to serve it in on Modal; left as `None`, the image is derived from the server package's requirements. `solarian-sam2` is a complete example.
+`ServiceClient` wraps the HTTP calls, with the bearer token and connect retries, and `solarian.utils.wire` encodes numpy arrays in JSON payloads. `Service.checkpoint_arg` names the server's flag for a checkpoint (`--input` for a policy). `solarian-sam2` is a complete example.
 
 ## See also
 
