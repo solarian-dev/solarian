@@ -3,7 +3,7 @@
 import pytest
 
 from solarian.core.action import Action, ActionType
-from solarian.core.ai.system1.skill import Skill, SkillStatus
+from solarian.core.skill import Skill, SkillStatus
 from solarian.core.execution import ExecutionMode, WorkerExit
 
 

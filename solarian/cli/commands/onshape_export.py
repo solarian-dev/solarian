@@ -41,6 +41,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 from solarian.cli import BaseCommand, CommandRegistry
+from solarian.utils.env_file import load_env_file
 
 #: Public Onshape stack; overridden if ``ONSHAPE_API`` is already set.
 DEFAULT_ONSHAPE_API = "https://cad.onshape.com"
@@ -49,17 +50,6 @@ DEFAULT_ONSHAPE_API = "https://cad.onshape.com"
 #: First match wins. ``.env`` is included so project-local secrets work without
 #: a separate onshape_keys.txt.
 DEFAULT_KEYS_FILES = ("onshape_keys.txt", ".env")
-
-
-def _load_keys_file(path: Path) -> None:
-    """Load ``KEY=VALUE`` lines from *path* into the environment (never
-    overwriting values already set)."""
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def _ensure_credentials(keys_file: str | None) -> None:
@@ -73,7 +63,7 @@ def _ensure_credentials(keys_file: str | None) -> None:
         )
         for candidate in candidates:
             if candidate.exists():
-                _load_keys_file(candidate)
+                load_env_file(candidate)
                 print(f"Loaded Onshape credentials from {candidate}")
                 break
 

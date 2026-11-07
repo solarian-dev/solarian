@@ -213,7 +213,7 @@ These run on the controller machine. They import <code>setup_modules=("controlle
 solarian run-controller
 ```
 
-Loads `conf/controller.yaml`, instantiates your `Controller` (or `AIController`) subclass, and starts the action sender / observation receiver. See [Controllers](/docs/controllers).
+Loads `conf/controller.yaml`, instantiates your `Controller` subclass, and starts the action sender / observation receiver. See [Controllers](/docs/controllers).
 
 ### `calibrate-controller`
 
@@ -257,7 +257,7 @@ solarian record num_episodes=10 episode_time_s=20
 
 The same teleop loop as `run-controller`, cut into episodes: reset the scene, record for `episode_time_s`, seal, repeat. Press `delete` during an episode to throw it away and record it again — the index is reused, so a bad take leaves no gap — `r` to seal early, and quit the UI to end the session.
 
-The robot is what writes the dataset, so `conf/commands/record.yaml` holds only the shape of the session (`name`, `num_episodes`, `episode_time_s`, `reset_time_s`, `tasks`) and the robot's `conf/robot.yaml` `recording:` block holds where and how. See [Recording](/docs/recording).
+`conf/commands/record.yaml` holds only the shape of the session (`name`, `num_episodes`, `episode_time_s`, `reset_time_s`, `tasks`). The `recording:` block in `conf/controller.yaml` picks which sides record: the robot, into `recordings/robot/`, and the controller, into `recordings/controller/`. The robot's `conf/robot.yaml` `recording:` block holds how the robot stores its episodes. The command refuses to start when neither side would record. See [Recording](/docs/recording).
 
 ### `replay`
 
@@ -272,7 +272,7 @@ Replays a previously recorded episode by streaming its actions back through the 
 ### `export-dataset`
 
 ```bash
-solarian export-dataset datasets/cup_stacking__2026-09-22T19-04-11
+solarian export-dataset recordings/robot/0003_7f3a9c_cup_stacking
 ```
 
 Turns a recorded session — archive mp4s plus one parquet per episode, all at native rates — into a LeRobot v2.1 dataset: every signal resampled onto one grid, every frame warped through the camera's optical remap and downscaled to the observation resolution. The session is never modified, so recalibrate a camera or change your mind about the rate and export again from the same recording. `--fps`, `--episodes A,B,C`, `--no-remap` and `--overwrite` cover the rest. See [Recording](/docs/recording).

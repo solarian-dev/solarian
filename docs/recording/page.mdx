@@ -1,16 +1,16 @@
 export const metadata = {
   title: 'Recording',
   description:
-    'How Solarian records episodes: the robot writes one mp4 per camera at archive resolution and one parquet of every signal at its native rate, so a dataset keeps the quality the sensor produced rather than the resolution today’s policy happens to want.',
+    'How Solarian records episodes: the robot writes one mp4 per camera at archive resolution and one parquet of every signal at its native rate, and the controller can write the same layout from what reached it, so a dataset keeps the quality the sensor produced and, beside it, what the policy actually saw.',
 }
 
 # Recording
 
 A dataset outlives the policy it was collected for. The resolution your policy trains at today is not the resolution you will want in two years, and no amount of later work recovers pixels a downscale threw away — so Solarian records the frame the sensor produced, not the frame the policy consumes. {{ className: 'lead' }}
 
-Everything on this page follows from one decision: **the robot records, end to end.** It is the only process that ever sees a full-resolution frame.
+An episode can record on two sides, each switched on or off by the operator: **the robot**, the high-fidelity record and the only process that ever sees a full-resolution frame, and **the controller**, which records what reached it and the AI controller's log of the run. Both write the same session layout under the project's `recordings/` folder.
 
-## Why the robot and not the controller
+## Why the robot is the high-fidelity side
 
 The observation a controller receives has been downscaled to the policy's input size, optically remapped, and JPEG-compressed — three irreversible losses, applied before the frame leaves the robot. On top of that, every hop of the link is `ZMQ_CONFLATE`: a controller that stalls for a tick does not get a backlog, it gets the latest frame and a hole where the others were. That is the right trade for teleop and the wrong one for a dataset.
 
@@ -26,21 +26,35 @@ flowchart TD
     obs --> jpeg[JPEG + zmq] --> ctrl[Controller]
 ```
 
+## What the controller records
+
+The controller's recording is the other end of the link. Its rows are the observations as they arrived — JPEG-decoded, at the preview rate, after the network — and its actions are the ones it sent, whether or not the robot received them. Its video is the frames it was shown, at the size they arrived. Each row still carries the robot's capture stamp in `obs.<module>.ts`, beside the controller's own receive time in `wall_ts`, so the latency of every row is in the table.
+
+That is the dataset to look at when a policy behaves differently on the robot than in training: it is what the policy saw, holes and all. It is also where the [AI controller](/docs/ai_controller) logs its runs, one `agent/` directory beside the episode each run drove. With only the robot recording, nothing of the agent is kept.
+
+When both sides record, the controller waits for the robot to open its episode and then files its own under the robot's session directory name and episode index, so the two datasets line up file for file. If the robot cannot record, or does not answer within a few seconds, the controller records on its own numbering and says so.
+
 ## On disk
 
 ```text
-datasets/<name>__2026-09-22T19-04-11/
-├── session.json          written once, then immutable
-├── manifest.jsonl        appended and fsynced once per sealed episode
-└── episodes/000000/
-    ├── episode.json
-    ├── episode.parquet
-    └── video/<module>.<field>.mp4
+recordings/
+├── robot/0003_7f3a9c_cup_stacking/
+│   ├── session.json          written at the first episode, then immutable
+│   ├── manifest.jsonl        appended and fsynced once per sealed episode
+│   └── episodes/000000/
+│       ├── episode.json
+│       ├── episode.parquet
+│       └── video/<module>.<field>.mp4
+└── controller/0003_7f3a9c_cup_stacking/
+    ├── …                     the same files, from what reached the controller
+    └── episodes/000000/agent/   the AI controller's run, when one drove it
 ```
+
+A session directory is `<number>_<hash>_<name>`. The number counts up within a recordings root, so sessions sort in the order they were recorded and you can ask for "session 3". The hash tells apart two sessions that reached the same number on different machines once they meet, on upload for instance. The name is the one you gave the session. The directory is created when the session's first episode opens, so a robot that boots and never records leaves nothing behind and spends no number.
 
 <Properties>
   <Property name="session.json" type="written once">
-    What makes an episode directory self-describing: column dtypes and units, camera geometry, the optical remap and resize that export has to apply because the archive is stored raw, the Solarian version and the git sha.
+    What makes an episode directory self-describing: column dtypes and units, camera geometry, the optical remap and resize that export has to apply because the archive is stored raw, the Solarian version and the git sha. Also `source` (`robot` or `controller`), and the session's `id` (`<number>_<hash>`), `number` and `name`.
   </Property>
   <Property name="episode.parquet" type="one per episode">
     Every low-dimensional signal — observations, the actions the robot received, and one frame index per camera. Zstd-compressed, written in row groups as the episode runs, so a hard kill costs one row group rather than the episode.
@@ -65,12 +79,22 @@ Cameras are the exception: the table stores a frame index and a capture timestam
 
 ## Configuring it
 
-Two files, split by who owns the decision. The robot's `conf/robot.yaml` decides *where and how* an episode is stored:
+Two files, split by who owns the decision. The controller's `conf/controller.yaml` decides *which sides* record, and how the controller stores its own:
+
+```yaml
+recording:
+  controller: true             # the GUI's two switches, as they start
+  robot: true
+  root: recordings/controller
+  # crf, keyint, preset, ... as in the robot's block below
+```
+
+The robot's `conf/robot.yaml` decides *where and how* the robot stores its episodes:
 
 ```yaml
 recording:
   enabled: true
-  root: datasets
+  root: recordings/robot
   crf: 20        # near-transparent; survives a later re-encode
   keyint: 120    # frames between keyframes; a quality/size/CPU dial
   preset: veryfast
@@ -91,7 +115,7 @@ Coverage — the fraction of grid slots backed by a distinct capture — is as m
 
 Recording is on by default, because a teleop session that was not recorded cannot be recovered and the cost of an mp4 nobody wanted is a deletion. `max_session_gb` is the counterweight: on-by-default without a cap fills an SD card.
 
-`root` has to be a disk on the machine running the robot. A relative path resolves against the project, which is the right default only while the project is local — if the project is a network mount, the default puts the link in the encoder's path, and the encoder is already the tightest budget on a single-board computer. Point `root` at local storage and let the transfer step move episodes afterwards.
+`root` has to be a disk on the machine running the robot. A relative path resolves against the project folder (`SOLARIAN_PROJECT_PATH`, else the working directory), which keeps the recordings with the project that made them. That is the right default only while the project is local — if the project is a network mount, the default puts the link in the encoder's path, and the encoder is already the tightest budget on a single-board computer. Point `root` at local storage and let the transfer step move episodes afterwards.
 
 Archive resolution is per camera, in the camera's own config:
 
@@ -114,7 +138,9 @@ Prefer a size that divides the sensor by a whole number. `cv2.resize` with `INTE
 
 Recording is on while you teleop, so `solarian run-controller` already records. Press `r` to seal the episode and open the next one, `delete` to throw the current one away and re-record it.
 
-To start idle instead and open the first episode by hand, set `record: false` in the controller's config. That is a different switch from the robot's `recording.enabled`, and the two answer different questions: `recording.enabled` is whether the robot can record at all, while `record` is only whether an operator has to press a key first. Turning `enabled` off to get a quiet startup also means `r` does nothing and `solarian record` refuses to run. `solarian record` ignores `record` either way, since it opens and seals every episode itself.
+The **Recording** panel, at the top of the pygame window and on the web controller page, has a switch per side. A switch decides where the *next* episode records: flip one mid-take and the take in progress still seals on the sides it started on. The status line says which sides are recording now, or between takes which ones are armed.
+
+To start idle instead and open the first episode by hand, set `record: false` in the controller's config. That is a different switch from the robot's `recording.enabled`, and the two answer different questions: `recording.enabled` is whether the robot can record at all, while `record` is only whether an operator has to press a key first. Turning `enabled` off to get a quiet startup also means the robot's switch does nothing. `solarian record` ignores `record` either way, since it opens and seals every episode itself.
 
 For a deliberate collection run, `solarian record` cuts the same teleop loop into episodes:
 
@@ -134,7 +160,7 @@ tasks: []              # one episode per task, cycled
 
 The controller keeps teleoperating between episodes as much as during them, so you reset the scene by hand and nothing is torn down and rebuilt between takes. Pressing `delete` reuses the episode index, so a bad take leaves no gap in the dataset.
 
-`name` names the session directory on the robot; a timestamp is appended, so a rerun gets its own directory rather than mixing its episodes in with ones an older build wrote.
+`name` names the session directory; a number and a hash are put in front of it, so a rerun gets its own directory rather than mixing its episodes in with ones an older build wrote. `solarian record` refuses to start when both switches are off, and when the robot's switch is on but the robot has recording disabled, because finding out after fifty takes is too late.
 
 <Note>
   An episode boundary is the one action that must not be dropped — a lost `RECORD_STOP` leaves the next take appended to this one. The controller therefore resends a boundary every tick until the robot echoes the request id back in its observation, and gives up loudly after three seconds rather than silently corrupting an episode.
@@ -145,8 +171,10 @@ The controller keeps teleoperating between episodes as much as during them, so y
 A session is not a training set, deliberately. Export is where the irreversible choices are finally made — a target rate, a policy resolution, a warped image — and because the session never changes, they are all cheap to redo.
 
 ```bash
-solarian export-dataset datasets/cup_stacking__2026-09-22T19-04-11
+solarian export-dataset recordings/robot/0003_7f3a9c_cup_stacking
 ```
+
+A controller session exports the same way, from `recordings/controller/`.
 
 That writes a [LeRobot](https://github.com/huggingface/lerobot) v2.1 dataset, which is what `solarian train` reads:
 

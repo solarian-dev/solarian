@@ -4,11 +4,11 @@ import threading
 import os
 import sys
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Any
 from multiprocessing.managers import SharedMemoryManager
 
 from solarian.core import curve
+from solarian.core.conf_paths import project_path
 from solarian.core.configs import RobotConfig
 from solarian.core.clock_sync import (
     sync_with_server,
@@ -33,6 +33,7 @@ from solarian.conf import settings
 from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.event import EventHost, event_inbox_for
 from solarian.core.execution import ExecutionMode
+from solarian.core.skill import SkillStatus, failure_reason
 
 import logging
 logger = logging.getLogger("robot")
@@ -379,6 +380,9 @@ class Robot(EventHost, ABC):
         #: ``name -> (skill, terminate_deadline)``. Reaped from the control
         #: loop rather than joined at the point of stopping.
         self._stopping_skills: dict[str, tuple[Any, float]] = {}
+        #: ``START_SKILL`` payloads for skills that arrived while a skill of the
+        #: same name was still stopping, launched once the reaper retires it.
+        self._deferred_starts: dict[str, dict] = {}
         self._init_events()
 
 
@@ -572,14 +576,17 @@ class Robot(EventHost, ABC):
         # the robot received it; this is. Sent even with recording disabled,
         # because "the robot heard you and is not recording" is the answer a
         # controller retrying a boundary needs.
-        enabled, active, episode, request = self._recording_snapshot()
+        enabled, active, episode, request, session = self._recording_snapshot()
         msg.data["recording"] = {
             "enabled": enabled,
             "active": active,
             "episode": episode,
             "request": request,
+            # The session directory's name, so a controller logging beside the
+            # recording files its notes under the same episode.
+            "session": session,
         }
-        sent_recording = (enabled, active, episode, request)
+        sent_recording = (enabled, active, episode, request, session)
 
         # Forward any pending skill status transitions to the controller so
         # that the think process can react to them.  ``drain`` advances a
@@ -596,6 +603,9 @@ class Robot(EventHost, ABC):
                         "skill_id": r.skill_id,
                         "status": r.status,
                         "timestamp": r.timestamp,
+                        "reason": self._skill_failure_reason(r)
+                        if r.status == int(SkillStatus.FAILED)
+                        else "",
                     }
                     for r in records
                 ]
@@ -695,14 +705,26 @@ class Robot(EventHost, ABC):
                 logger.exception(f"Observation sender error: {e}")
             time.sleep(0.005)
 
-    def _recording_snapshot(self) -> tuple[bool, bool, int, int]:
+    def _recording_snapshot(self) -> tuple[bool, bool, int, int, str | None]:
         recorder = self.recorder
         return (
             recorder is not None,
             recorder is not None and recorder.is_recording,
             recorder.episode_count if recorder else 0,
             self._record_request,
+            recorder.session_dir_name if recorder else None,
         )
+
+    def _skill_failure_reason(self, record) -> str:
+        """Why the robot-side skill behind a FAILED ``record`` failed, from its crash report."""
+        skills = [*self._local_skills.values(), *(s for s, _ in self._stopping_skills.values())]
+        for skill in skills:
+            if skill.skill_id != record.skill_id:
+                continue
+            error = skill.get_error()
+            if error is not None:
+                return failure_reason(error[1])
+        return ""
 
     def _should_send_observation(self, observation: Observation) -> bool:
         """False when this wake would repeat a message the controller has.
@@ -832,7 +854,7 @@ class Robot(EventHost, ABC):
         declared rather than by the robot growing a handler for it.
         """
         if cls.__dict__.get("_skill_class_cache") is None:
-            from solarian.core.ai.system1.registry import discover_skill_classes
+            from solarian.core.skill_registry import discover_skill_classes
 
             found = {
                 skill_cls.registry_name(): skill_cls
@@ -874,21 +896,25 @@ class Robot(EventHost, ABC):
         if name in self._stopping_skills:
             # A second process would command the same modules as the one still
             # winding down, and both would own the same hardware.
-            logger.info("Skill '%s' is still stopping; not restarting it", name)
+            logger.info("Skill '%s' is still stopping; starting it once it has", name)
+            self._deferred_starts[name] = data
             return True
+        self._launch_named_skill(name, data)
+        return True
+
+    def _launch_named_skill(self, name: str, data: dict) -> None:
         try:
             skill = self.start_skill(
-                skill_cls(
+                self._skill_classes()[name](
                     params=data.get("params", {}),
                     status_mp_q=StatusBoard.get_mp_queue(),
                 )
             )
         except Exception:
             logger.exception("Could not start skill '%s'", name)
-            return True
+            return
         logger.info("Started skill '%s' (pid=%s)", name, skill.pid)
         self._reserve_encoder_core()
-        return True
 
     @action_handler(ActionType.STOP_SKILL)
     def stop_named_skill(self, action, t_now: float) -> bool:
@@ -934,6 +960,7 @@ class Robot(EventHost, ABC):
         only a bounded backlog toward the robot, so a long stall turns into
         dropped commands rather than late ones.
         """
+        self._deferred_starts.pop(name, None)
         skill = self._local_skills.get(name)
         if skill is None:
             return
@@ -969,6 +996,9 @@ class Robot(EventHost, ABC):
                         ModuleAction(action_type=ActionType.CANCEL_TRAJECTORY)
                     )
             logger.info("Skill '%s' stopped", name)
+            deferred = self._deferred_starts.pop(name, None)
+            if deferred is not None:
+                self._launch_named_skill(name, deferred)
 
     def stop_all_skills(self, timeout: float = 5.0, wait: bool = True) -> None:
         """Stop every robot-side skill, waiting for them out unless told not to.
@@ -978,6 +1008,7 @@ class Robot(EventHost, ABC):
         inference must not delay the safe hold that follows it, and whatever
         its last tick dispatched is undone by the reaper's cancel.
         """
+        self._deferred_starts.clear()
         for name in list(self._local_skills):
             self.stop_skill(name, timeout=timeout)
         if not wait:
@@ -1135,12 +1166,8 @@ class Robot(EventHost, ABC):
                 ),
             )
 
-        root = Path(cfg.root)
-        if not root.is_absolute():
-            root = Path(os.environ.get("SOLARIAN_PROJECT_PATH", os.getcwd())) / root
-
         self.recorder = SessionRecorder(
-            root=root,
+            root=project_path(cfg.root),
             # Until a controller names one. `solarian record name=...` does;
             # an ordinary teleop session has no name to give.
             session=self.__class__.__name__,
@@ -1203,7 +1230,7 @@ class Robot(EventHost, ABC):
         # the encoder's migrations do. Matches VideoWriter's own threshold.
         if len(self._all_cores) < 3:
             return
-        _, recording, _, _ = self._recording_snapshot()
+        _, recording, *_ = self._recording_snapshot()
         cores = set(self._all_cores[:-1] if recording else self._all_cores)
         pids = [
             os.getpid(),

@@ -33,7 +33,7 @@ from multiprocessing import Queue as MpQueue
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from enum import IntEnum
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, NamedTuple, Optional
 
 from solarian.core.execution import ExecutionMode, ExecutionPlace, WorkerExit
 from solarian.core.runner import Runner, make_runner
@@ -69,6 +69,42 @@ _EXIT_STATUS = {
     WorkerExit.STOPPED: SkillStatus.STOPPED,
     WorkerExit.FAILED: SkillStatus.FAILED,
 }
+
+
+class SkillFailed(Exception):
+    """Raised by :meth:`Skill.fail`. Its message is the reason a planner reads."""
+
+    #: A runner logs this as an outcome, not as a crash with a traceback.
+    deliberate = True
+
+
+def failure_reason(traceback_str: str) -> str:
+    """The one line of a skill's crash report a planner can act on.
+
+    A runner reports a crash as a traceback, whichever process the skill ran
+    in, so the reason travels the same way: as the traceback's last line.
+    """
+    lines = [line for line in traceback_str.strip().splitlines() if line.strip()]
+    if not lines:
+        return ""
+    last = lines[-1].strip()
+    marker = f"{SkillFailed.__name__}: "
+    return last.split(marker, 1)[1] if marker in last else last
+
+
+class Tool(NamedTuple):
+    """A skill as a planner sees it: the class, plus the params the controller binds.
+
+    The planner fills in the rest of the params (those in the skill's
+    :meth:`Skill.tool_spec`); the bound ones — module names, which policy
+    config — are the controller's to choose and never reach the model.
+    """
+
+    skill: "type[Skill]"
+    params: Mapping[str, Any] = {}
+
+    def spec(self) -> Dict[str, Any]:
+        return self.skill.tool_spec(self.params)
 
 
 class Skill(ABC):
@@ -160,6 +196,40 @@ class Skill(ABC):
     #: entry-point name (e.g. ``"umi"``).
     config_name: Optional[str] = None
 
+    # ---- Agent contract: how a planner sees this skill as a tool ----------
+
+    #: What the skill does and when to choose it, written for a planner.
+    #: ``None`` keeps the skill off an agent's tool list.
+    description: Optional[str] = None
+
+    #: JSON Schema (an ``object``) of the params a planner chooses. Params the
+    #: controller's :class:`Tool` binds are not listed here.
+    parameters: Dict[str, Any] = {"type": "object", "properties": {}}
+
+    #: Params that are ``[x, y]`` pixels in an observation image. The harness
+    #: maps them back to capture pixels and refuses ones from a stale image.
+    image_points: tuple = ()
+
+    #: Example calls, each ``{"params": {...}, "when": "..."}``.
+    examples: tuple = ()
+
+    #: Whether the skill calls :meth:`finish` on its own. One that does not
+    #: runs until it is stopped, so the monitor or the planner has to end it.
+    ends_by_itself: bool = True
+
+    #: Seconds after which an agent-started run is stopped as timed out.
+    max_duration_s: Optional[float] = None
+
+    #: Largest share (0-1) of the camera image a seeded mask target may cover
+    #: when an agent starts the skill. A point that misses the object makes a
+    #: tracker select the background; the harness refuses such a start, and an
+    #: empty mask, before anything moves. ``None`` checks nothing.
+    max_target_area: Optional[float] = None
+
+    #: Questions the monitor asks of the camera while this skill runs, in the
+    #: format of :class:`solarian.core.ai.agent.monitor.MonitorQuestion`.
+    monitor: tuple = ()
+
     def __init__(
         self,
         name: Optional[str] = None,
@@ -224,6 +294,37 @@ class Skill(ABC):
         name; the class name is the fallback.
         """
         return cls.config_name or cls.__name__
+
+    @classmethod
+    def tool_spec(cls, params: Mapping[str, Any]) -> Dict[str, Any]:
+        """How a planner sees this skill when the controller binds ``params``.
+
+        The class attributes by default. A skill whose behaviour comes from
+        config (one policy skill, many checkpoints) overrides this to describe
+        the config ``params`` select.
+        """
+        return {
+            "description": cls.description,
+            "parameters": cls.parameters,
+            "image_points": list(cls.image_points),
+            # The camera module whose image ``image_points`` are pixels of.
+            "camera": params.get("camera"),
+            "examples": list(cls.examples),
+            "ends_by_itself": cls.ends_by_itself,
+            "max_duration_s": cls.max_duration_s,
+            "max_target_area": cls.max_target_area,
+            "monitor": list(cls.monitor),
+        }
+
+    @classmethod
+    def services_for(cls, params: Mapping[str, Any]) -> list[tuple[str, str, Dict[str, Any]]]:
+        """Services to start before running with ``params``: ``(module, field, service params)``.
+
+        A skill that reads its target from a tracker is pointed at an object
+        by seeding that tracker, so the planner's point has to reach the
+        tracker before the skill's first observation does.
+        """
+        return []
 
     def commanded_module_names(self) -> set[str]:
         """Module names this skill writes (for occupancy / preemption)."""
@@ -363,6 +464,15 @@ class Skill(ABC):
         finishes — a one-shot move both commands the pose and completes.
         """
         self._finished = True
+
+    def fail(self, reason: str) -> None:
+        """End this skill as FAILED, telling whoever started it why.
+
+        Raises, so the step that calls it ends there. The runner reports it
+        like any crash, which is what carries ``reason`` back to the host from
+        whichever process the skill ran in (see :func:`failure_reason`).
+        """
+        raise SkillFailed(reason)
 
     @property
     def finished(self) -> bool:

@@ -1,222 +1,259 @@
 export const metadata = {
   title: 'AI Controller',
   description:
-    'AIController is a dual-process controller that pairs a slow VLM-driven planner (System 2 / ThinkProcess) with fast reactive Skills (System 1) — all behind the same Controller contract.',
+    'Give the robot a task in plain language: a planner model plans and calls the controller’s skills as tools, and a fast monitor model watches each one through the cameras.',
 }
 
 # AI Controller
 
-`AIController` is a `Controller` subclass that adds a **dual-process cognitive architecture** on top of the standard control loop. A slow vision-language model running in its own process decides which [Skills](/docs/skills) to start or stop; the fast control loop merges actions emitted by those skills and forwards them to the robot. {{ className: 'lead' }}
+Any [Controller](/docs/controllers) becomes an AI controller by declaring **tools** and adding an `agent:` block to `conf/controller.yaml`. The operator types a task in the chat ("put all the batteries in the white box"); a **planner** model plans it and calls the tools, which start [Skills](/docs/skills) on the robot; a **monitor** model watches each running skill through the cameras and ends it, or wakes the planner, when something happens. {{ className: 'lead' }}
 
-Defined in [`solarian/core/ai/ai_controller.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/ai_controller.py).
+The harness lives in [`solarian/core/ai/agent/`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/agent/harness.py). There is no separate controller class: the agent is a part of `Controller`, built when `agent:` is set.
 
-## Why two processes?
-
-A single control loop can't be both:
-
-- **Fast enough for control** (30–500 Hz, predictable jitter, no I/O surprises), and
-- **Smart enough for planning** (LLM/VLM calls take seconds, return JSON, may fail).
-
-Solarian splits the responsibility:
-
-- **System 1 — fast loop.** Reactive `Skill`s push their next per-module actions onto their own queues. The controller's `control_step` drains those every tick and forwards a single merged action to the robot.
-- **System 2 — `ThinkProcess`.** Runs in its own OS process at `cfg.tps` Hz (typically 1 Hz). Reads the latest observation + a user message, calls a VLM, and decides which skills to start or stop.
+## How a run goes
 
 ```text
-┌──────────────────────  Main process  ──────────────────────┐
-│                                                             │
-│  Controller                                                 │
-│   ├── _state_receiver thread → observation_buffers (shm)    │
-│   ├── control_loop thread    → control_step → _send_action  │
-│   └── display_loop (main)                                   │
-│                                                             │
-│  AIController                                               │
-│   ├── skill_command_queue(shm)  ← think starts/stops skills │
-│   ├── skill_status_buffer(shm)  ← skills push status        │
-│   └── user_msg_queue     (shm)  ← user types commands       │
-└────────────────────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────  ThinkProcess (separate process, ~tps Hz)  ──┐
-│  1. Drain skill_status_buffer  → status history            │
-│  2. Drain user_msg_queue       → latest command            │
-│  3. Read latest observation    → image + proprio           │
-│  4. decide(image, user_msg, status) via VLM                │
-│  5. Launch / stop Skill processes (or push robot Actions)  │
-└────────────────────────────────────────────────────────────┘
-                       │
-                       ▼
-┌─────────  Skill processes (per-skill frequency)  ──────────┐
-│  - Read observations from shared buffers                   │
-│  - Compute actions (diffusion policy, MP, scripted, …)     │
-│  - control_step()    → own per-module action_queues        │
-│  - put_skill_status()→ skill_status_buffer                 │
-└────────────────────────────────────────────────────────────┘
+ user: "put all the batteries in the white box"
+   │
+   ▼
+ planner thread ── wakes on: a message · an action failing or stopped · a monitor flag ·
+   │               an operator key · a plan step that needs it · the optional heartbeat
+   │  sees: the task, what happened, the plan, the newest camera images (with ids), readings
+   │  calls: update_plan · observe · <skill tools> · stop_action · ask_user · finish_task
+   │  an action that succeeds starts the plan's next complete step without it
+   ▼
+ control thread ── starts / stops skills between two ticks (call_on_control_thread)
+   │
+   ▼
+ monitor thread ── every monitor.period_s while actions run:
+                   timeouts · check_agent_action tripwires · the skill's monitor questions
+                   → finish the action, or wake the planner
 ```
 
-## Defining an `AIController`
+A skill tool returns as soon as the skill has started, and a reply that starts one ends the planner's turn: it is woken when something changes. A call the harness refuses, or an `observe`, is answered at once instead, so the planner can retry or look.
 
-Subclass `AIController` and list the skill *classes* it can run. Each is known by its `registry_name()` — its `config_name` if it has one, otherwise the class name — and that is the name the VLM uses.
+The plan is a queue the harness runs. Each `update_plan` step can carry the `tool` and `args` that carry it out. When an action succeeds and nothing else runs, the harness marks its step `done` and starts the next step whose call is complete, logging a `plan_step` event, without calling the planner. It wakes the planner only when the next step needs a point in a fresh image (a tool with `image_points`), has no tool (checking the result is the planner's), cannot start, or when every step is done. A failure, a timeout, a stop, a monitor flag, the user and the operator always wake it, and the queue waits for its reply. An action the planner starts itself takes the first unfinished step naming its tool. So a pick-and-place costs about four planner turns: plan and start the first move, point the pick, point the place, check and finish.
+
+A run is **one episode**: when either side records (see [Recording](/docs/recording)), starting a run opens an episode on the sides that are switched on and ending it closes it.
+
+The operator always wins. Any key, click, skill start or stop from the operator **pauses** the run; the next chat message resumes it, and the planner is told what the operator did. Every command the harness sends carries the run's generation, so a decision made before a cancel, reset or takeover is refused instead of executed after it. When a run ends, `on_agent_idle()` runs so the controller can bring teleop back.
+
+## Declaring tools
+
+A tool is a skill class plus the params the controller binds. The planner fills in the rest:
 
 ```python
-from solarian.core.ai.ai_controller import AIController
-from myproject.skills import PickSkill, PlaceSkill, MoveArmSkill
+from solarian.core import Controller
+from solarian.core.skill import Tool
 
-class MyAIController(AIController):
-    skills = (PickSkill, PlaceSkill, MoveArmSkill)
+ARM = {"arm": "right_arm", "gripper": "right_gripper"}
+
+class MyController(Controller):
+    tools = {
+        "move_to_pose": Tool(MoveSkill, ARM),
+        "nudge_gripper": Tool(MoveSkill, {**ARM, "offer": "delta"}),
+        "pick_object": Tool(UMISkill, {"config": "pick_object.yaml"}),
+        "place_at": Tool(PlaceSkill, {**ARM, "camera": "right_wrist_camera"}),
+    }
+
+    def on_agent_idle(self):
+        self.start_skill(CartesianTeleopSkill(params=ARM))
 ```
 
-`AIController.__init__` reads the controller's own registry, which is that list plus any installed skill plugins:
+The bound params (module names, which policy config) never reach the model. A tool whose skill has no `description` is left off the planner's list, with a warning.
 
-```python
-{
-  "PickSkill":    {"cls": PickSkill,    "execution_place": ExecutionPlace.CONTROLLER},
-  "PlaceSkill":   {"cls": PlaceSkill,   "execution_place": ExecutionPlace.CONTROLLER},
-  "MoveArmSkill": {"cls": MoveArmSkill, "execution_place": ExecutionPlace.ROBOT},
-}
+## The skill contract
+
+Everything the planner and monitor know about a tool comes from the skill, through `Skill.tool_spec(params)`. By default that is these class attributes:
+
+<Properties>
+  <Property name="description" type="str | None">
+    What the skill does and when to choose it, written for the planner. <code>None</code> keeps the skill off every tool list.
+  </Property>
+  <Property name="parameters" type="dict">
+    JSON Schema (an object) of the params the planner chooses.
+  </Property>
+  <Property name="image_points" type="tuple[str, ...]">
+    Params that are <code>[x, y]</code> pixels in a camera image. The planner also passes the <code>observation_id</code> it read them from; the harness maps them back to capture pixels of the tool's <code>camera</code>, and refuses a point on an image older than <code>max_point_age_s</code> or taken before the robot last moved.
+  </Property>
+  <Property name="examples" type="tuple[dict, ...]">
+    <code>{"{"}"params": {"{"}…{"}"}, "when": "…"{"}"}</code> example calls.
+  </Property>
+  <Property name="ends_by_itself" type="bool">
+    Whether the skill calls <code>finish()</code>. A policy that runs until stopped sets this <code>False</code> and relies on a monitor <code>finish</code> rule or on <code>max_duration_s</code>.
+  </Property>
+  <Property name="max_duration_s" type="float | None">
+    An agent-started run longer than this is stopped as timed out, at the deadline rather than at the next monitor period. A policy without monitor questions ends this way, and the planner judges from the newest image whether it succeeded.
+  </Property>
+  <Property name="max_target_area" type="float | None">
+    Largest share (0 to 1) of the camera image a seeded mask target may cover. A point that misses the object makes the tracker select the background; above this, or with no mask at all, the harness stops the tracker and refuses the call before the skill starts, so the planner points again at once. <code>None</code> checks nothing.
+  </Property>
+  <Property name="monitor" type="tuple[dict, ...]">
+    Questions the monitor asks while the skill runs (below).
+  </Property>
+</Properties>
+
+A skill whose behaviour comes from config overrides `tool_spec`: `UMISkill` reads an `agent:` block from the policy yaml it is bound to, and `MoveSkill` describes the input the binding's `offer` names (`pose` with the pose names from `move.yaml` and their `description`s, a `delta` nudge, or a `gripper` aperture).
+
+A move ends when the robot gets there, not after a fixed time, since every second a finished move keeps running delays the next step. `MoveSkill` ends when every targeted field reads within tolerance of its target, or when none has moved for 0.3 s, counted from 0.5 s after the move was sent: a gripper closed on an object, or a pose just out of reach. The tolerances are 2 units for joints, 2 mm for a gripper aperture, 5 mm and 0.05 rad for a Cartesian pose. `timeout_s` is only the cap. A pose the arm is already at ends on the first check. A skill of your own that sends an exclusive move can end the same way with `solarian_move_skill.Arrival(targets, sent_at).check(self.observations, now)`.
+
+A skill that reads its target from a tracker overrides `services_for(params)` to return `(module, field, service params)`: the harness starts those services with the planner's point and waits for the tracker's first result before starting the skill. With `max_target_area` set, it measures that first mask: on so106 a pick's object covers 0.1-0.7% of the policy's image, while a point beside it selected 22-48%, so `pick_object.yaml` refuses a mask over 5% of the camera image.
+
+A skill reports a failure the planner can act on with `self.fail("reason")`. It raises `SkillFailed`, which ends the skill as `FAILED` wherever it runs; the reason reaches the planner through the controller (or the robot's status rows).
+
+## Monitor questions
+
+A question costs a vision call every tick, 3-6 s with a model that judges a grasp correctly, so its answer can arrive after the moment it is about. so106's pick therefore has none: it runs to its `max_duration_s` and the planner checks the newest image, one turn instead of several calls. Its place keeps a `released` question, since a place that has let go is plain in one frame. This is how the pick was watched:
+
+```yaml
+# conf/skills/pick_object.yaml, before it moved to a time limit
+agent:
+  description: Grasp one object with the pick policy and lift it. Point at the object in the wrist image.
+  max_duration_s: 25
+  monitor:
+    - name: progress
+      type: choice
+      instructions: Which phase the pick is in. Compare the previous close-up with the current one.
+      choices:
+        approaching: >-
+          The fingers are open, the target lies ahead of them, and it looks larger
+          (closer) in the current close-up than in the previous one.
+        grasping: >-
+          The fingers are down at the target and closing on it: they are closer
+          together in the current close-up than in the previous one.
+        holding: >-
+          The target is pinched between the fingers: it sits between them, both
+          fingers touch it, and the fingers are visibly bent by the pressure on it.
+        failed: >-
+          The fingers are closer together than the target is wide, with nothing
+          between them, or they reopened: wider in the current close-up than in the
+          previous one.
+      when:
+        - {do: finish, value: holding, threshold: 0.8, consecutive: 1, then: home_holding}
+        - {do: escalate, value: failed, threshold: 0.8, consecutive: 2, after_s: 6}
 ```
 
-Classes rather than configured instances, so a skill that takes arguments appears once and the VLM supplies them as `params` — `MoveArmSkill` with `{"named": "home"}` rather than separate `home` and `ground` entries. The think process names a skill; `execution_place` (declared on the class) is what decides whether the controller launches it locally or forwards a `START_SKILL` action to the robot. See [Skills](/docs/skills).
+A `predicate` is answered with a probability, a `choice` with a value and its probability. `when` is one rule or a list of them. A rule fires when its condition holds `consecutive` ticks in a row: `finish` stops the action as succeeded, `fail` stops it as failed, `escalate` leaves it running and wakes the planner once per question. `threshold` is a confidence floor: a tick whose answer is less sure does nothing, and the next tick decides. With a floor and `consecutive: 1`, one confident tick acts, which is faster and cheaper than waiting for several in a row; measure it on labelled ticks before trusting it. `after_s` keeps a rule from counting ticks until the action has run that long. `then` on a `finish` or `fail` rule names a tool the harness starts, without arguments, as soon as the action has stopped: the step that always follows, such as carrying a picked object home with the grip kept. After a `finish`, the follow-up carries the action's plan step on, or takes the next step when the plan names its tool there, and the planner is not woken; it hears what happened at its next wake, at the latest when the follow-up ends. After a `fail`, the planner is woken at once, and not again when the action has actually stopped. If the skill reports its own failure meanwhile, its reason is kept beside the rule's. A `then` naming no tool fails when the harness starts. A question without `when` is only shown to the planner. The planner can add its own conditions to any call with `watch_for`.
 
-## Registering with the project
+Each tick the monitor sees each camera's last `monitor.history` frames, oldest first, labelled `previous, 1.6 s ago` and `current`, and the readings. With `history` above 1, an action's first frame is only kept for the next tick: with nothing to compare it with, it is not judged, and the run log records it as a `monitor_frame` event. A camera listed in `monitor.close_ups` is seen only as that region, at capture resolution: what decides a grasp is a few pixels of the fingers, which a full frame at `image_max_side` blurs away. Other cameras are seen whole at `image_max_side`. Monitor frames never carry the tracker's overlay, since a tint over the fingers hides the very pixels that decide, and a tracker that slips onto another object misleads. With `monitor.mark_target`, a 1 px cyan box 3 px outside the bounds of the tracker's mask (else around its box) shows which object the action is on and how wide it is, without covering any of it; the monitor is told to trust the frame over the mark. With `monitor.reference` on (the default), each tick also gets the frames from when the action started, with the planner's point on the target; turn it off when the close-ups are all a question needs, since frames from before the grasp only distract from it.
 
-Set `CONTROLLER_CLASS` to your `AIController` subclass and run with `solarian run-controller`:
+Write questions the monitor can answer from the previous frame and the current one:
 
-```python
-# myrobot/settings.py
-CONTROLLER_CLASS = 'myrobot.controller.MyAIController'
-```
+- Prefer one `progress` choice with a `failed` value over several failure predicates. A phase is judged from motion across frames, and "is this failing?" asked during the approach comes back yes.
+- Define each choice by what changes between the previous and current frame (closer, closing, reopened), or by what shows in the current one (the fingers bent around the target).
+- Give failure rules an `after_s` long enough for the policy to reach the object, and `consecutive: 2`: half-closed fingers on the way look like a miss in one frame pair, while a real miss lasts. Finish rules usually need neither. Judge wording by the per-pick replay, not per-tick accuracy: on so106, a looser `failed` was wrong on a quarter of ticks yet escalated every missed pick on the right tick, while a stricter one cut false answers to 3% and missed a whole failed pick.
+- Describe success by what shows in the camera, for any object ("pinched between the fingers, which bend under the pressure"), and the nearest miss too ("closer together than the target is wide, with nothing between them"). Robot-specific detail (finger colour and shape, camera angle) goes in `monitor.instructions`, once for every skill.
+
+Measure the questions on recorded ticks before trusting them. The run log keeps every monitor frame, the episode the readings. so106 has two scripts for this, run from the project root:
 
 ```bash
-solarian run-controller
+python scripts/label_monitor_ticks.py   # previous | current close-up over the prompt; keys 1-4 label, s unsure, b back, q quit
+python scripts/eval_monitor.py --repeats 3 [--model gpt-6-luna] [--reasoning medium] [--no-target]
 ```
+
+The first appends labels to `evals/pick_progress.jsonl` and resumes at the first tick missing one. With `mark_target` on, it also asks where the target is in each close-up, since recordings keep no tracker output: drag a box around it as tight as the tracker's mask would be, or right-click when it is out of view; boxes go to `evals/pick_targets.jsonl`. The second sends each labelled tick as the robot would, marked where the boxes say, and reports accuracy, the confusion between choices, how often an answer met a rule's condition on the wrong tick, how often it fell below its floor, how often repeats of one tick disagree, and latency. It also replays each pick through the skill's rules, `consecutive` included, and prints the first rule to fire and the label of the tick it fired on.
+
+The planner is told that a monitor flag can be wrong and to check it against the newest image before stopping an action. A timeout reaches it as "without the monitor confirming success", or for an unwatched tool as "ran its limit; judge from the newest image whether it succeeded", not as a failure, and it is told to look before undoing anything: a policy that never stops by itself may have finished its job long before.
+
+For a signal no camera shows (a force sensor, a limit switch, a policy that has stopped moving), override `check_agent_action(action_id, tool, elapsed_s)` on the controller and return `("finish" | "fail" | "escalate", reason)`, or with a third element, a tool to start once the action has stopped, as a rule's `then`. It is polled with the monitor; `action_id` changes with every action. Its flags reach the planner as a controller check, which the planner trusts. so106 fails a pick or place whose arm and gripper have stayed within a few millimetres for 5 s and starts `home_holding`: a stall is plain in the readings, whatever the object. Do not use it for hand-tuned thresholds on readings that only correlate with success, such as a gripper's aperture and height: soft fingers read the same holding as empty, and such rules break with every new object.
+
+A `watch_for` condition the planner adds is checked from 6 s into the action, like a failure rule with `after_s: 6`, and must be false while the action goes as it should.
 
 ## Configuration
 
-`AIController` reuses `ControllerConfig` (`conf/controller.yaml`) and reads a few extra fields from it:
+```yaml
+# conf/controller.yaml
+agent:
+  planner:
+    provider: anthropic          # or openai (chat completions; any compatible server with base_url)
+    model: claude-opus-5
+    api_key_env: ANTHROPIC_API_KEY
+    thinking_budget: 4096
+  monitor:
+    provider: openai_responses   # or openai_decisions (/v1/decisions): faster, typed answers
+    model: gpt-6.1-sol
+    reasoning_effort: low
+    api_key_env: OPENAI_API_KEY
+    period_s: 1.5                # a tick waits for the previous call
+    history: 2                   # frames per camera each tick: this one and the last
+    image_max_side: 448
+    close_ups:                   # x0, y0, x1, y1 as fractions of the capture
+      right_wrist_camera/image: [0.25, 0.5, 0.75, 0.9]
+    reference: false             # no frames from the action's start
+    instructions: |
+      What is always in view (the gripper's fingers), and what a held object looks like.
+  planner_heartbeat_s: null      # no periodic wakes
+  budgets: {max_turns: 80, max_minutes: 20, retries_per_step: 3}
+  cameras: [right_wrist_camera/image]
+  state_fields: {right_arm: [x, y, z], right_gripper: [aperture_mm]}
+  dry_run: false
+  system_prompt: |
+    What this robot is, what its tools are good and bad at.
+```
 
 <Properties>
-  <Property name="tps" type="int">
-    Think Process rate in Hz. Typical values are 1–2 Hz.
+  <Property name="planner" type="ModelEndpointConfig">
+    The slow, smart model. <code>provider</code> picks the wire format: <code>anthropic</code> (prompt caching, extended thinking) or <code>openai</code>. Keys come from the environment variable <code>api_key_env</code>, never the yaml.
   </Property>
-  <Property name="system2_model" type="str">
-    Model name passed to the VLM client (e.g. <code>gpt-4o</code>).
+  <Property name="monitor" type="MonitorConfig | None">
+    The fast model, called every <code>period_s</code> per watched action. <code>openai_decisions</code> uses OpenAI's typed-answer Decisions API; any other provider is asked for the same answers as JSON. Without one, only timeouts and tripwires end policies.
   </Property>
-  <Property name="system2_base_url" type="str">
-    OpenAI-compatible endpoint URL. Leave empty for the default OpenAI endpoint.
+  <Property name="monitor.history / monitor.image_max_side" type="int / int">
+    Frames per camera in each assessment, newest last, labelled with their age (default 2, so the monitor can judge motion), and their longest side in pixels (default 512). Image tokens grow with both. A longer <code>period_s</code> keeps the cost per second down, but rules take longer to fire.
   </Property>
-  <Property name="system2_api_key" type="str">
-    API key for the VLM endpoint.
+  <Property name="monitor.instructions" type="str">
+    What the monitor should know about this robot, added to its generic instructions: which parts are always in view, how a grasp looks in this camera.
   </Property>
-  <Property name="system2_prompt" type="str">
-    Optional instruction prepended to the system prompt.
+  <Property name="monitor.close_ups" type="dict[str, [x0, y0, x1, y1]]">
+    Per camera, a region (fractions of the capture): the monitor sees only that region of the camera, at capture resolution. For a wrist camera, the fingers and what they hold.
+  </Property>
+  <Property name="monitor.reference" type="bool">
+    Also show the monitor the frames from when the action started, with the planner's point on the target (default true).
+  </Property>
+  <Property name="monitor.mark_target" type="bool">
+    Mark the tracked target on every monitor frame with a 1 px cyan box just outside the bounds of the tracker's mask, so none of the object is covered (default false). Measure it before turning it on: on so106's labelled picks it helped as often as it hurt, and a box enclosing the closed fingers read as "held" on a failed pick. Needs a skill that publishes a tracker mask or box on the camera image.
+  </Property>
+  <Property name="planner_heartbeat_s" type="float | None">
+    Seconds between planner wakes while actions run and nothing else happened (default 20). <code>null</code> turns them off: actions ending, the monitor, the user and the operator wake it. A heartbeat costs a planner turn each time, for news the monitor and the actions already bring.
+  </Property>
+  <Property name="cameras / state_fields" type="list / dict">
+    Which images (<code>module/field</code>) and readings the agent sees. Empty: all.
+  </Property>
+  <Property name="budgets" type="AgentBudgets">
+    Planner turns and minutes per run, and failures in a row of one tool before the planner is told to change approach.
+  </Property>
+  <Property name="max_images_in_context / max_point_age_s / image_max_side / image_grid" type="">
+    Context and pointing: older images become a text stub; planner images carry a labelled pixel grid.
+  </Property>
+  <Property name="dry_run" type="bool">
+    Plan and point, but start nothing: try a prompt before trusting it with the arm.
   </Property>
 </Properties>
 
-The full `vlm_config` dict (image preprocessing flags, temperature, debug overlays, action map) lives on `self.vlm_config` — override it in your subclass `__init__` if you need to tune it.
+Install the model clients with `pip install 'solarian[agent]'`.
 
-## System prompt and user prompt
+## Chat
 
-Two Jinja2 templates drive the VLM, declared as class attributes on your `AIController` subclass:
+- **pygame window** (`ui: pygame`): a chat column appears on the right. **Enter** (or a click on the input box) opens the input; while typing, keys type text and never drive the robot (held keys are released first). Enter sends, **Esc** drops the line. Drag over the conversation to select text and **Cmd/Ctrl+C** to copy it; **Cmd/Ctrl+V** pastes into the input, and the wheel scrolls back through the conversation. `/cancel` ends the run; `/reset` also forgets the conversation.
+- **Solarian Base** (`ui: external`): the controller page shows an AI controller panel with the plan, running actions, the conversation and an input. Cancel is a safety command: an observer without the control lock can send it.
+- **Any front end** sends `UICommandType.AGENT_MESSAGE` (`{"text": ...}`), `AGENT_CANCEL` and `AGENT_RESET`, and reads `UISnapshot.agent`. The image the planner last saw, with its chosen points marked, is drawn as `agent/view`.
 
-```python
-class MyAIController(AIController):
-    system_prompt = """
-    You are a robot skill orchestrator.
-    Available skills:
-    {{ available_skills }}
+## Run logs
 
-    Currently active skills:
-    {{ active_skills }}
+A run is logged when the controller records it, into `recordings/controller/<session>/episodes/<episode>/agent/`. Its id is that place, `<session>/<episode>`, for example `0003_7f3a9c_cup_stacking/000002`. It holds `run.json` (task, models, tools, status, usage), `events.jsonl` (every action, monitor answer, plan change, step the harness started and operator takeover, on the synced clock; `action_started` says how long the tracker seed and the start took, and with `max_target_area` the share of the image the mask covered as `target_area`; `target_rejected` is a call refused for its mask), `turns/NNNN.json` (every planner call's input and output) and `images/`. A run only the robot records, or that nothing records, keeps no log.
 
-    Return JSON: { "skills_to_start": [...], "skills_to_stop": [...], "reasoning": "..." }
-    """
+When the robot recorded the same episodes, its session has the same directory name, so after transferring it off the robot you can copy the logs in beside the robot's episodes:
 
-    user_prompt = """
-    User command: {{ user_msg }}
-    Previous decision: {{ prev_decide }}
-    Recent statuses: {{ recent_skills_status }}
-
-    Decide which skills to start or stop.
-    """
+```bash
+solarian dataset attach-agent recordings/robot/0003_7f3a9c_cup_stacking
 ```
 
-Both templates have access to:
+## Legacy `AIController`
 
-<Properties>
-  <Property name="user_msg" type="str">
-    The most recent natural-language command from the operator.
-  </Property>
-  <Property name="available_skills" type="str">
-    A formatted list of the registered skills and their docstrings.
-  </Property>
-  <Property name="active_skills" type="str">
-    Skills currently running.
-  </Property>
-  <Property name="prev_decide" type="str">
-    The previous decision (skills started/stopped + reasoning).
-  </Property>
-  <Property name="recent_skills_status" type="str">
-    Recent <code>SkillStatus</code> transitions drained from the shared buffer.
-  </Property>
-  <Property name="module.field" type="value">
-    The latest value of any observation field, e.g. <code>{`{{ arm.shoulder_pan }}`}</code>. Index back in time with <code>[0]</code>, <code>[-1]</code>, …
-  </Property>
-  <Property name="prev_obs.module.field" type="value">
-    The same field at the time of the *previous* <code>decide()</code> call. Guard with <code>{`{% if has_prev_obs %}`}…{`{% endif %}`}</code>.
-  </Property>
-  <Property name="delta_obs.module.field" type="value">
-    The numeric delta between now and the previous <code>decide()</code> call.
-  </Property>
-  <Property name="stagnation_warning" type="str">
-    A short hint emitted when the VLM keeps returning the same decision; useful to nudge it out of a fixed point.
-  </Property>
-</Properties>
-
-### Custom prompt filters
-
-Pipe values through registered Python callables using the `|` syntax:
-
-```python
-class MyAIController(AIController):
-    prompt_filters = {
-        "cm": lambda v: v * 100.0,   # meters → centimeters
-    }
-
-    user_prompt = """
-    Gripper opening: {{ gripper.gripper[0] | cm | fmt('.2f') }} cm
-    """
-```
-
-`fmt(spec)` is built in. Filters compose left to right.
-
-## Lifecycle
-
-```text
-AIController(cfg)         # __init__ — build skill registry, skill_command_queue, ThinkProcess
-   │
-   ├── connect()          # connect controller-side modules
-   ├── initialize()       # one-time setup
-   └── start()
-        ├── _state_receiver thread
-        ├── control_loop thread
-        ├── pynput keyboard listener
-        ├── on_start()    # spawn ThinkProcess
-        └── display_loop  # OpenCV window per camera + interactive prompt
-```
-
-`AIController` does not override `control_step`: the one it inherits from `Controller` steps the running skills, drains each one's per-module `action_queues`, and merges what they queued into a single `Action`. Skills running concurrently each command their own modules, so the merge normally has nothing to resolve; where two do overlap, last write wins.
-
-## Sending user commands
-
-Two ways to feed natural-language commands into the think process:
-
-1. **Programmatically** — `controller.send_user_message("pick up the red cup")`. The string lands in `user_msg_queue` and the next `decide()` call sees it as `{{ user_msg }}`.
-2. **Interactively** — press `Enter` in the controller window. The pynput listener captures keystrokes into a buffer (mirrored on the on-screen status board); pressing `Enter` again submits.
+The earlier dual-process `AIController` (a `ThinkProcess` choosing skills from Jinja prompts, configured by `system2_*`) is in `solarian.core.ai.old` for projects that still use it. New projects should use `agent:`.
 
 ## See also
 
-- [Skills](/docs/skills) — the unit of work the AI Controller orchestrates.
-- [Controllers](/docs/controllers) — the base class.
-- [Action types](/docs/actions#action-types) — used to dispatch robot/server-side skills.
-- [Observations](/docs/observations) — the data the VLM ingests through the prompt templates.
+- [Skills](/docs/skills) — the units of work the agent calls.
+- [Controllers](/docs/controllers) — the base class the agent is part of.
+- [Recording](/docs/recording) — sessions and episodes the run logs attach to.

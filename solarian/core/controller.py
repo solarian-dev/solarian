@@ -1,4 +1,5 @@
 import os
+import queue
 import threading
 import time
 import zmq
@@ -7,7 +8,8 @@ import numpy as np
 from abc import ABC
 from dataclasses import dataclass, field
 from collections.abc import Callable
-from typing import Any
+from concurrent.futures import Future
+from typing import TYPE_CHECKING, Any
 from multiprocessing.managers import SharedMemoryManager
 
 from solarian.utils import busy_wait
@@ -15,6 +17,7 @@ from solarian.core import curve
 from solarian.core import Action
 from solarian.core.action import ActionType
 from solarian.core import Observation
+from solarian.core.conf_paths import project_path
 from solarian.core.configs import ControllerConfig, ActionValue
 from solarian.core.message import Message
 from solarian.core.module import Module
@@ -47,7 +50,7 @@ from solarian.core.ui.base import (
     UISnapshot,
     recording_status,
 )
-from solarian.core.ai.system1.skill import Skill, SkillStatus
+from solarian.core.skill import Skill, SkillFailed, SkillStatus, Tool, failure_reason
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
 from solarian.core.data import ImageData, BoundingBoxData, MaskData, PointData
@@ -57,6 +60,8 @@ from solarian.utils.shared_memory.action_queue import ModuleActionQueue
 from solarian.utils.shared_memory.skill_status_buffer import SkillStatusBuffer
 from solarian.utils.configs import load_config_yaml
 
+if TYPE_CHECKING:
+    from solarian.core.recording import ControllerRecorder
 
 import logging
 logger = logging.getLogger(__name__)
@@ -134,6 +139,12 @@ class Controller(EventHost, ABC):
     # not a set of ready-made instances — a key handler constructs the skill
     # it wants with the arguments it wants.
     skills: tuple[type[Skill], ...] = ()
+
+    #: What the agent may call, by tool name: a skill class and the params this
+    #: controller binds (module names, which policy config). The agent fills in
+    #: the rest from the skill's :meth:`~Skill.tool_spec`. One skill can back
+    #: several tools — one policy skill, a pick config and a place config.
+    tools: dict[str, Tool] = {}
 
     # Deprecated: which front end runs is deployment configuration, not a
     # property of the controller class, so it belongs in ``conf/controller.yaml``
@@ -272,13 +283,24 @@ class Controller(EventHost, ABC):
 
         self._init_skill_orchestration()
         from solarian.utils.shared_memory.action_queue import ActionQueue
-        #: Control-plane inbox: START_SKILL / STOP_SKILL from the think
+        #: Control-plane inbox: START_SKILL / STOP_SKILL from the legacy think
         #: process. Skills command modules through their own queues, not here.
         self.skill_command_queue = ActionQueue(
             shm_manager=self.shm_manager,
             buffer_size=256,
             max_payload_bytes=8192,
         )
+        self.agent = self._build_agent()
+
+    def _build_agent(self):
+        """The supervising agent, when ``agent:`` is configured; started by :meth:`start`."""
+        if self.cfg.agent is None:
+            return None
+        from solarian.core.ai.agent import AgentHarness
+
+        if not self.tools:
+            logger.warning("agent is configured but %s declares no tools", type(self).__name__)
+        return AgentHarness(host=self, cfg=self.cfg.agent, tools=self.tools)
 
     def load_module_config(self, module_name: str, module_class: type):
         """Load module config from YAML using the module's own config class.
@@ -438,8 +460,12 @@ class Controller(EventHost, ABC):
 
             StatusBoard.set("Observation", self.last_observation)
 
+            recorder = self.controller_recorder
+            if recorder is not None:
+                recorder.feed(observation)
+
         if "recording" in msg.data:
-            self.recording_state = msg.data["recording"]
+            self.robot_recording = msg.data["recording"]
 
         if "skill_status" in msg.data:
             recs = msg.data["skill_status"]
@@ -481,6 +507,9 @@ class Controller(EventHost, ABC):
         msg.controller_timestamp = synced_time_ns()
         msg.data = {"action": action.to_dict()}
         self._send_message(msg)
+        recorder = self.controller_recorder
+        if recorder is not None:
+            recorder.note_sent(action)
 
     def _send_message(self, msg: Message) -> None:
         """Put *msg* on the action socket and note that the link was just used.
@@ -614,6 +643,7 @@ class Controller(EventHost, ABC):
 
     def disconnect(self):
         """Clean shutdown"""
+        self._close_controller_recorder()
         if not self.is_connected():
             return
         self.running = False
@@ -828,23 +858,32 @@ class Controller(EventHost, ABC):
             age_ms = (time.time_ns() - self._last_state_ns) / 1e6
             telemetry["Robot link age (ms)"] = f"{age_ms:.0f}"
         running = sorted(self.running_skills)
+        images = self._collect_display_images()
+        agent = None
+        if self.agent is not None:
+            agent = self.agent.ui_state()
+            view = self.agent.view_image()
+            if view is not None:
+                images.append(view)
+        recording = self.recording_state
         return UISnapshot(
             t_ns=synced_time_ns(),
             fps=self.cfg.fps or None,
             sections=self._gui_dashboard_sections(),
-            images=self._collect_display_images(),
+            images=images,
+            agent=agent,
             key_help=self.gui_key_help(),
             skills={
                 "available": sorted(self._skill_registry),
                 "running": running,
             },
             telemetry=telemetry,
-            recording=dict(self.recording_state),
+            recording=recording,
             # Recording first: a window with the episode number in it is the
             # difference between noticing a session was never armed and
             # finding out when the dataset is empty.
             status=" · ".join(
-                (recording_status(self.recording_state),
+                (recording_status(recording),
                  ", ".join(running) if running else "idle")
             ),
         )
@@ -871,6 +910,14 @@ class Controller(EventHost, ABC):
                 for name, spec in sorted(self._skill_registry.items())
             ],
             "observation_schema": self._ui_observation_schema(),
+            "agent": None if self.agent is None else {
+                "planner": self.agent.planner.model,
+                "monitor": self.agent.monitor.model if self.agent.monitor else None,
+                "tools": [
+                    {"name": name, "description": str(spec["description"]).strip()}
+                    for name, spec in self.agent.specs.items()
+                ],
+            },
         }
 
     @staticmethod
@@ -918,7 +965,8 @@ class Controller(EventHost, ABC):
             case UICommandType.STOP_SKILL:
                 name = str(data.get("skill") or "")
                 if name:
-                    self.stop_skill(name)
+                    self._operator_took_over(f"stopped {name}")
+                    self.stop_skill(name, reason="stopped by the operator")
             case UICommandType.STOP_ALL:
                 self.stop_all_skills()
             case UICommandType.RECORD_START:
@@ -927,8 +975,21 @@ class Controller(EventHost, ABC):
                 self.stop_recording()
             case UICommandType.RECORD_REDO:
                 self.redo_recording()
+            case UICommandType.RECORD_TARGETS:
+                self.set_recording_targets(
+                    controller=data.get("controller"), robot=data.get("robot")
+                )
             case UICommandType.INPUT_SAMPLE:
                 self._dispatch_input_sample(data)
+            case UICommandType.AGENT_MESSAGE:
+                if self.agent is not None:
+                    self.agent.send_user_message(str(data.get("text") or ""))
+            case UICommandType.AGENT_CANCEL:
+                if self.agent is not None:
+                    self.agent.cancel()
+            case UICommandType.AGENT_RESET:
+                if self.agent is not None:
+                    self.agent.reset()
             case UICommandType.QUIT:
                 return False
         return True
@@ -965,6 +1026,9 @@ class Controller(EventHost, ABC):
                 events = self._drain_events()
                 self._tick_local_modules()
                 self._fan_out_events(events)
+                # Here rather than in control_step, which a subclass may
+                # override: the controller's episode must still open.
+                self._open_pending_controller_episode()
 
                 self.last_action = self.control_step()
 
@@ -1020,10 +1084,10 @@ class Controller(EventHost, ABC):
         from the think process resolves to the same class the robot would
         resolve it to.
         """
-        from solarian.core.ai.system1.registry import discover_available_skills
+        from solarian.core.skill_registry import discover_available_skills
 
         skills: dict = {}
-        for cls in type(self).skills:
+        for cls in (*type(self).skills, *(tool.skill for tool in type(self).tools.values())):
             skills[cls.registry_name()] = _skill_spec(cls)
         try:
             discovered = discover_available_skills()
@@ -1097,6 +1161,19 @@ class Controller(EventHost, ABC):
         self._skill_registry: dict[str, dict[str, Any]] = (
             self._collect_controller_skills()
         )
+        #: Each start of a skill is one invocation; this maps a running skill's
+        #: name to its invocation, so whoever started it can tell its end from
+        #: the end of an earlier run of the same skill.
+        self._invocations: dict[str, int] = {}
+        self._invocation_seq = 0
+        #: Why each skill being stopped is stopping, reported when it ends.
+        self._stop_reasons: dict[str, str] = {}
+        #: ``(fn, future)`` to run on the control thread; see :meth:`call_on_control_thread`.
+        self._control_calls: queue.SimpleQueue = queue.SimpleQueue()
+        #: True while running a call the agent queued, so what it starts and
+        #: stops is not mistaken for the operator taking over.
+        self._agent_dispatching = False
+        self.agent = None
         self._init_events()
 
     @property
@@ -1177,19 +1254,39 @@ class Controller(EventHost, ABC):
         ``@event_handler`` — theirs runs alongside this one, not instead of it.
         """
         if event.data.get("key") in (" ", "space"):
-            self.stop_all_skills()
+            self.stop_all_skills(reason="operator pressed space")
 
     # ========= recording ============
     def _init_recording(self) -> None:
-        #: Recording state as the robot last reported it. The controller asks
-        #: for episodes but never owns them, so this is only ever echoed back.
-        #: ``request`` is the id of the last boundary the robot acted on.
-        self.recording_state: dict = {
+        #: Recording state as the robot last reported it. The robot owns its
+        #: episodes, so this is only ever echoed back. ``request`` is the id
+        #: of the last boundary the robot acted on.
+        self.robot_recording: dict = {
             "enabled": False,
             "active": False,
             "episode": 0,
             "request": 0,
+            "session": None,
         }
+
+        #: The GUI's two switches: which sides record the next episode.
+        cfg = self.cfg.recording
+        self.recording_targets = {"controller": bool(cfg.controller), "robot": bool(cfg.robot)}
+        #: The targets the open episode started with, so a switch flipped
+        #: mid-take still lets stop and drop reach the side that is recording.
+        self._episode_targets = dict(self.recording_targets)
+
+        #: The controller's own dataset, built on the first episode it records.
+        self.controller_recorder: "ControllerRecorder | None" = None
+        #: Controller episode boundaries run here, in order, because they block
+        #: on encoders: spawning them on the first start, draining them on a
+        #: seal. On the control loop that would be seconds of frozen teleop.
+        self._controller_recording_queue: queue.Queue = queue.Queue()
+        self._controller_recording_thread: threading.Thread | None = None
+        #: With both targets on, the controller's episode waits for the robot
+        #: to open its own and then takes the robot's session and index, so the
+        #: two recordings line up. ``(request id, deadline, start kwargs)``.
+        self._pending_controller_start: tuple[int, float, dict] | None = None
 
         #: Set when the episode in progress ends, whoever ended it. A recording
         #: schedule waits on this rather than sleeping out its timer, so the
@@ -1219,30 +1316,85 @@ class Controller(EventHost, ABC):
         elif key in ("delete", "backspace"):
             self.redo_recording()
 
-    def start_recording(self, task: str | None = None, session: str | None = None) -> None:
-        """Ask the robot to open an episode.
+    @property
+    def recording_state(self) -> dict:
+        """Both sides' recording, as UIs and the agent read it.
 
-        Nothing is recorded here. The robot holds the encoders and the table,
-        so an episode boundary is a request sent down the ordinary action
-        path, and the state shown back to the operator is whatever the robot
-        reports having done with it.
+        ``enabled`` says whether starting an episode would record anything;
+        ``active`` whether either side is recording now. ``episode`` and
+        ``session`` are the controller's while it records, else the robot's.
+        """
+        robot = dict(self.robot_recording)
+        recorder = self.controller_recorder
+        controller = {
+            "active": recorder is not None and recorder.is_recording,
+            "episode": recorder.episode_index if recorder is not None else 0,
+            "session": recorder.session_dir_name if recorder is not None else None,
+        }
+        targets = dict(self.recording_targets)
+        if controller["active"] or (not robot["active"] and targets["controller"]):
+            side = controller
+        else:
+            side = robot
+        return {
+            "targets": targets,
+            "enabled": targets["controller"] or (targets["robot"] and bool(robot["enabled"])),
+            "active": bool(robot["active"]) or controller["active"],
+            "episode": int(side["episode"]),
+            "session": side["session"],
+            "robot": robot,
+            "controller": controller,
+        }
+
+    def controller_episode_dir(self):
+        """The directory of the episode the controller is recording, if any."""
+        recorder = self.controller_recorder
+        return recorder.episode_dir if recorder is not None else None
+
+    def set_recording_targets(
+        self, controller: bool | None = None, robot: bool | None = None
+    ) -> None:
+        """Flip the GUI's switches. The episode in progress keeps its own."""
+        if controller is not None:
+            self.recording_targets["controller"] = bool(controller)
+        if robot is not None:
+            self.recording_targets["robot"] = bool(robot)
+
+    def start_recording(self, task: str | None = None, session: str | None = None) -> None:
+        """Open an episode on whichever sides the switches select.
+
+        The robot's side is a request sent down the ordinary action path, and
+        the state shown back to the operator is whatever the robot reports
+        having done with it. The controller's side records what reaches it.
 
         Args:
             task: Stamped on the episode. Defaults to the controller's ``task``.
-            session: Directory the robot files this episode under. ``None``
-                leaves the robot on whichever session it is already writing.
+            session: Name of the session this episode is filed under. ``None``
+                leaves each side on whichever session it is already writing.
         """
         self.episode_over.clear()
-        self._request_recording(
-            ActionType.RECORD_START,
-            {
-                "task": task if task is not None else self.cfg.task,
-                "session": session,
-            },
-        )
+        targets = dict(self.recording_targets)
+        self._episode_targets = targets
+        start = {"task": task if task is not None else self.cfg.task, "session": session}
+        if targets["robot"]:
+            self._request_recording(ActionType.RECORD_START, start)
+        if not targets["controller"]:
+            return
+        if targets["robot"]:
+            self._pending_controller_start = (
+                self._record_request_id,
+                time.monotonic() + _RECORD_REQUEST_TIMEOUT_S,
+                start,
+            )
+        else:
+            self._start_controller_episode(**start)
 
     def stop_recording(self) -> None:
-        self._request_recording(ActionType.RECORD_STOP, {})
+        if self._episode_targets["robot"]:
+            self._request_recording(ActionType.RECORD_STOP, {})
+        if self._episode_targets["controller"]:
+            self._pending_controller_start = None
+            self._on_controller_recorder(lambda recorder: recorder.stop())
         self.episode_over.set()
 
     def redo_recording(self) -> None:
@@ -1252,9 +1404,108 @@ class Controller(EventHost, ABC):
         without advancing its counter, so the next take gets a full-length
         episode rather than the remainder of the one just discarded.
         """
-        self._request_recording(ActionType.RECORD_DROP, {})
+        if self._episode_targets["robot"]:
+            self._request_recording(ActionType.RECORD_DROP, {})
+        if self._episode_targets["controller"]:
+            self._pending_controller_start = None
+            self._on_controller_recorder(lambda recorder: recorder.drop())
         self.events["rerecord_episode"] = True
         self.episode_over.set()
+
+    def _start_controller_episode(
+        self,
+        task: str | None,
+        session: str | None,
+        dir_name: str | None = None,
+        index: int | None = None,
+    ) -> None:
+        if self.controller_recorder is None:
+            # Imported here: it pulls in PyAV and pyarrow, which a controller
+            # that never records should not pay for at import.
+            from solarian.core.recording import ControllerRecorder
+
+            cfg = self.cfg.recording
+            self.controller_recorder = ControllerRecorder(
+                root=project_path(cfg.root),
+                cfg=cfg,
+                fps=cfg.fps if cfg.fps is not None else self.cfg.fps,
+                task=self.cfg.task,
+                session=type(self).__name__,
+                shm_manager=self.shm_manager,
+            )
+        self._on_controller_recorder(
+            lambda recorder: recorder.start(
+                self.last_observation,
+                session=session,
+                task=task,
+                dir_name=dir_name,
+                index=index,
+            )
+        )
+
+    def _open_pending_controller_episode(self) -> None:
+        """Start the controller's episode once the robot has opened its own.
+
+        The robot echoes a request it has acted on, but sealing the previous
+        take can hold the new one back, so an echo alone is not an open
+        episode. A robot that cannot record, or never opens one in time,
+        leaves the controller recording on its own numbering.
+        """
+        pending = self._pending_controller_start
+        if pending is None:
+            return
+        request_id, deadline, start = pending
+        robot = self.robot_recording
+        acknowledged = robot["request"] >= request_id
+        if acknowledged and robot["active"]:
+            self._pending_controller_start = None
+            self._start_controller_episode(
+                **start, dir_name=robot["session"], index=int(robot["episode"])
+            )
+            return
+        disabled = acknowledged and not robot["enabled"]
+        if not disabled and time.monotonic() < deadline:
+            return
+        self._pending_controller_start = None
+        logger.warning(
+            "The robot did not open an episode; the controller records this "
+            "one in a session of its own"
+        )
+        self._start_controller_episode(**start)
+
+    def _on_controller_recorder(self, command: "Callable[[ControllerRecorder], Any]") -> None:
+        """Run *command* on the controller recording thread, after earlier ones."""
+        if self.controller_recorder is None:
+            return
+        if self._controller_recording_thread is None:
+            self._controller_recording_thread = threading.Thread(
+                target=self._run_controller_recording,
+                name="ControllerRecording",
+                daemon=True,
+            )
+            self._controller_recording_thread.start()
+        self._controller_recording_queue.put(command)
+
+    def _run_controller_recording(self) -> None:
+        while True:
+            command = self._controller_recording_queue.get()
+            if command is None:
+                return
+            try:
+                command(self.controller_recorder)
+            except Exception:
+                logger.exception("Controller recording failed")
+
+    def _close_controller_recorder(self) -> None:
+        """Seal whatever the controller is recording and stop its encoders."""
+        if self._controller_recording_thread is None:
+            return
+        self._on_controller_recorder(lambda recorder: recorder.close())
+        self._controller_recording_queue.put(None)
+        # The seal waits on every encoder's flush, which is bounded by
+        # VideoWriter's own timeout.
+        self._controller_recording_thread.join(timeout=60.0)
+        self._controller_recording_thread = None
 
     def _request_recording(self, action_type: int, data: dict) -> None:
         """Queue an episode boundary and keep asking until the robot echoes it.
@@ -1278,7 +1529,7 @@ class Controller(EventHost, ABC):
         request = self._record_request
         if request is None:
             return None
-        if self.recording_state["request"] >= self._record_request_id:
+        if self.robot_recording["request"] >= self._record_request_id:
             self._record_request = None
             return None
         if time.monotonic() > self._record_request_deadline:
@@ -1301,18 +1552,24 @@ class Controller(EventHost, ABC):
         owns it, and gets a ``START_SKILL`` naming the class and its params.
         """
         name = skill.skill_name
+        if not self._agent_dispatching:
+            self._operator_took_over(f"started {name}")
+        preempted = f"preempted by {name}"
         if name in self.running_skills:
             # Starting is not toggling: pressing the same key twice re-runs the
             # skill rather than leaving nothing commanding the modules.
-            self.stop_skill(name)
+            self.stop_skill(name, reason=preempted)
         for other in list(self._local_skills.values()):
             if self._modules_overlap(skill, other):
-                self.stop_skill(other.skill_name)
+                self.stop_skill(other.skill_name, reason=preempted)
         for other_name, rec in list(self.running_skills.items()):
             if other_name in self._local_skills:
                 continue
             if rec.execution_place.is_remote and self._modules_overlap(skill, rec):
-                self.stop_skill(other_name)
+                self.stop_skill(other_name, reason=preempted)
+        self._invocation_seq += 1
+        self._invocations[name] = self._invocation_seq
+        self._stop_reasons.pop(name, None)
         if skill.execution_place.is_remote:
             self._pending_actions.append(
                 Action(
@@ -1384,7 +1641,17 @@ class Controller(EventHost, ABC):
         except Exception:
             logger.exception("Could not start skill '%s'", name)
 
-    def stop_skill(self, name: str) -> None:
+    def stop_skill(
+        self, name: str, reason: str = "", status: SkillStatus = SkillStatus.STOPPED
+    ) -> None:
+        """Stop a running skill.
+
+        Args:
+            reason: Why, passed to whoever started it when it ends.
+            status: How a local skill ended: ``STOPPED`` when someone stops it,
+                ``COMPLETED`` / ``FAILED`` when the tick retires one that ended
+                itself. A remote skill's end is whatever the robot reports.
+        """
         rec = self.running_skills.get(name)
         if rec is None:
             return
@@ -1403,9 +1670,10 @@ class Controller(EventHost, ABC):
                     for slot in last_words
                     if slot
                 )
-            else:
+            elif skill.is_alive():
                 skill.request_stop()
             logger.info("Stopped skill '%s'", name)
+            self._skill_ended(name, status, reason)
             return
 
         # A remote skill is stopped by asking, so it is not stopped until the
@@ -1414,6 +1682,8 @@ class Controller(EventHost, ABC):
         # preemptable, and a status row can only restore the record, not the
         # set — so a lost stop would leave a skill nothing can ever displace.
         remote_name = type(skill).registry_name() if skill is not None else rec.name
+        if reason:
+            self._stop_reasons[remote_name] = reason
         now = time.monotonic()
         self._remote_stopping[remote_name] = (now, now)
         self._pending_actions.append(
@@ -1441,6 +1711,7 @@ class Controller(EventHost, ABC):
                 )
                 self._remote_stopping.pop(name, None)
                 self._remote_running.pop(name, None)
+                self._skill_ended(name, SkillStatus.STOPPED, "stop never confirmed by the robot")
                 continue
             if now - last < _REMOTE_STOP_RETRY_S:
                 continue
@@ -1449,9 +1720,118 @@ class Controller(EventHost, ABC):
                 Action(action_type=ActionType.STOP_SKILL, data={"skill": name})
             )
 
-    def stop_all_skills(self) -> None:
+    def stop_all_skills(self, reason: str = "stopped by the operator") -> None:
+        if not self._agent_dispatching:
+            self._operator_took_over("stopped all skills")
         for name in list(self.running_skills):
-            self.stop_skill(name)
+            self.stop_skill(name, reason=reason)
+
+    def _skill_ended(self, name: str, status: SkillStatus, reason: str = "") -> None:
+        """One invocation of ``name`` is over; tell the agent if it started it.
+
+        Called from the control thread for local skills and from the state
+        receiver for remote ones, whose end is only known when the robot says.
+        """
+        invocation = self._invocations.pop(name, None)
+        stored = self._stop_reasons.pop(name, "")
+        if invocation is None:
+            return
+        if self.agent is not None:
+            self.agent.on_skill_ended(invocation, status, reason or stored)
+
+    def _operator_took_over(self, description: str) -> None:
+        if self.agent is not None:
+            self.agent.on_operator_action(description)
+
+    # ========= agent host ============
+    def call_on_control_thread(self, fn: Callable[[], Any]) -> Future:
+        """Run ``fn`` on the control thread at the next tick; its result lands in the future.
+
+        Skill orchestration is single-threaded by design — every start, stop
+        and preemption happens between two ticks — so a thread that wants to
+        command the robot (the agent) asks rather than reaching in.
+        """
+        future: Future = Future()
+        if not self.running:
+            future.set_exception(RuntimeError("the control loop is not running"))
+            return future
+        self._control_calls.put((fn, future))
+        return future
+
+    def _run_control_calls(self) -> None:
+        while True:
+            try:
+                fn, future = self._control_calls.get_nowait()
+            except queue.Empty:
+                return
+            self._agent_dispatching = True
+            try:
+                future.set_result(fn())
+            except Exception as exc:  # noqa: BLE001 - the caller decides what a failure means
+                future.set_exception(exc)
+            finally:
+                self._agent_dispatching = False
+
+    def skill_invocation(self, name: str) -> int | None:
+        """The invocation of ``name`` running now, or ``None``."""
+        return self._invocations.get(name)
+
+    def skill_active(self, name: str) -> bool:
+        """Running, or asked to stop and not yet confirmed stopped.
+
+        Membership tests only: the agent asks from its own thread, and these
+        dicts change under it.
+        """
+        return (
+            name in self._local_skills
+            or name in self._remote_running
+            or name in self._remote_stopping
+        )
+
+    def field_value(self, module: str, field_name: str):
+        """The latest ``module.field`` reading this controller has, or ``None``."""
+        try:
+            return self.last_observation[module][field_name]
+        except (KeyError, TypeError):
+            return None
+
+    def agent_inputs(self) -> tuple[list[UIImage], dict[str, dict[str, str]]]:
+        """What the agent observes: camera images with their overlays, and readings.
+
+        Readings are the dashboard's, already formatted, so the agent reads
+        the same numbers the operator does. ``agent.state_fields`` narrows them.
+        """
+        wanted = self.cfg.agent.state_fields if self.cfg.agent is not None else {}
+        state: dict[str, dict[str, str]] = {}
+        for title, rows in self._gui_dashboard_sections():
+            module = title.removeprefix("obs · ")
+            if module == title or (wanted and module not in wanted):
+                continue
+            fields = wanted.get(module)
+            state[module] = {
+                str(row[0]): str(row[1]) for row in rows if not fields or row[0] in fields
+            }
+        return self._collect_display_images(), state
+
+    def on_agent_idle(self) -> None:
+        """Called on the control thread when an agent run ends.
+
+        Override to bring back whatever should run between tasks — teleop,
+        say — so the operator is never left with nothing commanding the arm.
+        """
+
+    def check_agent_action(self, action_id: str, tool: str, elapsed_s: float) -> tuple | None:
+        """A deterministic check on a running agent action, polled with the monitor.
+
+        Returns ``("finish" | "fail" | "escalate", reason)`` to stop the action
+        as succeeded or failed, or wake the planner, or ``None``. A finish or
+        fail can add a third element, a tool to start without arguments once
+        the action has stopped: ``("fail", "the arm stalled", "home")``. For
+        what a reading shows better than a camera — an arm that stopped moving,
+        a joint at its limit. ``action_id`` is new for every action, so state
+        kept across polls can be reset when it changes.
+        """
+        return None
 
     # ========= services ============
     def start_service(self, module: str, field: str, **params) -> None:
@@ -1487,12 +1867,16 @@ class Controller(EventHost, ABC):
             if spec.get("skill_id") is not None
         }
         for rec in records:
+            # Deserialized off the wire (rows) or read from shared memory
+            # (records), and only the robot's rows carry a reason.
             if isinstance(rec, dict):
                 skill_id = int(rec.get("skill_id", 0))
                 status = int(rec.get("status", 0))
+                reason = str(rec.get("reason") or "")
             else:
                 skill_id = int(getattr(rec, "skill_id", 0))
                 status = int(getattr(rec, "status", 0))
+                reason = ""
             name = id_to_name.get(skill_id)
             if name is None:
                 continue
@@ -1515,9 +1899,11 @@ class Controller(EventHost, ABC):
                 int(SkillStatus.FAILED),
                 int(SkillStatus.STOPPED),
             ):
-                self._remote_running.pop(name, None)
+                was_running = self._remote_running.pop(name, None) is not None
                 self._local_skills.pop(name, None)
                 self._remote_stopping.pop(name, None)
+                if was_running:
+                    self._skill_ended(name, SkillStatus(status), reason)
 
     def _drain_skill_actions(self, skill, slots: list[dict]) -> None:
         """Merge everything *skill* queued into *slots*, one per queue position."""
@@ -1548,6 +1934,7 @@ class Controller(EventHost, ABC):
             return record_request
 
         self._retry_remote_stops()
+        self._run_control_calls()
         if self._pending_actions:
             return self._pending_actions.pop(0)
 
@@ -1578,20 +1965,32 @@ class Controller(EventHost, ABC):
         # Inline skills get stepped the way a runner steps the others, so
         # both end up writing into their own per-module queues rather than
         # one of them taking a shortcut the merge below cannot see.
-        finished: list[str] = []
+        finished: list[tuple[str, SkillStatus, str]] = []
         for name, skill in list(self._local_skills.items()):
             if skill.execution_place.is_remote:
                 continue
             if skill.execution_mode is not ExecutionMode.INLINE:
+                # A skill in its own process or thread ends on its own loop;
+                # what it leaves behind is how it ended.
+                if not skill.is_alive():
+                    error = skill.get_error()
+                    if error is None:
+                        finished.append((name, SkillStatus.COMPLETED, ""))
+                    else:
+                        finished.append((name, SkillStatus.FAILED, failure_reason(error[1])))
                 continue
             try:
                 skill.dispatch(skill.step())
-            except Exception:
+            except SkillFailed as exc:
+                logger.warning("Inline skill '%s' failed: %s", name, exc)
+                finished.append((name, SkillStatus.FAILED, str(exc)))
+                continue
+            except Exception as exc:
                 logger.exception("Inline skill '%s' crashed", name)
-                finished.append(name)
+                finished.append((name, SkillStatus.FAILED, f"{type(exc).__name__}: {exc}"))
                 continue
             if skill.finished:
-                finished.append(name)
+                finished.append((name, SkillStatus.COMPLETED, ""))
 
         # One slot per position in what each skill queued. Slot 0 goes out
         # now; the rest queue up behind it. Merging index-wise rather than
@@ -1603,8 +2002,8 @@ class Controller(EventHost, ABC):
             if skill.execution_place.is_remote:
                 continue
             self._drain_skill_actions(skill, slots)
-        for name in finished:
-            self.stop_skill(name)
+        for name, status, reason in finished:
+            self.stop_skill(name, reason=reason, status=status)
 
         slots = [slot for slot in slots if slot]
         if not slots:
@@ -1657,6 +2056,8 @@ class Controller(EventHost, ABC):
         # Hook for subclasses to start additional threads, and to bring up
         # whatever skill the application wants running from the start.
         self.on_start()
+        if self.agent is not None:
+            self.agent.start()
 
         # After on_start, so an episode opened here contains whatever skill
         # the application brought up with it. A session brackets its own
@@ -1689,12 +2090,15 @@ class Controller(EventHost, ABC):
                 self.ui.tick(fps)
                 manual_profile("ui loop latency", (time.time_ns() - start_loop_t))
         finally:
+            if self.agent is not None:
+                self.agent.close()
             # Sealed here rather than left to the robot's shutdown, which can
             # only mark the episode interrupted.
             if self.recording_state["active"]:
                 self.stop_recording()
             self.running = False
             t.join(timeout=5.0)
+            self._close_controller_recorder()
             self.events["exit_early"] = False
             self.ui.close()
             self._stop_keyboard_listener()

@@ -11,7 +11,7 @@ Each record is a fixed-width tuple::
 
 ``skill_id`` is an integer assigned by the orchestrator (e.g. the index of
 the skill in the ``available_skills`` registry).  ``status`` is the integer
-value of a :class:`solarian.core.ai.system1.skill.SkillStatus` member.
+value of a :class:`solarian.core.skill.SkillStatus` member.
 """
 
 from typing import List, Optional

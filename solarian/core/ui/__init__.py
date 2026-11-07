@@ -55,7 +55,7 @@ def build_ui(controller) -> ControllerUI:
         from solarian.core.ui.pygame_ui import PygameUI
 
         try:
-            return PygameUI()
+            return PygameUI(chat=controller.agent is not None)
         except Exception:
             # No display, no SDL, or a remote shell: the cameras are still
             # worth showing, so fall back rather than refuse to run.

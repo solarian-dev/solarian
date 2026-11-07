@@ -19,7 +19,8 @@ import solarian.core.recording.structure
 from solarian.core.action import Action, ActionType, ActuatorField, ModuleAction
 from solarian.core.arm_module import ArmModule
 from solarian.core.clock_sync import synced_time
-from solarian.core.configs import ActuatorConfig
+from solarian.core.conf_paths import project_path
+from solarian.core.configs import ActuatorConfig, ControllerRecordingConfig, RecordingConfig
 from solarian.core.controller import Controller
 from solarian.core.controller_gui import ControllerGUI
 from solarian.core.data import ImageData, PosData, TemperatureData
@@ -29,15 +30,22 @@ from solarian.core.ik import CartesianIKActuator, MinkIK
 from solarian.core.observation import ModuleObs, Observation, SensorField
 from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.camera_bus import ArchivesFrames, CameraBus
+from solarian.core.recording.controller_recorder import ControllerRecorder
 from solarian.core.recording.export import export_lerobot
 from solarian.core.recording.recorder import SessionRecorder
 from solarian.core.recording.schema import build_schema
-from solarian.core.recording.session import CameraMeta, read_manifest
+from solarian.core.recording.session import (
+    CameraMeta,
+    SessionPaths,
+    parse_session_dir,
+    read_manifest,
+)
 from solarian.core.recording.structure import build_structure
 from solarian.core.recording.timeline import frame_index_for, repeats_for
 from solarian.core.recording.video_writer import VideoWriter
 from solarian.core.robot import Robot
 from solarian.core.servo import Servo
+from solarian.core.ui.base import UICommand, UICommandType, recording_status
 from solarian.sim import ModuleAttachment, SceneConfig
 
 ARCHIVE_SHAPE = (48, 64, 3)
@@ -675,15 +683,21 @@ def test_a_video_that_never_sealed_is_not_labelled_a_good_episode(
     assert read_manifest(session.paths)[0]["status"] == "video_failed"
 
 
-def test_session_metadata_is_written_once_at_session_start(recorder):
+def test_session_metadata_is_written_when_the_first_episode_opens(recorder, tmp_path):
+    """A robot that boots and never records leaves nothing and spends no number."""
     session, _ = recorder
+    assert session.paths is None and list(tmp_path.iterdir()) == []
 
+    session.start_episode()
     document = json.loads(session.paths.session_json.read_text())
 
     assert document["robot"]["class"] == "TestRobot"
     assert document["fps"] == FPS
     assert "obs.arm.shoulder" in document["schema"]
     assert document["obs_fields"]["arm"] == ["shoulder", "shoulder_temp"]
+    number, digest, name = parse_session_dir(session.paths.root.name)
+    assert (document["source"], document["number"], document["name"]) == ("robot", number, name)
+    assert document["id"] == f"{number:04d}_{digest}" and name == "testing"
 
 
 def test_a_dropped_episode_leaves_nothing_behind(recorder, schema_classes):
@@ -723,22 +737,95 @@ def test_naming_a_session_moves_later_episodes_into_its_own_directory(
     obs_cls, action_cls = schema_classes
     _record_one_episode(session, sink, obs_cls, action_cls, clock, n_rows=5)
 
-    session.open_session("cup_stacking")
+    first = parse_session_dir(session.paths.root.name)
+
+    session.open_session("cup stacking!")
     _record_one_episode(session, sink, obs_cls, action_cls, clock, n_rows=5)
 
-    assert session.paths.root.name.startswith("cup_stacking__")
+    number, digest, name = parse_session_dir(session.paths.root.name)
+    assert (number, name) == (first[0] + 1, "cup_stacking")
+    assert digest != first[1]
     assert session.episode_count == 1
     assert [e["episode"] for e in read_manifest(session.paths)] == [0]
 
 
-def test_reasking_for_the_open_session_does_not_roll_the_directory(recorder):
+def test_reasking_for_the_open_session_does_not_roll_the_directory(
+    recorder, schema_classes, clock
+):
     """RECORD_START is retried until the robot answers, and carries the name."""
-    session, _ = recorder
+    session, sink = recorder
+    obs_cls, action_cls = schema_classes
+    _record_one_episode(session, sink, obs_cls, action_cls, clock, n_rows=5)
     before = session.paths.root
 
     session.open_session("testing")
 
     assert session.paths.root == before
+
+
+def test_session_numbers_continue_past_the_highest_on_disk(tmp_path):
+    """Numbers order sessions; a gap or an older unnumbered directory is no claim."""
+    (tmp_path / "0007_abcdef_old").mkdir()
+    (tmp_path / "cup_stacking__2026-01-01_10-00-00").mkdir()
+
+    paths = SessionPaths.allocate(tmp_path, "new")
+
+    number, digest, name = parse_session_dir(paths.root.name)
+    assert (number, name) == (8, "new") and len(digest) == 6
+
+
+def test_a_session_can_adopt_a_directory_name_and_episode_index(
+    recorder, schema_classes, clock, tmp_path
+):
+    """How the controller files its take beside the robot's: same name, same index."""
+    session, sink = recorder
+    obs_cls, action_cls = schema_classes
+
+    session.open_session("testing", dir_name="0003_abcdef_testing")
+    session.start_episode(index=4)
+    session.end_episode()
+
+    assert session.paths.root == tmp_path / "0003_abcdef_testing"
+    assert [e["episode"] for e in read_manifest(session.paths)] == [4]
+    assert session.episode_count == 5
+
+
+def test_the_controller_records_what_reached_it_in_the_robots_layout(
+    tmp_path, schema_classes, clock
+):
+    """Same files as the robot's session, so export and the viewer read either."""
+    obs_cls, action_cls = schema_classes
+    start = clock["now"]
+    with SharedMemoryManager() as shm_manager:
+        recorder = ControllerRecorder(
+            root=tmp_path,
+            cfg=ControllerRecordingConfig(preset="ultrafast"),
+            fps=FPS,
+            task="put the cup down",
+            session="testing",
+            shm_manager=shm_manager,
+        )
+        recorder.start(_observation(obs_cls, t=start, shoulder=0.0, with_image=True))
+        episode_dir = recorder.episode_dir
+        for i in range(20):
+            t = clock["now"] = start + i * 0.01
+            recorder.note_sent(action_cls(
+                action_type=ActionType.MODULE_ACTION,
+                data={"arm": {"action_type": int(ActionType.SERVO_J),
+                              "data": {"shoulder": {"value": float(i), "timestamp": t}}}},
+            ))
+            recorder.feed(_observation(obs_cls, t=t, shoulder=float(i), with_image=i % 5 == 0))
+        recorder.stop()
+        assert recorder.episode_dir is None
+        recorder.close()
+
+    document = json.loads((episode_dir.parent.parent / "session.json").read_text())
+    assert (document["source"], document["robot"]) == ("controller", None)
+    assert document["cameras"]["cam.image"]["width"] == ARCHIVE_SHAPE[1]
+    table = pq.read_table(episode_dir / "episode.parquet")
+    assert table.num_rows == 20
+    assert table.column("act.arm.shoulder").to_pylist()[:3] == [0.0, 1.0, 2.0]
+    assert (episode_dir / "video" / "cam.image.mp4").is_file()
 
 
 def test_rows_written_outside_an_episode_are_discarded(recorder, schema_classes):
@@ -748,7 +835,7 @@ def test_rows_written_outside_an_episode_are_discarded(recorder, schema_classes)
     session.write_row(_observation(obs_cls, t=1.0, shoulder=1.0, with_image=True))
 
     assert session.end_episode() is None
-    assert read_manifest(session.paths) == []
+    assert session.paths is None
 
 
 # --- export -----------------------------------------------------------------
@@ -1038,6 +1125,7 @@ class _AffinityRobot(Robot):
         self.recorder = SimpleNamespace(
             is_recording=False,
             episode_count=0,
+            session_dir_name=None,
             end_episode=self._end,
             drop_episode=self._end,
             open_session=lambda name: None,
@@ -1464,13 +1552,46 @@ def test_a_module_that_advanced_is_still_sent(schema_classes, delta_robot):
 # --- asking the robot for a boundary ---------------------------------------
 
 
-class _RecordingCtrl(Controller):
-    """Only the recording-request machinery: no zmq, no modules, no skills."""
+class _FakeControllerRecorder:
+    """What the controller asks of its own recorder, in order."""
 
     def __init__(self):
-        self.cfg = SimpleNamespace(task="put the cup down")
+        self.calls: list[tuple[str, dict]] = []
+        self.is_recording = False
+        self.episode_index = 0
+        self.session_dir_name = None
+        self.episode_dir = None
+
+    def start(self, latest, **kwargs):
+        self.calls.append(("start", kwargs))
+        self.is_recording = True
+
+    def stop(self):
+        self.calls.append(("stop", {}))
+        self.is_recording = False
+
+    def drop(self):
+        self.calls.append(("drop", {}))
+        self.is_recording = False
+
+
+class _RecordingCtrl(Controller):
+    """Only the recording-request machinery: no zmq, no modules, no skills.
+
+    The controller's recorder is a fake run inline, so a test sees each
+    boundary the moment the controller decides it.
+    """
+
+    def __init__(self, *, controller: bool = False, robot: bool = True):
+        self.cfg = SimpleNamespace(
+            task="put the cup down",
+            recording=ControllerRecordingConfig(controller=controller, robot=robot),
+        )
         self.events = {"rerecord_episode": False}
+        self.last_observation = None
         self._init_recording()
+        self.controller_recorder = _FakeControllerRecorder()
+        self._on_controller_recorder = lambda command: command(self.controller_recorder)
 
 
 def test_a_boundary_is_resent_until_the_robot_echoes_it():
@@ -1481,7 +1602,7 @@ def test_a_boundary_is_resent_until_the_robot_echoes_it():
     assert ctrl._retry_record_request() is not None
     assert ctrl._retry_record_request() is not None
 
-    ctrl.recording_state["request"] = ctrl._record_request_id
+    ctrl.robot_recording["request"] = ctrl._record_request_id
     assert ctrl._retry_record_request() is None
 
 
@@ -1516,7 +1637,7 @@ def test_r_opens_an_episode_and_then_seals_it():
     assert ctrl._record_request.action_type == ActionType.RECORD_START
 
     # Only the robot flips this, so a toggle needs it echoed back first.
-    ctrl.recording_state["active"] = True
+    ctrl.robot_recording["active"] = True
     _press(ctrl, "r")
     assert ctrl._record_request.action_type == ActionType.RECORD_STOP
 
@@ -1544,6 +1665,125 @@ def test_the_gripper_keys_do_not_touch_recording():
     _press(ctrl, "z")
 
     assert ctrl._record_request is opened
+
+
+# --- where an episode records -----------------------------------------------
+
+
+def _starts(ctrl: _RecordingCtrl) -> list[dict]:
+    return [kwargs for name, kwargs in ctrl.controller_recorder.calls if name == "start"]
+
+
+def test_a_controller_only_episode_never_asks_the_robot():
+    ctrl = _RecordingCtrl(controller=True, robot=False)
+
+    ctrl.start_recording(session="cups")
+
+    assert ctrl._record_request is None
+    (start,) = _starts(ctrl)
+    assert start["session"] == "cups" and start["dir_name"] is None
+    assert ctrl.recording_state["active"] is True
+    assert ctrl.recording_state["enabled"] is True
+
+
+def test_a_robot_only_episode_leaves_the_controller_recorder_alone():
+    ctrl = _RecordingCtrl(controller=False, robot=True)
+
+    ctrl.start_recording()
+    ctrl._open_pending_controller_episode()
+    ctrl.stop_recording()
+
+    assert ctrl.controller_recorder.calls == []
+    assert ctrl._record_request.action_type == ActionType.RECORD_STOP
+
+
+def test_with_both_sides_the_controller_files_its_take_under_the_robots():
+    """Same session directory, same episode index: the two datasets line up."""
+    ctrl = _RecordingCtrl(controller=True, robot=True)
+    ctrl.robot_recording["enabled"] = True
+    ctrl.start_recording()
+
+    ctrl.robot_recording["request"] = ctrl._record_request_id
+    ctrl._open_pending_controller_episode()
+    assert _starts(ctrl) == [], "an echo while the last take seals is not an open episode"
+
+    ctrl.robot_recording.update(active=True, episode=3, session="0002_abcdef_cups")
+    ctrl._open_pending_controller_episode()
+
+    (start,) = _starts(ctrl)
+    assert (start["dir_name"], start["index"]) == ("0002_abcdef_cups", 3)
+
+
+def test_a_robot_that_cannot_record_leaves_the_controller_on_its_own_numbering():
+    ctrl = _RecordingCtrl(controller=True, robot=True)
+    ctrl.robot_recording["enabled"] = False
+    ctrl.start_recording()
+
+    ctrl.robot_recording["request"] = ctrl._record_request_id
+    ctrl._open_pending_controller_episode()
+
+    (start,) = _starts(ctrl)
+    assert start["dir_name"] is None and start["index"] is None
+
+
+def test_a_robot_that_never_answers_does_not_hold_the_controller_back():
+    ctrl = _RecordingCtrl(controller=True, robot=True)
+    ctrl.start_recording()
+    request_id, _, start = ctrl._pending_controller_start
+    ctrl._pending_controller_start = (request_id, time.monotonic() - 1.0, start)
+
+    ctrl._open_pending_controller_episode()
+
+    (start,) = _starts(ctrl)
+    assert start["dir_name"] is None
+
+
+def test_a_switch_flipped_mid_take_still_lets_stop_reach_both_sides():
+    """The switches pick the next episode; the open one seals where it started."""
+    ctrl = _RecordingCtrl(controller=True, robot=False)
+    ctrl.start_recording()
+
+    ctrl.set_recording_targets(controller=False, robot=True)
+    ctrl.redo_recording()
+
+    assert [name for name, _ in ctrl.controller_recorder.calls] == ["start", "drop"]
+    assert ctrl._record_request is None
+    assert ctrl.recording_targets == {"controller": False, "robot": True}
+
+
+def test_with_both_switches_off_nothing_would_record():
+    ctrl = _RecordingCtrl(controller=False, robot=False)
+
+    ctrl.start_recording()
+
+    assert ctrl._record_request is None and ctrl.controller_recorder.calls == []
+    assert ctrl.recording_state["enabled"] is False
+    assert recording_status(ctrl.recording_state) == "not recording (both switches off)"
+
+
+def test_the_status_line_names_the_sides_recording():
+    ctrl = _RecordingCtrl(controller=True, robot=True)
+    ctrl.robot_recording.update(enabled=True)
+    assert recording_status(ctrl.recording_state) == "paused, 0 recorded (robot+controller)"
+
+    ctrl.robot_recording.update(active=True, episode=2)
+    assert recording_status(ctrl.recording_state) == "REC episode 2 (robot)"
+
+
+def test_the_switches_are_flipped_by_a_ui_command():
+    ctrl = _RecordingCtrl(controller=False, robot=True)
+
+    ctrl.handle_ui_command(UICommand(UICommandType.RECORD_TARGETS, {"controller": True}))
+
+    assert ctrl.recording_targets == {"controller": True, "robot": True}
+
+
+def test_a_relative_recordings_root_lives_in_the_project(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOLARIAN_PROJECT_PATH", str(tmp_path))
+
+    assert project_path(ControllerRecordingConfig().root) == tmp_path / "recordings" / "controller"
+    assert project_path(RecordingConfig().root) == tmp_path / "recordings" / "robot"
+    assert project_path("/elsewhere") == Path("/elsewhere")
 
 
 class _FakePygame:

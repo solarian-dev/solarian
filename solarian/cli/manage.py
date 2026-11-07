@@ -17,6 +17,8 @@ from hydra import initialize, compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 import colorama
 
+from solarian.utils.env_file import load_env_file
+
 from .base import CommandRegistry
 from .help import GLOBAL_OPTIONS, format_command_help
 
@@ -273,6 +275,10 @@ def main() -> None:
         os.environ["SOLARIAN_SETTINGS"] = settings_path
 
     os.environ["SOLARIAN_PROJECT_PATH"] = os.getcwd()
+    # Project secrets (model API keys, Onshape keys). Exported, so skill and
+    # service child processes see them too.
+    if Path(".env").is_file():
+        load_env_file(".env")
 
     # Add project path to sys.path
     sys.path.insert(0, os.getcwd())

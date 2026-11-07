@@ -6,7 +6,7 @@ import pytest
 
 from solarian.core.action import Action, ActionType
 from solarian.core.actuator_module import ActuatorModule
-from solarian.core.ai.system1.skill import Skill
+from solarian.core.skill import Skill
 from solarian.core.robot import Robot
 
 
@@ -89,6 +89,7 @@ class FakeRobot(Robot):
         self.skills_status_buffer = None
         self._local_skills = {}
         self._stopping_skills = {}
+        self._deferred_starts = {}
         # No cores to reserve: this robot has no encoder.
         self._all_cores = []
 
@@ -243,17 +244,39 @@ def test_a_skill_that_will_not_exit_is_terminated_and_still_cancelled():
     ]
 
 
-def test_a_skill_that_is_still_stopping_is_not_restarted():
-    """Two processes commanding the same modules would both own the hardware."""
+def test_a_skill_that_is_still_stopping_is_restarted_once_it_has_stopped():
+    """Two processes commanding the same modules would both own the hardware,
+    and dropping the start would leave the controller waiting on a skill that
+    never runs."""
     robot = FakeRobot()
     start(robot, skill="stubborn_wave", params={"arm": "arm"})
     first = robot._local_skills["stubborn_wave"]
     stop(robot, "stubborn_wave")
 
-    start(robot, skill="stubborn_wave", params={"arm": "arm"})
+    start(robot, skill="stubborn_wave", params={"arm": "arm", "amplitude": 3.0})
 
     assert robot._local_skills == {}
     assert robot._stopping_skills["stubborn_wave"][0] is first
+
+    robot._reap_stopping_skills(force=True)
+
+    second = robot._local_skills["stubborn_wave"]
+    assert second is not first and second.did_start and second.params["amplitude"] == 3.0
+    assert [int(a.action_type) for a in robot.action_queues["arm"].actions] == [
+        int(ActionType.CANCEL_TRAJECTORY)
+    ]
+
+
+def test_a_restart_waiting_on_a_stop_is_dropped_when_it_is_stopped_too():
+    robot = FakeRobot()
+    start(robot, skill="stubborn_wave", params={"arm": "arm"})
+    stop(robot, "stubborn_wave")
+    start(robot, skill="stubborn_wave", params={"arm": "arm"})
+
+    stop(robot, "stubborn_wave")
+    robot._reap_stopping_skills(force=True)
+
+    assert robot._local_skills == {}
 
 
 def test_both_handlers_are_registered_on_every_robot():

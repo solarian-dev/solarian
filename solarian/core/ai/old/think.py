@@ -37,7 +37,7 @@ import numpy as np
 
 from solarian.core.action import Action, ActionType
 from solarian.core.execution import ExecutionPlace
-from solarian.core.ai.system1.skill import Skill, SkillStatus
+from solarian.core.skill import Skill, SkillStatus
 from solarian.core.data import ImageData
 from solarian.utils import setup_process_logging, get_log_queue
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer

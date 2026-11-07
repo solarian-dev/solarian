@@ -29,6 +29,10 @@ from solarian.utils.log_buffer import LogBuffer, get_log_queue, remove_fallback_
 #: that the control loops want. Nobody reads a status table faster than this.
 _REFRESH_S = 0.25
 
+#: The label column stays this wide no matter how wide the value beside it is.
+#: A label that does not fit folds onto the next line.
+_STATE_COLUMN_WIDTH = 28
+
 
 
 def format_floats(obj, fmt="{:.3f}"):
@@ -139,8 +143,9 @@ def _build_fields_renderable(
         for field, field_payload in items[start:end]:
             if isinstance(field_payload, Mapping):
                 val = field_payload.get("value", "")
-                if field_payload.get("timestamp") is not None:
-                    last_timestamp = field_payload.get("timestamp")
+                ts = field_payload.get("timestamp")
+                if ts is not None and (last_timestamp is None or float(ts) > float(last_timestamp)):
+                    last_timestamp = ts
             else:
                 val = field_payload
             sub.add_row(str(field), value_str(val))
@@ -195,7 +200,7 @@ def _render_observation_panel(
         dt = datetime.fromtimestamp(float(last_timestamp))
         subtitle = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-    return Panel(inner, title=title, subtitle=subtitle, border_style="blue")
+    return Panel(inner, title=title, subtitle=subtitle, border_style="blue", expand=True)
 
 
 def _render_raw_action_panel(
@@ -551,23 +556,45 @@ class StatusBoard:
 
     def render(self):
         t = Table(title=getattr(self, "table_title", "Status"), expand=True, show_edge=False)
-        t.add_column("State"); t.add_column("Value")
+        t.add_column("State", width=_STATE_COLUMN_WIDTH, no_wrap=False, overflow="fold")
+        t.add_column("Value", ratio=1, overflow="fold")
         t.add_row("Local time", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
         for k, v in self.data.items():
             t.add_row(k, value_str(v))
         return Group(t, self._log_buf.render())
 
+    def _store(self, key, value) -> None:
+        """Keep the last reading of each module when a partial observation arrives.
+
+        The robot publishes only the modules that produced a new sample since
+        the previous send. Replacing the cell with that slice drops every
+        other module until one of its samples happens to be the newest
+        message in the queue.
+        """
+        from solarian.core.observation import Observation
+
+        current = self.data.get(key)
+        if (
+            isinstance(current, Observation)
+            and isinstance(value, Observation)
+            and value is not current
+        ):
+            for name, module_obs in value.items():
+                current[name] = module_obs
+            return
+        self.data[key] = value
+
     def _drain_queues(self):
         try:
             while True:
                 k, v = self._local_q.get_nowait()
-                self.data[k] = v
+                self._store(k, v)
         except queue.Empty:
             pass
         try:
             while True:
                 k, v = self._mp_q.get_nowait()
-                self.data[k] = v
+                self._store(k, v)
         except queue.Empty:
             pass
         return self._log_buf.drain(self._log_q)

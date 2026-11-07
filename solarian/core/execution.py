@@ -1,7 +1,7 @@
 """How a runtime component is scheduled, independent of what it is.
 
 A :class:`~solarian.core.module.Module` describes a logical device and a
-:class:`~solarian.core.ai.system1.skill.Skill` describes control logic; neither
+:class:`~solarian.core.skill.Skill` describes control logic; neither
 should encode whether it happens to live in its own OS process. That is an
 operational decision, so it is a property (:class:`ExecutionMode`) resolved at
 launch time by :func:`~solarian.core.runner.make_runner`.

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from solarian.core.action import Action, ActionType
-from solarian.core.configs import ModuleConfig
+from solarian.core.configs import ControllerRecordingConfig, ModuleConfig
 from solarian.core.event import Event, EventType, event_handler
 from solarian.core.execution import ExecutionMode, ExecutionPlace
-from solarian.core.ai.system1.skill import Skill, SkillStatus
+from solarian.core.skill import Skill, SkillStatus
 from solarian.core.controller import (
     _REMOTE_STOP_RETRY_S,
     _REMOTE_STOP_TIMEOUT_S,
@@ -127,8 +127,10 @@ class TeleopCtrl(Controller):
 
     def __init__(self):
         self._init_skill_orchestration()
+        self.cfg = SimpleNamespace(
+            fps=30, waypoint_lookahead_s=0.25, recording=ControllerRecordingConfig()
+        )
         self._init_recording()
-        self.cfg = SimpleNamespace(fps=30, waypoint_lookahead_s=0.25)
         self.skill_command_queue = FakeCommandQueue()
         self.skill_status_buffer = None
         self.modules = {}
@@ -686,3 +688,125 @@ def test_a_shorter_chunk_does_not_pad_the_longer_one():
     assert [s["right_arm"]["data"]["x"]["value"] for s in sent] == [0.0, 1.0, 2.0]
     assert "right_gripper" in sent[0]
     assert [s for s in sent[1:] if "right_gripper" in s] == []
+
+
+# ---- the agent's view of skill lifecycles --------------------------------------------
+
+
+class FakeAgent:
+    def __init__(self):
+        self.ended: list[tuple] = []
+        self.operator: list[str] = []
+        self.messages: list[str] = []
+        self.cancelled = 0
+
+    def on_skill_ended(self, invocation, status, reason):
+        self.ended.append((invocation, status, reason))
+
+    def on_operator_action(self, description):
+        self.operator.append(description)
+
+    def send_user_message(self, text):
+        self.messages.append(text)
+
+    def cancel(self):
+        self.cancelled += 1
+
+
+class FailingSkill(Skill):
+    execution_mode = ExecutionMode.INLINE
+
+    def control_step(self, dt):
+        self.fail("no target in view")
+
+
+def _agent_ctrl():
+    ctrl = TeleopCtrl()
+    ctrl.agent = FakeAgent()
+    ctrl.running = True
+    return ctrl
+
+
+def _as_agent(ctrl, fn):
+    """Run ``fn`` the way the harness does: queued, then drained on the control thread."""
+    future = ctrl.call_on_control_thread(fn)
+    ctrl._run_control_calls()
+    return future.result(timeout=0)
+
+
+def test_an_agent_started_skill_reports_how_it_was_preempted():
+    ctrl = _agent_ctrl()
+    name = _as_agent(ctrl, lambda: ctrl.start_skill(
+        HoldSkill("hold_all", {"arm": RIGHT_ARM, "gripper": RIGHT_GRIPPER})
+    ))
+    invocation = ctrl.skill_invocation(name)
+    assert ctrl.agent.operator == []
+
+    ctrl.press("m")
+
+    assert ctrl.agent.operator == ["started leader_follow"]
+    assert ctrl.agent.ended == [(invocation, SkillStatus.STOPPED, "preempted by leader_follow")]
+
+
+def test_an_agent_started_skill_reports_its_completion():
+    ctrl = _agent_ctrl()
+    name = _as_agent(ctrl, lambda: ctrl.start_skill(
+        OneShotSkill(name="move_home", params={"arm": RIGHT_ARM})
+    ))
+    invocation = ctrl.skill_invocation(name)
+
+    ctrl._tick_skills()
+    ctrl._tick_skills()
+
+    assert ctrl.agent.ended == [(invocation, SkillStatus.COMPLETED, "")]
+    assert ctrl.skill_invocation(name) is None
+
+
+def test_a_skill_that_fails_reports_its_reason():
+    ctrl = _agent_ctrl()
+    name = _as_agent(ctrl, lambda: ctrl.start_skill(FailingSkill(params={"arm": RIGHT_ARM})))
+    invocation = ctrl.skill_invocation(name)
+
+    ctrl._tick_skills()
+    ctrl._tick_skills()
+
+    assert ctrl.agent.ended == [(invocation, SkillStatus.FAILED, "no target in view")]
+
+
+def test_each_run_of_a_skill_is_its_own_invocation():
+    ctrl = _agent_ctrl()
+    start = lambda: ctrl.start_skill(HoldSkill("hold_all", {"arm": RIGHT_ARM}))  # noqa: E731
+    first = ctrl.skill_invocation(_as_agent(ctrl, start))
+    second = ctrl.skill_invocation(_as_agent(ctrl, start))
+
+    assert second != first
+    assert ctrl.agent.ended == [(first, SkillStatus.STOPPED, "preempted by hold_all")]
+
+
+def test_a_control_call_without_a_running_loop_fails_at_once():
+    ctrl = TeleopCtrl()
+    ctrl.running = False
+
+    with pytest.raises(RuntimeError):
+        ctrl.call_on_control_thread(lambda: None).result(timeout=0)
+
+
+def test_space_is_an_operator_takeover():
+    ctrl = _agent_ctrl()
+    _as_agent(ctrl, lambda: ctrl.start_skill(HoldSkill("hold_all", {"arm": RIGHT_ARM})))
+
+    ctrl.press(" ")
+
+    assert ctrl.agent.operator == ["stopped all skills"]
+    assert ctrl.agent.ended[0][1:] == (SkillStatus.STOPPED, "operator pressed space")
+
+
+def test_chat_commands_reach_the_agent():
+    from solarian.core.ui.base import UICommand, UICommandType
+
+    ctrl = _agent_ctrl()
+    ctrl.handle_ui_command(UICommand(UICommandType.AGENT_MESSAGE, {"text": "put the batteries away"}))
+    ctrl.handle_ui_command(UICommand(UICommandType.AGENT_CANCEL))
+
+    assert ctrl.agent.messages == ["put the batteries away"]
+    assert ctrl.agent.cancelled == 1

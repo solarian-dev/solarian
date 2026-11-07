@@ -189,3 +189,19 @@ class TestProcess:
             error = runner.get_error()
         assert error is not None
         assert "worker exploded" in error[1]
+
+    def test_a_forked_worker_exits_despite_the_timings_its_parent_took(self, monkeypatch):
+        """Its snapshot is read only after it exits, so an inherited one bigger
+        than the pipe would hold that exit until the host killed it."""
+        import solarian.core.runner as runner_module
+        from solarian.utils.profiling import func_stats
+
+        monkeypatch.setattr(runner_module, "Process", mp.get_context("fork").Process)
+        monkeypatch.setitem(func_stats, "parent_loop", [0.1] * 200_000)
+        runner = ProcessModuleRunner(ProcessCounter(max_ticks=1))
+        runner.start()
+        runner.join(timeout=3)
+        exitcode = runner.exitcode
+        runner.terminate()
+
+        assert exitcode == 0

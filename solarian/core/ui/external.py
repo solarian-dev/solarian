@@ -304,6 +304,7 @@ class ExternalUI:
             "skills": {key: list(value) for key, value in snapshot.skills.items()},
             "telemetry": dict(snapshot.telemetry),
             "recording": dict(snapshot.recording),
+            "agent": snapshot.agent,
             "status": snapshot.status,
         }
 

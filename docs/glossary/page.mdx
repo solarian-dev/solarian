@@ -182,7 +182,15 @@ The node that decides what the robot does — keyboard teleop, learned policy, A
 
 ### `ControllerConfig`
 
-Pydantic model for `conf/controller.yaml` (`fps`, `tps`, `system2_*`, `policy_path`, `device`, `headless`, `connection`, `modules`).
+Pydantic model for `conf/controller.yaml` (`fps`, `tps`, `agent`, `policy_path`, `device`, `headless`, `connection`, `modules`; `system2_*` only for the legacy `AIController`).
+
+### `AgentHarness`
+
+The AI controller: a planner model that calls the controller's `tools`, and a monitor model that watches them. Enabled by `agent:` in `conf/controller.yaml`. See [AI Controller](/docs/ai_controller).
+
+### `Tool`
+
+A skill class plus the params a controller binds, as the AI controller's planner sees it. Declared in `Controller.tools`. See [AI Controller](/docs/ai_controller#declaring-tools).
 
 ### `Data`
 
@@ -294,11 +302,11 @@ Enum (`IDLE`, `RUNNING`, `COMPLETED`, `FAILED`, `STOPPED`) reported by skills vi
 
 ### System 1 / System 2
 
-The naming Solarian uses for its dual-process AI architecture. System 1 = fast reactive control loop running [Skills](/docs/skills). System 2 = slow `ThinkProcess` running a VLM. See [AI Controller](/docs/ai_controller).
+The naming Solarian uses for its dual-process AI architecture. System 1 = fast reactive control loop running [Skills](/docs/skills). System 2 = the [AI Controller](/docs/ai_controller)'s planner, which calls those skills as tools.
 
 ### `ThinkProcess`
 
-The separate OS process that runs Solarian's "System 2" loop: drains user messages, queries a VLM, decides which [Skills](/docs/skills) to start or stop. Spawned by `AIController.on_start()`.
+The legacy `AIController`'s System 2 process (`solarian.core.ai.old`): queried a VLM each tick to decide which skills to start or stop. Replaced by the `agent:` harness.
 
 ### ZeroMQ
 

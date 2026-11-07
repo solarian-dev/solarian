@@ -36,8 +36,17 @@ class UICommandType(str, Enum):
     RECORD_STOP = "record_stop"
     #: Seal and delete the episode in progress, then start a fresh one.
     RECORD_REDO = "record_redo"
+    #: Which sides record the next episode. ``data``: ``controller`` and/or
+    #: ``robot``, each a bool; a side not named keeps its switch.
+    RECORD_TARGETS = "record_targets"
     #: One reading of a teleop device sampled wherever that device is plugged in.
     INPUT_SAMPLE = "input_sample"
+    #: A chat message to the agent: a new task, an answer, or a follow-up. ``data``: ``text``.
+    AGENT_MESSAGE = "agent_message"
+    #: End the agent's run and stop the actions it started.
+    AGENT_CANCEL = "agent_cancel"
+    #: Cancel, and forget the conversation.
+    AGENT_RESET = "agent_reset"
     QUIT = "quit"
 
 
@@ -99,12 +108,20 @@ class UISnapshot:
     skills: dict[str, list[str]] = field(default_factory=dict)
     #: Pre-formatted rows (latencies, clock offset, link age).
     telemetry: dict[str, str] = field(default_factory=dict)
-    #: Recording state as the robot reports it: ``enabled``, ``active``,
-    #: ``episode`` (sealed so far) and ``request``. Echoed back rather than
-    #: tracked locally, because the robot is what actually records and a
-    #: command the controller sent is not evidence that it arrived.
+    #: :attr:`Controller.recording_state`: the switches (``targets``),
+    #: ``enabled``, ``active``, ``episode``, ``session``, and each side's own
+    #: view under ``robot`` and ``controller``. The robot's is echoed back
+    #: rather than tracked locally, because a command the controller sent is
+    #: not evidence that it arrived.
     recording: dict[str, Any] = field(default_factory=dict)
+    #: The agent's run as :meth:`AgentHarness.ui_state` reports it — status,
+    #: plan, actions, chat transcript, usage — or ``None`` with no agent.
+    agent: dict[str, Any] | None = None
     status: str = ""
+
+
+#: Both recording sides, in the order every front end lists them.
+RECORDING_SIDES = ("robot", "controller")
 
 
 def recording_status(state: dict[str, Any]) -> str:
@@ -112,13 +129,22 @@ def recording_status(state: dict[str, Any]) -> str:
 
     ``episode`` counts what is sealed, so the episode recording right now is
     the one after it — the operator is told the number they will find on disk,
-    not an index they have to adjust.
+    not an index they have to adjust. The sides in brackets are the ones
+    recording now, or between takes the ones the switches have armed.
     """
+    targets = state.get("targets") or {}
     if not state.get("enabled"):
+        if targets.get("robot"):
+            return "not recording (the robot has recording disabled)"
+        if "robot" in targets:
+            return "not recording (both switches off)"
         return "not recording"
+    episode = state.get("episode", 0)
     if state.get("active"):
-        return f"REC episode {state.get('episode', 0)}"
-    return f"paused, {state.get('episode', 0)} recorded"
+        sides = [s for s in RECORDING_SIDES if (state.get(s) or {}).get("active")]
+        return f"REC episode {episode} ({'+'.join(sides)})"
+    sides = [s for s in RECORDING_SIDES if targets.get(s)]
+    return f"paused, {episode} recorded ({'+'.join(sides)})"
 
 
 @runtime_checkable

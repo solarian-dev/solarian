@@ -69,6 +69,13 @@ ai = [
     "openai",
     #"xformers==0.0.31.post1",
 ]
+# The AI controller (`agent:` in conf/controller.yaml): the planner and monitor
+# clients. No torch, so a controller laptop can run it without the training stack.
+agent = [
+    "anthropic>=0.76",
+    "openai>=2.0",
+    "httpx>=0.27",
+]
 sim = [
     "gymnasium==0.29.1",
     "mujoco==3.3.2",
@@ -80,7 +87,7 @@ sim = [
     "onshape-to-robot>=1.8",
 ]
 all = [
-    "solarian[ai,sim]",
+    "solarian[ai,agent,sim]",
 ]
 
 [tool.uv]

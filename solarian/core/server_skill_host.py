@@ -17,7 +17,7 @@ import time
 from multiprocessing.managers import SharedMemoryManager
 
 from solarian.core.action import Action, ActionType, ModuleAction
-from solarian.core.ai.system1.registry import discover_skill_classes
+from solarian.core.skill_registry import discover_skill_classes
 from solarian.core.event import event_inbox_for
 from solarian.core.execution import ExecutionPlace
 from solarian.core.module import Module
@@ -91,6 +91,9 @@ class ServerSkillHost:
         self._zeros = example_observation
         self._local_skills: dict = {}
         self._stopping: dict = {}
+        #: ``START_SKILL`` payloads that arrived while a skill of the same name
+        #: was still stopping, started once :meth:`reap` retires it.
+        self._deferred_starts: dict[str, dict] = {}
         self._skill_classes: dict[str, type] | None = None
 
     # -- observations ---------------------------------------------------------
@@ -150,7 +153,8 @@ class ServerSkillHost:
             logger.info("Skill '%s' already running (pid=%s)", name, running.pid)
             return
         if name in self._stopping:
-            logger.info("Skill '%s' is still stopping; not restarting it", name)
+            logger.info("Skill '%s' is still stopping; starting it once it has", name)
+            self._deferred_starts[name] = data
             return
         try:
             skill = skill_cls(
@@ -170,6 +174,7 @@ class ServerSkillHost:
         logger.info("Started skill '%s' on the server (pid=%s)", name, skill.pid)
 
     def stop_skill(self, name: str) -> None:
+        self._deferred_starts.pop(name, None)
         skill = self._local_skills.pop(name, None)
         if skill is None:
             return
@@ -178,6 +183,7 @@ class ServerSkillHost:
         self._stopping[name] = (skill, time.monotonic() + _STOP_TIMEOUT_S)
 
     def stop_all_skills(self) -> None:
+        self._deferred_starts.clear()
         for name in list(self._local_skills):
             self.stop_skill(name)
 
@@ -202,6 +208,9 @@ class ServerSkillHost:
                 if queue is not None:
                     queue.put(ModuleAction(action_type=ActionType.CANCEL_TRAJECTORY))
             logger.info("Skill '%s' stopped", name)
+            deferred = self._deferred_starts.pop(name, None)
+            if deferred is not None:
+                self.start_named_skill(deferred)
         for name, skill in list(self._local_skills.items()):
             if not skill.is_alive():
                 self._local_skills.pop(name)

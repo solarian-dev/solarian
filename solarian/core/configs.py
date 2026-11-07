@@ -313,21 +313,18 @@ class ConnectionConfig(BaseModel):
     #: one lost heartbeat does not trip the watchdog.
     heartbeat_s: float = 0.5
 
-# A robot is composed by multiple modules, eg: arms, legs, base, etc.
-class RecordingConfig(BaseModel):
-    """Episode recording, which the robot owns end to end.
+class ArchiveConfig(BaseModel):
+    """Where a recording side writes its sessions, and how it encodes video.
 
-    On by default: a session that was not recorded cannot be recovered, and
-    the cost of an mp4 nobody wanted is a deletion. ``max_session_gb`` is the
-    counterweight — on-by-default without a cap fills an SD card.
+    Shared by the robot's :class:`RecordingConfig` and the controller's
+    :class:`ControllerRecordingConfig`: both write the same session layout.
     """
 
-    enabled: bool = True
     #: Where sessions are written. Relative paths resolve against the project,
     #: which is only the right default while the project lives on local disk —
     #: point this elsewhere rather than mux an mp4 over a network mount.
-    root: str = "datasets"
-    #: Grid the archive video is encoded onto. Defaults to the robot's ``fps``.
+    root: str = "recordings/robot"
+    #: Grid the archive video is encoded onto. Defaults to the side's ``fps``.
     fps: float | None = None
     codec: str = "libx264"
     #: Constant Rate Factor. 18 is near-transparent, 23 is the x264 default;
@@ -368,6 +365,34 @@ class RecordingConfig(BaseModel):
     max_session_gb: float | None = 64.0
 
 
+# A robot is composed by multiple modules, eg: arms, legs, base, etc.
+class RecordingConfig(ArchiveConfig):
+    """Episode recording on the robot, at the fidelity only the robot has.
+
+    On by default: a session that was not recorded cannot be recovered, and
+    the cost of an mp4 nobody wanted is a deletion. ``max_session_gb`` is the
+    counterweight — on-by-default without a cap fills an SD card.
+    """
+
+    #: Whether the robot starts encoders at all. A controller can only ask a
+    #: robot with this on to record.
+    enabled: bool = True
+
+
+class ControllerRecordingConfig(ArchiveConfig):
+    """Which sides record an episode, and how the controller stores its own.
+
+    The controller's dataset has the robot's layout, built from what reached
+    the controller: the observations as received and the actions it sent.
+    """
+
+    #: Initial positions of the GUI's two recording switches. Read when an
+    #: episode starts, so flipping one mid-episode applies to the next.
+    controller: bool = True
+    robot: bool = True
+    root: str = "recordings/controller"
+
+
 class RobotConfig(BaseModel):
     img_compression_quality: int
     connection: ConnectionConfig
@@ -382,13 +407,117 @@ class RobotConfig(BaseModel):
     #: override, so the same robot class can run on hardware or in sim.
     sim: bool | None = None
 
+class ModelEndpointConfig(BaseModel):
+    """One model behind one API.
+
+    ``provider`` picks the wire format, not the vendor: an OpenAI-compatible
+    server (vLLM, a gateway) is ``openai`` with its ``base_url``.
+    """
+
+    #: ``anthropic``, ``openai`` (chat completions), ``openai_responses``
+    #: (``/v1/responses``: OpenAI reasoning models with tools) or, for the
+    #: monitor only, ``openai_decisions`` (``/v1/decisions``).
+    provider: str = "openai"
+    model: str
+    #: Environment variable holding the API key, so the key never sits in a
+    #: yaml that gets committed.
+    api_key_env: str | None = None
+    base_url: str | None = None
+    #: Output token cap per call.
+    max_tokens: int = 4096
+    #: Anthropic extended thinking budget in tokens; ``None`` disables it.
+    thinking_budget: int | None = None
+    #: OpenAI ``reasoning_effort`` for reasoning models; ``None`` leaves the default.
+    reasoning_effort: str | None = None
+    timeout_s: float = 120.0
+
+
+class MonitorConfig(ModelEndpointConfig):
+    #: Seconds between assessments while an agent action runs. A tick whose
+    #: previous call is still in flight is skipped, never queued.
+    period_s: float = 1.0
+    #: Longest side of each frame sent to the monitor, in pixels.
+    image_max_side: int = 512
+    #: Frames per camera in each assessment, one per tick, newest last: two
+    #: or more let the monitor judge motion rather than a still.
+    history: int = 2
+    #: What the monitor should know about this robot and its cameras, appended
+    #: to the generic instructions: which parts are always in view, what a held
+    #: object looks like.
+    instructions: str = ""
+    #: Per camera (``module/field``), a region ``[x0, y0, x1, y1]`` as fractions
+    #: of the capture. The monitor sees only that region of the camera, at
+    #: capture resolution: where the detail that decides success is small and
+    #: always in the same place, such as what the gripper holds. Monitor frames
+    #: never carry overlays; a tracker mask that slips would mislead it.
+    close_ups: dict[str, tuple[float, float, float, float]] = {}
+    #: Also send the frame from the action's start, the planner's point marked
+    #: on it, so the monitor knows which object is the target. Off when the
+    #: close-ups alone decide, as for a gripper's fingertips.
+    reference: bool = True
+    #: Mark where the tracker has the target on every monitor frame: a 1 px
+    #: box just outside its mask's bounds, not a mask, so the object stays visible.
+    #: Nothing is marked on a frame whose camera has no tracker output.
+    mark_target: bool = False
+    timeout_s: float = 10.0
+
+
+class AgentBudgets(BaseModel):
+    #: Planner calls per run.
+    max_turns: int = 80
+    max_minutes: float = 20.0
+    #: Failed or timed-out runs of one tool in a row before the planner is
+    #: told to change approach or ask the user.
+    retries_per_step: int = 3
+
+
+class AgentConfig(BaseModel):
+    """The supervising agent: a slow planner and a fast monitor.
+
+    The planner reads the task, plans and calls the controller's tools; the
+    monitor watches running actions and finishes them or wakes the planner.
+    Different models because they are paid for differently: the planner is
+    called a few times a minute, the monitor every ``period_s``.
+    """
+
+    planner: ModelEndpointConfig
+    monitor: MonitorConfig | None = None
+    #: Seconds between planner wakes while actions run and nothing else
+    #: happened; ``None`` never wakes it on time alone. Actions ending and
+    #: the monitor are the fast path; this is a backstop.
+    planner_heartbeat_s: float | None = 20.0
+    budgets: AgentBudgets = AgentBudgets()
+    #: Project instructions appended to the framework's system prompt: the
+    #: robot, the workspace, what the tools are good and bad at.
+    system_prompt: str = ""
+    #: Camera images the agent sees, as ``module/field`` labels. Empty: all.
+    cameras: list[str] = []
+    #: Longest side of each image sent to the planner, in pixels.
+    image_max_side: int = 768
+    #: Draw a labelled pixel grid on planner images, to help it point.
+    image_grid: bool = True
+    #: Module readings the agent sees, ``{module: [field, ...]}``. Empty: all.
+    state_fields: dict[str, list[str]] = {}
+    #: Images kept in the planner's context; older ones become a text stub.
+    max_images_in_context: int = 4
+    #: A point chosen on an image older than this is refused as stale.
+    max_point_age_s: float = 15.0
+    #: Open a recording episode per run when the robot can record.
+    record_runs: bool = True
+    #: Plan and point, but never start a skill.
+    dry_run: bool = False
+
+
 class ControllerConfig(BaseModel):
     fps: int
     tps: int
-    system2_model: str
-    system2_prompt: str
-    system2_base_url: str
-    system2_api_key: str
+    #: Deprecated: read only by the legacy ``solarian.core.ai.old`` AIController.
+    system2_model: str = ""
+    system2_prompt: str = ""
+    system2_base_url: str = ""
+    system2_api_key: str = ""
+    #: The supervising agent (see :class:`AgentConfig`). ``None``: no agent.
+    agent: AgentConfig | None = None
     policy_path: str
     device: str
     #: Front end that drives this controller: ``console`` (default), ``pygame``,
@@ -410,10 +539,12 @@ class ControllerConfig(BaseModel):
     #: cloud-hosted controller uses a leader arm plugged into the operator's
     #: laptop, without the project's code changing.
     remote_input_modules: list[str] = []
-    #: Ask the robot to start recording as soon as the session is up. The robot
-    #: is what records; this only decides whether an operator has to press a
-    #: key first. A teleop session that was not recorded cannot be recovered.
+    #: Start an episode as soon as the session is up, on whichever sides
+    #: ``recording`` selects. This only decides whether an operator has to
+    #: press a key first. A teleop session that was not recorded cannot be
+    #: recovered.
     record: bool = True
+    recording: ControllerRecordingConfig = ControllerRecordingConfig()
     #: Task string stamped on the episodes this session records.
     task: str | None = None
     #: Deprecated, superseded by ``ui``. ``true`` still selects the console UI,
@@ -430,13 +561,13 @@ class RecordConfig(ControllerConfig):
 
     Only the shape of the session lives here — how many episodes, how long
     each one runs, how long to reset between them. Everything about *how* an
-    episode is stored belongs to the robot's :class:`RecordingConfig`, because
-    the robot is what writes it.
+    episode is stored belongs to the recording sides' configs: the robot's
+    :class:`RecordingConfig` and the controller's ``recording``.
     """
 
-    #: Session directory the robot files these episodes under, below its own
-    #: ``RecordingConfig.root``. A timestamp is appended, so a rerun gets its
-    #: own directory rather than mixing with episodes an older build wrote.
+    #: Name of the session these episodes are filed under. A number and a
+    #: hash are prepended, so a rerun gets its own directory rather than
+    #: mixing with episodes an older build wrote.
     name: str = "session"
     num_episodes: int
     #: Cut the episode here. ``null`` records until the operator says stop.

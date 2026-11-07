@@ -28,6 +28,22 @@ CALIBRATIONS = "calibrations"
 DEPLOYMENT = "deployment"
 
 
+def project_dir() -> Path:
+    """The active project: ``SOLARIAN_PROJECT_PATH``, else the working directory."""
+    project = os.environ.get("SOLARIAN_PROJECT_PATH")
+    return Path(project) if project else Path.cwd()
+
+
+def project_path(path: str | os.PathLike) -> Path:
+    """*path* as given when absolute, else inside the active project.
+
+    How a recording ``root`` is resolved, so ``recordings/robot`` lands in the
+    project that produced it on whichever machine it runs.
+    """
+    path = Path(path).expanduser()
+    return path if path.is_absolute() else project_dir() / path
+
+
 def conf_dir() -> Path:
     """The active project's ``conf/``.
 
@@ -37,8 +53,7 @@ def conf_dir() -> Path:
     conf_path = os.environ.get("SOLARIAN_CONF_PATH")
     if conf_path:
         return Path(conf_path)
-    project = os.environ.get("SOLARIAN_PROJECT_PATH")
-    return (Path(project) if project else Path.cwd()) / "conf"
+    return project_dir() / "conf"
 
 
 def _in_folder(folder: str, filename: str) -> Path:

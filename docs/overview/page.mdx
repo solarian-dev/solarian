@@ -57,7 +57,7 @@ Solarian is structured as a **Robot ↔ Server ↔ Controller** system. Each rol
 
 - **Robot** runs on the robot. It owns the hardware: every `Module` subclass becomes its own OS process, polls actuators and sensors, and streams typed observations back out. Implementation: [`solarian/core/robot.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py).
 - **RelayServer** runs anywhere reachable from both ends. It forwards actions from controllers to robots and observations from robots to controllers, and can run server-side observation processors. Implementation: [`solarian/core/server.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/server.py).
-- **Controller** decides what the robot should do next. Subclass `Controller` for keyboard teleop, leader-arm teleop, a learned policy, or use the built-in `AIController` for a dual-process VLM-driven loop. Implementation: [`solarian/core/controller.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/controller.py).
+- **Controller** decides what the robot should do next. Subclass `Controller` for keyboard teleop, leader-arm teleop, a learned policy, or add an `agent:` block to let a planner model drive it from a chat. Implementation: [`solarian/core/controller.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/controller.py).
 
 All three nodes speak the same protocol: a Pydantic-validated [`Action`](/docs/actions) goes one way, a Pydantic-validated [`Observation`](/docs/observations) comes the other. Both are msgpack-serialized over ZeroMQ.
 
@@ -67,7 +67,7 @@ All three nodes speak the same protocol: a Pydantic-validated [`Action`](/docs/a
 - **Typed observations and actions.** [`Observation`](/docs/observations) and [`Action`](/docs/actions) are Pydantic-typed schemas that bind directly to your modules. The same data flows from hardware through the wire to your controller, your dataset, and your policy.
 - **Plug-and-play hardware.** Hardware drivers ship as standalone `solarian-<name>` [plugins](/docs/plugins). `solarian install ur5` installs the package and copies the default config straight into `conf/modules/ur5.yaml`.
 - **Hydra-driven configuration.** Every command takes its config from a YAML file (`robot.yaml`, `controller.yaml`, `server.yaml`, `record.yaml`, …) composed via [Hydra defaults](/docs/project-configs). Each module's config lives in `conf/modules/<module_name>.yaml` matching the attribute name on your `Robot`.
-- **AI Controller.** [`AIController`](/docs/ai_controller) implements a dual-process System 1 / System 2 architecture — a fast reactive loop running [Skills](/docs/skills) and a slower `ThinkProcess` driven by a vision-language model.
+- **AI Controller.** [Any controller](/docs/ai_controller) can take tasks in plain language: a planner model calls its [Skills](/docs/skills) as tools while a fast monitor model watches each one through the cameras.
 - **Recording, replay, and training.** First-class CLI commands ([`record`](/docs/commands), `replay`, `train`) let you go from teleoperated demonstrations to a trained policy without leaving the framework.
 - **Settings and lifecycle.** A simple `settings.py` pattern (à la Django) registers your `Robot`, `Controller`, and `Server` classes, so the CLI can discover and run any of them with the right configuration.
 

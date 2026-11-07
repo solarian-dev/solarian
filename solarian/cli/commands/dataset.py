@@ -15,7 +15,7 @@ from omegaconf import DictConfig
 from solarian.cli import BaseCommand, CommandRegistry
 
 ACTIONS = ("ops", "describe", "info", "run", "materialize", "new", "apply", "log", "close", "drop",
-           "export", "rebuild", "session", "redo", "accept")
+           "export", "rebuild", "session", "redo", "accept", "attach-agent")
 
 
 def _set_dotted(target: dict, key: str, value) -> None:
@@ -147,7 +147,7 @@ class DatasetCommand(BaseCommand):
         "[--review | --online] [--progress-json] | log <dir> [--json] | close <dir>@VERSION | "
         "drop <dir>@VERSION | export <dir>[@VERSION] <output> | rebuild <dir> <into> | "
         "session <dir>[@VERSION] | redo <dir>[@VERSION] <episode> [--param KEY=VALUE]... [--keep | --drop] | "
-        "accept <dir>[@VERSION] <episode>"
+        "accept <dir>[@VERSION] <episode> | attach-agent <session>"
     )
     options = {
         "ops": "List the installed ops.",
@@ -178,6 +178,8 @@ class DatasetCommand(BaseCommand):
         "redo <dir>[@VERSION] <episode>": "Reprocess one episode (map), --param over the version's.",
         "--keep / --drop": "With redo on a filter version: keep or drop the parent's episode.",
         "accept <dir>[@VERSION] <episode>": "Mark an episode of an open version as right.",
+        "attach-agent <session>": "Copy the AI controller's run logs (recordings/controller) into the "
+                                  "robot's recorded session, one agent/ beside each episode it ran.",
     }
     examples = (
         "solarian dataset ops",
@@ -253,6 +255,7 @@ class DatasetCommand(BaseCommand):
         accept = sub.add_parser("accept")
         accept.add_argument("ref")
         accept.add_argument("episode", type=int)
+        sub.add_parser("attach-agent").add_argument("session")
         self.ns = parser.parse_args(argv)
         return []
 
@@ -260,7 +263,21 @@ class DatasetCommand(BaseCommand):
         if self.ns.project:
             # The environment, not an argument, so op sessions and child processes see it too.
             os.environ["SOLARIAN_PROJECT_DIR"] = str(Path(self.ns.project).expanduser().resolve())
-        getattr(self, f"_{self.ns.action}")()
+        getattr(self, f"_{self.ns.action.replace('-', '_')}")()
+
+    def _attach_agent(self) -> None:
+        from solarian.core.ai.agent.run_log import merge_into_session
+        from solarian.core.configs import ControllerRecordingConfig
+
+        project = self.ns.project or os.environ.get("SOLARIAN_PROJECT_PATH") or os.getcwd()
+        root = Path(ControllerRecordingConfig().root).expanduser()
+        if not root.is_absolute():
+            root = Path(project).expanduser() / root
+        written = merge_into_session(root, Path(self.ns.session))
+        if not written:
+            print(f"No agent runs recorded for {Path(self.ns.session).name}")
+        for path in written:
+            print(f"Attached {path}")
 
     def _ops(self) -> None:
         from solarian.datasets.op import discover

@@ -1,14 +1,18 @@
 """Episode recording: archive video, one table per episode, and the ledger.
 
-The robot owns recording end to end. A camera bus fans each captured frame out
-to a :class:`~solarian.core.recording.video_writer.VideoWriter` process before
-the observation path downscales and remaps it, so the archive keeps the
-resolution and the geometry the sensor produced rather than the ones today's
-policy happens to want. Everything else a session needs is written by
+Either side of the link can record, into the same layout. On the robot, a
+camera bus fans each captured frame out to a
+:class:`~solarian.core.recording.video_writer.VideoWriter` process before the
+observation path downscales and remaps it, so the archive keeps the resolution
+and the geometry the sensor produced rather than the ones today's policy
+happens to want. Everything else a session needs is written by
 :class:`~solarian.core.recording.recorder.SessionRecorder` in the robot's main
-process.
+process. On the controller,
+:class:`~solarian.core.recording.controller_recorder.ControllerRecorder` records
+what arrived there instead.
 """
 
+from solarian.core.recording.controller_recorder import ControllerRecorder
 from solarian.core.recording.export import ExportStats, export_lerobot
 from solarian.core.recording.recorder import SessionRecorder
 from solarian.core.recording.schema import CameraKey, RecordingSchema, build_schema
@@ -28,6 +32,7 @@ __all__ = [
     "ArchiveSink",
     "CameraKey",
     "CameraMeta",
+    "ControllerRecorder",
     "EpisodeMeta",
     "ExportStats",
     "RecordingSchema",

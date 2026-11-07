@@ -62,10 +62,7 @@ connection: ${deployment.connection}
 
 fps: 30
 tps: 1
-system2_model: ""
-system2_base_url: ""
-system2_api_key: ""
-system2_prompt: Be a smart and helpful robot assistant.
+# agent: {planner: ..., monitor: ...}   # the AI controller; see /docs/ai_controller
 policy_path: ""
 device: cpu
 modules: {}
@@ -212,7 +209,7 @@ When no plugin does what you need, write the skill in your project. A skill subc
 import time
 
 from solarian.core.action import Action, ActionType
-from solarian.core.ai.system1.skill import Skill
+from solarian.core.skill import Skill
 from solarian.core.execution import ExecutionMode
 
 POSE_FIELDS = ("x", "y", "z", "rx", "ry", "rz")
@@ -439,7 +436,7 @@ Controller-side modules read their config from `cfg.modules[name]`, inline under
     Runs once after <code>connect()</code>. Use for one-time setup that needs a live observation stream (homing, baseline reads, etc.).
   </Property>
   <Property name="on_start()">
-    Runs after the receiver and control threads have started but before the display loop. Where an application brings up the skill it wants running from the start; the <code>AIController</code> uses it to start its <code>ThinkProcess</code>.
+    Runs after the receiver and control threads have started but before the display loop. Where an application brings up the skill it wants running from the start; the agent's harness threads start right after it.
   </Property>
   <Property name="@event_handler(EventType.X)">
     Any number of methods, on any event type. Called on the control thread as the tick drains. See <a href="/docs/events">Events</a>.

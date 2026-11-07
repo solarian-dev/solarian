@@ -1,7 +1,7 @@
 """A teleop device sampled somewhere else, published here as observations.
 
 Reading a device and consuming what it reports are already separate concerns:
-:class:`~solarian.core.ai.system1.skill.Skill` code reads
+:class:`~solarian.core.skill.Skill` code reads
 ``observations["leader_arm"]``, never the serial bus. That separation is what
 makes a remote device tractable — if the sampling happens in a browser tab and
 the samples arrive over a WebSocket, the skill cannot tell, and by design should

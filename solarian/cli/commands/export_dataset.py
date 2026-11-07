@@ -35,7 +35,7 @@ class ExportDatasetCommand(BaseCommand):
         "[--no-remap] [--overwrite]"
     )
     options = {
-        "<session_dir>": "Session to read, e.g. datasets/cup_stacking__2026-09-22T19-04-11.",
+        "<session_dir>": "Session to read, e.g. recordings/robot/0003_7f3a9c_cup_stacking.",
         "<output_dir>": "Where to write. Defaults to <session_dir>/export/lerobot.",
         "--fps N": "Rate to resample onto. Defaults to the session's video grid.",
         "--episodes A,B,C": "Only these episode indices. Defaults to all sealed ones.",
@@ -43,9 +43,9 @@ class ExportDatasetCommand(BaseCommand):
         "--overwrite": "Replace the output directory if it exists.",
     }
     examples = (
-        "solarian export-dataset datasets/cup_stacking__2026-09-22T19-04-11",
-        "solarian export-dataset datasets/session out/cup_v3 --fps 30 --overwrite",
-        "solarian export-dataset datasets/session --episodes 0,1,4 --no-remap",
+        "solarian export-dataset recordings/robot/0003_7f3a9c_cups",
+        "solarian export-dataset recordings/robot/0003_7f3a9c_cups out/cups --fps 30",
+        "solarian export-dataset recordings/controller/0003_7f3a9c_cups --no-remap",
     )
 
     def parse_args(self, argv: list[str]) -> list[str]:

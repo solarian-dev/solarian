@@ -18,14 +18,14 @@ An episode answers three questions for every instant of a take, and each answer 
 - **What did the cameras see?** One mp4 per camera, at archive resolution, before any lens remap or downscale. The table stores a frame index into it, not pixels.
 - **Is the take usable?** `episode.json`, written when the episode is sealed: its length, status, task, measured rates and running statistics, so you can choose episodes without opening a table.
 
-What ties the episodes of a session together is `session.json`: the robot's structure, the column schema with units, and the camera geometry. It is written once, when the session starts, so every episode in it has the same columns and cameras.
+What ties the episodes of a session together is `session.json`: the robot's structure, the column schema with units, and the camera geometry. It is written once, when the session's first episode opens, so every episode in it has the same columns and cameras. A session the controller recorded has the same layout, with `source: controller` and no robot structure; see [Recording](/docs/recording#what-the-controller-records).
 
 ## A session on disk
 
 Here is a real one: an [SO-106](/docs/tutorials/first-robot) with a wrist camera, recorded with [`solarian record`](/docs/recording#recording-a-session).
 
 ```text
-datasets/So106Robot__2026-09-25T18-43-28/
+recordings/robot/0012_4c9e1b_So106Robot/
 ├── session.json                         robot, schema, cameras, video settings
 ├── manifest.jsonl                       one line per sealed episode
 └── episodes/
@@ -172,7 +172,7 @@ Ops can add members to an episode beside the table and videos. Built-in ops and 
 ```python
 from solarian.core.recording.archive import Session, video_member
 
-session = Session("datasets/So106Robot__2026-09-25T18-43-28")
+session = Session("recordings/robot/0012_4c9e1b_So106Robot")
 session.cameras                     # ['right_wrist_camera.image']
 session.meta["schema"]              # session.json, parsed
 
@@ -186,7 +186,7 @@ for index in session.episodes():    # the sealed, ok episodes
 `solarian dataset info` prints the same summary from the shell: episodes, frames, tracking coverage per camera, and the ops the session was derived through.
 
 ```bash
-solarian dataset info datasets/So106Robot__2026-09-25T18-43-28
+solarian dataset info recordings/robot/0012_4c9e1b_So106Robot
 ```
 
 ## `.solarian.zip`
@@ -194,7 +194,7 @@ solarian dataset info datasets/So106Robot__2026-09-25T18-43-28
 A session zipped is still a session. Zip the directory to move or upload it:
 
 ```bash
-zip -r cup_stacking.solarian.zip datasets/cup_stacking__2026-09-22T19-04-11
+zip -r cup_stacking.solarian.zip recordings/robot/0003_7f3a9c_cup_stacking
 ```
 
 Videos, tables and `.npz` files are stored uncompressed inside the zip, as they are compressed already, so an mp4 decodes straight out of the archive without extracting it. The wrapping directory an archiver adds is ignored, and a 7z of the same tree is read the same way.

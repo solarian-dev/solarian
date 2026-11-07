@@ -12,7 +12,7 @@ The framework's ``solarian train`` command reads the ``trainer`` key from the
 config (``trainer: diffusion``) and calls :func:`get_trainer_class` to resolve
 it to the trainer class — without importing the plugin directly.  This keeps
 the framework library-agnostic and mirrors how skills are discovered (see
-:mod:`solarian.core.ai.system1.registry`).
+:mod:`solarian.core.skill_registry`).
 """
 
 import importlib.metadata

@@ -2,7 +2,7 @@
 
 ::
 
-    datasets/<session>/
+    recordings/<side>/<number>_<hash>_<name>/
     ├── session.json      written once at session start, then immutable
     ├── manifest.jsonl    appended once per sealed episode
     └── episodes/000000/
@@ -18,12 +18,18 @@ remap and resize that export has to apply because the archive is stored raw.
 without opening a parquet file. ``manifest.jsonl`` is the durability ledger:
 append-only, so a hard kill costs you a torn last line instead of the whole
 record of what has been uploaded.
+
+A session directory is named ``<number>_<hash>_<name>``: the number orders
+sessions within one recordings root, and the hash keeps two roots that reached
+the same number apart once their sessions meet, on upload for one.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
+import secrets
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
@@ -38,6 +44,22 @@ TABLE_FILE = "episode.parquet"
 EPISODES_DIR = "episodes"
 VIDEO_DIR = "video"
 
+#: ``0042_7f3a9c_cup_stacking`` -> number, hash, name.
+_SESSION_DIR = re.compile(r"^(\d+)_([0-9a-f]{6})_(.+)$")
+
+
+def session_name(name: str) -> str:
+    """*name* reduced to what is safe in a directory name on every platform."""
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or "session"
+
+
+def parse_session_dir(dir_name: str) -> tuple[int, str, str] | None:
+    """``(number, hash, name)`` of a session directory, or ``None`` for an older one."""
+    match = _SESSION_DIR.match(dir_name)
+    if match is None:
+        return None
+    return int(match.group(1)), match.group(2), match.group(3)
+
 
 @dataclass(frozen=True)
 class SessionPaths:
@@ -48,6 +70,37 @@ class SessionPaths:
         paths = SessionPaths(Path(root))
         (paths.root / EPISODES_DIR).mkdir(parents=True, exist_ok=True)
         return paths
+
+    @staticmethod
+    def allocate(root: str | os.PathLike, name: str) -> SessionPaths:
+        """A fresh ``<number>_<hash>_<name>`` directory under *root*.
+
+        The directory is the claim: created exclusively, so two recorders
+        sharing a root that pick the same number both see it and one moves on.
+        """
+        root = Path(root)
+        root.mkdir(parents=True, exist_ok=True)
+        name = session_name(name)
+        while True:
+            number = SessionPaths.next_session_number(root)
+            candidate = root / f"{number:04d}_{secrets.token_hex(3)}_{name}"
+            try:
+                candidate.mkdir()
+            except FileExistsError:
+                continue
+            return SessionPaths.create(candidate)
+
+    @staticmethod
+    def next_session_number(root: Path) -> int:
+        """One past the highest numbered session under *root*."""
+        if not root.is_dir():
+            return 0
+        numbers = [
+            parsed[0]
+            for p in root.iterdir()
+            if p.is_dir() and (parsed := parse_session_dir(p.name)) is not None
+        ]
+        return max(numbers) + 1 if numbers else 0
 
     @property
     def session_json(self) -> Path:
@@ -103,18 +156,31 @@ class SessionMeta:
     #: The robot's expanded structure from
     #: :func:`~solarian.core.recording.structure.build_structure` -- modules,
     #: components, IK joint mapping and attachment graph, not just a class name.
-    robot: dict
+    #: ``None`` from the controller, which has no robot to introspect.
+    robot: dict | None
     schema: RecordingSchema
     cameras: dict[str, CameraMeta]
     video: dict
     fps: float
     task: str | None = None
+    #: Which side recorded: ``robot`` or ``controller``.
+    source: str = "robot"
+    #: ``<number>_<hash>``; with ``number`` and ``name``, what the directory
+    #: name encodes, so no reader has to parse it. ``None`` for a directory
+    #: adopted under a name that does not follow the scheme.
+    id: str | None = None
+    number: int | None = None
+    name: str | None = None
     created_at: float = field(default_factory=time.time)
 
     def write(self, paths: SessionPaths) -> None:
         payload = {
             "solarian_version": _solarian_version(),
             "git_sha": _git_sha(),
+            "id": self.id,
+            "number": self.number,
+            "name": self.name,
+            "source": self.source,
             "robot": self.robot,
             "task": self.task,
             "created_at": self.created_at,

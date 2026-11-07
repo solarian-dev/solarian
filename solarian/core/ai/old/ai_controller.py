@@ -51,7 +51,7 @@ from solarian.core.action import Action
 from solarian.core.configs import ControllerConfig
 from solarian.utils import get_class, StatusBoard
 from solarian.conf import settings
-from solarian.core.ai.system2.think import ThinkProcess
+from solarian.core.ai.old.think import ThinkProcess
 
 try:
     from pynput import keyboard as _pynput_keyboard

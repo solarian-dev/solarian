@@ -7,9 +7,9 @@ Skill plugins advertise their :class:`Skill` subclasses under the
     [project.entry-points."solarian.skills"]
     umi = "solarian_umi_skill.skill:UMISkill"
 
-Installing such a package makes the skill discoverable by an
-:class:`~solarian.core.ai.ai_controller.AIController` without editing any
-controller code — the foundation the skill marketplace builds on.
+Installing such a package makes the skill discoverable by any
+:class:`~solarian.core.controller.Controller` without editing its code — the
+foundation the skill marketplace builds on.
 """
 
 import importlib.metadata
@@ -64,7 +64,7 @@ def discover_available_skills(
     """
     # Imported here to avoid a circular import at module load time.
     from solarian.core.execution import ExecutionMode, ExecutionPlace
-    from solarian.core.ai.system1.skill import Skill
+    from solarian.core.skill import Skill
 
     skills: Dict[str, Dict[str, Any]] = {}
     next_id = start_skill_id

@@ -1,7 +1,7 @@
 """Runtime machinery that schedules a component according to its execution mode.
 
 :class:`~solarian.core.module.Module` and
-:class:`~solarian.core.ai.system1.skill.Skill` describe *what* to do; a
+:class:`~solarian.core.skill.Skill` describe *what* to do; a
 :class:`Runner` decides *when and where* it runs. Both expose the same worker
 protocol, so both share these runners:
 
@@ -30,7 +30,7 @@ from typing import Any, Protocol
 
 from solarian.core.execution import ExecutionMode, WorkerExit
 from solarian.utils.precise_sleep import precise_wait
-from solarian.utils.profiling import get_stats_snapshot
+from solarian.utils.profiling import func_stats, get_stats_snapshot
 
 logger = logging.getLogger("runner")
 
@@ -139,6 +139,12 @@ class Runner(ABC):
             # prints a traceback for a stop that was asked for. The parent's
             # stop event is the only shutdown this worker answers to.
             signal.signal(signal.SIGINT, signal.SIG_IGN)
+            # A forked worker inherits every timing its parent has taken. The
+            # snapshot it queues on exit is read only once it has exited, and
+            # a queue holds its process until the pipe has taken the lot, so
+            # a snapshot bigger than the pipe keeps the worker alive until it
+            # is killed.
+            func_stats.clear()
         try:
             target.worker_setup(self.crosses_process_boundary)
 
@@ -163,7 +169,10 @@ class Runner(ABC):
         except Exception as exc:  # noqa: BLE001
             exit_reason = WorkerExit.FAILED
             tb_str = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
-            logger.exception("'%s' crashed: %s", self.name, exc)
+            if getattr(exc, "deliberate", False):
+                logger.warning("'%s' failed: %s", self.name, exc)
+            else:
+                logger.exception("'%s' crashed: %s", self.name, exc)
             self._put_error(tb_str)
         finally:
             self._set_ready()
@@ -428,7 +437,10 @@ class InlineModuleRunner(Runner):
                 self._finish(WorkerExit.COMPLETED)
         except Exception as exc:  # noqa: BLE001
             tb_str = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
-            logger.exception("Inline '%s' crashed: %s", self.name, exc)
+            if getattr(exc, "deliberate", False):
+                logger.warning("Inline '%s' failed: %s", self.name, exc)
+            else:
+                logger.exception("Inline '%s' crashed: %s", self.name, exc)
             self._put_error(tb_str)
             self._finish(WorkerExit.FAILED)
 

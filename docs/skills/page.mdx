@@ -20,7 +20,7 @@ A `Skill` is an abstract class — not a `Process`. How it is scheduled is a sep
 - A `frequency` (Hz) and a `params` dict (its construction arguments, and what the think process forwards).
 
 ```python
-from solarian.core.ai.system1.skill import Skill, SkillStatus
+from solarian.core.skill import Skill, SkillStatus
 
 class PickSkill(Skill):
     def setup(self):
@@ -117,7 +117,7 @@ Merging is index-wise *per queue*, so both properties hold at once: actions for 
 Skills publish their lifecycle state through a shared-memory `SkillStatusBuffer` so the think process can read recent transitions and feed them into its next prompt:
 
 ```python
-from solarian.core.ai.system1.skill import SkillStatus
+from solarian.core.skill import SkillStatus
 
 self.put_skill_status(SkillStatus.RUNNING)
 # ... do work ...

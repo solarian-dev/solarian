@@ -2,8 +2,9 @@ defaults:
   # conf/controller.yaml, merged at the top level.
   - /controller@_global_
   - _self_
-# Only the shape of the session lives here. Where and how an episode is stored
-# is the robot's business: see the `recording:` block in robot.yaml.
+# Only the shape of the session lives here. Which sides record is the
+# `recording:` block in controller.yaml; how the robot stores its episodes is
+# the `recording:` block in robot.yaml.
 name: ${project_name}
 num_episodes: 3
 # null records until the operator presses r or delete.

@@ -43,6 +43,7 @@ from solarian.core.recording.session import (
     SessionPaths,
     append_manifest,
     directory_size,
+    parse_session_dir,
 )
 from solarian.core.recording.timeline import frame_index_for
 from solarian.core.recording.video_writer import VideoWriter
@@ -82,12 +83,13 @@ class SessionRecorder:
         session: str,
         fps: float,
         writers: dict[str, VideoWriter],
-        robot: dict,
+        robot: dict | None,
         cameras: dict,
         video_options: dict,
         task: str | None = None,
         max_session_bytes: int | None = None,
         schema: RecordingSchema | None = None,
+        source: str = "robot",
     ):
         self.fps = float(fps)
         self.writers = writers
@@ -99,6 +101,7 @@ class SessionRecorder:
         self._robot = robot
         self._cameras = cameras
         self._video_options = video_options
+        self._source = source
 
         self._lock = threading.Lock()
         self._recording = False
@@ -145,35 +148,65 @@ class SessionRecorder:
         self._module_updates: dict[str, int] = {}
 
         self._session = ""
+        self._dir_name: str | None = None
+        #: ``None`` until the session's first episode reserves its directory.
+        self.paths: SessionPaths | None = None
+        self._episode_index = 0
+        self._session_bytes = 0
+        self._over_budget = False
         self.open_session(session)
 
     # -- session -------------------------------------------------------------
 
-    def open_session(self, session: str) -> None:
-        """Point recording at a fresh directory named for *session*.
+    @property
+    def session_dir_name(self) -> str | None:
+        """The session's directory name; ``None`` until its first episode."""
+        return self.paths.root.name if self.paths is not None else None
+
+    def open_session(self, session: str, *, dir_name: str | None = None) -> None:
+        """File the next episode under *session*.
 
         A recording run is one session, and the run starts from the
         controller — long after the robot booted and built this. Rolling here
         is what lets one running robot record ``cup_stacking`` and then
         ``plate_stacking`` without a restart.
 
-        A timestamp is appended, so a rerun never mixes its episodes in with a
-        previous one's: the schema and the calibration in ``session.json``
-        describe the episodes beside them, and appending to a directory
-        written by an older build would make that description a lie.
+        Nothing is written until an episode starts, so a robot that boots and
+        never records leaves no directory and spends no session number. Each
+        session gets a fresh ``<number>_<hash>_<name>`` directory, so a rerun
+        never mixes its episodes in with a previous one's: the schema and the
+        calibration in ``session.json`` describe the episodes beside them, and
+        appending to a directory written by an older build would make that
+        description a lie.
+
+        Args:
+            dir_name: Use this directory verbatim instead of allocating one.
+                How the controller files its episodes under the session the
+                robot allocated, so the two line up.
         """
-        if session == self._session:
+        if session == self._session and (
+            dir_name is None or dir_name == self.session_dir_name
+        ):
             return
         if self._recording:
             self.end_episode(status="interrupted")
 
         self._session = session
-        stamp = time.strftime("%Y-%m-%dT%H-%M-%S")
-        self.paths = SessionPaths.create(self._root / f"{session}__{stamp}")
-        self._episode_index = self.paths.next_episode_index()
+        self._dir_name = dir_name
+        self.paths = None
+        self._episode_index = 0
         self._session_bytes = 0
         self._over_budget = False
 
+    def _reserve_session(self) -> None:
+        """Create the session's directory and write its ``session.json``."""
+        if self._dir_name is not None:
+            self.paths = SessionPaths.create(self._root / self._dir_name)
+        else:
+            self.paths = SessionPaths.allocate(self._root, self._session)
+        self._episode_index = self.paths.next_episode_index()
+
+        parsed = parse_session_dir(self.paths.root.name)
         SessionMeta(
             robot=self._robot,
             schema=self.schema,
@@ -181,6 +214,10 @@ class SessionRecorder:
             video=self._video_options,
             fps=self.fps,
             task=self.task,
+            source=self._source,
+            id=f"{parsed[0]:04d}_{parsed[1]}" if parsed else None,
+            number=parsed[0] if parsed else None,
+            name=parsed[2] if parsed else self._session,
         ).write(self.paths)
         logger.info("Recording to %s", self.paths.root)
 
@@ -197,15 +234,26 @@ class SessionRecorder:
 
     # -- episode lifecycle ---------------------------------------------------
 
-    def start_episode(self, task: str | None = None, skill: str | None = None) -> int:
-        """Open an episode and hand every encoder the same grid origin."""
+    def start_episode(
+        self, task: str | None = None, skill: str | None = None, index: int | None = None
+    ) -> int:
+        """Open an episode and hand every encoder the same grid origin.
+
+        Args:
+            index: File the episode under this index rather than the next
+                free one, so the controller's episode carries the robot's.
+        """
         if self._recording:
             logger.warning("Episode %d is already recording", self._episode_index)
             return self._episode_index
+        if self.paths is None:
+            self._reserve_session()
         if self._over_budget:
             logger.error("Session is over its size budget; not starting an episode")
             return -1
 
+        if index is not None:
+            self._episode_index = int(index)
         index = self._episode_index
         (self.paths.episode_dir(index) / "video").mkdir(parents=True, exist_ok=True)
 

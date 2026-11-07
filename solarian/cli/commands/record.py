@@ -19,10 +19,13 @@ class RecordCommand(BaseCommand):
     help = "Teleoperate and record a training dataset, episode by episode"
     description = """
     The same teleop loop as `run-controller`, cut into episodes: reset the scene,
-    record for episode_time_s, seal, repeat. The robot is what writes the dataset
-    — one mp4 per camera at archive resolution plus one parquet of every signal at
-    its native rate — so `conf/robot.yaml`'s `recording:` block decides where and
-    how, and `conf/commands/record.yaml` decides only the shape of the session.
+    record for episode_time_s, seal, repeat. The robot writes the high-fidelity
+    dataset — one mp4 per camera at archive resolution plus one parquet of every
+    signal at its native rate — under recordings/robot, as `conf/robot.yaml`'s
+    `recording:` block says. The controller writes what reached it, in the same
+    layout, under recordings/controller. `conf/controller.yaml`'s `recording:`
+    block picks which sides record; `conf/commands/record.yaml` decides only the
+    shape of the session.
 
     The robot (`solarian run-robot`) and the relay (`solarian run-server`) have to
     be up. Press delete during an episode to throw it away and record it again: the
@@ -69,16 +72,23 @@ class RecordCommand(BaseCommand):
         much as during them — so the operator resets the scene by hand and
         nothing is torn down and rebuilt between takes.
         """
-        # The robot writes the dataset, so it is the only thing that can say
-        # whether one will exist. Finding out after fifty takes is too late.
-        deadline = time.monotonic() + _ROBOT_REPORT_TIMEOUT_S
-        while not controller.recording_state["enabled"] and time.monotonic() < deadline:
-            time.sleep(0.05)
-        if not controller.recording_state["enabled"]:
+        # Finding out after fifty takes that nothing was written is too late.
+        targets = controller.recording_targets
+        if not (targets["robot"] or targets["controller"]):
             raise RuntimeError(
-                "The robot is not recording: either it never reported in, or "
-                "conf/robot.yaml sets recording.enabled: false"
+                "Nothing would be recorded: both recording switches are off "
+                "(controller.yaml recording.robot and recording.controller)"
             )
+        if targets["robot"]:
+            # Only the robot can say whether it will write its dataset.
+            deadline = time.monotonic() + _ROBOT_REPORT_TIMEOUT_S
+            while not controller.robot_recording["enabled"] and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if not controller.robot_recording["enabled"]:
+                raise RuntimeError(
+                    "The robot is not recording: either it never reported in, or "
+                    "conf/robot.yaml sets recording.enabled: false"
+                )
 
         tasks = cfg.tasks or [cfg.task]
         self.reset(controller, cfg)
