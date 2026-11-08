@@ -45,6 +45,18 @@ class ServiceProcessor(Processor):
         self._result: tuple[Any, float] | None = None
         self._worker: threading.Thread | None = None
 
+    # A spawned module process pickles its processors; a lock and a thread
+    # cannot cross that boundary, so the copy gets fresh ones.
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        del state["_cond"]
+        state["_worker"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._cond = threading.Condition()
+
     # -- hooks, run on the worker thread ------------------------------------
 
     def on_start(self, frame, params: dict):

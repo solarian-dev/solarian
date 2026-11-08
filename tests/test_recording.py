@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import threading
@@ -10,6 +11,7 @@ from multiprocessing.managers import SharedMemoryManager
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
@@ -23,7 +25,7 @@ from solarian.core.conf_paths import project_path
 from solarian.core.configs import ActuatorConfig, ControllerRecordingConfig, RecordingConfig
 from solarian.core.controller import Controller
 from solarian.core.controller_gui import ControllerGUI
-from solarian.core.data import ImageData, PosData, TemperatureData
+from solarian.core.data import BoundingBoxData, ImageData, MaskData, PointData, PosData, TemperatureData
 from solarian.core.event import Event, EventType
 from solarian.core.gripper_module import GripperModule
 from solarian.core.ik import CartesianIKActuator, MinkIK
@@ -31,6 +33,7 @@ from solarian.core.observation import ModuleObs, Observation, SensorField
 from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.camera_bus import ArchivesFrames, CameraBus
 from solarian.core.recording.controller_recorder import ControllerRecorder
+from solarian.core.recording.episode_log import EpisodeLog
 from solarian.core.recording.export import export_lerobot
 from solarian.core.recording.recorder import SessionRecorder
 from solarian.core.recording.schema import build_schema
@@ -817,8 +820,13 @@ def test_the_controller_records_what_reached_it_in_the_robots_layout(
             recorder.feed(_observation(obs_cls, t=t, shoulder=float(i), with_image=i % 5 == 0))
         recorder.stop()
         assert recorder.episode_dir is None
+        # Kept past the seal: what happens between takes is logged after this episode.
+        assert recorder.log.dir == episode_dir / "logs"
         recorder.close()
 
+    events = [json.loads(line) for line in (episode_dir / "logs" / "events.jsonl").read_text().splitlines()]
+    assert [(e["kind"], e["episode"]) for e in events] == [("episode_started", 0), ("episode_ended", 0)]
+    assert events[0]["task"] == "put the cup down"
     document = json.loads((episode_dir.parent.parent / "session.json").read_text())
     assert (document["source"], document["robot"]) == ("controller", None)
     assert document["cameras"]["cam.image"]["width"] == ARCHIVE_SHAPE[1]
@@ -826,6 +834,50 @@ def test_the_controller_records_what_reached_it_in_the_robots_layout(
     assert table.num_rows == 20
     assert table.column("act.arm.shoulder").to_pylist()[:3] == [0.0, 1.0, 2.0]
     assert (episode_dir / "video" / "cam.image.mp4").is_file()
+
+
+def test_a_dropped_episode_takes_its_log_with_it(tmp_path, schema_classes, clock):
+    obs_cls, _ = schema_classes
+    with SharedMemoryManager() as shm_manager:
+        recorder = ControllerRecorder(
+            root=tmp_path, cfg=ControllerRecordingConfig(preset="ultrafast"), fps=FPS,
+            task=None, session="testing", shm_manager=shm_manager,
+        )
+        recorder.start(_observation(obs_cls, t=clock["now"], shoulder=0.0, with_image=True))
+        log = recorder.log
+        recorder.drop()
+        log.event("late")
+        recorder.close()
+
+    assert recorder.log is None and not log.dir.exists()
+
+
+def test_the_controller_logs_what_its_trackers_mark_on_each_new_frame(tmp_path):
+    recorder = ControllerRecorder(
+        root=tmp_path, cfg=ControllerRecordingConfig(), fps=FPS, task=None, session="testing",
+        shm_manager=None, overlays={("cam", "image"): ["target_mask", "target_box", "target_point"]},
+    )
+    recorder.log = EpisodeLog(tmp_path / "logs")
+    camera = SimpleNamespace(module="cam", field="image", name="cam.image")
+    mask = np.zeros((48, 64), np.uint8)
+    mask[10:20, 30:40] = 1
+    fields = {
+        "target_mask": MaskData(value=mask),
+        "target_box": BoundingBoxData(value=np.array([30, 10, 40, 20])),
+        "target_point": PointData(value=np.zeros(3, np.float32)),
+    }
+    marked = SimpleNamespace(get=fields.get)
+    empty = SimpleNamespace(get={"target_mask": MaskData(value=np.zeros((48, 64), np.uint8))}.get)
+
+    recorder._log_overlays(camera, marked, (48, 64), 1.0)
+    recorder._log_overlays(camera, marked, (48, 64), 1.0)
+    recorder._log_overlays(camera, empty, (48, 64), 2.0)
+
+    (row,) = [json.loads(line) for line in (tmp_path / "logs" / "overlays" / "cam.image.jsonl").read_text().splitlines()]
+    assert row["ts"] == 1.0 and row["size"] == [48, 64]
+    assert row["target_box"] == {"box": [30, 10, 40, 20]} and "target_point" not in row
+    png = np.frombuffer(base64.b64decode(row["target_mask"]["mask"]), np.uint8)
+    assert (cv2.imdecode(png, cv2.IMREAD_UNCHANGED) == mask).all()
 
 
 def test_rows_written_outside_an_episode_are_discarded(recorder, schema_classes):

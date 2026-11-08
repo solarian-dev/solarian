@@ -51,6 +51,15 @@ _STATE_SNDHWM = 16
 # Both are judged in seconds, so checking at 20 Hz is already generous.
 _SUPERVISION_PERIOD_S = 0.05
 
+# A camera child blocked in one capture (1.5s) still has to notice the stop
+# and finish picamera2's close, which gives up after 2s.
+_MODULE_STOP_JOIN_S = 5.0
+
+# terminate() is a SIGTERM, and the handler's close is the same 2s bound.
+_MODULE_TERM_JOIN_S = 3.0
+
+_MODULE_KILL_JOIN_S = 1.0
+
 
 class RobotSchemaError(Exception):
     """Raised when a robot module has no matching entry in the
@@ -355,6 +364,7 @@ class Robot(EventHost, ABC):
             self.observation_buffers[name] = ObservationBuffer.create_from_example(
                 shm_manager=self.shm_manager,
                 example_observation=module_obs,
+                get_max_k=module_cfg.get_max_k,
                 get_time_budget=0.2,
                 put_desired_frequency=200
             )
@@ -1397,6 +1407,10 @@ class Robot(EventHost, ABC):
 
     def disconnect(self):
         """Clean shutdown, you can extend this method to do other cleanup"""
+        # run-robot's SIGTERM handler raises out of the main thread. Once
+        # this has started, a second signal has to be ignored or it aborts
+        # the camera close below.
+        self._shutdown_started = True
         if self.is_sim:
             # Tear down the live viewer; the world server is terminated below
             # because it is listed in self._bus_servers.
@@ -1418,9 +1432,18 @@ class Robot(EventHost, ABC):
             self.state_socket.close()
             self.state_socket = None
         for module in self.modules.values():
+            # Stop first so the child closes its camera in teardown. SIGTERM
+            # still runs that teardown; SIGKILL is only if the process is
+            # stuck and would otherwise keep the pipeline locked.
+            if module.is_alive():
+                module.stop(wait=False)
+                module.join(timeout=_MODULE_STOP_JOIN_S)
             if module.is_alive():
                 module.terminate()
-                module.join(timeout=5)
+                module.join(timeout=_MODULE_TERM_JOIN_S)
+            if module.is_alive():
+                module.kill()
+                module.join(timeout=_MODULE_KILL_JOIN_S)
             child_stats = module.get_profiling_stats()
             if child_stats is not None:
                 merge_profiling_stats(child_stats)

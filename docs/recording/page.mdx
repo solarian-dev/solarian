@@ -30,7 +30,7 @@ flowchart TD
 
 The controller's recording is the other end of the link. Its rows are the observations as they arrived — JPEG-decoded, at the preview rate, after the network — and its actions are the ones it sent, whether or not the robot received them. Its video is the frames it was shown, at the size they arrived. Each row still carries the robot's capture stamp in `obs.<module>.ts`, beside the controller's own receive time in `wall_ts`, so the latency of every row is in the table.
 
-That is the dataset to look at when a policy behaves differently on the robot than in training: it is what the policy saw, holes and all. It is also where the [AI controller](/docs/ai_controller) logs its runs, one `agent/` directory beside the episode each run drove. With only the robot recording, nothing of the agent is kept.
+That is the dataset to look at when a policy behaves differently on the robot than in training: it is what the policy saw, holes and all. Beside each episode it keeps a `logs/` directory: every skill and tracker the operator or the [AI controller](/docs/ai_controller) started or stopped, what the trackers marked on each frame, and the agent's runs (see [Episode logs](/docs/ai_controller#episode-logs)). With only the robot recording, none of it is kept.
 
 When both sides record, the controller waits for the robot to open its episode and then files its own under the robot's session directory name and episode index, so the two datasets line up file for file. If the robot cannot record, or does not answer within a few seconds, the controller records on its own numbering and says so.
 
@@ -47,7 +47,7 @@ recordings/
 │       └── video/<module>.<field>.mp4
 └── controller/0003_7f3a9c_cup_stacking/
     ├── …                     the same files, from what reached the controller
-    └── episodes/000000/agent/   the AI controller's run, when one drove it
+    └── episodes/000000/logs/    what the operator, the agent and the trackers did
 ```
 
 A session directory is `<number>_<hash>_<name>`. The number counts up within a recordings root, so sessions sort in the order they were recorded and you can ask for "session 3". The hash tells apart two sessions that reached the same number on different machines once they meet, on upload for instance. The name is the one you gave the session. The directory is created when the session's first episode opens, so a robot that boots and never records leaves nothing behind and spends no number.

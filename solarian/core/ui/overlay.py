@@ -10,9 +10,13 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from solarian.core.ui.base import UIImage
+
 #: RGB, Solarian Base's ``#ef4444``.
 MASK_COLOR = (239, 68, 68)
 MASK_FILL_ALPHA = 0.35
+#: RGB.
+BBOX_COLOR = (255, 0, 0)
 
 
 def mask_rings(mask: np.ndarray) -> list[np.ndarray]:
@@ -40,3 +44,25 @@ def tint_masks(frame: np.ndarray, masks) -> np.ndarray:
             + np.asarray(MASK_COLOR, dtype=np.float32) * MASK_FILL_ALPHA
         ).astype(np.uint8)
     return out
+
+
+def draw_overlays(image: UIImage) -> np.ndarray:
+    """``image``'s RGB frame with its masks tinted and edged and its boxes drawn and labelled."""
+    if not image.bboxes and not image.masks:
+        return image.data
+    frame = tint_masks(image.data, image.masks).copy()
+    for mask in image.masks:
+        cv2.polylines(frame, mask_rings(mask), True, MASK_COLOR, 2)
+    texts = list(image.bbox_texts[:len(image.bboxes)])
+    texts += [None] * (len(image.bboxes) - len(texts))
+    for bbox, text in zip(image.bboxes, texts):
+        if all(value == 0 for value in bbox[:4]):
+            continue
+        x1, y1, x2, y2 = bbox[:4]
+        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), BBOX_COLOR, 2)
+        if text:
+            cv2.putText(
+                frame, text, (int(x1), max(14, int(y1) - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, BBOX_COLOR, 1, cv2.LINE_AA,
+            )
+    return frame

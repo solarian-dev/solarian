@@ -97,7 +97,7 @@ A skill whose behaviour comes from config overrides `tool_spec`: `UMISkill` read
 
 A move ends when the robot gets there, not after a fixed time, since every second a finished move keeps running delays the next step. `MoveSkill` ends when every targeted field reads within tolerance of its target, or when none has moved for 0.3 s, counted from 0.5 s after the move was sent: a gripper closed on an object, or a pose just out of reach. The tolerances are 2 units for joints, 2 mm for a gripper aperture, 5 mm and 0.05 rad for a Cartesian pose. `timeout_s` is only the cap. A pose the arm is already at ends on the first check. A skill of your own that sends an exclusive move can end the same way with `solarian_move_skill.Arrival(targets, sent_at).check(self.observations, now)`.
 
-A skill that reads its target from a tracker overrides `services_for(params)` to return `(module, field, service params)`: the harness starts those services with the planner's point and waits for the tracker's first result before starting the skill. With `max_target_area` set, it measures that first mask: on so106 a pick's object covers 0.1-0.7% of the policy's image, while a point beside it selected 22-48%, so `pick_object.yaml` refuses a mask over 5% of the camera image.
+A skill that reads its target from a tracker overrides `services_for(params)` to return `(module, field, service params)`: the harness starts those services with the planner's point and waits for the tracker's first result before starting the skill. When the action ends, the harness stops them, unless another running action reads the same field: a tracker left running keeps painting its mask over whatever the action left, such as an object now held in the gripper. With `max_target_area` set, it measures that first mask: on so106 a pick's object covers 0.1-0.7% of the policy's image, while a point beside it selected 22-48%, so `pick_object.yaml` refuses a mask over 5% of the camera image.
 
 A skill reports a failure the planner can act on with `self.fail("reason")`. It raises `SkillFailed`, which ends the skill as `FAILED` wherever it runs; the reason reaches the planner through the controller (or the robot's status rows).
 
@@ -135,7 +135,7 @@ agent:
 
 A `predicate` is answered with a probability, a `choice` with a value and its probability. `when` is one rule or a list of them. A rule fires when its condition holds `consecutive` ticks in a row: `finish` stops the action as succeeded, `fail` stops it as failed, `escalate` leaves it running and wakes the planner once per question. `threshold` is a confidence floor: a tick whose answer is less sure does nothing, and the next tick decides. With a floor and `consecutive: 1`, one confident tick acts, which is faster and cheaper than waiting for several in a row; measure it on labelled ticks before trusting it. `after_s` keeps a rule from counting ticks until the action has run that long. `then` on a `finish` or `fail` rule names a tool the harness starts, without arguments, as soon as the action has stopped: the step that always follows, such as carrying a picked object home with the grip kept. After a `finish`, the follow-up carries the action's plan step on, or takes the next step when the plan names its tool there, and the planner is not woken; it hears what happened at its next wake, at the latest when the follow-up ends. After a `fail`, the planner is woken at once, and not again when the action has actually stopped. If the skill reports its own failure meanwhile, its reason is kept beside the rule's. A `then` naming no tool fails when the harness starts. A question without `when` is only shown to the planner. The planner can add its own conditions to any call with `watch_for`.
 
-Each tick the monitor sees each camera's last `monitor.history` frames, oldest first, labelled `previous, 1.6 s ago` and `current`, and the readings. With `history` above 1, an action's first frame is only kept for the next tick: with nothing to compare it with, it is not judged, and the run log records it as a `monitor_frame` event. A camera listed in `monitor.close_ups` is seen only as that region, at capture resolution: what decides a grasp is a few pixels of the fingers, which a full frame at `image_max_side` blurs away. Other cameras are seen whole at `image_max_side`. Monitor frames never carry the tracker's overlay, since a tint over the fingers hides the very pixels that decide, and a tracker that slips onto another object misleads. With `monitor.mark_target`, a 1 px cyan box 3 px outside the bounds of the tracker's mask (else around its box) shows which object the action is on and how wide it is, without covering any of it; the monitor is told to trust the frame over the mark. With `monitor.reference` on (the default), each tick also gets the frames from when the action started, with the planner's point on the target; turn it off when the close-ups are all a question needs, since frames from before the grasp only distract from it.
+Each tick the monitor sees each camera's last `monitor.history` frames, oldest first, labelled `previous, 1.6 s ago` and `current`, and the readings. With `history` above 1, an action's first frame is only kept for the next tick: with nothing to compare it with, it is not judged, and the episode log records it as a `monitor_frame` event. A camera listed in `monitor.close_ups` is seen only as that region, at capture resolution: what decides a grasp is a few pixels of the fingers, which a full frame at `image_max_side` blurs away. Other cameras are seen whole at `image_max_side`. Monitor frames never carry the tracker's overlay, since a tint over the fingers hides the very pixels that decide, and a tracker that slips onto another object misleads. With `monitor.mark_target`, a 1 px cyan box 3 px outside the bounds of the tracker's mask (else around its box) shows which object the action is on and how wide it is, without covering any of it; the monitor is told to trust the frame over the mark. With `monitor.reference` on (the default), each tick also gets the frames from when the action started, with the planner's point on the target; turn it off when the close-ups are all a question needs, since frames from before the grasp only distract from it.
 
 Write questions the monitor can answer from the previous frame and the current one:
 
@@ -144,14 +144,14 @@ Write questions the monitor can answer from the previous frame and the current o
 - Give failure rules an `after_s` long enough for the policy to reach the object, and `consecutive: 2`: half-closed fingers on the way look like a miss in one frame pair, while a real miss lasts. Finish rules usually need neither. Judge wording by the per-pick replay, not per-tick accuracy: on so106, a looser `failed` was wrong on a quarter of ticks yet escalated every missed pick on the right tick, while a stricter one cut false answers to 3% and missed a whole failed pick.
 - Describe success by what shows in the camera, for any object ("pinched between the fingers, which bend under the pressure"), and the nearest miss too ("closer together than the target is wide, with nothing between them"). Robot-specific detail (finger colour and shape, camera angle) goes in `monitor.instructions`, once for every skill.
 
-Measure the questions on recorded ticks before trusting them. The run log keeps every monitor frame, the episode the readings. so106 has two scripts for this, run from the project root:
+Measure the questions on recorded ticks before trusting them. The [episode log](#episode-logs) keeps every monitor frame, the episode the readings. so106 has two scripts for this, run from the project root:
 
 ```bash
 python scripts/label_monitor_ticks.py   # previous | current close-up over the prompt; keys 1-4 label, s unsure, b back, q quit
 python scripts/eval_monitor.py --repeats 3 [--model gpt-6-luna] [--reasoning medium] [--no-target]
 ```
 
-The first appends labels to `evals/pick_progress.jsonl` and resumes at the first tick missing one. With `mark_target` on, it also asks where the target is in each close-up, since recordings keep no tracker output: drag a box around it as tight as the tracker's mask would be, or right-click when it is out of view; boxes go to `evals/pick_targets.jsonl`. The second sends each labelled tick as the robot would, marked where the boxes say, and reports accuracy, the confusion between choices, how often an answer met a rule's condition on the wrong tick, how often it fell below its floor, how often repeats of one tick disagree, and latency. It also replays each pick through the skill's rules, `consecutive` included, and prints the first rule to fire and the label of the tick it fired on.
+The first appends labels to `evals/pick_progress.jsonl` and resumes at the first tick missing one. With `mark_target` on, it also asks where the target is in each close-up, since recordings made before episode logs kept no tracker output: drag a box around it as tight as the tracker's mask would be, or right-click when it is out of view; boxes go to `evals/pick_targets.jsonl`. The second sends each labelled tick as the robot would, marked where the boxes say, and reports accuracy, the confusion between choices, how often an answer met a rule's condition on the wrong tick, how often it fell below its floor, how often repeats of one tick disagree, and latency. It also replays each pick through the skill's rules, `consecutive` included, and prints the first rule to fire and the label of the tick it fired on.
 
 The planner is told that a monitor flag can be wrong and to check it against the newest image before stopping an action. A timeout reaches it as "without the monitor confirming success", or for an unwatched tool as "ran its limit; judge from the newest image whether it succeeded", not as a failure, and it is told to look before undoing anything: a policy that never stops by itself may have finished its job long before.
 
@@ -225,6 +225,9 @@ agent:
   <Property name="max_images_in_context / max_point_age_s / image_max_side / image_grid" type="">
     Context and pointing: older images become a text stub; planner images carry a labelled pixel grid.
   </Property>
+  <Property name="image_overlays" type="bool">
+    Draw the controller's overlays (tracker masks, boxes) on planner images (default true). so106 turns it off: a tracker's pink mask over a red block held in the orange fingers hid the grasp, and the planner pointed a new pick at it, which opened the gripper and dropped it. The monitor never sees overlays, whatever this says.
+  </Property>
   <Property name="dry_run" type="bool">
     Plan and point, but start nothing: try a prompt before trusting it with the arm.
   </Property>
@@ -238,14 +241,34 @@ Install the model clients with `pip install 'solarian[agent]'`.
 - **Solarian Base** (`ui: external`): the controller page shows an AI controller panel with the plan, running actions, the conversation and an input. Cancel is a safety command: an observer without the control lock can send it.
 - **Any front end** sends `UICommandType.AGENT_MESSAGE` (`{"text": ...}`), `AGENT_CANCEL` and `AGENT_RESET`, and reads `UISnapshot.agent`. The image the planner last saw, with its chosen points marked, is drawn as `agent/view`.
 
-## Run logs
+## Episode logs
 
-A run is logged when the controller records it, into `recordings/controller/<session>/episodes/<episode>/agent/`. Its id is that place, `<session>/<episode>`, for example `0003_7f3a9c_cup_stacking/000002`. It holds `run.json` (task, models, tools, status, usage), `events.jsonl` (every action, monitor answer, plan change, step the harness started and operator takeover, on the synced clock; `action_started` says how long the tracker seed and the start took, and with `max_target_area` the share of the image the mask covered as `target_area`; `target_rejected` is a call refused for its mask), `turns/NNNN.json` (every planner call's input and output) and `images/`. A run only the robot records, or that nothing records, keeps no log.
+Every episode the controller records has a log, in `recordings/controller/<session>/episodes/<episode>/logs/`, holding what the operator and the agent did during it:
+
+- `events.jsonl`: one JSON object per line, each with `t` (the synced clock, ISO 8601) and `kind`.
+- `images/`: the images the events and turns name.
+- `turns/NNNN.json`: every planner call's input and output, numbered from `0001` in each episode.
+- `overlays/<module>.<field>.jsonl`: what the trackers marked on each camera frame.
+
+The controller logs `episode_started` (with the task) and `episode_ended`, and every command it carries out, with `by: operator` or `by: agent`: `skill_started` (skill, params), `skill_stop` (skill, reason), `service_started` (module, field, params: a tracker and the point it was seeded with) and `service_stopped`. It also logs `skill_ended` (skill, `completed`, `failed` or `stopped`, reason), which has no `by`, since a skill ends by itself as often as it is stopped.
+
+An agent run adds:
+
+- `run_started`: the run id, task, models, system prompt and tools.
+- `planner_turn` for every planner call: its turn file, latency, token usage, text and the tools it called.
+- Every action, monitor answer, plan change, step the harness started and operator takeover. `action_started` says how long the tracker seed and the start took, and with `max_target_area` the share of the image the mask covered, as `target_area`. `target_rejected` is a call refused for its mask.
+- `run_ended`: status, summary and usage.
+
+The run id is the episode it started in, `<session>/<episode>`, for example `0003_7f3a9c_cup_stacking/000002`. A run that goes on after its episode closes, for example after you take over, seal the episode and press the record key, carries on in the next episode's log. Its first write there is a `run_continued` event, with the run's config, its status and plan so far, and the episode it `continues_from`. The next planner turn holds only the messages since the previous one, and every image the new log's events and turns name is saved in it. Between episodes, writes go on in the last episode's log, and a run that started with nothing recording logs from the first episode the controller opens. A run only the robot records, or that nothing records, keeps no log.
+
+Overlays are logged for the fields the controller draws on each camera, one line per new frame that has any: `{"ts": capture time, "size": [h, w], <field>: {"mask": base64 PNG} | {"point": [x, y, visibility %]} | {"box": [x0, y0, x1, y1]}}`, in the pixels of the frame as it arrived.
+
+so106's `scripts/episode_viewer.py` plays an episode's video with its events beside it, the agent's and the operator's alike, and the overlays drawn as the controller drew them live. **o** turns the overlays off and on, and clicking a planner turn prints what the planner was sent and replied. Sessions recorded before `logs/` have only the agent's events, in `agent/`; the viewer and `monitor_ticks.py` read both.
 
 When the robot recorded the same episodes, its session has the same directory name, so after transferring it off the robot you can copy the logs in beside the robot's episodes:
 
 ```bash
-solarian dataset attach-agent recordings/robot/0003_7f3a9c_cup_stacking
+solarian dataset attach-logs recordings/robot/0003_7f3a9c_cup_stacking
 ```
 
 ## Legacy `AIController`
@@ -256,4 +279,4 @@ The earlier dual-process `AIController` (a `ThinkProcess` choosing skills from J
 
 - [Skills](/docs/skills) — the units of work the agent calls.
 - [Controllers](/docs/controllers) — the base class the agent is part of.
-- [Recording](/docs/recording) — sessions and episodes the run logs attach to.
+- [Recording](/docs/recording) — sessions and episodes the episode logs attach to.

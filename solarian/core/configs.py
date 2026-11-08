@@ -202,7 +202,10 @@ class ServoConfig(ActuatorConfig, SensorConfig):
 class ModuleConfig(BaseModel):
     # Process/control loop settings
     frequency: float # control loop frequency in Hz
-    get_max_k: int = 128  # max number of states to keep in ring buffer
+    #: Most recent observations a reader can get at once, i.e. the history a
+    #: skill can see: get_max_k / frequency seconds. Each slot costs a full
+    #: observation of shared memory, which for a camera is a whole frame.
+    get_max_k: int = 32
     commands_per_cycle: int = 1  # max commands to process per control loop iteration
     command_queue_size: int = 1024  # size of the command input queue
     launch_timeout: float = 3.0  # timeout for process launch in seconds
@@ -496,6 +499,10 @@ class AgentConfig(BaseModel):
     image_max_side: int = 768
     #: Draw a labelled pixel grid on planner images, to help it point.
     image_grid: bool = True
+    #: Draw the controller's overlays (tracker masks, boxes) on planner images.
+    #: Off, the planner sees the camera as it is: a tinted mask can hide what
+    #: it has to judge, such as an object held between the fingers.
+    image_overlays: bool = True
     #: Module readings the agent sees, ``{module: [field, ...]}``. Empty: all.
     state_fields: dict[str, list[str]] = {}
     #: Images kept in the planner's context; older ones become a text stub.

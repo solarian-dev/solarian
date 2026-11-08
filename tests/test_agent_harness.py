@@ -6,6 +6,7 @@ its wakes and monitor ticks itself, so every step is deterministic.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 import time
@@ -40,7 +41,7 @@ from solarian.core.ai.agent.monitor import (
     RuleTracker,
     monitor_context,
 )
-from solarian.core.ai.agent.run_log import merge_into_session
+from solarian.core.recording.episode_log import LOGS_DIR, EpisodeLog, merge_into_session
 from solarian.core.clock_sync import synced_time
 from solarian.core.configs import AgentConfig, ModelEndpointConfig, MonitorConfig
 from solarian.core.skill import Skill, SkillStatus, Tool
@@ -105,6 +106,7 @@ class FakeHost:
             "controller": {"active": False, "episode": 0, "session": None},
         }
         self.harness: AgentHarness | None = None
+        self.log: EpisodeLog | None = None
         self.started: list[Skill] = []
         self.stopped: list[tuple[str, str]] = []
         self.services: list[tuple] = []
@@ -177,13 +179,15 @@ class FakeHost:
         state = self.recording_state
         state["active"] = state["robot"]["active"] = state["controller"]["active"] = False
 
-    def controller_episode_dir(self):
-        state = self.recording_state
-        if not state["controller"]["active"]:
-            return None
-        episode_dir = self.root / state["controller"]["session"] / "episodes" / f"{state['controller']['episode']:06d}"
-        episode_dir.mkdir(parents=True, exist_ok=True)
-        return episode_dir
+    @property
+    def episode_log(self):
+        """As the controller's recorder keeps it: a new log per episode, the last one kept between takes."""
+        state = self.recording_state["controller"]
+        if state["active"]:
+            directory = self.root / state["session"] / "episodes" / f"{state['episode']:06d}" / LOGS_DIR
+            if self.log is None or self.log.dir != directory:
+                self.log = EpisodeLog(directory)
+        return self.log
 
     def on_agent_idle(self):
         self.idle_calls += 1
@@ -286,11 +290,13 @@ def test_a_task_runs_a_skill_until_the_planner_finishes(tmp_path):
     woken = harness.planner.seen[1][-1]
     assert [r.call_id for r in woken.tool_results] == ["c1_0", "c1_1"]
     assert any("succeeded" in p for p in woken.content if isinstance(p, str))
-    log = harness.run_log.dir
-    assert json.loads((log / "run.json").read_text())["status"] == "done"
-    kinds = [json.loads(line)["kind"] for line in (log / "events.jsonl").read_text().splitlines()]
-    assert kinds[0] == "run_started" and "action_ended" in kinds and kinds[-1] == "run_ended"
-    assert sorted(p.name for p in (log / "turns").iterdir()) == ["0001.json", "0002.json"]
+    events = _all_events(host.log.dir)
+    run = next(e for e in events if e["kind"] == "run_started")
+    assert run["task"] == "pick it" and run["system_prompt"] and run["tools"]
+    assert "action_ended" in _kinds(host.log.dir)
+    assert events[-1]["kind"] == "run_ended" and events[-1]["status"] == "done"
+    assert [e["turn"] for e in events if e["kind"] == "planner_turn"] == ["turns/0001.json", "turns/0002.json"]
+    assert sorted(p.name for p in (host.log.dir / "turns").iterdir()) == ["0001.json", "0002.json"]
 
 
 def test_a_point_on_an_image_from_before_the_robot_moved_is_refused(tmp_path):
@@ -339,7 +345,7 @@ def test_the_harness_runs_complete_plan_steps_without_the_planner(tmp_path):
     notes = " ".join(p for p in harness.planner.seen[1][-1].content if isinstance(p, str))
     assert "a2 home succeeded" in notes and "Next is step 3 (check), which has no tool" in notes
     assert "Plan: 1. go home [done, a1]; 2. home again [done, a2]; 3. check [pending]." in notes
-    events = [json.loads(line) for line in (harness.run_log.dir / "events.jsonl").read_text().splitlines()]
+    events = _all_events(host.log.dir)
     assert [(e["step"], e["action"]) for e in events if e["kind"] == "plan_step"] == [(1, "a1"), (2, "a2")]
 
 
@@ -528,8 +534,7 @@ def _pick_with_area_limit(tmp_path, target, script):
 
 
 def _events(harness, kind):
-    lines = (harness.run_log.dir / "events.jsonl").read_text().splitlines()
-    return [e for e in map(json.loads, lines) if e["kind"] == kind]
+    return [e for e in _all_events(harness.host.log.dir) if e["kind"] == kind]
 
 
 def test_a_mask_covering_much_of_the_image_is_refused_before_anything_moves(tmp_path):
@@ -560,6 +565,40 @@ def test_a_mask_the_size_of_an_object_starts_the_pick_and_logs_its_area(tmp_path
 
     assert [type(s).__name__ for s in host.started] == ["PickSkill"] and host.services_stopped == []
     assert [e["target_area"] for e in _events(harness, "action_started")] == [0.01]
+
+
+def test_a_pick_that_ends_stops_its_tracker(tmp_path):
+    harness, host = _harness(tmp_path, [[PICK_AT_CENTRE], "ok"])
+    harness._handle([Wake("user", "pick it")])
+    assert host.services_stopped == []
+
+    host.end("pick")
+
+    assert host.services_stopped == [("cam", "target_mask")]
+
+
+def test_a_tracker_a_running_action_still_reads_is_left_running(tmp_path):
+    harness, host = _harness(tmp_path, [[PICK_AT_CENTRE], "ok"])
+    harness._handle([Wake("user", "pick it")])
+    harness.actions.append(dataclasses.replace(harness.actions[0], id="a9", invocation=None))
+
+    host.end("pick")
+
+    assert harness.actions[0].status == "succeeded" and host.services_stopped == []
+
+
+@pytest.mark.parametrize("overlays", [True, False])
+def test_image_overlays_decides_whether_the_planner_sees_tracker_masks(tmp_path, overlays):
+    harness, host = _harness(tmp_path, [], image_grid=False, image_overlays=overlays)
+    mask = np.zeros((CAPTURE_H, CAPTURE_W), np.uint8)
+    mask[CAPTURE_H // 4: 3 * CAPTURE_H // 4, CAPTURE_W // 4: 3 * CAPTURE_W // 4] = 1
+    host.image = UIImage(label="cam/image", data=host.image.data, masks=[mask])
+
+    (view,) = harness._observe().views
+    h, w = view.rgb.shape[:2]
+
+    tinted = np.abs(view.rgb[h // 2, w // 2].astype(int) - 90).max() > 8
+    assert tinted == overlays
 
 
 def test_a_tripwire_escalates_once_per_reason(tmp_path):
@@ -680,7 +719,7 @@ def test_the_monitor_sees_its_recent_frames_oldest_first(tmp_path):
     second, third = ([f.label for f in e.frames] for e in monitor.evidence)
     assert len(third) == 2 and third[0].startswith("cam/image previous, ") and third[1] == "cam/image current"
     assert second[0].endswith("s ago")
-    events = [json.loads(line) for line in (harness.run_log.dir / "events.jsonl").read_text().splitlines()]
+    events = _all_events(host.log.dir)
     (kept,) = [e["images"] for e in events if e["kind"] == "monitor_frame"]
     logged = [e["images"] for e in events if e["kind"] == "monitor"]
     assert [len(images) for images in logged] == [2, 2]
@@ -853,14 +892,14 @@ def test_a_dry_run_starts_nothing(tmp_path):
 
 
 def test_a_recorded_run_logs_beside_the_controllers_episode(tmp_path):
-    """One run is one episode, and its id is where to find it: session/episode."""
+    """A run's id is where its log starts: session/episode."""
     harness, host = _harness(tmp_path, [[("finish_task", {"success": True, "summary": "ok"})]])
     host.arm(controller=True, robot=True)
     harness._handle([Wake("user", "do it")])
 
-    assert harness.run_log.dir == tmp_path / "0001_abcdef_S1" / "episodes" / "000003" / "agent"
+    assert host.log.dir == tmp_path / "0001_abcdef_S1" / "episodes" / "000003" / "logs"
     assert harness.run_id == "0001_abcdef_S1/000003"
-    assert json.loads((harness.run_log.dir / "run.json").read_text())["run_id"] == harness.run_id
+    assert _events(harness, "run_started")[0]["run_id"] == harness.run_id
     assert host.recording_state["active"] is False
 
 
@@ -869,16 +908,102 @@ def test_a_run_only_the_robot_records_keeps_nothing_of_the_agent(tmp_path):
     host.arm(robot=True)
     harness._handle([Wake("user", "do it")])
 
-    assert harness.run_log is None and harness.run_id is None
+    assert host.log is None and harness.run_id is None
     assert list(tmp_path.iterdir()) == []
     assert any("not recorded" in entry["text"] for entry in harness.ui_state()["transcript"])
 
 
 def test_an_unrecorded_run_writes_nothing(tmp_path):
-    harness, _ = _harness(tmp_path, [[("finish_task", {"success": True, "summary": "ok"})]])
+    harness, host = _harness(tmp_path, [[("finish_task", {"success": True, "summary": "ok"})]])
     harness._handle([Wake("user", "do it")])
 
-    assert harness.run_log is None and list(tmp_path.iterdir()) == []
+    assert host.log is None and list(tmp_path.iterdir()) == []
+
+
+def _all_events(log_dir):
+    return [json.loads(line) for line in (log_dir / "events.jsonl").read_text().splitlines()]
+
+
+def _kinds(log_dir):
+    return [e["kind"] for e in _all_events(log_dir)]
+
+
+def test_an_episode_opened_during_a_run_continues_its_log_there(tmp_path):
+    harness, host = _harness(tmp_path, [[PICK_AT_CENTRE], [("finish_task", {"success": True, "summary": "ok"})]])
+    host.arm(controller=True)
+    harness._handle([Wake("user", "pick it")])
+    first = host.log.dir
+
+    host.stop_recording()
+    host.end("pick")
+    host.recording_state["controller"].update(active=True, episode=4)
+    _next(harness)
+
+    second = host.log.dir
+    assert second == tmp_path / "0001_abcdef_S1" / "episodes" / "000004" / "logs"
+    # With no episode open, the pick's end stayed in the log it started in.
+    assert _kinds(first)[0] == "run_started" and "action_ended" in _kinds(first)
+    assert "run_ended" not in _kinds(first)
+    continued, *_, ended = _all_events(second)
+    assert continued["kind"] == "run_continued" and continued["task"] == "pick it" and continued["system_prompt"]
+    assert continued["run_id"] == harness.run_id == "0001_abcdef_S1/000003"
+    assert continued["continues_from"] == "0001_abcdef_S1/000003"
+    assert ended["kind"] == "run_ended" and ended["status"] == "done"
+    assert [p.name for p in (first / "turns").iterdir()] == ["0001.json"]
+    assert [p.name for p in (second / "turns").iterdir()] == ["0001.json"]
+    turn = json.loads((second / "turns" / "0001.json").read_text())
+    images = [c["image"] for m in turn["input"] for c in m.get("content", []) if "image" in c]
+    assert images and all((second / "images" / name).exists() for name in images)
+
+
+def test_monitor_frames_from_before_a_new_episode_are_saved_in_it(tmp_path):
+    harness, host = _harness(tmp_path, [[PICK_AT_CENTRE]], monitor=FixedMonitor())
+    host.arm(controller=True)
+    harness._handle([Wake("user", "pick it")])
+    harness._monitor_tick()
+    host.recording_state["controller"].update(episode=4)
+    harness._monitor_tick()
+
+    (event,) = _events(harness, "monitor")
+    assert len(event["images"]) == 2
+    assert all((host.log.dir / "images" / name).exists() for name in event["images"])
+
+
+def test_a_run_started_unrecorded_logs_once_the_controller_opens_an_episode(tmp_path):
+    harness, host = _harness(tmp_path, [[PICK_AT_CENTRE], "ok"])
+    harness._handle([Wake("user", "pick it")])
+    assert host.log is None
+
+    host.recording_state["controller"].update(active=True, session="0001_abcdef_S1", episode=5)
+    host.end("pick")
+
+    assert harness.run_id == "0001_abcdef_S1/000005"
+    (continued,) = _events(harness, "run_continued")
+    assert continued["run_id"] == harness.run_id and continued["task"] == "pick it"
+    assert continued["continues_from"] is None
+    assert "action_ended" in _kinds(host.log.dir)
+
+
+def test_two_runs_in_one_episode_keep_their_own_turns_and_monitor_frames(tmp_path):
+    finish = [("finish_task", {"success": True, "summary": "ok"})]
+    harness, host = _harness(tmp_path, [[PICK_AT_CENTRE], finish, [PICK_AT_CENTRE]], monitor=FixedMonitor())
+    host.arm(controller=True)
+    host.start_recording()
+
+    harness._handle([Wake("user", "pick it")])
+    harness._monitor_tick()
+    harness._monitor_tick()
+    host.end("pick")
+    _next(harness)
+    harness._handle([Wake("user", "pick it again")])
+    harness._monitor_tick()
+    harness._monitor_tick()
+
+    assert [e["task"] for e in _events(harness, "run_started")] == ["pick it", "pick it again"]
+    assert [e["turn"] for e in _events(harness, "planner_turn")] == [
+        "turns/0001.json", "turns/0002.json", "turns/0003.json"]
+    images = [e["images"] for e in _events(harness, "monitor")]
+    assert len(images) == 2 and not set(images[0]) & set(images[1])
 
 
 def test_the_ui_state_crosses_msgpack(tmp_path):
@@ -890,16 +1015,20 @@ def test_the_ui_state_crosses_msgpack(tmp_path):
     assert harness.view_image().jpeg[:2] == b"\xff\xd8"
 
 
-def test_merge_copies_agent_logs_into_the_robots_session(tmp_path):
+def test_merge_copies_episode_logs_into_the_robots_session(tmp_path):
     """Both sides share the session directory name, so it is the join key."""
     root = tmp_path / "recordings" / "controller"
-    (root / "0001_abcdef_S1" / "episodes" / "000003" / "agent").mkdir(parents=True)
-    (root / "0001_abcdef_S1" / "episodes" / "000003" / "agent" / "run.json").write_text("{}")
+    EpisodeLog(root / "0001_abcdef_S1" / "episodes" / "000003" / LOGS_DIR).event("episode_started")
+    (root / "0001_abcdef_S1" / "episodes" / "000002" / "agent").mkdir(parents=True)
+    (root / "0001_abcdef_S1" / "episodes" / "000002" / "agent" / "run.json").write_text("{}")
     session = tmp_path / "recordings" / "robot" / "0001_abcdef_S1"
+    (session / "episodes" / "000002").mkdir(parents=True)
     (session / "episodes" / "000003").mkdir(parents=True)
 
-    assert merge_into_session(root, session) == [session / "episodes" / "000003" / "agent"]
-    assert (session / "episodes" / "000003" / "agent" / "run.json").exists()
+    assert merge_into_session(root, session) == [
+        session / "episodes" / "000002" / "agent", session / "episodes" / "000003" / "logs"]
+    assert (session / "episodes" / "000003" / "logs" / "events.jsonl").exists()
+    assert (session / "episodes" / "000002" / "agent" / "run.json").exists()
 
 
 # ---- wire formats ---------------------------------------------------------------------

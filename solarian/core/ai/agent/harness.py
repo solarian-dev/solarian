@@ -39,8 +39,7 @@ from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
@@ -68,7 +67,6 @@ from solarian.core.ai.agent.monitor import (
     make_monitor,
     monitor_context,
 )
-from solarian.core.ai.agent.run_log import AGENT_DIR, RunLog
 from solarian.core.ai.agent.vision import (
     Frame,
     View,
@@ -83,6 +81,9 @@ from solarian.core.clock_sync import synced_time
 from solarian.core.configs import AgentConfig
 from solarian.core.skill import SkillStatus, Tool
 from solarian.core.ui.base import UIImage
+
+if TYPE_CHECKING:
+    from solarian.core.recording.episode_log import EpisodeLog
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +101,9 @@ _FRAMES_KEPT = 30
 class AgentHost(Protocol):
     #: :attr:`Controller.recording_state`: both sides' recording.
     recording_state: dict
-
-    def controller_episode_dir(self) -> Path | None: ...
+    #: :attr:`Controller.episode_log`: the log of the episode the controller
+    #: records, or last recorded.
+    episode_log: EpisodeLog | None
 
     def call_on_control_thread(self, fn: Callable[[], Any]) -> Future: ...
 
@@ -166,7 +168,7 @@ class AgentAction:
     ended: float | None = None
     tracker: RuleTracker = field(default_factory=RuleTracker)
     reference: list[ImagePart] = field(default_factory=list)
-    #: ``(time.monotonic(), frames, their run log file names)`` of this
+    #: ``(time.monotonic(), frames, their run log labels)`` of this
     #: action's last monitor ticks, oldest first.
     recent: deque[tuple[float, list[ImagePart], list[str]]] = field(default_factory=deque)
     answers: list[MonitorAnswer] = field(default_factory=list)
@@ -176,6 +178,8 @@ class AgentAction:
     #: The follow-up tool a monitor finish starts once this action stops; the
     #: follow-up's end, not this one's, moves the run on.
     then: str | None = None
+    #: ``(module, field)`` of the trackers seeded for this action, stopped when it ends.
+    services: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def running(self) -> bool:
@@ -389,6 +393,43 @@ def _armed_sides_recording(state: Mapping[str, Any]) -> bool:
     return bool(armed) and all((state.get(side) or {}).get("active") for side in armed)
 
 
+def _episode_id(log: EpisodeLog) -> str:
+    """``<session dir>/<episode dir>`` of the episode ``log`` is in."""
+    episode_dir = log.dir.parent
+    return f"{episode_dir.parent.parent.name}/{episode_dir.name}"
+
+
+def _logged_part(log: EpisodeLog, part) -> dict:
+    if isinstance(part, str):
+        return {"text": part}
+    return {"image": log.image(part.label, part.jpeg), "label": part.label}
+
+
+def _logged_message(log: EpisodeLog, message: Message) -> dict:
+    """``message`` as a turn file holds it, its images saved in ``log``."""
+    if isinstance(message, UserTurn):
+        return {
+            "role": "user",
+            "content": [_logged_part(log, p) for p in message.content],
+            "tool_results": [
+                {
+                    "call_id": r.call_id,
+                    "is_error": r.is_error,
+                    "content": [_logged_part(log, p) for p in r.content],
+                }
+                for r in message.tool_results
+            ],
+        }
+    assert isinstance(message, AssistantTurn)
+    return {
+        "role": "assistant",
+        "text": message.text,
+        "tool_calls": [{"id": c.id, "name": c.name, "arguments": c.arguments} for c in message.tool_calls],
+        "stop_reason": message.stop_reason,
+        "usage": message.usage.to_dict(),
+    }
+
+
 class AgentHarness:
     def __init__(
         self,
@@ -446,15 +487,21 @@ class AgentHarness:
         self.transcript: deque[dict] = deque(maxlen=_TRANSCRIPT_LIMIT)
         self.actions: list[AgentAction] = []
         self.task = ""
-        #: ``<session dir>/<episode dir>`` of a recorded run; ``None`` when the
-        #: controller is not recording it, and nothing of the run is kept.
+        #: ``<session dir>/<episode dir>`` the run's log starts in; ``None`` while
+        #: the controller has logged no episode, and nothing of the run is kept.
         self.run_id: str | None = None
-        self.run_log: RunLog | None = None
+        #: The task, models, prompt and tools of the current run, which every
+        #: episode log it writes to starts with.
+        self._run_config: dict = {}
+        #: The episode log the current run last wrote to. Write through
+        #: ``_episode_log()``, which notices the controller moving to another.
+        self._run_log: EpisodeLog | None = None
         #: Tokens and calls of the current run, per model.
         self.usage = Usage()
         self.monitor_usage = Usage()
         self.monitor_calls = 0
-        #: Frames captured for the monitor this run: names the logged ``m<k>`` images.
+        #: Frames captured for the monitor: names the logged ``m<k>`` images. Never
+        #: reset, since several runs can log into one episode.
         self._monitor_frames = 0
         self._turns = 0
         self._run_started = 0.0
@@ -527,6 +574,10 @@ class AgentHarness:
             if outcome == "succeeded" and step is not None and action.then is None:
                 step["status"] = "done"
         self._log("action_ended", action=action.id, status=outcome, reason=action.reason)
+        if action.services:
+            # Queued, not awaited: this can already be the control thread. A tracker left
+            # running keeps painting its mask over what the action left, e.g. a held object.
+            self.host.call_on_control_thread(lambda: self._stop_services(action.services))
         self._say("tool", f"{action.id} {action.tool}: {outcome}" + (f" — {action.reason}" if action.reason else ""))
         text = f"Action {action.describe()}."
         if action.then is not None:
@@ -708,9 +759,20 @@ class AgentHarness:
 
     def _begin_run(self, task: str) -> None:
         session, episode = self._open_episode(task)
-        episode_dir = self.host.controller_episode_dir() if session is not None else None
-        # One run is one episode, so the episode's place in its session is the id.
-        run_id = f"{episode_dir.parent.parent.name}/{episode_dir.name}" if episode_dir else None
+        # Only the controller logs the agent's side. A run the robot alone
+        # records keeps nothing of the agent; one nobody records keeps nothing
+        # until the controller opens an episode during it.
+        log = self.host.episode_log
+        # The episode the run starts in names it, in every episode it goes on into.
+        run_id = _episode_id(log) if log is not None else None
+        config = {
+            "run_id": run_id,
+            "task": task,
+            "planner": self.cfg.planner.model_dump(exclude={"api_key_env"}),
+            "monitor": self.cfg.monitor.model_dump(exclude={"api_key_env"}) if self.cfg.monitor else None,
+            "system_prompt": self.system_prompt,
+            "tools": [t.__dict__ for t in self.tool_defs],
+        }
         with self._lock:
             self.generation += 1
             self.task = task
@@ -723,27 +785,11 @@ class AgentHarness:
             self.usage = Usage()
             self.monitor_usage = Usage()
             self.monitor_calls = 0
-            self._monitor_frames = 0
             self._run_started = time.monotonic()
             self._logged_upto = len(self.messages)
-        # Only the controller records the agent's side. A run the robot alone
-        # records keeps nothing of the agent; one nobody records keeps nothing.
-        self.run_log = None if episode_dir is None else RunLog(
-            episode_dir / AGENT_DIR,
-            {
-                "run_id": run_id,
-                "task": task,
-                "started": synced_time(),
-                "session": session,
-                "episode": episode,
-                "planner": self.cfg.planner.model_dump(exclude={"api_key_env"}),
-                "monitor": self.cfg.monitor.model_dump(exclude={"api_key_env"}) if self.cfg.monitor else None,
-                "system_prompt": self.system_prompt,
-                "tools": [t.__dict__ for t in self.tool_defs],
-                "status": RunStatus.THINKING.value,
-            },
-        )
-        self._log("run_started", task=task)
+            self._run_config = config
+            self._run_log = log
+        self._log("run_started", **config)
         if run_id is not None:
             self._say("system", f"Run {run_id} started")
         elif episode is not None:
@@ -785,9 +831,7 @@ class AgentHarness:
             self._opened_episode = False
         self._control(self.host.on_agent_idle, check=False)
         self._say("system", summary)
-        self._log("run_ended", status=status.value, summary=summary)
-        if self.run_log is not None:
-            self.run_log.update(status=status.value, summary=summary, ended=synced_time(), usage=self._usage())
+        self._log("run_ended", run_id=self.run_id, status=status.value, summary=summary, usage=self._usage())
 
     def _budget_exceeded(self) -> str | None:
         budgets = self.cfg.budgets
@@ -861,7 +905,6 @@ class AgentHarness:
                     finished = True
                 result = self._execute(call, gen)
                 results.append(result)
-            self._log_turn()
 
             if finished:
                 self.messages.append(UserTurn(tool_results=results))
@@ -914,16 +957,19 @@ class AgentHarness:
             self.usage.add(reply.usage)
         added = self.messages[self._logged_upto:]
         self.messages.append(reply)
-        if self.run_log is not None:
-            self.run_log.turn(added, reply, latency)
+        log = self._episode_log()
+        if log is not None:
+            turn = log.turn({
+                "latency_s": round(latency, 3),
+                "input": [_logged_message(log, m) for m in added],
+                "output": _logged_message(log, reply),
+            })
+            self._log("planner_turn", turn=turn, latency_s=round(latency, 2), usage=reply.usage.to_dict(),
+                      text=reply.text, tools=[c.name for c in reply.tool_calls])
         self._logged_upto = len(self.messages)
         for call in reply.tool_calls:
             self._log("tool_call", id=call.id, name=call.name, arguments=call.arguments)
         return reply
-
-    def _log_turn(self) -> None:
-        if self.run_log is not None:
-            self.run_log.update(status=self.status.value, plan=self.plan, usage=self._usage())
 
     def _trim_images(self) -> None:
         """Keep the newest images in context; older ones become a one-line stub.
@@ -972,7 +1018,8 @@ class AgentHarness:
 
     def _observe(self) -> Frame:
         images, state = self._capture()
-        views = [make_view(i, self.cfg.image_max_side, self.cfg.image_grid) for i in images]
+        views = [make_view(i, self.cfg.image_max_side, self.cfg.image_grid, overlays=self.cfg.image_overlays)
+                 for i in images]
         with self._lock:
             self._obs_seq += 1
             frame = Frame(obs_id=f"o{self._obs_seq}", t_mono=time.monotonic(), t=synced_time(),
@@ -980,10 +1027,10 @@ class AgentHarness:
             self._frames.append(frame)
         if views:
             self._show(views[0].rgb)
-        if self.run_log is not None:
-            for part in frame.image_parts():
-                self.run_log.image(part)
-            self._log("observation", obs_id=frame.obs_id, images=[p.label for p in frame.image_parts()])
+        log = self._episode_log()
+        if log is not None:
+            self._log("observation", obs_id=frame.obs_id,
+                      images=[log.image(p.label, p.jpeg) for p in frame.image_parts()])
         return frame
 
     def _frame(self, obs_id: str | None) -> Frame | None:
@@ -1124,6 +1171,7 @@ class AgentHarness:
         if services:
             seeded_at = synced_time()
             self._control(lambda: [self.host.start_service(m, f, **p) for m, f, p in services], gen=gen)
+            action.services = [(m, f) for m, f, _ in services]
             values = [self._wait_for_field(module, field_name, seeded_at) for module, field_name, _ in services]
             limit = spec.get("max_target_area")
             if limit is not None:
@@ -1136,7 +1184,7 @@ class AgentHarness:
                     problem = (f"The tracker selected {target_area:.0%} of the image, not one object: the point "
                                "missed it. Point again at the middle of the object.")
                 if problem:
-                    self._control(lambda: [self.host.stop_service(m, f) for m, f, _ in services], gen=gen)
+                    self._control(lambda: self._stop_services(action.services), gen=gen)
                     self._log("target_rejected", action=action.id,
                               area=None if target_area is None else round(target_area, 4))
                     raise ToolError(problem)
@@ -1177,6 +1225,14 @@ class AgentHarness:
         if action.questions and self.monitor is not None:
             result["monitoring"] = [q.name for q in action.questions]
         return json.dumps(result)
+
+    def _stop_services(self, services: list[tuple[str, str]]) -> None:
+        """Stop ``services`` on the control thread, except those a running action still reads."""
+        with self._lock:
+            in_use = {s for a in self.actions if a.running for s in a.services}
+        for module, field_name in services:
+            if (module, field_name) not in in_use:
+                self.host.stop_service(module, field_name)
 
     def _wait_for_field(self, module: str, field_name: str, since: float):
         """The first non-empty value of ``module.field_name`` stamped after ``since``, or ``None``."""
@@ -1286,10 +1342,10 @@ class AgentHarness:
             with self._lock:
                 self._monitor_frames += 1
                 frame = self._monitor_frames
-            logged = []
-            if self.run_log is not None:
-                logged = [self.run_log.image(ImagePart(f.jpeg, f"m{frame} {f.label}")) for f in frames]
-            action.recent.append((now, frames, logged))
+            labels = [f"m{frame} {f.label}" for f in frames]
+            log = self._episode_log()
+            logged = [log.image(label, f.jpeg) for f, label in zip(frames, labels)] if log else []
+            action.recent.append((now, frames, labels))
             if self._monitor_history > 1 and len(action.recent) == 1:
                 # Choices are defined by what changed since the previous frame: the
                 # first one is kept for the next tick, not judged on its own.
@@ -1313,9 +1369,12 @@ class AgentHarness:
             with self._lock:
                 self.monitor_usage.add(usage)
                 action.answers = answers
-            if self.run_log is not None:
-                # Every frame the monitor was shown, oldest first: the earlier ones were logged by earlier ticks.
-                shown = [name for _, _, names in action.recent for name in names]
+            log = self._episode_log()
+            if log is not None:
+                # Every frame the monitor was shown, oldest first. Earlier ticks saved theirs,
+                # but maybe in an earlier episode's log, or in none.
+                shown = [log.image(label, f.jpeg)
+                         for _, tick, labels in action.recent for f, label in zip(tick, labels)]
                 self._log("monitor", action=action.id, answers=[a.to_dict() for a in answers], images=shown)
             for firing in action.tracker.update(action.questions, answers, evidence.data["elapsed_s"]):
                 self._fire(action, firing.rule.do, f"{firing.question.name}: {firing.reason()}",
@@ -1396,9 +1455,31 @@ class AgentHarness:
         with self._lock:
             self.transcript.append({"role": role, "text": text, "t": synced_time()})
 
+    def _episode_log(self) -> EpisodeLog | None:
+        """The controller's episode log, where everything of the run goes.
+
+        The first write of an active run into a log it has not written to yet,
+        an episode opened during the run, logs ``run_continued`` there first,
+        with the run's config, so every episode's log stands alone.
+        """
+        log = self.host.episode_log
+        if log is None:
+            return None
+        with self._lock:
+            if not self.status.active or log is self._run_log:
+                return log
+            previous, self._run_log = self._run_log, log
+            if self.run_id is None:
+                self.run_id = _episode_id(log)
+            config = {**self._run_config, "run_id": self.run_id}
+            log.event("run_continued", **config, status=self.status.value, plan=self.plan,
+                      continues_from=_episode_id(previous) if previous is not None else None)
+        return log
+
     def _log(self, kind: str, **data) -> None:
-        if self.run_log is not None:
-            self.run_log.event(kind, **data)
+        log = self._episode_log()
+        if log is not None:
+            log.event(kind, **data)
 
 
 class ToolError(Exception):

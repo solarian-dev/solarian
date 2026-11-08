@@ -9,11 +9,9 @@ import cv2
 import numpy as np
 
 from solarian.core.ui.base import UICommand, UICommandType, UIImage, UISnapshot
-from solarian.core.ui.overlay import MASK_COLOR, mask_rings, tint_masks
+from solarian.core.ui.overlay import draw_overlays
 
 logger = logging.getLogger(__name__)
-
-_BBOX_COLOR = (255, 0, 0)
 
 # Monitor geometry used to center windows, resolved lazily and at most once.
 # ``screeninfo`` on macOS imports pyobjc (AppKit / Foundation / Cocoa) at module
@@ -64,7 +62,7 @@ class OpenCVUI:
         for image in snapshot.images:
             if image.label not in self._windows:
                 self._open_window(image)
-            frame = self._with_overlays(image)
+            frame = draw_overlays(image)
             cv2.imshow(image.label, np.ascontiguousarray(frame[:, :, ::-1]))
 
     def tick(self, fps: int) -> None:
@@ -111,26 +109,3 @@ class OpenCVUI:
                 {"label": label, "point": (x, y), "button": 1},
             )
         )
-
-    @staticmethod
-    def _with_overlays(image: UIImage) -> np.ndarray:
-        if not image.bboxes and not image.masks:
-            return image.data
-        frame = tint_masks(image.data, image.masks).copy()
-        for mask in image.masks:
-            cv2.polylines(frame, mask_rings(mask), True, MASK_COLOR, 2)
-        texts = list(image.bbox_texts[:len(image.bboxes)])
-        texts += [None] * (len(image.bboxes) - len(texts))
-        for bbox, text in zip(image.bboxes, texts):
-            if all(value == 0 for value in bbox[:4]):
-                continue
-            x1, y1, x2, y2 = bbox[:4]
-            cv2.rectangle(
-                frame, (int(x1), int(y1)), (int(x2), int(y2)), _BBOX_COLOR, 2
-            )
-            if text:
-                cv2.putText(
-                    frame, text, (int(x1), max(14, int(y1) - 6)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, _BBOX_COLOR, 1, cv2.LINE_AA,
-                )
-        return frame

@@ -9,20 +9,26 @@ the robot's capture stamp while ``wall_ts`` is the controller's receive time, so
 the latency of every row is in the table.
 
 The session layout is the robot's, so the exporter and the viewer read either
-one. The agent's log of a run lands beside the episode it drove, under
-``episodes/<index>/agent/``.
+one. Beside each episode it keeps the episode's
+:class:`~solarian.core.recording.episode_log.EpisodeLog` under
+``episodes/<index>/logs/``, with the tracker overlays drawn over each frame.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
+from collections.abc import Mapping, Sequence
 from multiprocessing.managers import SharedMemoryManager
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from solarian.core.action import ActionType
+from solarian.core.data import MaskData, PointData
 from solarian.core.observation import Observation
+from solarian.core.recording.episode_log import LOGS_DIR, EpisodeLog
 from solarian.core.recording.recorder import SessionRecorder
 from solarian.core.recording.schema import CameraKey, build_schema
 from solarian.core.recording.session import CameraMeta
@@ -49,6 +55,7 @@ class ControllerRecorder:
         task: str | None,
         session: str,
         shm_manager: SharedMemoryManager,
+        overlays: Mapping[tuple[str, str], Sequence[str]] | None = None,
     ):
         """
         Args:
@@ -56,6 +63,8 @@ class ControllerRecorder:
                 settings and the session size budget.
             fps: Grid the video is encoded onto.
             session: Name episodes are filed under until a caller names one.
+            overlays: ``(module, image field)`` to the box, point and mask
+                fields drawn over it, logged with each frame they mark.
         """
         self._root = Path(root)
         self._cfg = cfg
@@ -63,12 +72,18 @@ class ControllerRecorder:
         self._task = task
         self._session_name = session
         self._shm_manager = shm_manager
+        self._overlays = dict(overlays or {})
         self.schema = build_schema()
 
         #: Built at the first episode, once frames have shown what size the
         #: cameras arrive at.
         self._session: SessionRecorder | None = None
         self._sinks: dict[str, tuple[CameraKey, ArchiveSink, tuple[int, int]]] = {}
+        #: The log of the latest episode, kept after its seal so what happens
+        #: between takes is still written down; ``None`` once it is dropped.
+        self.log: EpisodeLog | None = None
+        #: Capture time of the last frame whose overlays were logged, per camera.
+        self._overlay_ts: dict[str, float] = {}
 
     # -- state ---------------------------------------------------------------
 
@@ -118,16 +133,23 @@ class ControllerRecorder:
         if self._session is None:
             self._session = self._build(latest)
         self._session.open_session(self._session_name, dir_name=dir_name)
-        return self._session.start_episode(
-            task=task if task is not None else self._task, skill=skill, index=index
-        )
+        task = task if task is not None else self._task
+        index = self._session.start_episode(task=task, skill=skill, index=index)
+        if index >= 0:
+            self.log = EpisodeLog(self._session.paths.episode_dir(index) / LOGS_DIR)
+            self.log.event("episode_started", episode=index, task=task)
+        return index
 
     def stop(self) -> None:
         if self._session is not None:
+            if self.is_recording and self.log is not None:
+                self.log.event("episode_ended", episode=self._session.episode_count)
             self._session.end_episode()
 
     def drop(self) -> None:
         if self._session is not None:
+            if self.is_recording:
+                self.log = None
             self._session.drop_episode()
 
     def close(self) -> None:
@@ -148,12 +170,41 @@ class ControllerRecorder:
             image = data.value
             if not isinstance(image, np.ndarray) or image.ndim != 3:
                 continue
+            self._log_overlays(camera, module_obs, image.shape[:2], float(data.timestamp))
             if image.shape[:2] != (height, width):
-                import cv2
-
                 image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
             sink.write_frame(image, float(data.timestamp))
         self._session.write_row(observation)
+
+    def _log_overlays(self, camera: CameraKey, module_obs, size: tuple[int, int], ts: float) -> None:
+        """Log what the overlay fields mark on this frame, once per frame and only when they mark something.
+
+        Boxes and points are in the pixels of the frame as it arrived, ``size``,
+        which the video may have been scaled from.
+        """
+        fields = self._overlays.get((camera.module, camera.field))
+        log = self.log
+        if not fields or log is None or self._overlay_ts.get(camera.name) == ts:
+            return
+        self._overlay_ts[camera.name] = ts
+        row = {}
+        for name in fields:
+            overlay = module_obs.get(name)
+            value = overlay.value if overlay is not None else None
+            if value is None or not np.any(value):
+                continue
+            if isinstance(overlay, MaskData):
+                if np.shape(value) != size:
+                    continue
+                ok, png = cv2.imencode(".png", np.asarray(value, dtype=np.uint8))
+                if ok:
+                    row[name] = {"mask": base64.b64encode(png.tobytes()).decode("ascii")}
+            elif isinstance(overlay, PointData):
+                row[name] = {"point": np.asarray(value, dtype=float).round(1).tolist()}
+            else:
+                row[name] = {"box": np.asarray(overlay.overlay_box()).tolist()}
+        if row:
+            log.overlay(camera.name, {"ts": ts, "size": list(size), **row})
 
     def note_sent(self, action) -> None:
         """Tabulate a ``MODULE_ACTION`` the controller put on the link."""

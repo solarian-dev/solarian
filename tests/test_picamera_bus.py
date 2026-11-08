@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import sys
 import time
 import types
@@ -11,7 +13,7 @@ import numpy as np
 import pytest
 
 from solarian.core.data import ImageData, PosData
-from solarian.core.picamera_bus import _SENSOR_CLOCK, PiCameraBus
+from solarian.core.picamera_bus import _SENSOR_CLOCK, PiCameraBus, release_leftover_cameras
 from solarian.core.picamera_module import PiCameraConfig
 
 
@@ -130,6 +132,9 @@ def fake_picamera2(monkeypatch):
     mod.Picamera2 = FakePicamera2
     monkeypatch.setitem(sys.modules, "picamera2", mod)
     monkeypatch.setattr("solarian.core.picamera_bus.time.sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "solarian.core.picamera_bus.release_leftover_cameras", lambda **_k: None
+    )
     return FakePicamera2
 
 
@@ -357,3 +362,71 @@ def test_pi_camera_config_keeps_isp_fields():
     assert cam.contrast is None
     assert cam.shutter is None
     assert cam.gain is None
+
+
+def _hold(proc, pid: int, device, cmdline: bytes, pgrp: int) -> None:
+    entry = proc / str(pid)
+    fd_dir = entry / "fd"
+    fd_dir.mkdir(parents=True)
+    (fd_dir / "3").symlink_to(device)
+    (entry / "cmdline").write_bytes(cmdline)
+    (entry / "stat").write_text(f"{pid} (python3 x) S 1 {pgrp} {pgrp} 0 -1\n")
+
+
+def test_connect_releases_leftover_holders_before_opening(fake_picamera2, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "solarian.core.picamera_bus.release_leftover_cameras",
+        lambda **_k: calls.append(len(fake_picamera2.instances)),
+    )
+    _bus().connect()
+    assert calls == [0]
+
+
+def test_release_leftover_cameras_signals_only_holders_from_another_run(tmp_path):
+    proc = tmp_path / "proc"
+    dev = tmp_path / "dev"
+    sysfs = tmp_path / "sys"
+    dev.mkdir()
+    media = dev / "media0"
+    usb = dev / "video0"
+    csi_video = dev / "video1"
+    for node in (media, usb, csi_video):
+        node.write_bytes(b"")
+    (sysfs / "class" / "video4linux" / "video0").mkdir(parents=True)
+    (sysfs / "class" / "video4linux" / "video0" / "name").write_text("USB Camera\n")
+    (sysfs / "class" / "video4linux" / "video1").mkdir(parents=True)
+    (sysfs / "class" / "video4linux" / "video1" / "name").write_text("rp1-cfe\n")
+
+    me = os.getpid()
+    own_group = os.getpgid(0)
+    old_group = own_group + 1
+    sibling = 1_000_001
+    holder = 4242
+    usb_holder = 4243
+    _hold(proc, me, media, b"solarian\x00run-robot\x00", own_group)
+    _hold(proc, sibling, media, b"other-camera-module\x00", own_group)
+    _hold(proc, holder, media, b"solarian\x00run-robot\x00-d\x00pi\x00", old_group)
+    _hold(proc, usb_holder, usb, b"some-webcam\x00", old_group)
+    _hold(proc, 4244, csi_video, b"old-camera-child\x00", old_group)
+
+    signaled: list[tuple[int, int]] = []
+
+    def kill(pid, sig):
+        signaled.append((pid, sig))
+
+    release_leftover_cameras(
+        proc_root=proc,
+        sys_root=sysfs,
+        dev_root=dev,
+        kill=kill,
+        sleep=lambda _seconds: None,
+    )
+
+    assert signaled == [
+        (holder, signal.SIGTERM),
+        (4244, signal.SIGTERM),
+        (holder, signal.SIGKILL),
+        (4244, signal.SIGKILL),
+    ]
+    assert all(pid not in (me, sibling, usb_holder) for pid, _sig in signaled)

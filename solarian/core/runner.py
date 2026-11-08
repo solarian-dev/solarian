@@ -83,6 +83,10 @@ class Runner(ABC):
         """Stop as abruptly as the execution mode allows."""
         self.stop(wait=False)
 
+    def kill(self) -> None:
+        """End the worker without waiting for it to unwind."""
+        self.terminate()
+
     def join(self, timeout: float | None = None) -> None:
         """Wait for the worker to finish."""
 
@@ -132,6 +136,15 @@ class Runner(ABC):
         """Setup, loop at the target frequency, tear down. Runs in the worker."""
         target = self.target
         exit_reason = WorkerExit.COMPLETED
+        # Set before teardown so a SIGTERM delivered mid-close does not
+        # raise out of the close and leave the camera held.
+        teardown_started = False
+
+        def _on_sigterm(signum, _frame):
+            if teardown_started:
+                return
+            raise SystemExit(128 + signum)
+
         if self.crosses_process_boundary:
             # Ctrl+C reaches every process in the terminal's foreground group,
             # so a worker that acts on it unwinds from inside a device read
@@ -139,6 +152,10 @@ class Runner(ABC):
             # prints a traceback for a stop that was asked for. The parent's
             # stop event is the only shutdown this worker answers to.
             signal.signal(signal.SIGINT, signal.SIG_IGN)
+            # The default SIGTERM action skips this finally. The parent's
+            # terminate() is a SIGTERM, and a CSI camera stays locked until
+            # teardown closes it.
+            signal.signal(signal.SIGTERM, _on_sigterm)
             # A forked worker inherits every timing its parent has taken. The
             # snapshot it queues on exit is read only once it has exited, and
             # a queue holds its process until the pipe has taken the lot, so
@@ -166,6 +183,9 @@ class Runner(ABC):
 
                 period = 1.0 / max(float(getattr(target, "frequency", 0.0) or 0.0), 1e-9)
                 precise_wait(t_end=t_start + period * idx, time_func=time.monotonic)
+        except SystemExit:
+            exit_reason = WorkerExit.STOPPED
+            raise
         except Exception as exc:  # noqa: BLE001
             exit_reason = WorkerExit.FAILED
             tb_str = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
@@ -175,6 +195,7 @@ class Runner(ABC):
                 logger.exception("'%s' crashed: %s", self.name, exc)
             self._put_error(tb_str)
         finally:
+            teardown_started = True
             self._set_ready()
             self._put_profiling()
             try:
@@ -260,6 +281,13 @@ class ProcessModuleRunner(Runner):
         self._stop.set()
         if self._process is not None and self._process.is_alive():
             self._process.terminate()
+
+    def kill(self) -> None:
+        # SIGKILL cannot run teardown. The caller already gave the process
+        # a chance to close its camera; this is what frees the device when
+        # that process is stuck.
+        if self._process is not None and self._process.is_alive():
+            self._process.kill()
 
     def is_alive(self) -> bool:
         return self._process is not None and self._process.is_alive()

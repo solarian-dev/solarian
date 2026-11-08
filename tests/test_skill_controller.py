@@ -1,5 +1,6 @@
 """Controller skill orchestration: preemption, occupancy, inline merge, remote status."""
 
+import json
 from collections import deque
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from solarian.core.controller import (
     Controller,
 )
 from solarian.core.keyboard_module import KeyboardModule
+from solarian.core.recording.episode_log import EpisodeLog
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 
 
@@ -810,3 +812,51 @@ def test_chat_commands_reach_the_agent():
 
     assert ctrl.agent.messages == ["put the batteries away"]
     assert ctrl.agent.cancelled == 1
+
+
+# ---- the episode log -----------------------------------------------------------------
+
+
+def _logged_ctrl(tmp_path):
+    ctrl = _agent_ctrl()
+    ctrl.controller_recorder = SimpleNamespace(log=EpisodeLog(tmp_path / "logs"))
+    return ctrl
+
+
+def _logged(tmp_path):
+    lines = (tmp_path / "logs" / "events.jsonl").read_text().splitlines()
+    return [{k: v for k, v in json.loads(line).items() if k != "t"} for line in lines]
+
+
+def test_the_episode_logs_every_command_and_who_gave_it(tmp_path):
+    ctrl = _logged_ctrl(tmp_path)
+    _as_agent(ctrl, lambda: ctrl.start_skill(HoldSkill("hold_all", {"arm": RIGHT_ARM})))
+    ctrl.press("m")
+
+    assert _logged(tmp_path) == [
+        {"kind": "skill_started", "by": "agent", "skill": "hold_all", "params": {"arm": RIGHT_ARM}},
+        {"kind": "skill_started", "by": "operator", "skill": "leader_follow",
+         "params": {"arm": RIGHT_ARM, "gripper": RIGHT_GRIPPER}},
+        {"kind": "skill_stop", "by": "operator", "skill": "hold_all", "reason": "preempted by leader_follow"},
+        {"kind": "skill_ended", "skill": "hold_all", "status": "stopped", "reason": "preempted by leader_follow"},
+    ]
+
+
+def test_the_episode_logs_trackers_started_and_stopped(tmp_path):
+    ctrl = _logged_ctrl(tmp_path)
+    _as_agent(ctrl, lambda: ctrl.start_service("right_wrist_camera", "target_mask", point=[120, 80]))
+    ctrl.stop_service("right_wrist_camera", "target_mask")
+
+    assert _logged(tmp_path) == [
+        {"kind": "service_started", "by": "agent", "module": "right_wrist_camera", "field": "target_mask",
+         "params": {"point": [120, 80]}},
+        {"kind": "service_stopped", "by": "operator", "module": "right_wrist_camera", "field": "target_mask"},
+    ]
+
+
+def test_nothing_is_logged_outside_an_episode():
+    ctrl = _agent_ctrl()
+    ctrl.press("m")
+    ctrl.start_service("right_wrist_camera", "target_mask", point=[1, 2])
+
+    assert ctrl.episode_log is None

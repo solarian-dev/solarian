@@ -635,6 +635,9 @@ class Module(ABC):
     def terminate(self):
         self.runner.terminate()
 
+    def kill(self):
+        self.runner.kill()
+
     def is_alive(self) -> bool:
         return self.runner.is_alive()
 
@@ -1002,6 +1005,10 @@ class Module(ABC):
         return keep_running
 
     def worker_teardown(self, exit_reason: WorkerExit) -> None:
+        # The parent drops the bus before the fork. The handle opened in
+        # worker_setup lives only in this process, and only this process
+        # can close it.
+        self.disconnect()
         if self.verbose:
             print(f"[Module] {self.name} terminated ({exit_reason.value})")
 

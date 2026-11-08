@@ -60,6 +60,26 @@ class ProcessCounter(Counter):
         return keep_running
 
 
+class BlocksUntilSignaled(ProcessCounter):
+    """Stuck inside a tick, the way a capture_request blocks in C.
+
+    The stop event is not visible from there. Only SIGTERM can end the
+    tick, and teardown still has to run so the camera is closed.
+    """
+
+    def __init__(self):
+        super().__init__(name="blocked", frequency=1.0)
+        self.shared_teardown = mp.Value("i", 0)
+
+    def worker_tick(self):
+        self.shared_ticks.value = 1
+        time.sleep(30)
+        return True
+
+    def worker_teardown(self, exit_reason):
+        self.shared_teardown.value = 1
+
+
 def test_make_runner_matches_execution_mode():
     assert isinstance(make_runner(Counter()), InlineModuleRunner)
     assert isinstance(
@@ -205,3 +225,23 @@ class TestProcess:
         runner.terminate()
 
         assert exitcode == 0
+
+    def test_sigterm_runs_teardown_before_the_process_exits(self):
+        target = BlocksUntilSignaled()
+        runner = ProcessModuleRunner(target)
+        runner.start(wait=False)
+        try:
+            deadline = time.monotonic() + 5
+            while target.shared_ticks.value == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert target.shared_ticks.value == 1
+
+            runner.terminate()
+            runner.join(timeout=5)
+        finally:
+            if runner.is_alive():
+                runner.kill()
+                runner.join(timeout=2)
+
+        assert target.shared_teardown.value == 1
+        assert not runner.is_alive()

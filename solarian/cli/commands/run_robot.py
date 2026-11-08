@@ -1,4 +1,6 @@
 import logging
+import signal
+
 from omegaconf import DictConfig, OmegaConf
 
 from solarian.cli import BaseCommand, CommandRegistry
@@ -36,11 +38,27 @@ class RunRobotCommand(BaseCommand):
         setup_process_logging(level=log_level, logger_name=None)
         RobotClass = get_class(settings.ROBOT_CLASS)
         robot = RobotClass(cfg)
+
+        # The first SIGTERM takes the same path as Ctrl-C, so start()'s
+        # finally still disconnects every module. A second one, or one that
+        # lands once disconnect() has begun, must not abort that shutdown.
+        robot._shutdown_started = False
+
+        def _on_sigterm(signum, frame):
+            if robot._shutdown_started:
+                return
+            robot._shutdown_started = True
+            raise KeyboardInterrupt
+
+        previous_sigterm = signal.signal(signal.SIGTERM, _on_sigterm)
         try:
-            robot.connect()
-            robot.initialize()
-            robot.start()
-        except KeyboardInterrupt:
-            StatusBoard.stop()
-        except Exception:
-            StatusBoard.print_exception()
+            try:
+                robot.connect()
+                robot.initialize()
+                robot.start()
+            except KeyboardInterrupt:
+                StatusBoard.stop()
+            except Exception:
+                StatusBoard.print_exception()
+        finally:
+            signal.signal(signal.SIGTERM, previous_sigterm)

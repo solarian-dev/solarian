@@ -314,7 +314,7 @@ class MujocoWorldServer(Process):
         renderer = self._renderers.get(key)
         try:
             if renderer is None:
-                renderer = mujoco.Renderer(self.model, height=src_h, width=src_w)
+                renderer = self._new_renderer(src_h, src_w)
                 self._renderers[key] = renderer
             with self._lock:
                 renderer.update_scene(self.data, camera=spec["camera"])
@@ -327,6 +327,16 @@ class MujocoWorldServer(Process):
                 logger.warning("MuJoCo rendering unavailable (%s); returning blank frames.", exc)
                 self._render_failed = True
             return np.zeros((h, w, 3), dtype=np.uint8)
+
+    def _new_renderer(self, height: int, width: int):
+        import mujoco
+
+        # The GL offscreen framebuffer is sized from the model when the renderer
+        # is created, and mujoco.Renderer rejects anything larger than it.
+        vis = self.model.vis.global_
+        vis.offwidth = max(int(vis.offwidth), width)
+        vis.offheight = max(int(vis.offheight), height)
+        return mujoco.Renderer(self.model, height=height, width=width)
 
     def _distort(self, spec, dist, frame, h, w, src_h, src_w) -> np.ndarray:
         """Warp a pinhole render into a calibrated fisheye-distorted image."""
@@ -390,7 +400,7 @@ class MujocoWorldServer(Process):
         renderer = self._renderers.get(key)
         try:
             if renderer is None:
-                renderer = mujoco.Renderer(self.model, height=h, width=w)
+                renderer = self._new_renderer(h, w)
                 self._renderers[key] = renderer
             camera = mujoco.MjvCamera()
             camera.type = mujoco.mjtCamera.mjCAMERA_FREE

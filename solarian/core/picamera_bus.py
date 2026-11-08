@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
+import signal
 import threading
 import time
-from typing import Any, Dict, TYPE_CHECKING
 from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Dict, TYPE_CHECKING
 
 import numpy as np
 
@@ -41,6 +44,141 @@ _RECONNECT_MIN_DELAY_S = 0.05
 _RECONNECT_MAX_DELAY_S = 1.0
 _CLOSE_TIMEOUT_S = 2.0
 _BUFFER_COUNT = 6
+
+# How long a leftover holder gets to exit after SIGTERM before SIGKILL.
+# picamera2's own close is the same order of magnitude; this is just the
+# gap between the two signals.
+_LEFTOVER_TERM_WAIT_S = 0.5
+
+# libcamera's Pi pipeline, as it shows up in sysfs video-node names.
+# A USB webcam's name does not contain these, so it is left alone.
+_CSI_VIDEO_MARKERS = ("pisp", "rp1-cfe", "unicam", "imx")
+
+
+def _process_group(pid: int, proc_root: Path) -> int | None:
+    """``pgrp`` from ``/proc/<pid>/stat``, or ``None`` if it cannot be read."""
+    try:
+        stat = (proc_root / str(pid) / "stat").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return None
+    # comm is parenthesised and may contain spaces; fields after it are fixed.
+    fields = stat.rsplit(")", 1)[-1].split()
+    try:
+        return int(fields[2])
+    except (IndexError, ValueError):
+        return None
+
+
+def _csi_device_paths(dev_root: Path, sys_root: Path) -> set[str]:
+    """Device nodes a Pi CSI pipeline holds open.
+
+    ``/dev/media*`` is the media controller. The matching ``/dev/video*``
+    nodes are the ones whose sysfs name belongs to the Pi ISP or sensor,
+    not every video device on the machine.
+    """
+    paths: set[str] = set()
+    if dev_root.is_dir():
+        for node in dev_root.iterdir():
+            if node.name.startswith("media"):
+                paths.add(str(node))
+    v4l = sys_root / "class" / "video4linux"
+    if not v4l.is_dir():
+        return paths
+    for node in v4l.iterdir():
+        try:
+            name = (node / "name").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lowered = name.lower()
+        if any(marker in lowered for marker in _CSI_VIDEO_MARKERS):
+            paths.add(str(dev_root / node.name))
+    return paths
+
+
+def _pids_holding(proc_root: Path, devices: set[str]) -> dict[int, str]:
+    """Pid to command line, for processes with an fd open on ``devices``."""
+    holders: dict[int, str] = {}
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        fd_dir = entry / "fd"
+        try:
+            fds = list(fd_dir.iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except OSError:
+                continue
+            if target in devices:
+                try:
+                    raw = (entry / "cmdline").read_bytes()
+                except OSError:
+                    raw = b""
+                cmdline = (
+                    raw.replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+                )
+                holders[int(entry.name)] = cmdline
+                break
+    return holders
+
+
+def release_leftover_cameras(
+    *,
+    proc_root: str | Path = "/proc",
+    sys_root: str | Path = "/sys",
+    dev_root: str | Path = "/dev",
+    kill: Callable[[int, int], None] | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> None:
+    """SIGTERM, then SIGKILL, any process from another run holding the Pi camera.
+
+    A previous ``run-robot`` whose camera child outlived it leaves libcamera's
+    pipeline locked (``Device or resource busy``). No ``/proc`` — a laptop, or
+    a machine with no CSI nodes — is a no-op.
+
+    Processes in this process group are never signaled: forked module
+    processes share it, so on a robot with two CSI cameras the second one
+    to connect must not kill the first.
+    """
+    proc = Path(proc_root)
+    if not proc.is_dir():
+        return
+    devices = _csi_device_paths(Path(dev_root), Path(sys_root))
+    if not devices:
+        return
+    me = os.getpid()
+    own_group = os.getpgid(0)
+    holders = {
+        pid: cmd
+        for pid, cmd in _pids_holding(proc, devices).items()
+        if pid != me and _process_group(pid, proc) != own_group
+    }
+    if not holders:
+        return
+    send = os.kill if kill is None else kill
+    pause = time.sleep if sleep is None else sleep
+    for pid, cmd in sorted(holders.items()):
+        logger.warning(
+            "Releasing CSI camera held by pid %s (%s)",
+            pid,
+            cmd or "unknown",
+        )
+        try:
+            send(pid, signal.SIGTERM)
+        except OSError:
+            logger.debug("SIGTERM pid %s failed", pid, exc_info=True)
+    pause(_LEFTOVER_TERM_WAIT_S)
+    still = {pid for pid in _pids_holding(proc, devices) if pid in holders}
+    for pid in sorted(still):
+        logger.warning("pid %s still holding the CSI camera; sending SIGKILL", pid)
+        try:
+            send(pid, signal.SIGKILL)
+        except OSError:
+            logger.debug("SIGKILL pid %s failed", pid, exc_info=True)
 
 
 class PiCameraBus(CameraBus):
@@ -143,6 +281,7 @@ class PiCameraBus(CameraBus):
     def connect(self):
         if self.picam2 is not None:
             return
+        release_leftover_cameras()
         self._open(settle=self.ae_settle_s)
 
     @staticmethod

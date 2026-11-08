@@ -14,25 +14,7 @@ Solarian sits between your hardware and your application code. It handles the pa
 
 A typical Solarian project looks like this:
 
-```text
-myrobot/
-├── conf/                        # Hydra YAML configs (one per module and one per role)
-├── myrobot/
-│   ├── settings.py              # Project class registry
-│   ├── robot.py                 # Your Robot subclass and its modules
-│   ├── controller.py            # Your Controller subclass
-│   ├── server.py                # Your RelayServer subclass
-│   ├── observation.py           # Observation/ModuleObs schema
-│   ├── action.py                # Action/ModuleAction schema
-│   ├── action_types.py          # Custom action types for your modules
-│   ├── modules/                 # Your Module subclasses (hardware interfaces)
-│   │   ├── arm.py               # Example: Arm module
-│   │   └── gripper.py           # Example: Gripper module
-│   └── skills/                  # Your Skill subclasses (task/controller logic)
-│       ├── move_skill.py        # Example: MoveSkill implementation
-│       └── teleop_skill.py      # Example: Teleop skill
-└── pyproject.toml
-```
+<ProjectFigure />
 
 You write a few small classes, declare your hardware modules, and Solarian wires the rest together.
 
@@ -46,14 +28,7 @@ Solarian's vision is to **standardize the boring parts** so that hardware module
 
 Solarian is structured as a **Robot ↔ Server ↔ Controller** system. Each role is a separate process and can run on a separate machine.
 
-```text
-┌──────────────┐     actions      ┌──────────────┐    actions    ┌──────────────┐
-│  Controller  │ ───────────────▶ │ RelayServer  │ ────────────▶ │    Robot     │
-│  (laptop)    │                  │  (anywhere)  │               │ (on-robot)   │
-│              │ ◀─────────────── │              │ ◀──────────── │              │
-└──────────────┘   observations   └──────────────┘  observations └──────────────┘
-       PUSH/SUB                       PULL/PUB                         PULL/PUB
-```
+<ArchitectureFigure />
 
 - **Robot** runs on the robot. It owns the hardware: every `Module` subclass becomes its own OS process, polls actuators and sensors, and streams typed observations back out. Implementation: [`solarian/core/robot.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py).
 - **RelayServer** runs anywhere reachable from both ends. It forwards actions from controllers to robots and observations from robots to controllers, and can run server-side observation processors. Implementation: [`solarian/core/server.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/server.py).
@@ -66,7 +41,7 @@ All three nodes speak the same protocol: a Pydantic-validated [`Action`](/docs/a
 - **Real-time multi-process modules.** Each hardware [`Module`](/docs/modules) runs in its own process at its own configurable rate (`frequency` Hz), talking to the robot loop through shared-memory ring buffers, so a 500 Hz arm and a 30 Hz camera coexist without blocking each other. Scheduling is a property, not a base class, so cheap input devices like a keyboard run inline instead of paying for a process.
 - **Typed observations and actions.** [`Observation`](/docs/observations) and [`Action`](/docs/actions) are Pydantic-typed schemas that bind directly to your modules. The same data flows from hardware through the wire to your controller, your dataset, and your policy.
 - **Plug-and-play hardware.** Hardware drivers ship as standalone `solarian-<name>` [plugins](/docs/plugins). `solarian install ur5` installs the package and copies the default config straight into `conf/modules/ur5.yaml`.
-- **Hydra-driven configuration.** Every command takes its config from a YAML file (`robot.yaml`, `controller.yaml`, `server.yaml`, `record.yaml`, …) composed via [Hydra defaults](/docs/project-configs). Each module's config lives in `conf/modules/<module_name>.yaml` matching the attribute name on your `Robot`.
+- **Hydra-driven configuration.** Every command takes its config from a YAML file (`robot.yaml`, `controller.yaml`, `server.yaml`, `record.yaml`, …) composed via [Hydra defaults](/docs/project-configs). Each module's config lives in `conf/modules/<module_name>.yaml` matching the attribute name on your `Robot`. A [skill](/docs/skills) config lives in `conf/skills/<config_name>.yaml`, a [service](/docs/services) config in `conf/services/<name>.yaml`, and a [training](/docs/training) run in `conf/training/<name>.yaml`.
 - **AI Controller.** [Any controller](/docs/ai_controller) can take tasks in plain language: a planner model calls its [Skills](/docs/skills) as tools while a fast monitor model watches each one through the cameras.
 - **Recording, replay, and training.** First-class CLI commands ([`record`](/docs/commands), `replay`, `train`) let you go from teleoperated demonstrations to a trained policy without leaving the framework.
 - **Settings and lifecycle.** A simple `settings.py` pattern (à la Django) registers your `Robot`, `Controller`, and `Server` classes, so the CLI can discover and run any of them with the right configuration.
@@ -90,6 +65,7 @@ Each step uses the same `Robot`, `Controller`, `Observation`, and `Action` class
 ## Where to next?
 
 - **New to Solarian?** Continue with [Installation](/docs/installation) and then [Creating a Project](/docs/creating-a-project).
+- **Want to learn by building?** Take the [tutorials](/docs/tutorials).
 - **Want the big picture of every concept?** Skim [Modules](/docs/modules), [Controllers](/docs/controllers), and [Server](/docs/servers).
 - **Looking for the AI side?** Read [AI Controller](/docs/ai_controller) and [Skills](/docs/skills).
 - **Need to look up a term?** Try the [Glossary](/docs/glossary).

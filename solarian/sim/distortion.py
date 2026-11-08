@@ -25,14 +25,20 @@ import numpy as np
 
 
 def _scaled_K(K: np.ndarray, calib_w: int, calib_h: int, out_w: int, out_h: int) -> np.ndarray:
-    """Rescale calibrated intrinsics from the calibration resolution to output."""
-    sx = out_w / float(calib_w)
-    sy = out_h / float(calib_h)
+    """Rescale calibrated intrinsics from the calibration resolution to output.
+
+    Pixels are square, so both focal lengths take one scale; scaling the axes
+    separately would squash the image circle into an ellipse whenever the
+    output aspect differs from the calibration's. The vertical scale is kept
+    because the policy crop is height-normalized; a different aspect widens or
+    narrows the frame around the principal point instead.
+    """
+    s = out_h / float(calib_h)
     scaled = K.astype(np.float64).copy()
-    scaled[0, 0] *= sx  # fx
-    scaled[0, 2] *= sx  # cx
-    scaled[1, 1] *= sy  # fy
-    scaled[1, 2] *= sy  # cy
+    scaled[0, 0] *= s  # fx
+    scaled[1, 1] *= s  # fy
+    scaled[0, 2] = out_w / 2.0 + (K[0, 2] - calib_w / 2.0) * s  # cx
+    scaled[1, 2] *= s  # cy
     return scaled
 
 

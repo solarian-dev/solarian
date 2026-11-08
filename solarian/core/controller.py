@@ -62,6 +62,7 @@ from solarian.utils.configs import load_config_yaml
 
 if TYPE_CHECKING:
     from solarian.core.recording import ControllerRecorder
+    from solarian.core.recording.episode_log import EpisodeLog
 
 import logging
 logger = logging.getLogger(__name__)
@@ -1346,10 +1347,11 @@ class Controller(EventHost, ABC):
             "controller": controller,
         }
 
-    def controller_episode_dir(self):
-        """The directory of the episode the controller is recording, if any."""
+    @property
+    def episode_log(self) -> "EpisodeLog | None":
+        """The log of the episode the controller records, or last recorded; ``None`` before any."""
         recorder = self.controller_recorder
-        return recorder.episode_dir if recorder is not None else None
+        return recorder.log if recorder is not None else None
 
     def set_recording_targets(
         self, controller: bool | None = None, robot: bool | None = None
@@ -1424,6 +1426,8 @@ class Controller(EventHost, ABC):
             # that never records should not pay for at import.
             from solarian.core.recording import ControllerRecorder
 
+            if self._overlay_field_map is None:
+                self._build_display_schema()
             cfg = self.cfg.recording
             self.controller_recorder = ControllerRecorder(
                 root=project_path(cfg.root),
@@ -1432,6 +1436,7 @@ class Controller(EventHost, ABC):
                 task=self.cfg.task,
                 session=type(self).__name__,
                 shm_manager=self.shm_manager,
+                overlays=self._overlay_field_map,
             )
         self._on_controller_recorder(
             lambda recorder: recorder.start(
@@ -1552,6 +1557,7 @@ class Controller(EventHost, ABC):
         owns it, and gets a ``START_SKILL`` naming the class and its params.
         """
         name = skill.skill_name
+        self._log_episode_event("skill_started", skill=name, params=skill.params)
         if not self._agent_dispatching:
             self._operator_took_over(f"started {name}")
         preempted = f"preempted by {name}"
@@ -1655,6 +1661,8 @@ class Controller(EventHost, ABC):
         rec = self.running_skills.get(name)
         if rec is None:
             return
+        if status is SkillStatus.STOPPED:
+            self._log_episode_event("skill_stop", skill=name, reason=reason)
         skill = self._local_skills.pop(name, None)
         if skill is not None and not skill.execution_place.is_remote:
             self._remote_running.pop(name, None)
@@ -1734,6 +1742,9 @@ class Controller(EventHost, ABC):
         """
         invocation = self._invocations.pop(name, None)
         stored = self._stop_reasons.pop(name, "")
+        log = self.episode_log
+        if log is not None:
+            log.event("skill_ended", skill=name, status=status.name.lower(), reason=reason or stored)
         if invocation is None:
             return
         if self.agent is not None:
@@ -1742,6 +1753,16 @@ class Controller(EventHost, ABC):
     def _operator_took_over(self, description: str) -> None:
         if self.agent is not None:
             self.agent.on_operator_action(description)
+
+    def _log_episode_event(self, kind: str, **data) -> None:
+        """Log a command in the episode, ``by`` whoever gave it.
+
+        Only for the control thread: elsewhere ``_agent_dispatching`` says
+        nothing about who is calling.
+        """
+        log = self.episode_log
+        if log is not None:
+            log.event(kind, by="agent" if self._agent_dispatching else "operator", **data)
 
     # ========= agent host ============
     def call_on_control_thread(self, fn: Callable[[], Any]) -> Future:
@@ -1848,9 +1869,11 @@ class Controller(EventHost, ABC):
                 data={"module": module, "field": field, "params": params},
             )
         )
+        self._log_episode_event("service_started", module=module, field=field, params=params)
         logger.info("Starting service %s/%s %s", module, field, params)
 
     def stop_service(self, module: str, field: str) -> None:
+        self._log_episode_event("service_stopped", module=module, field=field)
         self._pending_actions.append(
             Action(
                 action_type=ActionType.STOP_SERVICE,
