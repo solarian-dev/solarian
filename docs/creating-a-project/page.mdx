@@ -19,31 +19,9 @@ cd myrobot
 
 The scaffolder produces a project with this layout:
 
-```text
-myrobot/
-├── conf/
-│   ├── controller.yaml      # `solarian run-controller` config
-│   ├── robot.yaml           # `solarian run-robot` config
-│   ├── server.yaml          # `solarian run-server` config
-│   ├── record.yaml          # `solarian record` config
-│   ├── replay.yaml          # `solarian replay` config
-│   ├── train.yaml           # `solarian train` config
-│   └── deployment/
-│       └── localhost.yaml   # relay IP/ports and device paths per host
-├── myrobot/
-│   ├── __init__.py
-│   ├── settings.py          # ROBOT_CLASS / CONTROLLER_CLASS / SERVER_CLASS
-│   ├── robot.py             # MyrobotRobot(Robot)
-│   ├── controller.py        # MyrobotController(Controller)
-│   ├── server.py            # MyrobotServer(RelayServer)
-│   ├── observation.py       # Observation/ModuleObs schema
-│   ├── action.py            # Action/ModuleAction schema
-│   ├── modules/
-│   │   └── example_module.py
-│   └── dataset_ops/
-│       └── drop_short_episodes.py   # an example dataset op
-└── pyproject.toml
-```
+<ScaffoldFigure />
+
+`conf/` is organized by who reads each file; [Project Configs](/docs/project-configs#the-conf-folder) covers every folder. Skills you write go in a `skills/` package next to `modules/`, and custom [action types](/docs/actions#custom-action-types) in `action.py` beside the schema that uses them.
 
 The generated [`settings.py`](/docs/settings) wires the project together by class path:
 
@@ -179,6 +157,6 @@ In the controller window, press `a` and `d` to nudge `shoulder_pan`. You should 
 - **Calibrate the hardware** with `solarian calibrate` before first `run-robot` on a real arm or gripper — see [Calibration](/docs/modules/calibration).
 - **Add more modules** with `solarian install <plugin>` — see [Core Plugins](/docs/plugins#core-plugins).
 - **Record a dataset** of teleoperated demonstrations: `solarian record`.
-- **Curate it** with dataset ops, your own included: `solarian add-op <name>` writes one into `dataset_ops/` — see [Dataset ops](/docs/datasets#dataset-ops).
+- **Curate it** with dataset ops, your own included: `solarian add-op <name>` writes one into `datasets/` — see [Dataset ops](/docs/datasets#dataset-ops).
 - **Replace the controller** with a learned policy, served with `solarian run-service <skill conf>` and driven by a skill, or with the [AI Controller](/docs/ai_controller) for VLM-driven control.
-- **Train a policy** with `solarian train`.
+- **Train a policy** with `solarian train --conf conf/training/<run>`.

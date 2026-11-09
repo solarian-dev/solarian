@@ -1,22 +1,22 @@
 export const metadata = {
   title: 'Simulation',
   description:
-    'Run any Solarian robot in a MuJoCo simulation by flipping a switch: set is_sim = True and declare a scene. The same modules, servos, cameras and YAML drive both real hardware and sim. Covers scenes, attaching module models, simulated servos and cameras, and building models from Onshape.',
+    'Run any Solarian robot in a MuJoCo simulation by flipping a switch: declare a scene and run solarian run-robot --sim. The same modules, servos, cameras and YAML drive both real hardware and sim. Covers scenes, attaching module models, simulated servos and cameras, and building models from Onshape.',
 }
 
 # Simulation
 
-Running a robot in simulation is a **switch, not a rewrite**. Take your existing [`Robot`](/docs/robots), set `is_sim = True`, give it a `scene`, and the framework runs every [Module](/docs/modules) inside a shared MuJoCo world instead of on hardware — same [Observation](/docs/observations)/[Action](/docs/actions) schemas, same transport, same control loop. {{ className: 'lead' }}
+Running a robot in simulation is a **switch, not a rewrite**. Take your existing [`Robot`](/docs/robots), give it a `scene`, run `solarian run-robot --sim`, and the framework runs every [Module](/docs/modules) inside a shared MuJoCo world instead of on hardware — same [Observation](/docs/observations)/[Action](/docs/actions) schemas, same transport, same control loop. {{ className: 'lead' }}
 
 There are **no** `SimRobot`, `SimModule`, `SimServo` or `SimCamera` classes. Your real modules, servos, and cameras run unchanged; the only extra input the sim needs is a `scene` describing the environment and how each module's MuJoCo model attaches, plus `sim_joint` / `sim_range_*` on each servo and a `sim:` block on each camera.
 
 <Note>
-  MuJoCo and the other simulation dependencies live in the `[sim]` extra (`mujoco`, `mink`, `onshape-to-robot`). They are imported lazily inside the sim code paths, so `import solarian` never requires them — only running a robot with `is_sim = True` does. Install with <code>pip install "solarian[sim]"</code>.
+  MuJoCo and the other simulation dependencies live in the `[sim]` extra (`mujoco`, `mink`, `onshape-to-robot`). They are imported lazily inside the sim code paths, so `import solarian` never requires them — only running a robot with `--sim` does. Install with <code>pip install "solarian[sim]"</code>.
 </Note>
 
 ## Flip the switch
 
-Set `is_sim = True` and a `scene` on your robot class:
+Declare a `scene` on your robot class:
 
 ```python
 from solarian.core import Robot
@@ -24,7 +24,6 @@ from solarian.sim import SceneConfig, ModuleAttachment
 from myrobot.modules.arm import ArmModule
 
 class MyRobot(Robot):
-    is_sim = True            # run in MuJoCo
     view = True              # show the live overview window
 
     arm = ArmModule()        # the SAME module used on real hardware
@@ -37,14 +36,11 @@ class MyRobot(Robot):
     )
 ```
 
-That's the whole difference from a real robot. The [scene](#scenes) builds the world, [attaching modules](#attaching-modules) places each module's model in it, and [simulated servos](#simulated-servos) and [cameras](#simulated-cameras) map each component onto a joint or a camera of that model.
+Then start it with `--sim`. That's the whole difference from a real robot. The [scene](#scenes) builds the world, [attaching modules](#attaching-modules) places each module's model in it, and [simulated servos](#simulated-servos) and [cameras](#simulated-cameras) map each component onto a joint or a camera of that model.
 
 <Properties>
-  <Property name="is_sim" type="bool">
-    Class attribute, default <code>False</code>. When true, <code>connect</code>/<code>start</code>/<code>disconnect</code> use the MuJoCo path instead of hardware.
-  </Property>
   <Property name="scene" type="SceneConfig">
-    Required when <code>is_sim</code> is true (a clear error is raised otherwise). See <a href="#scenes">Scenes</a>.
+    Required to run with <code>--sim</code> (a clear error is raised otherwise). See <a href="#scenes">Scenes</a>.
   </Property>
   <Property name="view" type="bool">
     Show a live overview window while running. Overridable at runtime with the <code>SOLARIAN_SIM_VIEW</code> env var (<code>1</code>/<code>0</code>). Best-effort: with no display available the sim runs headless.
@@ -57,31 +53,14 @@ That's the whole difference from a real robot. The [scene](#scenes) builds the w
 
 ## Choosing real vs sim at run time
 
-`is_sim` defaults to the class attribute but is overridable per run by the `sim` field on [`RobotConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py). So the **same** robot class can run on hardware or in sim:
+Sim vs hardware is a choice per run, not a property of the robot class. The **same** class runs on either:
 
 ```bash
-solarian run-robot            # uses the class attribute (sim here)
-solarian run-robot sim=false  # force the real hardware path
-solarian run-robot sim=true   # force simulation
+solarian run-robot        # the real hardware
+solarian run-robot --sim  # MuJoCo, in the class's scene
 ```
 
-The resolution order is: `sim` from config/CLI if set, otherwise the class attribute. Keep `sim: null` in your `conf/robot.yaml` so the CLI override is accepted:
-
-```yaml
-# conf/robot.yaml
-connection: ${deployment.connection}
-fps: 30
-img_compression_quality: 70
-sim: null   # null defers to the robot class's is_sim; override with sim=true/false
-```
-
-```python
-# solarian/core/robot.py — resolution in Robot.__init__
-cfg_sim = getattr(cfg, "sim", None)
-self.is_sim = type(self).is_sim if cfg_sim is None else bool(cfg_sim)
-```
-
-So one class serves both: hard-code `is_sim = True` for a sim-first project and run `sim=false` for the occasional hardware run, or leave it `False` and opt in with `sim=true`.
+`--sim` sets the `sim` field on [`RobotConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py), and `Robot.__init__` copies it to `robot.is_sim`. Without the flag the robot always opens its hardware buses, so a forgotten setting can never send a "sim" run to real motors or the other way round.
 
 ## Running the stack
 
@@ -89,16 +68,16 @@ Sim uses the same three-node setup as hardware — only the robot node changes:
 
 ```bash
 solarian run-server                 # relay server
-solarian run-robot sim=true         # the simulated robot
+solarian run-robot --sim            # the simulated robot
 solarian run-controller             # unchanged controller (keyboard, leader arm, policy...)
 ```
 
 ## How it works
 
-When `is_sim` is set, [`Robot`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py) delegates to [`solarian/sim/runtime.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/runtime.py) instead of opening hardware buses. The hardware lifecycle from [Robots](/docs/robots) is preserved; only the bus layer changes:
+With `--sim`, [`Robot`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py) delegates to [`solarian/sim/runtime.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/runtime.py) instead of opening hardware buses. The hardware lifecycle from [Robots](/docs/robots) is preserved; only the bus layer changes:
 
 ```text
-MyRobot(cfg)            # resolves is_sim; requires `scene`
+MyRobot(cfg)            # is_sim from --sim; requires `scene`
    │
    ├── connect()        # compose scene → launch MujocoWorldServer →
    │                    #   inject a BusClient proxy per (module, port) →
@@ -291,7 +270,6 @@ Attaching two copies of the same arm is just two attachments with different pref
 
 ```python
 class Bimanual(Robot):
-    is_sim = True
     left_arm = ArmModule()
     right_arm = ArmModule()
 

@@ -163,18 +163,11 @@ class Robot(EventHost, ABC):
     # Override in subclasses to use a custom config class (must extend ModuleConfig)
     config_class: type = RobotConfig
 
-    #: Run this robot's modules in a MuJoCo simulation instead of on hardware.
-    #: Defaults to this class attribute, but is overridable per-run by the
-    #: ``sim`` config field (e.g. ``solarian run-robot sim=true``). When set, a
-    #: ``scene`` must be declared and ``connect``/``start``/``disconnect``
-    #: delegate to :mod:`solarian.sim.runtime` instead of opening hardware.
-    is_sim: bool = False
-
     modules = _ModulesDescriptor()
 
     #: Simulation scene (:class:`~solarian.sim.configs.SceneConfig`). Required
-    #: when ``is_sim`` is true; describes the environment and how each module's
-    #: MJCF attaches. Ignored on hardware.
+    #: to run with ``solarian run-robot --sim``; describes the environment and
+    #: how each module's MJCF attaches. Ignored on hardware.
     scene = None
 
     #: Show a live overview window of the whole scene while running in sim.
@@ -227,16 +220,15 @@ class Robot(EventHost, ABC):
     def __init__(self, cfg: RobotConfig):
         self.cfg = cfg
 
-        # Resolve the sim switch: the class attribute is the default, but the
-        # ``sim`` config field (settable via yaml or ``run-robot sim=true``)
-        # overrides it when present so the same robot class can run real or sim.
-        cfg_sim = getattr(cfg, "sim", None)
-        self.is_sim = type(self).is_sim if cfg_sim is None else bool(cfg_sim)
+        # When true, connect/start/disconnect delegate to solarian.sim.runtime
+        # instead of opening hardware. Calibration commands and the shell pass a
+        # plain DictConfig that may lack the key.
+        self.is_sim = bool(getattr(cfg, "sim", False))
         if self.is_sim and self.scene is None:
             raise ValueError(
-                f"Robot '{type(self).__name__}' has is_sim=True but no `scene` "
-                f"is declared. Set a `scene` (SceneConfig) describing the "
-                f"environment and how each module's MJCF attaches."
+                f"Robot '{type(self).__name__}' was asked to run in sim (--sim) "
+                f"but declares no `scene`. Set a `scene` (SceneConfig) describing "
+                f"the environment and how each module's MJCF attaches."
             )
         # Populated by solarian.sim.runtime when running in simulation.
         self._world_server = None

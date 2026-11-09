@@ -21,8 +21,9 @@ class CreateProjectCommand(BaseCommand):
     description = """
     Scaffolds a project directory in the current working directory: a Robot and a
     Controller class, a settings.py the CLI discovers, a conf/ tree with the yaml
-    each command composes (robot, controller, server, record, replay, train) and
-    a pyproject.toml where module plugins are added as dependencies.
+    each command composes (robot, controller, server, commands/record,
+    commands/replay, training/umi_pick_object) and a pyproject.toml where module
+    plugins are added as dependencies.
 
     Add a plugin to the new project with `solarian install`.
     """

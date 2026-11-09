@@ -1,4 +1,4 @@
-"""Ops a project defines in <package>/dataset_ops/, and the scaffolding that writes them."""
+"""Ops a project defines in <package>/datasets/, and the scaffolding that writes them."""
 
 from __future__ import annotations
 
@@ -42,12 +42,12 @@ def project(tmp_path, monkeypatch) -> Path:
     """A project ``proj_<test>`` whose package holds a few op files, good and bad."""
     package = f"proj_{tmp_path.name.replace('-', '_')}"
     root = tmp_path / "project"
-    (root / package / "dataset_ops").mkdir(parents=True)
+    (root / package / "datasets").mkdir(parents=True)
     (root / "pyproject.toml").write_text(f'[project]\nname = "{package}"\n')
     (root / package / "__init__.py").write_text("")
     (root / package / "settings.py").write_text("")
     (root / package / "helpers.py").write_text("LIMIT = 2\n")
-    ops = root / package / "dataset_ops"
+    ops = root / package / "datasets"
     (ops / "first_two.py").write_text(OP.format(package=package, cls="FirstTwo", name=""))
     (ops / "mirror.py").write_text(OP.format(package=package, cls="NotAMirror", name=""))
     (ops / "broken.py").write_text("import not_a_module\n")
@@ -68,17 +68,25 @@ def test_project_ops_load_by_file_name(project):
     catalog = discover(project)
     package = _package(project)
     op = catalog.ops["first-two"]
-    assert op.source == f"project:{package}/dataset_ops/first_two.py"
+    assert op.source == f"project:{package}/datasets/first_two.py"
     assert op.title == "First two"
     assert op.package == package
     assert op.commit is None
     assert catalog.ops["mirror"].overrides == "builtin"
     assert catalog.ops["mirror"].describe()["source"].endswith("mirror.py")
     errors = dict(catalog.errors)
-    assert "ModuleNotFoundError" in errors[f"{package}/dataset_ops/broken.py"]
-    assert "defines 2" in errors[f"{package}/dataset_ops/two.py"]
+    assert "ModuleNotFoundError" in errors[f"{package}/datasets/broken.py"]
+    assert "defines 2" in errors[f"{package}/datasets/two.py"]
     assert not any("_shared" in where for where in errors)
     assert "delete-episodes" in catalog.ops
+
+
+def test_ops_left_in_the_old_folder_say_where_to_move(project):
+    package = _package(project)
+    (project / package / "datasets").rename(project / package / "dataset_ops")
+    catalog = discover(project)
+    assert "first-two" not in catalog.ops
+    assert "Move " in dict(catalog.errors)[f"{package}/dataset_ops"]
 
 
 def test_a_project_op_runs_where_the_project_is(project, tmp_path, monkeypatch):
@@ -104,8 +112,8 @@ def test_the_commit_is_recorded_and_marked_dirty(project):
     commit = discover(project).ops["first-two"].commit
     assert len(commit) == 40
     package = _package(project)
-    (project / package / "dataset_ops" / "first_two.py").write_text(
-        (project / package / "dataset_ops" / "first_two.py").read_text() + "\n# edited\n")
+    (project / package / "datasets" / "first_two.py").write_text(
+        (project / package / "datasets" / "first_two.py").read_text() + "\n# edited\n")
     _project_commit.cache_clear()
     assert discover(project).ops["first-two"].commit == f"{commit}-dirty"
 
@@ -124,7 +132,7 @@ def test_add_op_writes_a_working_op(project, tmp_path, monkeypatch):
     command.parse_args(["drop_short"])
     command.handle(None)
     package = _package(project)
-    assert (project / package / "dataset_ops" / "drop_short.py").is_file()
+    assert (project / package / "datasets" / "drop_short.py").is_file()
     with pytest.raises(SystemExit, match="exists"):
         command.handle(None)
 
@@ -135,7 +143,7 @@ def test_add_op_writes_a_working_op(project, tmp_path, monkeypatch):
 
 def test_the_project_template_carries_an_example_op(tmp_path):
     root = scaffold_project("newbot", target_dir=tmp_path)
-    example = root / "newbot" / "dataset_ops" / "drop_short_episodes.py"
+    example = root / "newbot" / "datasets" / "drop_short_episodes.py"
     text = example.read_text()
     assert "class DropShortEpisodesOp(DatasetOp)" in text and "${" not in text
     compile(text, str(example), "exec")

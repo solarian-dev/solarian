@@ -19,33 +19,7 @@ cd so106
 
 You should see a short tree printed, and a new `so106/` folder. The layout is:
 
-<FileTree tree={`
-so106/
-├── conf/
-│   ├── controller.yaml          # solarian run-controller
-│   ├── robot.yaml               # solarian run-robot
-│   ├── server.yaml              # solarian run-server
-│   ├── commands/
-│   │   ├── record.yaml          # solarian record
-│   │   └── replay.yaml          # solarian replay
-│   ├── training/
-│   │   └── lerobot_act.yaml     # one example training file
-│   └── deployment/
-│       └── localhost.yaml       # addresses and device paths
-├── so106/
-│   ├── __init__.py
-│   ├── settings.py              # which classes to run
-│   ├── robot.py                 # So106Robot
-│   ├── controller.py            # So106Controller
-│   ├── server.py                # So106Server
-│   ├── observation.py           # what the robot reports
-│   ├── action.py                # what the controller sends
-│   ├── modules/
-│   │   └── example_module.py    # a sketch you will replace
-│   └── dataset_ops/
-│       └── drop_short_episodes.py
-└── pyproject.toml
-`} />
+<ScaffoldFigure name="so106" />
 
 These files are:
 

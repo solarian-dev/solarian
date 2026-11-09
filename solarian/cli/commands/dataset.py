@@ -135,7 +135,7 @@ class DatasetCommand(BaseCommand):
     `rebuild` reproduces the dataset from its source.
 
     Ops come from solarian, from installed plugins (entry-point group
-    solarian.dataset_ops) and from the project's <package>/dataset_ops/*.py.
+    solarian.dataset_ops) and from the project's <package>/datasets/*.py.
     `describe <op>` prints an op's parameters as JSON Schema, which is also
     what Solarian Base renders its forms from.
     """
@@ -162,7 +162,7 @@ class DatasetCommand(BaseCommand):
         "--progress-json": "Print progress and the result as JSON lines on stdout, for a job runner.",
         "materialize <session> <output>": "Flatten a version; an output ending in .zip is a .solarian.zip.",
         "materialize <session> -": "Stream the flattened .solarian.zip to stdout, for a server to send on.",
-        "--project DIR": "Project whose <package>/dataset_ops/ load (default: the one around the cwd).",
+        "--project DIR": "Project whose <package>/datasets/ load (default: the one around the cwd).",
         "new <source> <dir>": "Start a computed dataset over a standalone session.",
         "apply <dir>[@VERSION] <op>": "Add a version made by <op> on VERSION (default: the only leaf).",
         "VERSION": "A version's key (see log), or source for the computed dataset's source.",

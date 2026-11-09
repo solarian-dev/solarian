@@ -82,7 +82,7 @@ The gripper should open, then the arm should move toward the object in the wrist
 Click-to-track, masks, and a second model that follows a point are how some checkpoints are told *which* object. This chapter does not use them. The checkpoint is one task, and the scene has one object. The reference for targets is the skill config's `targets:` block, when you outgrow a single object.
 
 <Note>
-  If the arm jitters in place and the wrist image is frozen, the controller and the robot disagree about <code>is_sim</code>, or the camera field is missing from the observation. The policy is looking at whatever <code>rgb_image</code> contains. A black image is a confident policy aimed at nothing.
+  If the arm jitters in place and the wrist image is frozen, the robot was started without <code>--sim</code> while you expected the simulation, or the camera field is missing from the observation. The policy is looking at whatever <code>rgb_image</code> contains. A black image is a confident policy aimed at nothing.
 </Note>
 
 Next, on hardware: [the real arm](/docs/tutorials/skills/real-arm).

@@ -357,11 +357,11 @@ An op is a file in your project, next to `modules/`:
 ```text
 myrobot/
 └── myrobot/
-    └── dataset_ops/
+    └── datasets/
         └── drop_short_episodes.py   # the op drop-short-episodes
 ```
 
-Every `<package>/dataset_ops/<name>.py` is an op, named after the file with `_` turned into `-`, unless the class sets `name`. There is nothing to register, and it can import your project's code. `create-solarian` writes `drop_short_episodes.py` as an example, and [`solarian add-op <name>`](/docs/commands#add-op) writes another from the same template:
+Every `<package>/datasets/<name>.py` is an op, named after the file with `_` turned into `-`, unless the class sets `name`. There is nothing to register, and it can import your project's code. `create-solarian` writes `drop_short_episodes.py` as an example, and [`solarian add-op <name>`](/docs/commands#add-op) writes another from the same template:
 
 ```python
 from pydantic import BaseModel, Field

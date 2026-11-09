@@ -10,7 +10,7 @@ You have `pick.solarian.zip` from the collector, or a session from `solarian rec
 
 ## Drop the short takes
 
-The project scaffold wrote a dataset op for this: `so106/dataset_ops/drop_short_episodes.py`. It throws away episodes under a minimum number of rows, which is the usual shape of a false start. List it to confirm the project picked it up:
+The project scaffold wrote a dataset op for this: `so106/datasets/drop_short_episodes.py`. It throws away episodes under a minimum number of rows, which is the usual shape of a false start. List it to confirm the project picked it up:
 
 ```bash
 solarian dataset ops
@@ -65,7 +65,7 @@ policy_checkpoint: models/pick_mine/checkpoints/latest.ckpt
 
 Restart `solarian run-service pick`. Restart the robot if it was up. Press `4`.
 
-In simulation, put an object in the wrist image that matches what you demonstrated. On the real arm, put that object on the table, in frame, and press `4` with `sim=false`. The [real-arm chapter](/docs/tutorials/skills/real-arm) still applies: a checkpoint trained on Lumi's camera is aimed with your lens remap and your `ik_tcp`. Skip those and the new weights will miss in the same direction the old ones did.
+In simulation, put an object in the wrist image that matches what you demonstrated. On the real arm, put that object on the table, in frame, and press `4` with the robot started without `--sim`. The [real-arm chapter](/docs/tutorials/skills/real-arm) still applies: a checkpoint trained on Lumi's camera is aimed with your lens remap and your `ik_tcp`. Skip those and the new weights will miss in the same direction the old ones did.
 
 Press `0` when you want the arm back. Watch a few episodes before you record fifty more. The misses tell you what the next dataset needs: a different start position, a slower hand, an object that was leaving the frame. That loop — record, drop the bad takes, train, run — is the whole of this tutorial.
 

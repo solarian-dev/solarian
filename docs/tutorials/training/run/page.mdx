@@ -32,6 +32,6 @@ The checkpoint path is wrong, or you started the server from a directory that is
 
 The skill YAML does not contain the path. It contains `${deployment.policy_checkpoint}`. Editing `pick.yaml` to a hardcoded path works once and then breaks on the Pi, which is why the deployment file is the place.
 
-On the real robot, set `policy_checkpoint` in `lab.yaml` to a path the Pi can read. Copy the `models/pick_example` directory there, or train on the Pi if you enjoy waiting. Then the same `4`, with `sim=false`, from [On the real arm](/docs/tutorials/skills/real-arm).
+On the real robot, set `policy_checkpoint` in `lab.yaml` to a path the Pi can read. Copy the `models/pick_example` directory there, or train on the Pi if you enjoy waiting. Then the same `4`, with the robot started without `--sim`, from [On the real arm](/docs/tutorials/skills/real-arm).
 
 Next: build a recorder so the next dataset is yours. [Lumi](/docs/tutorials/training/lumi).

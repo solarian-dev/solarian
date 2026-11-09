@@ -1,4 +1,4 @@
-"""Live overview viewer for a robot running with ``is_sim = True``.
+"""Live overview viewer for a robot running with ``run-robot --sim``.
 
 The MuJoCo world runs in its own (spawned) :class:`MujocoWorldServer` process so
 that module subprocesses can talk to it over pipes. MuJoCo's native

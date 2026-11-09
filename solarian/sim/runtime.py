@@ -1,7 +1,8 @@
-"""Simulation runtime for the ``is_sim`` switch on :class:`~solarian.core.robot.Robot`.
+"""Simulation runtime behind ``solarian run-robot --sim``.
 
-A robot runs in MuJoCo by declaring ``is_sim = True`` and a ``scene``
-(:class:`~solarian.sim.configs.SceneConfig`) -- no separate ``SimRobot``,
+A robot runs in MuJoCo when it declares a ``scene``
+(:class:`~solarian.sim.configs.SceneConfig`) and is started with ``--sim``,
+which sets ``Robot.is_sim`` -- no separate ``SimRobot``,
 ``SimModule`` or ``SimServo`` classes are needed. The ordinary robot keeps its
 real modules and servos; when ``is_sim`` is set, :class:`Robot` delegates its
 ``connect`` / ``start`` / ``disconnect`` hardware paths to the helpers here.
@@ -18,7 +19,7 @@ leader arm requires zero schema or transport changes.
 
 MuJoCo and the other ``[sim]`` extras are imported lazily inside these helpers
 so that ``import solarian`` never requires them; only running a robot with
-``is_sim = True`` does.
+``--sim`` does.
 """
 
 from __future__ import annotations

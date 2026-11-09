@@ -38,7 +38,7 @@ PROJECT_FILES: Tuple[FileSpec, ...] = (
     FileSpec(Path("observation.py.tmpl"), Path("{package_name}/observation.py")),
     FileSpec(Path("settings.py.tmpl"), Path("{package_name}/settings.py")),
     FileSpec(Path("example_module.py.tmpl"), Path("{package_name}/modules/example_module.py")),
-    FileSpec(Path("dataset_op.py.tmpl"), Path("{package_name}/dataset_ops/drop_short_episodes.py")),
+    FileSpec(Path("dataset_op.py.tmpl"), Path("{package_name}/datasets/drop_short_episodes.py")),
     # conf/
     
     FileSpec(Path("conf/controller.yaml.tmpl"), Path("conf/controller.yaml")),
@@ -46,7 +46,7 @@ PROJECT_FILES: Tuple[FileSpec, ...] = (
     FileSpec(Path("conf/commands/replay.yaml.tmpl"), Path("conf/commands/replay.yaml")),
     FileSpec(Path("conf/robot.yaml.tmpl"), Path("conf/robot.yaml")),
     FileSpec(Path("conf/server.yaml.tmpl"), Path("conf/server.yaml")),
-    FileSpec(Path("conf/training/lerobot_act.yaml.tmpl"), Path("conf/training/lerobot_act.yaml")),
+    FileSpec(Path("conf/training/umi_pick_object.yaml.tmpl"), Path("conf/training/umi_pick_object.yaml")),
     FileSpec(Path("conf/deployment/localhost.yaml.tmpl"), Path("conf/deployment/localhost.yaml")),
 )
 
@@ -152,12 +152,12 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print(f"  │   ├── __init__.py")
     print(f"  │   ├── settings.py")
     print(f"  │   ├── robot.py")
-    print(f"  │   ├── modules.py")
     print(f"  │   ├── controller.py")
     print(f"  │   ├── server.py")
     print(f"  │   ├── action.py")
     print(f"  │   ├── observation.py")
-    print(f"  │   └── dataset_ops/drop_short_episodes.py")
+    print(f"  │   ├── modules/example_module.py")
+    print(f"  │   └── datasets/drop_short_episodes.py")
     print(f"  └── conf/")
     print(f"      ├── robot.yaml")
     print(f"      ├── controller.yaml")
@@ -166,7 +166,7 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print(f"      │   ├── record.yaml")
     print(f"      │   └── replay.yaml")
     print(f"      ├── training/")
-    print(f"      │   └── lerobot_act.yaml")
+    print(f"      │   └── umi_pick_object.yaml")
     print(f"      └── deployment/")
     print(f"          └── localhost.yaml")
     print()

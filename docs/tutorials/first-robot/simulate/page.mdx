@@ -15,7 +15,7 @@ solarian run-server
 ```
 
 ```bash {{ title: 'Terminal 2' }}
-solarian run-robot
+solarian run-robot --sim
 ```
 
 ```bash {{ title: 'Terminal 3' }}
@@ -51,8 +51,8 @@ The third is a `TypeError` before anything starts, naming `right_arm` or a joint
 
 ## What you just ran
 
-Same module class, same YAML, same controller as the real arm will use. Simulation swapped the Feetech bus for MuJoCo because `is_sim` is true. Nothing in `right_arm.py` mentions MuJoCo. The scene and the `sim_joint` lines are the entire simulation-specific part.
+Same module class, same YAML, same controller as the real arm will use. Simulation swapped the Feetech bus for MuJoCo because you passed `--sim`. Nothing in `right_arm.py` mentions MuJoCo. The scene and the `sim_joint` lines are the entire simulation-specific part.
 
-`solarian run-robot sim=false` would try to open `/dev/ttyUSB0` instead. Leave that until the arm exists on the desk.
+`solarian run-robot` without `--sim` would try to open `/dev/ttyUSB0` instead. Leave that until the arm exists on the desk.
 
 Next: [add the gripper](/docs/tutorials/first-robot/gripper).

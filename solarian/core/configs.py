@@ -405,9 +405,8 @@ class RobotConfig(BaseModel):
     #: capture from shared memory regardless.
     preview_image_hz: float = 30.0
     recording: RecordingConfig = RecordingConfig()
-    #: Run in MuJoCo simulation. ``None`` (default) defers to the robot class's
-    #: ``is_sim`` attribute; set it here (or via ``run-robot sim=true``) to
-    #: override, so the same robot class can run on hardware or in sim.
+    #: Run in MuJoCo instead of on hardware; set by ``run-robot --sim``. Older
+    #: robot.yaml files carry ``sim: null``, which means hardware.
     sim: bool | None = None
 
 class ModelEndpointConfig(BaseModel):

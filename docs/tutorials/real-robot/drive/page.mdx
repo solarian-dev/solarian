@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Drive it',
   description:
-    'Run the Tutorial 2 keyboard controller on the physical SO-106 with sim=false.',
+    'Run the Tutorial 2 keyboard controller on the physical SO-106.',
 }
 
 # Drive it
@@ -17,12 +17,12 @@ solarian --deployment lab run-server
 ```
 
 ```bash {{ title: 'Pi: robot' }}
-solarian --deployment lab run-robot sim=false
+solarian --deployment lab run-robot
 ```
 
 </CodeGroup>
 
-`sim=false` overrides `is_sim = True` on the class. `conf/robot.yaml` has `sim: null` so the override is accepted. If you forgot that line in Tutorial 2, add it before this command. Without it, a config value of false may not be what the class attribute says, and you will be arguing with the wrong robot.
+No `--sim` this time, so the robot opens the servo bus instead of MuJoCo. The robot class is the one from Tutorial 2, unchanged.
 
 On the laptop:
 
@@ -44,7 +44,7 @@ You already answered this in calibration, and a joint can still be backward if t
 
 - `feetech-inspect` no longer lists the ID. The adapter moved nodes after a reboot (`ttyACM0` became `ttyACM1`). Update `lab.yaml`.
 - The controller is talking to `localhost`. The deployment flag has to be on all three commands. A controller on `localhost` is a healthy process connected to nothing on the Pi.
-- `sim=false` was omitted and the Pi opened a sim window instead of the bus. Look at the robot terminal. A MuJoCo banner means you are not on hardware.
+- `--sim` was left on the command and the Pi opened a sim window instead of the bus. Look at the robot terminal. A MuJoCo banner means you are not on hardware.
 
 The keyboard code did not change. If simulation still moves and hardware does not, the failure is the port, the deployment, or calibration, in that order.
 

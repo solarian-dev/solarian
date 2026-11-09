@@ -1,3 +1,4 @@
+import argparse
 import logging
 import signal
 
@@ -20,12 +21,27 @@ class RunRobotCommand(BaseCommand):
     to, with the deployment profile that names that machine's device ports. It
     holds the actuator buses and cameras open, so calibration and camera tools
     cannot run at the same time.
+
+    With --sim the same robot runs in MuJoCo instead of on hardware, in the
+    scene its class declares.
     """
+    usage = "[--sim] [key=value ...]"
+    options = {
+        "--sim": "Run in MuJoCo instead of on hardware; the robot must declare a scene.",
+    }
     examples = (
         "solarian run-robot",
+        "solarian run-robot --sim",
         "solarian run-robot -d pi",
         "solarian run-robot fps=60",
     )
+
+    def parse_args(self, argv: list[str]) -> list[str]:
+        parser = argparse.ArgumentParser(prog="solarian run-robot")
+        parser.add_argument("--sim", action="store_true", help="Run in MuJoCo instead of on hardware.")
+        ns, overrides = parser.parse_known_args(argv)
+        self.sim = ns.sim
+        return overrides
 
     def get_config_class(self):
         """Return the config class for this command."""
@@ -36,6 +52,8 @@ class RunRobotCommand(BaseCommand):
 
         log_level = getattr(logging, getattr(settings, 'LOG_LEVEL', 'INFO'), logging.INFO)
         setup_process_logging(level=log_level, logger_name=None)
+        if self.sim:
+            cfg.sim = True
         RobotClass = get_class(settings.ROBOT_CLASS)
         robot = RobotClass(cfg)
 

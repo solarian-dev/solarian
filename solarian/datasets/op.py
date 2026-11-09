@@ -16,7 +16,7 @@ Kinds, by what one input episode becomes:
 * ``COMBINE``: several input sessions into one (merging).
 
 Plugins register ops under the ``solarian.dataset_ops`` entry-point group. A
-project needs no registration: each ``<package>/dataset_ops/<op_name>.py`` of
+project needs no registration: each ``<package>/datasets/<op_name>.py`` of
 the project being run in defines one op, which can import the project's code.
 """
 
@@ -250,7 +250,9 @@ class DatasetOp(ABC):
 
 
 #: Directory of a project's package that holds its ops, one per file.
-PROJECT_OPS_DIR = "dataset_ops"
+PROJECT_OPS_DIR = "datasets"
+#: Where project ops lived before; still there means the project was never moved.
+LEGACY_PROJECT_OPS_DIR = "dataset_ops"
 
 
 @dataclass
@@ -300,6 +302,9 @@ def _project_ops(project: Path, errors: list[tuple[str, str]]) -> dict[str, type
 
     package = Path(_find_settings_path(project)).parent
     ops_dir = package / PROJECT_OPS_DIR
+    legacy = package / LEGACY_PROJECT_OPS_DIR
+    if legacy.is_dir() and not ops_dir.is_dir():
+        errors.append((str(legacy.relative_to(project)), f"Move {legacy} to {ops_dir}."))
     if not (package / "__init__.py").is_file() or not ops_dir.is_dir():
         return {}
     if str(project) not in sys.path:

@@ -79,11 +79,11 @@ solarian install ur5
 solarian add-op <name> [--force]
 ```
 
-Writes `<package>/dataset_ops/<name>.py`, a dataset op stub copied from the same template as the `drop_short_episodes.py` example every new project gets. Nothing needs registering: each file in `dataset_ops/` is an op, named after the file with `_` turned into `-` (`split_by_success.py` is `split-by-success`), unless its class sets `name`. `--force` overwrites the file. See [Dataset ops](/docs/datasets#dataset-ops).
+Writes `<package>/datasets/<name>.py`, a dataset op stub copied from the same template as the `drop_short_episodes.py` example every new project gets. Nothing needs registering: each file in `datasets/` is an op, named after the file with `_` turned into `-` (`split_by_success.py` is `split-by-success`), unless its class sets `name`. `--force` overwrites the file. See [Dataset ops](/docs/datasets#dataset-ops).
 
 ```bash
 solarian add-op split-by-success
-solarian dataset ops                 # lists it, with source project:so106/dataset_ops/split_by_success.py
+solarian dataset ops                 # lists it, with source project:so106/datasets/split_by_success.py
 ```
 
 ## Robot commands
@@ -94,9 +94,10 @@ These commands run on the robot machine. They import the modules listed under <c
 
 ```bash
 solarian run-robot
+solarian run-robot --sim
 ```
 
-Loads `conf/robot.yaml`, instantiates your `Robot` subclass, spawns one process per `Module`, and starts the action receiver / observation publisher. See [Robots](/docs/robots).
+Loads `conf/robot.yaml`, instantiates your `Robot` subclass, spawns one process per `Module`, and starts the action receiver / observation publisher. See [Robots](/docs/robots). `--sim` runs the same robot in MuJoCo, in the `scene` its class declares; see [Simulation](/docs/simulation).
 
 ### `calibrate`
 
@@ -286,7 +287,7 @@ solarian dataset apply <dir>[@VERSION] <op> [--param KEY=VALUE]... [--review | -
 solarian dataset log <dir>
 ```
 
-Runs [dataset ops](/docs/datasets#dataset-ops) on recorded sessions without changing them. `new` starts a computed dataset over a session; `apply` adds a version made by an op on another version (by default the only leaf, or `@source`). `redo`, `accept`, `close`, `drop`, `export` and `rebuild` cover the rest, and `solarian dataset --help` lists them all. `--project DIR` picks the project whose `dataset_ops/` load, by default the one around the current directory.
+Runs [dataset ops](/docs/datasets#dataset-ops) on recorded sessions without changing them. `new` starts a computed dataset over a session; `apply` adds a version made by an op on another version (by default the only leaf, or `@source`). `redo`, `accept`, `close`, `drop`, `export` and `rebuild` cover the rest, and `solarian dataset --help` lists them all. `--project DIR` picks the project whose `datasets/` load, by default the one around the current directory.
 
 ### `umi-slam`
 

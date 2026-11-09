@@ -64,7 +64,7 @@ A position is three numbers along three axes. An orientation is also three numbe
 - **Axis-angle.** Pick the axis you turn around and the angle you turn by. Pack both into one vector of three numbers: its direction is the axis, and its length is the angle in radians. Solarian uses this one.
 - **Rotation matrix.** Nine numbers in a 3×3 grid. Each column is one axis of the turned frame, written in the original frame. Easy to combine: rotating twice is multiplying two matrices.
 - **Quaternion.** Four numbers. Smooth to interpolate between two orientations, and common in simulators and model files.
-- **Euler angles**, such as roll, pitch, and yaw. Three turns about three axes, one after the other. Easy to picture, and the order of the turns matters.
+- **Euler angles**, such as roll, pitch, and yaw. Three turns about the base frame's axes, one after the other. Easy to picture, and the order of the turns matters.
 
 Move and turn the gripper, and watch all four change together. Every orientation is a single turn about some axis, the amber line, starting from the base frame's axes.
 

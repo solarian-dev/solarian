@@ -14,7 +14,7 @@ Most of robotics is one of two problems.
 
 **Locomotion** is moving the robot itself, on wheels, tracks, or legs. It answers the question *how do I get there?* A warehouse cart driving to a shelf, a four-legged robot climbing stairs, and a vacuum mapping a living room are all locomotion. Getting to a goal takes three steps:
 
-- **Path planning** builds the plan: it finds a route from where the robot is to the goal that avoids every obstacle.
+- **Mapping and path planning** build the plan: mapping records the obstacles, and path planning finds a route from where the robot is to the goal that avoids every one of them.
 - **Trajectory optimization** turns that route into a trajectory the robot can follow, smooth and within its speed limits, saying where it should be at each moment.
 - **Control** drives the motors so the robot follows that trajectory, correcting it whenever it drifts.
 
@@ -22,7 +22,7 @@ Together with knowing where the robot is along the way, these steps are called *
 
 <LocomotionFigure />
 
-**Manipulation** is changing the world with a hand. Grasping, placing, pushing, turning, using a tool. It answers the question *what do I do with this object?* Picking a cup off a table, folding a shirt, and tightening a screw are all manipulation.
+**Manipulation** is changing the world with an end effector (hand, gripper, or tool). Grasping, placing, pushing, turning, using a tool. It answers the question *what do I do with this object?* Picking a cup off a table, folding a shirt, and tightening a screw are all manipulation.
 
 <ManipulationFigure />
 
@@ -32,7 +32,7 @@ Some robots do both: an arm on a wheeled base, or on a legged body. That is a **
 
 Locomotion is largely solved. Legged robots trained with reinforcement learning in simulation walk over rough ground, recover from a push, and climb stairs. Wheeled robots build a map, locate themselves on it, and plan a route through a building. You can buy both today.
 
-Manipulation is still a work in progress, and it is the hardest open problem in robotics. Every object has its own shape, weight, and friction. The hand has to touch the world, and contact is hard to predict. A grasp a few millimetres off slips. A task that looks trivial to a person, such as loading a dishwasher, hides hundreds of these small decisions.
+Manipulation is still a work in progress, and it is the hardest open problem in robotics. Every object has its own shape, weight, and friction. The hand has to touch the world, and contact is hard to predict. A grasp a few millimetres off slips. A task that looks trivial to a person, such as loading a dishwasher, hides hundreds of small decisions that involve perception and control running in a very tight feedback loop.
 
 So **Solarian focuses on manipulation first**: an arm, a gripper, a camera, and the tools to teach them a task from demonstrations.
 

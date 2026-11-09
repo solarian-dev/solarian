@@ -42,7 +42,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "add-op",
     module_path=f"{_pkg}.add_op",
-    help="Write a dataset op stub into this project's <package>/dataset_ops/",
+    help="Write a dataset op stub into this project's <package>/datasets/",
     setup_modules=(),
     category="Project",
 )

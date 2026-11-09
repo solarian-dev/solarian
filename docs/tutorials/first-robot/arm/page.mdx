@@ -235,9 +235,6 @@ from so106.modules.right_arm import RightArmModule
 
 
 class So106Robot(Robot):
-    # Simulation until Tutorial 3. `sim: null` in conf/robot.yaml lets a
-    # single run override this with `solarian run-robot sim=false`.
-    is_sim = True
     view = True
 
     right_arm = RightArmModule()
@@ -259,7 +256,7 @@ class So106Robot(Robot):
 
 The lines that matter:
 
-- **`is_sim = True`** runs the robot in MuJoCo. The servos become the model's joints, and the module class does not change.
+- **`scene`** is what lets the robot run in MuJoCo. You choose sim per run with `solarian run-robot --sim`; without the flag the same class drives the hardware. In sim the servos become the model's joints, and the module class does not change.
 - **`view = True`** opens a window that draws the simulation.
 - **`world_mjcf`** is the world you just wrote.
 - **`module="right_arm"`** pairs the attachment with the module of that name, so the module's servos drive this model's joints.
@@ -267,15 +264,8 @@ The lines that matter:
 - **`prefix="right/"`** renames the model's joints inside the scene, so `shoulder_pan` becomes `right/shoulder_pan`. That is why the YAML's `sim_joint` lines carry the prefix. It also lets a second arm join later without its joint names colliding.
 - **`timestep=0.002`** steps the physics at 500 Hz.
 
-Last, let the command line override `is_sim`. Add this line to `conf/robot.yaml`, next to `fps`:
-
-```yaml {{ title: 'conf/robot.yaml' }}
-# null defers to the class attribute. Override with sim=true or sim=false.
-sim: null
-```
-
 <Note>
-  You can start the robot now. The sim window should show the arm at mid-travel, holding still, because nothing sends it a command yet. A missing <code>so106.xml</code> fails at startup with a file error. A <code>sim_joint</code> that does not match the prefixed model name fails when the world is built, and the message names the joint.
+  You can start the robot now with <code>solarian run-robot --sim</code>. The sim window should show the arm at mid-travel, holding still, because nothing sends it a command yet. A missing <code>so106.xml</code> fails at startup with a file error. A <code>sim_joint</code> that does not match the prefixed model name fails when the world is built, and the message names the joint.
 </Note>
 
 Next: [observations and actions](/docs/tutorials/first-robot/observations-actions).

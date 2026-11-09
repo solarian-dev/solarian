@@ -100,7 +100,7 @@ You tell a servo an angle, and it has to produce whatever torque gets the joint 
 
 <PidFigure />
 
-Try the presets from left to right. **P only** swings past the target and settles short of the line, because gravity wins the last bit. **+ D** calms the swing. **+ I** closes the gap. The last three presets compare damping: underdamped crosses the target, critically damped is the fastest arrival that never crosses, and overdamped arrives later.
+Try the presets from left to right. **P only** swings past the target and settles short of the line, because gravity wins the last bit. **+ D** calms the swing. **+ I** closes the gap. The last three presets cancel that weight and compare damping: underdamped crosses the target, critically damped is the fastest arrival that never crosses, and overdamped arrives later.
 
 ### Other controllers
 
@@ -115,7 +115,7 @@ PID is the workhorse, and it is far from the only option. A few names you will m
 
 Each Solarian piece maps onto one part of the loop.
 
-**Read.** The readings arrive as an [`Observation`](/docs/observations): a typed snapshot with one group of fields per module. You write it as a small class. This one reads the six encoders and the wrist camera:
+**Read: Observation as readings from sensors.** The readings from all sensors arrive as an [`Observation`](/docs/observations): a typed snapshot with one group of fields per module. You declare it as a small class. This one reads the six encoders and the wrist camera, each field references a particular sensor module and value:
 
 ```python {{ title: 'so106/observation.py' }}
 class RightArmObs(ModuleObs):
@@ -139,10 +139,27 @@ class So106Observation(Observation):
 **Decide.** Solarian splits the loop across three processes:
 
 - The **robot** process owns the hardware, or the simulator. It reads the sensors and applies actions.
-- The **relay server** passes observations and actions between the other two, so the computer wired to the arm and the computer running the decisions can be different machines.
 - The **controller** process decides. In Tutorial 2 the decision is "the operator pressed a key". Later it is a skill.
+- The **relay server** passes observations and actions between the other two, so the computer wired to the arm and the computer running the decisions can be different machines.
 
-**Write.** Commands travel as an [`Action`](/docs/actions), the same shape written the other way. Each `FeetechServo` runs its PID inside the motor, so Solarian sends a target position and the servo produces the torque. On the SO-106 the joints that hold the arm up use a small I term, which is what lifts the sag you saw in the figure. The shoulder pan carries no constant gravity load, so it runs with I at zero, which also keeps it from chattering inside its gear backlash.
+
+**Write: Action as commands to actuators.** Commands travel as an [`Action`](/docs/actions), the same shape written the other way. You declare it as a small class. This one commands the six joint targets, and each field references the same servo the observation reads. The camera is only read, so it has no fields here:
+
+```python {{ title: 'so106/action.py' }}
+class RightArmAction(ModuleAction):
+    shoulder_pan = ActuatorField(So106Robot.right_arm.shoulder_pan.pos)
+    shoulder_lift = ActuatorField(So106Robot.right_arm.shoulder_lift.pos)
+    elbow_flex = ActuatorField(So106Robot.right_arm.elbow_flex.pos)
+    wrist_flex = ActuatorField(So106Robot.right_arm.wrist_flex.pos)
+    wrist_yaw = ActuatorField(So106Robot.right_arm.wrist_yaw.pos)
+    wrist_roll = ActuatorField(So106Robot.right_arm.wrist_roll.pos)
+
+
+class So106Action(Action):
+    right_arm = RightArmAction()
+```
+
+Each `FeetechServo` runs its PID inside the motor, so Solarian sends a target position and the servo produces the torque. On the SO-106 the joints that hold the arm up use a small I term, which is what lifts the sag you saw in the figure. The shoulder pan carries no constant gravity load, so it runs with I at zero, which also keeps it from chattering inside its gear backlash.
 
 **Timing.** The arm module interpolates between targets. In [Tutorial 4](/docs/tutorials/skills/move) you set its limits in the module's config:
 

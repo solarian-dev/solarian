@@ -1,4 +1,4 @@
-"""``solarian add-op``: a dataset op stub in the project's ``<package>/dataset_ops/``."""
+"""``solarian add-op``: a dataset op stub in the project's ``<package>/datasets/``."""
 
 from __future__ import annotations
 
@@ -14,9 +14,9 @@ from solarian.cli import BaseCommand, CommandRegistry
 class AddOpCommand(BaseCommand):
     category = "Project"
     uses_config = False
-    help = "Write a dataset op stub into this project's <package>/dataset_ops/"
+    help = "Write a dataset op stub into this project's <package>/datasets/"
     description = """
-    Writes <package>/dataset_ops/<name>.py from the op template: a filter that
+    Writes <package>/datasets/<name>.py from the op template: a filter that
     drops short episodes, to edit into the op you need. A convenience only:
     any file there that defines one DatasetOp is an op, named after the file
     with _ as -, and `solarian dataset ops` lists it as project:<file>.

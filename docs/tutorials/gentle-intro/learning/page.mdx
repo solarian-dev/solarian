@@ -28,12 +28,12 @@ Five words describe every robot task.
 - The **state** *sₜ* is everything that decides what happens next, at time *t*: the joint angles and velocities, the pose of the cup, the friction of the table.
 - The **observation** *oₜ* is what the sensors return: the six encoder angles and the wrist image. It is a part of the state, seen through the sensors.
 - The **action** *aₜ* is what the policy writes: joint targets, a hand pose, the gripper width.
-- The **dynamics** are the rule that gives the next state from the current state and the action. On a real robot that rule is physics. The policy never sees it written down; a simulator such as MuJoCo is an approximation of it.
+- The **dynamics** are the rule that gives the next state from the current state and the action. On a real robot that rule is physics. The policy never sees it written down; a simulator such as [MuJoCo](https://mujoco.org/) is an approximation of it.
 - The **reward** *rₜ* is a number that scores how well the task is going. Only reinforcement learning uses it.
 
-Put together, these form a **Markov decision process**, or MDP: states, actions, dynamics, and reward. *Markov* names one assumption: the next state depends only on the current state and action, so the present holds everything needed to predict the future.
+Put together, these form a **[Markov decision process](https://en.wikipedia.org/wiki/Markov_decision_process)**, or MDP: states, actions, dynamics, and reward. *Markov* names one assumption: the next state depends only on the current state and action, so the present holds everything needed to predict the future.
 
-A robot only ever sees observations, so its real problem is *partially observed*. A single image hides how fast the cup is sliding, and the gripper hides what is behind it. Policies make up for it by reading a short history of observations and several cameras at once.
+A robot only ever sees observations, so its real problem is *partially observed*. A single image hides how fast the cup is sliding, and the gripper hides what is behind it. Policies make up for it by reading a short history of observations and several sensors at once.
 
 Run the loop and it leaves a **trajectory**, the sequence *o₀, a₀, o₁, a₁, o₂, …*. An episode in a Solarian dataset is exactly that: a recorded trajectory.
 
@@ -41,7 +41,7 @@ Run the loop and it leaves a **trajectory**, the sequence *o₀, a₀, o₁, a�
 
 ## Two ways to learn a policy
 
-**Imitation learning** learns from demonstrations. A person does the task while the robot records the observations and actions, and the network learns to output the person's action for each observation. In its simplest form, **behavior cloning**, it is plain supervised learning on (observation, action) pairs. Demonstrations come from teleoperation with a leader arm or a space mouse, or from a hand-held gripper like UMI's, which records a person's hand directly.
+**Imitation learning** learns from demonstrations. A person does the task while the robot records the observations and actions, and the network learns to output the person's action for each observation. In its simplest form, **behavior cloning**, it is plain supervised learning on (observation, action) pairs. Demonstrations come from teleoperation with a leader arm or a space mouse, or from a hand-held gripper like [UMI](https://umi-gripper.github.io/)'s, which records a person's hand directly.
 
 Imitation has one well-known weakness, **compounding error**. Every small mistake moves the robot a little away from the states in the demonstrations, where the policy is less sure, so the next mistake is larger. Good datasets include recoveries, and good policies predict several steps at once, which leaves fewer chances to drift.
 
@@ -90,7 +90,7 @@ Because it starts from random noise, each run can land on a different mode, and 
 
 - **Inputs.** The images from each camera pass through a ResNet, a standard image network, into a grid of features. The current joint positions join them.
 - **Model.** A transformer encoder mixes all those features. A transformer decoder then answers *k* learned queries at once, one per future step, so a single prediction is a **chunk** of the next *k* actions. The paper uses 100 steps, two seconds at 50 Hz.
-- **Style variable.** During training, a small encoder reads the demonstrated chunk and compresses *how* it was done into a short vector, a CVAE latent. The decoder learns to use it, which soaks up the differences between demonstrators. At test time the vector is set to zero, the average style.
+- **Style variable.** During training, a small encoder reads the demonstrated chunk and compresses *how* it was done into a short vector, a [CVAE](https://en.wikipedia.org/wiki/Variational_autoencoder) latent. The decoder learns to use it, which soaks up the differences between demonstrators. At test time the vector is set to zero, the average style.
 - **Loss.** The predicted chunk is compared to the demonstrated one with an L1 loss, the sum of absolute differences.
 
 **Chunking is the key idea**. A policy that commits to two seconds of motion makes far fewer decisions per task, so errors have fewer chances to compound, and pauses in the demonstrations stop confusing it.
@@ -99,7 +99,7 @@ ACT then smooths the motion with **temporal ensembling**. It predicts a fresh ch
 
 <ActionChunkFigure />
 
-In Solarian, the `solarian-policy-lerobot` plugin trains ACT with the `lerobot_act` trainer and serves it as the `lerobot-act` policy service. See [Training](/docs/training).
+In Solarian, the [`solarian-umi-skill`](/plugins/solarian-umi-skill) plugin trains diffusion policies from data collected from a UMI handheld device, and serves it for inference as policy service. See [Training](/docs/training).
 
 ## VLAs, vision-language-action models
 
@@ -143,11 +143,31 @@ Manipulation is harder for RL than walking. Contact with objects is hard to simu
 
 ## In Solarian
 
-Every policy, written or learned, sits behind the same interface. A [`PolicyServer`](/docs/policies) loads the model and answers predictions, and a skill calls it through a `PolicyClient`. Swapping a diffusion policy for ACT, or for a VLA, changes the server and leaves the skill alone.
+A **[skill](/docs/skills)** is one behavior the controller can start and stop. Move to a pose, open the gripper, or run a learned policy are all skills. A skill reads the latest observation and returns the next action.
 
-Notice what the policy leaves to the earlier chapters. It outputs hand poses or joint targets, so inverse kinematics turns poses into joints. The interpolator times the motion. PID in each servo holds the joints. The person who demonstrated the task already chose a path around the obstacles.
+A learned policy is a skill whose decision comes from a model. The model runs in its own process, a **[policy server](/docs/policies)**. A policy server is a **[service](/docs/services)**: a model other programs call over HTTP. [`solarian run-service`](/docs/commands#run-service) starts that process and loads a checkpoint into it, so the model stays in memory and answers each request. The skill reaches it through a **policy client**, which sends the observation and reads the action that comes back. The client is the same for every kind of model. Swapping a diffusion policy for ACT, or for a VLA, changes the server and leaves the skill alone.
 
-<PolicySurvey />
+```mermaid
+flowchart TD
+    dataset[Dataset of trajectories] --> train["solarian train"]
+    train --> trainer[Trainer]
+    trainer --> ckpt[Checkpoint]
+    ckpt --> server[Policy server, runs the model]
+    run["run-service"] --> server
+    skill[Skill] --> client[Policy client]
+    client -->|observation| server
+    server -->|action| client
+```
+
+The checkpoint is what a **[trainer](/docs/training)** writes. A trainer reads a dataset of recorded trajectories, the observation and the action of every tick, and fits the network's weights until those pairs come back out. [`solarian train`](/docs/training) is the command that runs one. The checkpoint it writes is the file `solarian run-service` loads.
+
+Notice what the policy leaves to the earlier chapters. Its action can be in **[joint space](/docs/tutorials/gentle-intro/configuration#joint-coordinates-and-task-coordinates)** or in **[task space](/docs/tutorials/gentle-intro/configuration#joint-coordinates-and-task-coordinates)**, and Solarian supports both. A joint-space action is one target per joint, so the motors can follow it directly, and it fits only the arm it was recorded on: another arm, jointed differently, cannot replay those angles. A task-space action is the hand's pose. Inverse kinematics has to turn it into joint targets, and that fails when the pose is out of reach, but the motion itself does not depend on how the arm is jointed.
+
+Solarian leans toward task space, through the [`solarian-umi-skill`](/plugins/solarian-umi-skill) plugin. A UMI model transfers to a new arm with no new training, as long as that arm wears the same UMI gripper and has at least six degrees of freedom, enough for inverse kinematics to meet the commanded pose. The demonstrations are faster to collect too: a hand-held UMI collector records the person's own hand, instead of teleoperating the robot for every episode.
+
+Either way, the interpolator times the motion and PID in each servo holds the joints. The person who demonstrated the task already chose a path around the obstacles.
+
+{/* <PolicySurvey /> */}
 
 [Tutorial 4](/docs/tutorials/skills/umi) runs a trained policy as a skill. [Tutorial 5](/docs/tutorials/training) records demonstrations and trains one.
 
