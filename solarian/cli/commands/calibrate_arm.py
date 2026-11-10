@@ -53,7 +53,7 @@ _POSES = 3
 # Metres and hertz. Cross-correlation of a narrowband signal has a broad peak
 # that the finite window biases toward zero lag; the bias falls as 1/f^2, and is
 # ~18 ms at 0.5 Hz but ~2 ms at 1.25 Hz over a 10 s sweep. 2 cm at 1.25 Hz peaks
-# at 0.16 m/s, inside the 0.25 m/s so106 arms run.
+# at 0.16 m/s, inside the 0.25 m/s arm1 arms run.
 _AMPLITUDE_M = 0.02
 _FREQ_HZ = 1.25
 # Refuse above this fraction of max_speed: a stretched waypoint arrives late

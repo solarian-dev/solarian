@@ -31,9 +31,9 @@ actuators:
   The command is interactive. <code>solarian calibrate</code> lists every module on your <code>Robot</code> and <code>Controller</code> and asks which to calibrate.
 </Note>
 
-## Calibrate an arm (SO-106)
+## Calibrate an arm (Solarian Arm 1)
 
-Example: the SO-106 project, module `right_arm`.
+Example: the Solarian Arm 1 project, module `right_arm`.
 
 ```bash
 solarian calibrate   # pick right_arm
@@ -43,7 +43,7 @@ The console uses the same step titles as this page. Answer ENTER / Y / N in the 
 
 ### Step 1: Joint limits
 
-Move every hard-stop joint through its full travel. Continuous joints (`wrist_roll` on SO-106) are printed and skipped — they have no hard stop.
+Move every hard-stop joint through its full travel. Continuous joints (`wrist_roll` on Solarian Arm 1) are printed and skipped — they have no hard stop.
 
 The status board shows **MIN / POS / MAX**. `POS` is the raw encoder. A single wrap-looking glitch is ignored.
 

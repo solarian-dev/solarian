@@ -348,7 +348,7 @@ def joints_present(module, joints: Iterable[str]) -> Dict[str, float]:
     """Read the real module's present normalized joint positions.
 
     Joints without a calibration entry are skipped. Continuous joints (e.g.
-    SO-106 ``wrist_roll``) are omitted by the hard-stop sweep, so including
+    Solarian Arm 1 ``wrist_roll``) are omitted by the hard-stop sweep, so including
     them here would KeyError inside the servo ``_normalize`` and freeze the
     whole live mirror.
     """

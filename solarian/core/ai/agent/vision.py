@@ -21,7 +21,7 @@ from solarian.core.ui.overlay import MASK_COLOR, mask_rings, tint_masks
 
 _GRID_COLOR = (255, 255, 255)
 _POINT_COLOR = (0, 200, 255)
-#: Cyan: unlike red or orange, not the colour of a tracker tint or of the so106 fingers.
+#: Cyan: unlike red or orange, not the colour of a tracker tint or of the arm1 fingers.
 _TARGET_COLOR = (0, 255, 255)
 #: Pixels between the target's bounds and its box; JPEG ringing spreads about 2.
 _TARGET_MARGIN = 3

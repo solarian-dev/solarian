@@ -37,7 +37,7 @@ _DEFAULT_JOINT_SPEED = 1.05
 # model's configuration limits, and the headroom below which a joint counts as
 # the thing that stopped it.
 _REACH_ITERATIONS = 300
-# A pass that moves no joint further than this has converged: on an SO-106
+# A pass that moves no joint further than this has converged: on a Solarian Arm 1
 # orbit that is 7-145 passes, landing within 0.01 mm of all 300.
 _REACH_SETTLED_RAD = 1e-5
 _LIMIT_MARGIN_RAD = np.deg2rad(1.0)

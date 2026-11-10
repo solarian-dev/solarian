@@ -800,7 +800,7 @@ class CalibrateUmiCameraCommand(BaseCommand):
     """
     params = {
         "config": "UMI skill yaml to read camera and image flags from; a filename "
-                  "in conf/ or a path (default: umi.yaml). so106's cup arrange "
+                  "in conf/ or a path (default: umi.yaml). arm1's cup arrange "
                   "file is config=cup_arrange.yaml.",
         "gold": "Path to a custom gold policy image; defaults to the UMI image "
                 "shipped with Solarian.",

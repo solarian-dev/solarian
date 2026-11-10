@@ -1,8 +1,7 @@
 """Export an Onshape assembly into an attachable MuJoCo (MJCF) sim model.
 
-This generalizes the two bespoke scripts originally written for the SO-106 arm
-(``export_so106.py`` + ``clean_mjcf.py``) into a single, config-driven pipeline
-that any assembly can reuse. It is the engine behind the ``solarian
+This generalizes the two bespoke scripts originally written for the Solarian
+Arm 1 into a single, config-driven pipeline that any assembly can reuse. It is the engine behind the ``solarian
 onshape-export`` CLI command.
 
 The pipeline has two stages:
@@ -69,7 +68,7 @@ class SolarianExportSpec:
     """The ``solarian`` block of an assembly ``config.json``.
 
     Everything specific to turning an Onshape assembly into an attachable
-    Solarian sim model. All fields have defaults that reproduce the SO-106 arm's
+    Solarian sim model. All fields have defaults that reproduce the Solarian Arm 1's
     original behaviour.
     """
 

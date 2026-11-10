@@ -72,7 +72,7 @@ class ArmModule(Module):
     rz = CartesianIKActuator()
 
     ik_backend = MinkIK(
-        mjcf="assets/so106.xml",
+        mjcf="assets/arm1.xml",
         joints={...},
         frame="tcp",
     )
@@ -85,7 +85,7 @@ interpolator_type: pose
 max_speed: [0.25, 0.6]   # m/s, rad/s
 ```
 
-See [Adding a new arm](/docs/ik#adding-a-new-arm) for the full SO-106 contract.
+See [Adding a new arm](/docs/ik#adding-a-new-arm) for the full Solarian Arm 1 contract.
 
 ### Scheduling from a controller
 
@@ -172,5 +172,5 @@ Diffusion (and similar) policies emit a chunk of absolute target times. For each
 
 - [Modules](/docs/modules) — process loop, config, handlers
 - [Motion actions](/docs/actions#waypoint-params) — `SCHEDULE_L` / `SCHEDULE_J`
-- [Adding a new arm](/docs/ik#adding-a-new-arm) — full MinkIK pose contract (SO-106)
+- [Adding a new arm](/docs/ik#adding-a-new-arm) — full MinkIK pose contract (Solarian Arm 1)
 - [Inverse Kinematics](/docs/ik) — Cartesian actuators and `IKActuatorBus`

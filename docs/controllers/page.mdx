@@ -261,7 +261,7 @@ class MyController(Controller):
                 self.start_skill(LiftSkill(params={"arm": "right_arm", "dz": 0.05}))
 ```
 
-[Skills](/docs/skills) covers the rest: what a step can read, returning chunks of waypoints, reporting status, per-project config in `conf/skills/`, and packaging a skill as a plugin. The [skills tutorial](/docs/tutorials/skills) builds several on the SO-106, starting with [a one-shot skill you write](/docs/tutorials/skills/your-own).
+[Skills](/docs/skills) covers the rest: what a step can read, returning chunks of waypoints, reporting status, per-project config in `conf/skills/`, and packaging a skill as a plugin. The [skills tutorial](/docs/tutorials/skills) builds several on the Solarian Arm 1, starting with [a one-shot skill you write](/docs/tutorials/skills/your-own).
 
 ### A skill's lifecycle
 
@@ -421,7 +421,7 @@ class TeleopController(Controller):
         return action
 ```
 
-The SO-106 project does the same as a skill, `LeaderFollowSkill`, constructed with `params={"leader": "leader_arm", "arm": "right_arm", ...}`, so leader follow is one more skill that preempts teleop rather than a different controller.
+The Solarian Arm 1 project does the same as a skill, `LeaderFollowSkill`, constructed with `params={"leader": "leader_arm", "arm": "right_arm", ...}`, so leader follow is one more skill that preempts teleop rather than a different controller.
 
 Read them from the module's [`ObservationBuffer`](/docs/glossary#observationbuffer) rather than calling `read_sensors()` yourself — a blocking serial read inside the control tick costs you the tick, and costs it once per reader. The buffer reads the hardware once, when `_tick_local_modules()` runs, and every reader after that is cheap.
 

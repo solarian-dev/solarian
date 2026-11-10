@@ -22,17 +22,17 @@ Your arm module from Tutorial 2 already handles `MOVE_J` by writing the joint va
 
 ## A key for home
 
-`so106/controller.py`:
+`arm1/controller.py`:
 
 ```python
 from solarian.core import Controller
 from solarian.core.event import Event, EventType, event_handler
 from solarian_move_skill import MoveSkill
 
-from so106.skills import OpenGripperSkill
+from arm1.skills import OpenGripperSkill
 
 
-class So106Controller(Controller):
+class Arm1Controller(Controller):
     skills = (OpenGripperSkill, MoveSkill)
 
     @event_handler(EventType.KEY_DOWN)
@@ -84,7 +84,7 @@ Restart the controller. `0` tucks, `1` reaches. If `1` raises `KeyError` naming 
 
 Joint poses were enough for `home` and `reach`. A policy does not speak in joint angles. It speaks in where the fingertips should be: `x, y, z` and three rotations. Inverse kinematics is the arm module turning that into joints.
 
-Replace `so106/modules/right_arm.py`. The hand-written `MOVE_J` handler has to go. `ArmModule` already implements it, and a second handler on the subclass would hide that one. `ArmModule` also needs the joint limits from the kinematics model, which is why this arrives now and not in Tutorial 2.
+Replace `arm1/modules/right_arm.py`. The hand-written `MOVE_J` handler has to go. `ArmModule` already implements it, and a second handler on the subclass would hide that one. `ArmModule` also needs the joint limits from the kinematics model, which is why this arrives now and not in Tutorial 2.
 
 ```python
 from solarian.core.arm_module import ArmModule
@@ -119,7 +119,7 @@ class RightArmModule(ArmModule):
     # The arm MJCF, not the scene. Joint names here are unprefixed.
     # sim_joint in the YAML stays prefixed, because that is the composed world.
     ik_backend = MinkIK(
-        mjcf="assets/so106/so106.xml",
+        mjcf="assets/arm1/arm1.xml",
         joints=dict(zip(JOINTS, JOINTS)),
         frame="flange",
         position_cost=1.0,
@@ -127,7 +127,7 @@ class RightArmModule(ArmModule):
     )
 ```
 
-The six `CartesianIKActuator`s are the pose. `frame="flange"` is the wrist site in the arm model. The fingertips are not the flange. They sit a fixed offset beyond it, which the gripper module already measured. Pass that offset when you construct the arm, in `so106/robot.py`:
+The six `CartesianIKActuator`s are the pose. `frame="flange"` is the wrist site in the arm model. The fingertips are not the flange. They sit a fixed offset beyond it, which the gripper module already measured. Pass that offset when you construct the arm, in `arm1/robot.py`:
 
 ```python
 right_arm = RightArmModule(ik_tcp=UmiSlimFeetechModule.tcp_from_flange)
@@ -144,12 +144,12 @@ max_accel: [0.5, 3.0]
 And the action schema has to grow the six axes, or a Cartesian command has nowhere to land. In `RightArmAction`:
 
 ```python
-x = ActuatorField(So106Robot.right_arm.x.pos)
-y = ActuatorField(So106Robot.right_arm.y.pos)
-z = ActuatorField(So106Robot.right_arm.z.pos)
-rx = ActuatorField(So106Robot.right_arm.rx.pos)
-ry = ActuatorField(So106Robot.right_arm.ry.pos)
-rz = ActuatorField(So106Robot.right_arm.rz.pos)
+x = ActuatorField(Arm1Robot.right_arm.x.pos)
+y = ActuatorField(Arm1Robot.right_arm.y.pos)
+z = ActuatorField(Arm1Robot.right_arm.z.pos)
+rx = ActuatorField(Arm1Robot.right_arm.rx.pos)
+ry = ActuatorField(Arm1Robot.right_arm.ry.pos)
+rz = ActuatorField(Arm1Robot.right_arm.rz.pos)
 ```
 
 Do the same six lines on `RightArmObs`, with `SensorField`. The observation is how anything, including you in a log, reads the pose the kinematics produced.

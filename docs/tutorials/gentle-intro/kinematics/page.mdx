@@ -12,7 +12,7 @@ export const metadata = {
 
 **Forward kinematics** (FK) takes the joint angles and returns the hand pose in task coordinates. Walk out along the chain: the shoulder pan turns everything above it, the shoulder lift tilts the upper arm, the elbow bends the forearm, and the three wrist joints turn the gripper. Where the fingertips end up is the pose of the tool frame. One set of angles always gives exactly one pose.
 
-Move the joints of the SO-106 below. The white rods are the chain FK walks along, from the base frame through each link frame to the tool frame, and the equation underneath is the function itself, recomputed as you move.
+Move the joints of the Solarian Arm 1 below. The white rods are the chain FK walks along, from the base frame through each link frame to the tool frame, and the equation underneath is the function itself, recomputed as you move.
 
 <ForwardKinematicsFigure />
 
@@ -48,7 +48,7 @@ Forward kinematics is a formula. Inverse kinematics is a search, and the figure 
 
 The **workspace** is the set of places the hand can get to. Robotics draws it at two levels of demand.
 
-The **reachable workspace** is every position the tool frame can reach in at least one orientation. The link lengths set its outer edge, which is the arm stretched out. Joint limits carve pieces away from there. The green cloud below is the SO-106's reachable workspace.
+The **reachable workspace** is every position the tool frame can reach in at least one orientation. The link lengths set its outer edge, which is the arm stretched out. Joint limits carve pieces away from there. The green cloud below is the Solarian Arm 1's reachable workspace.
 
 <WorkspaceFigure />
 
@@ -82,7 +82,7 @@ Every step starts from the joints the arm has now, so the solver returns the ans
 
 In [Tutorial 4](/docs/tutorials/skills/move) you add the solver to the arm module, next to the six task-coordinate actuators:
 
-```python {{ title: 'so106/modules/right_arm.py' }}
+```python {{ title: 'arm1/modules/right_arm.py' }}
 from solarian.core.arm_module import ArmModule
 from solarian.core.ik import CartesianIKActuator, MinkIK
 from solarian_feetech.actuator import FeetechServo
@@ -101,7 +101,7 @@ class RightArmModule(ArmModule):
     # ... the six FeetechServo joints and six CartesianIKActuator axes ...
 
     ik_backend = MinkIK(
-        mjcf="assets/so106/so106.xml",
+        mjcf="assets/arm1/arm1.xml",
         joints=dict(zip(JOINTS, JOINTS)),
         frame="flange",
         position_cost=1.0,

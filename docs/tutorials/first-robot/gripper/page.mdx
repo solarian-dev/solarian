@@ -24,7 +24,7 @@ That installs `solarian-umi-slim` (and the Feetech driver it depends on, if you 
 
 ## Mount it
 
-Add the attribute. The name `right_gripper` is the module name from here on. In `so106/robot.py`:
+Add the attribute. The name `right_gripper` is the module name from here on. In `arm1/robot.py`:
 
 ```python
 from solarian_umi_slim import MJCF_FEETECH_PATH
@@ -87,26 +87,26 @@ The filename is `right_gripper.yaml` because the attribute is `right_gripper`.
 
 Add the gripper to the observation and the action, or the class check fails at startup.
 
-In `so106/observation.py`:
+In `arm1/observation.py`:
 
 ```python
 class RightGripperObs(ModuleObs):
-    gripper = SensorField(So106Robot.right_gripper.gripper.pos)
+    gripper = SensorField(Arm1Robot.right_gripper.gripper.pos)
 
 
-class So106Observation(Observation):
+class Arm1Observation(Observation):
     right_arm = RightArmObs()
     right_gripper = RightGripperObs()
 ```
 
-In `so106/action.py`:
+In `arm1/action.py`:
 
 ```python
 class RightGripperAction(ModuleAction):
-    gripper = ActuatorField(So106Robot.right_gripper.gripper.pos)
+    gripper = ActuatorField(Arm1Robot.right_gripper.gripper.pos)
 
 
-class So106Action(Action):
+class Arm1Action(Action):
     right_arm = RightArmAction()
     right_gripper = RightGripperAction()
 ```

@@ -28,8 +28,8 @@ MJCF ranges are written back into ``config.json``. With
 the module conf's ``sim_range_min`` / ``sim_range_max``.
 
 Examples:
-    solarian onshape-export assets/so106_description
-    solarian onshape-export assets/so106_description --update-yaml conf/right_arm.yaml
+    solarian onshape-export assets/arm1_description
+    solarian onshape-export assets/arm1_description --update-yaml conf/right_arm.yaml
     solarian onshape-export assets/umi_slim_gripper_description --clean-only
 """
 
@@ -104,8 +104,8 @@ class OnshapeExportCommand(BaseCommand):
                               "conf's sim_range_min / sim_range_max.",
     }
     examples = (
-        "solarian onshape-export assets/so106_description",
-        "solarian onshape-export assets/so106_description --update-yaml conf/right_arm.yaml",
+        "solarian onshape-export assets/arm1_description",
+        "solarian onshape-export assets/arm1_description --update-yaml conf/right_arm.yaml",
         "solarian onshape-export assets/umi_slim_gripper_description --clean-only",
     )
 

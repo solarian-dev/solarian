@@ -2,6 +2,16 @@
 
 A robotics control and teleoperation framework.
 
+<div align="center">
+
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-alpha-orange)](https://pypi.org/project/solarian/)
+[![PyPI](https://img.shields.io/pypi/v/solarian)](https://pypi.org/project/solarian/)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/S7rfmJfpm5)
+
+</div>
+
 ## Installation
 
 ### Create a conda environment:

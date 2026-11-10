@@ -92,7 +92,7 @@ first-class work item (principle 8), not documentation polish.
 Hardware is harder than software for humans and agents alike. There is little
 training data for it, mistakes cost parts and days, and sourcing, tolerances and
 assembly order are tacit knowledge. Solarian ships hardware that is already
-designed, built and tested (the SO-106 arm, the UMI-slim gripper, the Lumi
+designed, built and tested (the Solarian Arm 1, the UMI-slim gripper, the Lumi
 handheld collector), at minimal cost, integrated with the framework (drivers,
 calibration commands, and a MuJoCo twin exported from the same Onshape CAD by
 `solarian onshape-export`), and meant to be assembled by someone who is not a
@@ -108,7 +108,7 @@ Two consequences:
   (`detect-device`, `calibrate`, `verify-calibration`) and with the robot's own
   camera.
 - **Standard hardware makes data and policies portable.** A dataset recorded on
-  one SO-106 trains a policy that runs on another. That is the root of the
+  one Solarian Arm 1 trains a policy that runs on another. That is the root of the
   network effect in section 3.5.
 
 ### 3.3 Solarian Base: infrastructure designed for Solarian robots
@@ -280,7 +280,7 @@ What exists today and is reused:
 - **Training.** `solarian train` with trainers registered under
   `solarian.trainers`; `PolicyTrainer.modal_spec()` declares a cloud image and
   `plugins/solarian-modal` runs it on Modal.
-- **Hardware.** The SO-106 arm and the UMI-slim gripper have MJCF twins exported
+- **Hardware.** The Solarian Arm 1 and the UMI-slim gripper have MJCF twins exported
   from their Onshape assemblies by `solarian onshape-export`, shipped in their
   plugins' `assets/`. The Lumi collector has scripts that build its enclosure
   in Onshape (`solarian-lumi-collector/cad/`). Device setup, calibration and
@@ -932,7 +932,7 @@ What an agent needs to build a Solarian project correctly, beyond the docs:
   validates project yaml as it is written.
 - **`--json` on every command** that reports state.
 - **`llms.txt`** generated from the MDX docs.
-- **One canonical reference project.** `projects/so106` is kept clean as the
+- **One canonical reference project.** `projects/arm1` is kept clean as the
   example agents copy.
 - **Lessons as checks** (principle 8). The lessons in section 3.1 become
   assertions where they can be: a camera field whose colour order is not
@@ -945,7 +945,7 @@ What an agent needs to build a Solarian project correctly, beyond the docs:
 Principle 9 needs an instrument. A small suite of tasks, each a prompt and a
 check that passes or fails:
 
-- create a project for a simulated SO-106 and make it wave;
+- create a project for a simulated Solarian Arm 1 and make it wave;
 - add a skill that moves the gripper to a point given in the camera image;
 - split a dataset into good and rejected episodes by a stated heuristic, on Base;
 - deploy the tracker as a hosted service and point the project at it;
@@ -1010,7 +1010,7 @@ code does: through a commit, which is the review gate.
 A hardware design ships the way a software plugin does: versioned, installable,
 and complete enough that an agent can take a non-expert from an empty desk to a
 calibrated robot. A hardware package (for example the hardware half of
-`solarian-so106`) holds:
+`solarian-arm-1`) holds:
 
 - **`hardware.yaml`**: design name and revision, the modules it provides, and a
   bill of materials. Each line has a part, a quantity, a unit cost, suppliers
@@ -1078,7 +1078,7 @@ Each phase ends with a check that someone other than its author can run.
   was migrated into computed datasets.
 - **Phase 2: agent-readiness pack.** `AGENTS.md`, shipped agent skills,
   `describe --json`, `doctor`, config schemas, `llms.txt`, and a first batch of
-  lessons turned into checks; the hardware package for the SO-106 (section
+  lessons turned into checks; the hardware package for the Solarian Arm 1 (section
   6.11), with the design and revision recorded in sessions; the agent-usability
   eval suite; OpenAPI, organisation scope for projects, datasets and tokens,
   personal access tokens and the `solarian base` CLI.

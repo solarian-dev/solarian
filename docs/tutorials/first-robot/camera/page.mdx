@@ -12,7 +12,7 @@ There is no `solarian install` step.
 
 ## Add the module
 
-In `so106/robot.py`:
+In `arm1/robot.py`:
 
 ```python
 from solarian.core.picamera_module import PiCameraModule
@@ -73,14 +73,14 @@ sensors:
 
 The controller draws every image field on the observation. Add one.
 
-In `so106/observation.py`:
+In `arm1/observation.py`:
 
 ```python
 class RightWristCameraObs(ModuleObs):
-    rgb_image = SensorField(So106Robot.right_wrist_camera.camera.rgb_image)
+    rgb_image = SensorField(Arm1Robot.right_wrist_camera.camera.rgb_image)
 
 
-class So106Observation(Observation):
+class Arm1Observation(Observation):
     right_arm = RightArmObs()
     right_gripper = RightGripperObs()
     right_wrist_camera = RightWristCameraObs()
@@ -106,7 +106,7 @@ Restart the robot and the controller. The controller window should show the wris
 
 | Module | Where the class lives | What you configured |
 | --- | --- | --- |
-| `right_arm` | your project, `so106/modules/right_arm.py` | joints, YAML, the arm MJCF |
+| `right_arm` | your project, `arm1/modules/right_arm.py` | joints, YAML, the arm MJCF |
 | `right_gripper` | `solarian-umi-slim` | YAML, a site-to-site attachment |
 | `right_wrist_camera` | Solarian itself, `PiCameraModule` | YAML, a `CameraMount` |
 

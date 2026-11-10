@@ -98,7 +98,7 @@ class TestEncoderRangeTracker:
         assert hi == 4000
 
     def test_accepts_large_contiguous_travel(self):
-        # SO-106-class arms need large fractions of a turn (e.g. pan ≈ 69%).
+        # Solarian Arm 1-class arms need large fractions of a turn (e.g. pan ≈ 69%).
         t = EncoderRangeTracker(cpr=CPR)
         lo, hi = 500, 500 + int(0.70 * CPR)
         for p in list(range(lo, hi, 50)) + [hi]:

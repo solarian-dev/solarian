@@ -8,7 +8,7 @@ export const metadata = {
 
 The smallest skill that does something you can see: open the gripper, then finish. It lives in the project, the way the arm module did. {{ className: 'lead' }}
 
-Create `so106/skills.py`:
+Create `arm1/skills.py`:
 
 ```python
 from solarian.core.action import Action, ActionType
@@ -37,20 +37,20 @@ class OpenGripperSkill(Skill):
 
 `params` is how the skill learns the module's name. It does not hold the module object. 85 is millimetres, fully open, which is the unit `UmiSlimFeetechModule` already accepts. `finish()` marks the skill done on the same step it commands the motion. A skill that returned forever would hold the gripper and refuse to be replaced cleanly.
 
-A skill never imports `So106Robot`. The name `"right_gripper"` is the whole address. That is what lets the same class run on the controller or on the robot later.
+A skill never imports `Arm1Robot`. The name `"right_gripper"` is the whole address. That is what lets the same class run on the controller or on the robot later.
 
 ## The controller only starts it
 
-Replace `so106/controller.py`. The joint-nudge `control_step` has to go. An override of `control_step` replaces skill ticking, so a skill you start would never get a turn.
+Replace `arm1/controller.py`. The joint-nudge `control_step` has to go. An override of `control_step` replaces skill ticking, so a skill you start would never get a turn.
 
 ```python
 from solarian.core import Controller
 from solarian.core.event import Event, EventType, event_handler
 
-from so106.skills import OpenGripperSkill
+from arm1.skills import OpenGripperSkill
 
 
-class So106Controller(Controller):
+class Arm1Controller(Controller):
     skills = (OpenGripperSkill,)
 
     @event_handler(EventType.KEY_DOWN)

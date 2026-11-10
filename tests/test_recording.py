@@ -231,7 +231,7 @@ class _StructureRobot:
     is_sim = False
     scene = SceneConfig(
         attachments=[
-            ModuleAttachment(module="arm", mjcf="so106.xml", prefix="right/")
+            ModuleAttachment(module="arm", mjcf="arm1.xml", prefix="right/")
         ]
     )
 
@@ -239,7 +239,7 @@ class _StructureRobot:
         self.modules = modules
 
 
-def _structure_arm(mjcf="so106.xml"):
+def _structure_arm(mjcf="arm1.xml"):
     class _Arm(ArmModule):
         ik_backend = MinkIK(
             mjcf=mjcf, joints={"shoulder_pan": "shoulder_pan"}, frame="flange"

@@ -32,7 +32,7 @@ from solarian.core.optical_remap import (
 CAL_DIR = (
     Path(__file__).resolve().parents[1]
     / "projects"
-    / "so106"
+    / "arm1"
     / "conf"
     / "calibrations"
 )

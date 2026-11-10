@@ -1,29 +1,29 @@
 export const metadata = {
   title: 'Create a project',
   description:
-    'Scaffold a Solarian project named so106, see what each file is for, and run the three processes on an empty robot.',
+    'Scaffold a Solarian project named arm1, see what each file is for, and run the three processes on an empty robot.',
 }
 
 # Create a project
 
-`create-solarian` writes a project: a Python package plus a `conf/` directory. The directory name is up to you. This course uses `so106`, because that is the arm you are building. {{ className: 'lead' }}
+`create-solarian` writes a project: a Python package plus a `conf/` directory. The directory name is up to you. This course uses `arm1`, because that is the arm you are building. {{ className: 'lead' }}
 
 ## Scaffold it
 
 From a directory where you keep code:
 
 ```bash
-create-solarian so106
-cd so106
+create-solarian arm1
+cd arm1
 ```
 
-You should see a short tree printed, and a new `so106/` folder. The layout is:
+You should see a short tree printed, and a new `arm1/` folder. The layout is:
 
-<ScaffoldFigure name="so106" />
+<ScaffoldFigure name="arm1" />
 
 These files are:
 
-- `so106/settings.py` tells Solarian which classes are your robot, controller, and server.
+- `arm1/settings.py` tells Solarian which classes are your robot, controller, and server.
 - `robot.py` is the machine: one class attribute per module. The attribute's name is the module's name everywhere else.
 - `controller.py` is the decision. Keys, and later skills, live here.
 - `server.py` is the relay. Leave the generated class alone.
@@ -33,37 +33,37 @@ These files are:
 
 The generated `robot.py` imports an example arm from `example_module.py`, and that example imports a Feetech servo driver you have not installed yet. For this chapter the robot is empty on purpose. Replace the three files below so the first run has nothing to connect to.
 
-`so106/robot.py`:
+`arm1/robot.py`:
 
 ```python
 from solarian.core import Robot
 
 
-class So106Robot(Robot):
+class Arm1Robot(Robot):
     pass
 ```
 
-`so106/observation.py`:
+`arm1/observation.py`:
 
 ```python
 from solarian.core.observation import Observation
 
 
-class So106Observation(Observation):
+class Arm1Observation(Observation):
     pass
 ```
 
-`so106/action.py`:
+`arm1/action.py`:
 
 ```python
 from solarian.core.action import Action
 
 
-class So106Action(Action):
+class Arm1Action(Action):
     pass
 ```
 
-You can delete `so106/modules/example_module.py` or leave it. Nothing imports it now.
+You can delete `arm1/modules/example_module.py` or leave it. Nothing imports it now.
 
 ## Install the project
 
@@ -104,7 +104,7 @@ What you should see:
 Quit each process with Control-C. You will start them again every chapter.
 
 <Note>
-  Run the commands from the project root, the directory that contains <code>pyproject.toml</code>. Solarian finds <code>so106/settings.py</code> from there. From any other directory it will not know which project you mean.
+  Run the commands from the project root, the directory that contains <code>pyproject.toml</code>. Solarian finds <code>arm1/settings.py</code> from there. From any other directory it will not know which project you mean.
 </Note>
 
 ## Where the name has to match

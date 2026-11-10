@@ -1,12 +1,12 @@
 export const metadata = {
   title: "The robot's body",
   description:
-    'Links, joints, end effectors, and degrees of freedom, with the six-joint SO-106 as the example, and the Solarian classes that describe a robot.',
+    'Links, joints, end effectors, and degrees of freedom, with the six-joint Solarian Arm 1 as the example, and the Solarian classes that describe a robot.',
 }
 
 # The robot's body
 
-A robot arm is a chain of rigid parts moved by motors. This chapter names the parts and counts the ways they can move. By the end you can read the SO-106 as a list of six joints, which is exactly how Solarian describes it. {{ className: 'lead' }}
+A robot arm is a chain of rigid parts moved by motors. This chapter names the parts and counts the ways they can move. By the end you can read the Solarian Arm 1 as a list of six joints, which is exactly how Solarian describes it. {{ className: 'lead' }}
 
 ## Links, joints, and the end effector
 
@@ -55,13 +55,13 @@ The controller compares the target with the encoder's reading and powers the mot
 
 So you send a servo a target angle, and it moves there and holds. It also reports the angle it reached, which is how the robot knows its own pose.
 
-A servo drives one joint. Its body is bolted to one link, and its output shaft turns the next link. On the SO-106 every joint has its own servo.
+A servo drives one joint. Its body is bolted to one link, and its output shaft turns the next link. On the Solarian Arm 1 every joint has its own servo.
 
-## The SO-106: six joints
+## The Solarian Arm 1: six joints
 
-The SO-106 is the arm this course uses. Here is its real simulation model, the same MuJoCo file Solarian loads, with the UMI Slim gripper mounted on the end. Each slider drives one joint, the way a command to its servo would.
+The Solarian Arm 1 is the arm this course uses. Here is its real simulation model, the same MuJoCo file Solarian loads, with the UMI Slim gripper mounted on the end. Each slider drives one joint, the way a command to its servo would.
 
-<So106Figure />
+<Arm1Figure />
 
 The arm and the gripper are two separate pieces of hardware, bolted together at the arm's **flange**, the mounting plate at the end of the wrist. Solarian models them the same way: two modules, `right_arm` and `right_gripper`, each with its own servos. A different gripper means a different gripper module, and the arm module stays as it is.
 
@@ -90,7 +90,7 @@ The whole machine is a [`Robot`](/docs/robots). Each piece of hardware on it is 
 
 A module declares its joints as class attributes, one per joint, along with the actuator that drives it. Here is the arm you write in [Tutorial 2](/docs/tutorials/first-robot/arm), with the six joints from the table:
 
-```python {{ title: 'so106/modules/right_arm.py' }}
+```python {{ title: 'arm1/modules/right_arm.py' }}
 from solarian.core.module import Module
 from solarian_feetech.actuator import FeetechServo
 
@@ -115,8 +115,8 @@ class UmiSlimFeetechModule(GripperModule):
 
 The robot lists its modules the same way:
 
-```python {{ title: 'so106/robot.py' }}
-class So106Robot(Robot):
+```python {{ title: 'arm1/robot.py' }}
+class Arm1Robot(Robot):
     right_arm = RightArmModule()
     right_gripper = UmiSlimFeetechModule()
 ```

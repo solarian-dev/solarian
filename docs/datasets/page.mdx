@@ -22,10 +22,10 @@ What ties the episodes of a session together is `session.json`: the robot's stru
 
 ## A session on disk
 
-Here is a real one: an [SO-106](/docs/tutorials/first-robot) with a wrist camera, recorded with [`solarian record`](/docs/recording#recording-a-session).
+Here is a real one: a [Solarian Arm 1](/docs/tutorials/first-robot) with a wrist camera, recorded with [`solarian record`](/docs/recording#recording-a-session).
 
 ```text
-recordings/robot/0012_4c9e1b_So106Robot/
+recordings/robot/0012_4c9e1b_Arm1Robot/
 ├── session.json                         robot, schema, cameras, video settings
 ├── manifest.jsonl                       one line per sealed episode
 └── episodes/
@@ -172,7 +172,7 @@ Ops can add members to an episode beside the table and videos. Built-in ops and 
 ```python
 from solarian.core.recording.archive import Session, video_member
 
-session = Session("recordings/robot/0012_4c9e1b_So106Robot")
+session = Session("recordings/robot/0012_4c9e1b_Arm1Robot")
 session.cameras                     # ['right_wrist_camera.image']
 session.meta["schema"]              # session.json, parsed
 
@@ -186,7 +186,7 @@ for index in session.episodes():    # the sealed, ok episodes
 `solarian dataset info` prints the same summary from the shell: episodes, frames, tracking coverage per camera, and the ops the session was derived through.
 
 ```bash
-solarian dataset info recordings/robot/0012_4c9e1b_So106Robot
+solarian dataset info recordings/robot/0012_4c9e1b_Arm1Robot
 ```
 
 ## `.solarian.zip`

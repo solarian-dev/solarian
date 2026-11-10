@@ -176,7 +176,7 @@ _MAX_JITTER_PX = 2.0
 _MAX_TIP_STDERR_MM = 3.0
 # Ceilings, not pass marks. The per-pose residual is dominated by how well the
 # arm knows its own tool orientation, which is a property of the rig and not
-# of how carefully a run is done: on an SO-106 the tag alone spends half of a
+# of how carefully a run is done: on a Solarian Arm 1 the tag alone spends half of a
 # 1 deg budget before the arm contributes anything. These are set where a
 # residual stops meaning "this rig is noisy" and starts meaning "something is
 # wrong" -- a mismeasured marker, a moved board, the wrong tag.
@@ -238,11 +238,11 @@ _JOINT_SWEEP_TILT_DEG = 40.0
 # Not tighter: shoulder_lift, elbow_flex and wrist_flex share one pitch axis,
 # so their sum is pinned far better than each alone (simulating 48 planned
 # poses at 0.3 deg of tag noise gives 0.3-0.7 deg apiece while the camera
-# comes out within 1 mm; a real SO-106 run gave 0.4-0.6 deg against offsets
+# comes out within 1 mm; a real Solarian Arm 1 run gave 0.4-0.6 deg against offsets
 # of up to 5 deg), and an eyeballed home is off by degrees.
 _OFFSET_STDERR_MAX_DEG = 1.0
 # Per-pose residual past which the arm's kinematics, not the tag, is the likely
-# cause: a real SO-106 fits to 2.6 mm rms with fitted zeros, 6-7 without.
+# cause: a real Solarian Arm 1 fits to 2.6 mm rms with fitted zeros, 6-7 without.
 _KINEMATIC_RESIDUAL_MM = 5.0
 # |scale - 1| past this many standard errors, and past _SCALE_FLOOR, is a
 # distance scale the fit has actually resolved rather than noise.
@@ -260,14 +260,14 @@ _REACH_ROT_DEG = 3.0
 # Closest any two parts may come, by the robot scene's collision meshes. Those
 # are measured as convex hulls, already larger than the parts, so this is
 # margin for the arm not tracking its path exactly and for joint zeros a few
-# degrees off, not for the meshes. 2 cm drops twice the SO-106 orbit poses
+# degrees off, not for the meshes. 2 cm drops twice the Solarian Arm 1 orbit poses
 # 1.5 cm does (simulated), and the sweep is then too thin for joints=fit.
 _COLLISION_MARGIN_M = 0.015
 # Joint-space step at which the move between two targets is checked.
 _PATH_STEP_DEG = 4.0
 # Orbit candidates planned per pose wanted. From an anchor near the edge of
 # reach only 1 in 16 survives reach, view angle and the collision check (a real
-# SO-106 run kept 6 of 96), so fewer leaves a sweep, and every top-up, short.
+# Solarian Arm 1 run kept 6 of 96), so fewer leaves a sweep, and every top-up, short.
 # Each reach check is ~25 ms of IK on a Pi 5, and half fail cheaper tests first.
 _CANDIDATES_PER_TARGET = 16
 # After a move the gravity joints keep creeping for a second or two while each
@@ -359,7 +359,7 @@ def _measurement_optics(sensor_cfg, conf_dir: Path):
 
     So when the remap is a pure rotation, the sensor's own frame is the
     better place to measure and the result is rotated home afterwards. It is
-    sharper, by the ratio of the focal lengths: an SO-106 wrist camera reads
+    sharper, by the ratio of the focal lengths: a Solarian Arm 1 wrist camera reads
     719 px of focal length across its native 2028x1520, against 424 once
     warped onto the GoPro's much wider field at 1080p, and corner precision
     in angle scales with exactly that. It also skips a resampling pass, and

@@ -14,7 +14,7 @@ modules with their kind, the components behind each column, the IK joint
 mapping, and the attachment graph. It is what lets a reader draw a gripper
 trajectory, and later an arm, without being told which robot it is looking at.
 
-MJCF and STL assets are *named*, not embedded — the SO-106 mesh tree alone is
+MJCF and STL assets are *named*, not embedded — the Solarian Arm 1 mesh tree alone is
 about 9.7 MB per session, and a reader that wants meshes can resolve the paths
 itself. The joint mapping and the attachment graph are enough to animate a
 model it already has.
@@ -68,7 +68,7 @@ def _asset_ref(mjcf: str) -> str:
 
     A plugin resolves its assets to an absolute path, which names a directory on
     the recording machine and nothing on any other. The path relative to the
-    containing package's parent -- ``solarian_so106/assets/so106.xml`` -- names
+    containing package's parent -- ``solarian_arm_1/assets/arm1.xml`` -- names
     the same file wherever that plugin is installed. Anything already relative
     (a project path, or a ``robot_descriptions`` module name) passes through.
     """

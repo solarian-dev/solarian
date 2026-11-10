@@ -70,7 +70,7 @@ CAMERA_IN_FLANGE[:3, :3] = st.Rotation.from_rotvec(
 ).as_matrix()
 CAMERA_IN_FLANGE[:3, 3] = [-0.0002, -0.0847, 0.0217]
 
-# Declared TCP: the umi-slim CAD tip with identity rotation, as so106 wires it.
+# Declared TCP: the umi-slim CAD tip with identity rotation, as arm1 wires it.
 IK_TCP = FrameOffset(pos=(0.0, -0.0157, 0.2057), quat=(1.0, 0.0, 0.0, 0.0))
 
 TAG_IN_BASE = np.eye(4)
@@ -693,13 +693,13 @@ def test_wait_until_still_waits_out_a_creeping_joint(monkeypatch):
 
 
 def test_collision_guard_sees_the_gripper_folded_into_the_arm():
-    """On the real SO-106 + umi-slim meshes: the home pose is clear, and a
+    """On the real Solarian Arm 1 + umi-slim meshes: the home pose is clear, and a
     wrist folded back drives the gripper into the arm."""
-    pytest.importorskip("solarian_so106")
+    pytest.importorskip("solarian_arm_1")
     pytest.importorskip("solarian_umi_slim")
     from solarian.sim import ModuleAttachment, SceneConfig
     from solarian.sim.collision import CollisionGuard
-    from solarian_so106 import ARM_MJCF_PATH
+    from solarian_arm_1 import ARM_MJCF_PATH
     from solarian_umi_slim import MJCF_FEETECH_PATH
 
     scene = SceneConfig(attachments=[
@@ -1874,24 +1874,24 @@ def test_shell_line_reports_nothing_waiting_on_an_unselectable_stdin(monkeypatch
 # Joint zeros off by the couple of degrees an eyeballed home pose leaves, on
 # the four joints one fixed tag can see.
 _JOINT_ERROR = np.radians([0.0, 2.0, -1.5, 2.0, -1.5, 0.0])
-_SO106_TCP = FrameOffset(pos=(0.0, 0.0, 0.19824), quat=(1.0, 0.0, 0.0, 0.0))
+_ARM1_TCP = FrameOffset(pos=(0.0, 0.0, 0.19824), quat=(1.0, 0.0, 0.0, 0.0))
 
 
-def _so106_backend():
-    pytest.importorskip("solarian_so106")
+def _arm1_backend():
+    pytest.importorskip("solarian_arm_1")
     from dataclasses import replace
 
-    from solarian_so106.arm import So106ArmModule
+    from solarian_arm_1.arm import Arm1Module
 
-    return replace(So106ArmModule.ik_backend, tcp_offset=_SO106_TCP).build()
+    return replace(Arm1Module.ik_backend, tcp_offset=_ARM1_TCP).build()
 
 
-# Two joints=fit orbits on the SO-106 model about a tag flat on the table at
+# Two joints=fit orbits on the Solarian Arm 1 model about a tag flat on the table at
 # (-0.04, -0.28, 0): the two anchors first, each looking at the tag from 0.3 m
 # on opposite sides, then the 40 deg orbit targets about each that IK reached
 # (degrees, 0.1 deg rounding). Precomputed because planning them takes a
 # minute of differential IK.
-_SO106_ORBIT_DEG = np.array([
+_ARM1_ORBIT_DEG = np.array([
     [-35.0, -45.0, 8.0, 105.0, 36.0, -124.0],
     [25.0, -6.0, -27.0, 111.0, -40.0, 106.0],
     [-55.3, -44.9, 62.0, 56.8, 60.4, -146.5],
@@ -1917,8 +1917,8 @@ _SO106_ORBIT_DEG = np.array([
 ])
 
 
-def _so106_samples(backend, joint_error, seed=0):
-    """What the joints=fit sweep measures on an SO-106 with *joint_error*.
+def _arm1_samples(backend, joint_error, seed=0):
+    """What the joints=fit sweep measures on a Solarian Arm 1 with *joint_error*.
 
     The arm reads its joints *joint_error* short of where they are, plus 0.1
     deg of servo noise; the camera sees the tag through the true joints with
@@ -1929,7 +1929,7 @@ def _so106_samples(backend, joint_error, seed=0):
     rng = np.random.default_rng(seed)
     camera_in_flange = CAMERA_IN_FLANGE.copy()
     camera_in_flange[:3, 3] = [-0.003, -0.086, 0.008]
-    tcp2camera = np.linalg.inv(camera_in_flange) @ _offset_to_mat(_SO106_TCP)
+    tcp2camera = np.linalg.inv(camera_in_flange) @ _offset_to_mat(_ARM1_TCP)
 
     def camera_in_base(q):
         return _pose_to_mat(fk(backend, q)) @ np.linalg.inv(tcp2camera)
@@ -1939,7 +1939,7 @@ def _so106_samples(backend, joint_error, seed=0):
     tag_in_base[:3, 3] = [-0.04, -0.28, 0.0]
 
     samples = []
-    for q_true in np.radians(_SO106_ORBIT_DEG):
+    for q_true in np.radians(_ARM1_ORBIT_DEG):
         world2cam = np.linalg.inv(camera_in_base(q_true)) @ tag_in_base
         noise = np.eye(4)
         noise[:3, :3] = st.Rotation.from_rotvec(rng.normal(0.0, np.radians(0.3), 3)).as_matrix()
@@ -1962,12 +1962,12 @@ def _so106_samples(backend, joint_error, seed=0):
 def test_joint_zeros_off_by_degrees_pull_the_camera_along_its_axis():
     """The symptom joints=fit exists for: the plain solve has no joint zeros
     to blame, so it moves the camera -- most of all along its own axis."""
-    backend = _so106_backend()
-    samples, tip = _so106_samples(backend, _JOINT_ERROR)
+    backend = _arm1_backend()
+    samples, tip = _arm1_samples(backend, _JOINT_ERROR)
     _, tcp2camera = _solve(samples)
     assert abs(tcp2camera[2, 3] - tip[2]) * 1000.0 > 5.0
 
-    clean, tip = _so106_samples(backend, np.zeros(6))
+    clean, tip = _arm1_samples(backend, np.zeros(6))
     assert np.linalg.norm(_solve(clean)[1][:3, 3] - tip) * 1000.0 < 2.0
 
 
@@ -1977,8 +1977,8 @@ def test_joint_offset_fit_recovers_the_zeros_and_the_camera():
         _with_joint_offsets,
     )
 
-    backend = _so106_backend()
-    samples, tip = _so106_samples(backend, _JOINT_ERROR)
+    backend = _arm1_backend()
+    samples, tip = _arm1_samples(backend, _JOINT_ERROR)
     zeros = _fit_joint_offsets(samples, backend, range(1, 5))
 
     assert zeros["delta"][0] == zeros["delta"][5] == 0.0
@@ -1996,7 +1996,7 @@ def test_joint_offset_fit_recovers_the_zeros_and_the_camera():
 
 
 class _ZeroArm:
-    """What _offer_joint_zeros reads off an SO-106 arm, and what it saves."""
+    """What _offer_joint_zeros reads off a Solarian Arm 1, and what it saves."""
 
     def __init__(self):
         from types import SimpleNamespace

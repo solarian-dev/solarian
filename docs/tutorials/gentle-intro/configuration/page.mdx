@@ -20,13 +20,13 @@ The fewest numbers that pin down the configuration is the robot's number of degr
 
 ## Joint coordinates and task coordinates
 
-The SO-106 has six revolute joints, so six degrees of freedom, and its configuration is six angles. Robotics writes them as a vector **q**:
+The Solarian Arm 1 has six revolute joints, so six degrees of freedom, and its configuration is six angles. Robotics writes them as a vector **q**:
 
 **q** = (`shoulder_pan`, `shoulder_lift`, `elbow_flex`, `wrist_flex`, `wrist_yaw`, `wrist_roll`)
 
 Read a value of **q** as an instruction for drawing the arm: turn the base by the first angle, tilt the shoulder by the second, and so on out to the wrist. There is a second way to describe the same arm. You could say where the gripper is and how it is turned. That is also six numbers: the same arm, described in different coordinates. Those are the two kinds of coordinates.
 
-The figure is the SO-106, the real MuJoCo model, with the UMI Slim gripper on its flange. Move any joint and both descriptions change together: the six joint angles on the left, and the pose of the tool frame on the right.
+The figure is the Solarian Arm 1, the real MuJoCo model, with the UMI Slim gripper on its flange. Move any joint and both descriptions change together: the six joint angles on the left, and the pose of the tool frame on the right.
 
 
 
@@ -37,7 +37,7 @@ The figure is the SO-106, the real MuJoCo model, with the UMI Slim gripper on it
 | | Joint coordinates | Task coordinates |
 | --- | --- | --- |
 | Describes | each joint | the end effector |
-| Numbers on the SO-106 | 6 angles | 3 for position, 3 for orientation |
+| Numbers on the Solarian Arm 1 | 6 angles | 3 for position, 3 for orientation |
 | Natural for | motors, logging, replaying a motion | goals in the world, camera-guided motion |
 
 Both describe the same robot, so you can convert from one to the other. That conversion is **kinematics**, the subject of the [next chapter](/docs/tutorials/gentle-intro/kinematics).
@@ -51,7 +51,7 @@ Both describe the same robot, so you can convert from one to the other. That con
 The frames you will meet most:
 
 - The **base frame** is bolted to the table at the foot of the arm. Task coordinates are typically written in this frame.
-- A **link frame** rides on a link and moves with it. The next joint sits at a fixed place in this frame, which is why one angle is enough to place the next link. In the SO-106 model each link frame sits on the joint that moves it, with its Z axis along that joint's axis.
+- A **link frame** rides on a link and moves with it. The next joint sits at a fixed place in this frame, which is why one angle is enough to place the next link. In the Solarian Arm 1 model each link frame sits on the joint that moves it, with its Z axis along that joint's axis.
 - The **tool frame** sits at the fingertips. A task-space command asks to put this frame at a pose in the base frame.
 - The **camera frame** sits on the wrist and looks along the fingers. A pixel in the image is a direction in this frame.
 
@@ -78,7 +78,7 @@ Each joint is one actuator on the module, so the six servo lines from the previo
 
 Task coordinates arrive in [Tutorial 4](/docs/tutorials/skills/move), when a skill needs to name a pose. The arm module gains six more actuators, one per task coordinate:
 
-```python {{ title: 'so106/modules/right_arm.py' }}
+```python {{ title: 'arm1/modules/right_arm.py' }}
 from solarian.core.arm_module import ArmModule
 from solarian.core.ik import CartesianIKActuator
 from solarian_feetech.actuator import FeetechServo

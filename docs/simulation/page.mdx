@@ -235,7 +235,7 @@ actuators:
 When both modules export a matching Onshape frame (a `<site>` in MJCF), attach by coinciding those sites instead of hand-tuning `pos`/`quat` against a body origin:
 
 ```python
-ModuleAttachment(module="right_arm", mjcf="assets/so106.xml", prefix="right/"),
+ModuleAttachment(module="right_arm", mjcf="assets/arm1.xml", prefix="right/"),
 ModuleAttachment(
     module="right_gripper",
     mjcf=UMI_SLIM_MJCF,
@@ -330,7 +330,7 @@ actuators:
 The world server maps the servo's normalized command space (e.g. `mode: range_m100_100` → `[-100, 100]`) onto `[range_min, range_max]` radians on write, and back on read. A `write` sets the MuJoCo actuator `ctrl` target and a `read` returns the present joint position — so the physics loop tracks targets just like a real servo running its own control loop.
 
 <Note>
-  Keep <code>sim_range_min</code>/<code>sim_range_max</code> equal to the joint's actual MJCF limits (<code>jnt_range</code>). A mismatch silently skews every normalized ↔ radian conversion. The so106 tests assert the YAML ranges match the model, and <a href="#models-from-onshape"><code>onshape-export --update-yaml</code></a> keeps them in sync.
+  Keep <code>sim_range_min</code>/<code>sim_range_max</code> equal to the joint's actual MJCF limits (<code>jnt_range</code>). A mismatch silently skews every normalized ↔ radian conversion. The arm1 tests assert the YAML ranges match the model, and <a href="#models-from-onshape"><code>onshape-export --update-yaml</code></a> keeps them in sync.
 </Note>
 
 ### Virtual servos {{ id: 'virtual-servos' }}
@@ -406,7 +406,7 @@ MuJoCo renders a rectilinear (pinhole) image. If your real camera is a fisheye (
 
 ## Models from Onshape
 
-Each module's MJCF model can come straight from an **Onshape assembly**. `solarian onshape-export` pulls the CAD through [onshape-to-robot](https://onshape-to-robot.readthedocs.io), then cleans the raw export into an *attachable* MuJoCo model you can drop into a scene. The whole process is driven by a single `config.json`, so once an assembly is set up, re-exporting after a CAD change is one command — and the recipe is version-controlled next to the meshes. It is the pipeline used to build the SO-106 arm and its gripper.
+Each module's MJCF model can come straight from an **Onshape assembly**. `solarian onshape-export` pulls the CAD through [onshape-to-robot](https://onshape-to-robot.readthedocs.io), then cleans the raw export into an *attachable* MuJoCo model you can drop into a scene. The whole process is driven by a single `config.json`, so once an assembly is set up, re-exporting after a CAD change is one command — and the recipe is version-controlled next to the meshes. It is the pipeline used to build the Solarian Arm 1 and its gripper.
 
 ```bash
 solarian onshape-export <assembly_dir>              # full export (needs network)
@@ -457,9 +457,9 @@ The file is the ordinary [onshape-to-robot config](https://onshape-to-robot.read
     "workspace_id": "361314ab0f218f78e02b4966",
     "element_id": "f8420291ebade3c3ad36c733",
     "output_format": "mujoco",
-    "output_filename": "so106_raw",
+    "output_filename": "arm1_raw",
     "assets_directory": "meshes",
-    "robot_name": "so106",
+    "robot_name": "arm1",
     "joint_properties": {
         "shoulder_pan":  {"range": true},
         "shoulder_lift": {"range": true},
@@ -471,8 +471,8 @@ The file is the ordinary [onshape-to-robot config](https://onshape-to-robot.read
     "solarian": {
         "dof_mates": ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_yaw", "wrist_roll"],
         "base_dof": "shoulder_pan",
-        "output_xml": "../so106.xml",
-        "meshdir": "so106_description/meshes",
+        "output_xml": "../arm1.xml",
+        "meshdir": "arm1_description/meshes",
         "density": 1400
     }
 }
@@ -490,7 +490,7 @@ A tool TCP is a named Frame in Onshape on the **gripper** assembly (call it `tcp
 
 ### The `solarian` block
 
-Parsed into [`SolarianExportSpec`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/onshape.py). Every field has a default that reproduces the SO-106 arm's behaviour:
+Parsed into [`SolarianExportSpec`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/onshape.py). Every field has a default that reproduces the Solarian Arm 1's behaviour:
 
 <Properties>
   <Property name="dof_mates" type="list[str]">
@@ -554,7 +554,7 @@ solarian onshape-export <dir>
 
 ### Worked example: adding a gripper
 
-The export gives you an MJCF. Wiring it into a robot is the same as for any model: [attach it](#attaching-modules) with a `ModuleAttachment` and map each servo with [`sim_joint` / `sim_range_*`](#simulated-servos). The SO-106 gripper is a separate assembly with a single **prismatic** jaw mate. Its `config.json` differs from the arm only in the `solarian` block:
+The export gives you an MJCF. Wiring it into a robot is the same as for any model: [attach it](#attaching-modules) with a `ModuleAttachment` and map each servo with [`sim_joint` / `sim_range_*`](#simulated-servos). The Solarian Arm 1 gripper is a separate assembly with a single **prismatic** jaw mate. Its `config.json` differs from the arm only in the `solarian` block:
 
 ```json
 {
@@ -585,7 +585,7 @@ solarian onshape-export assets/umi_slim_gripper_description --update-yaml conf/m
 
     scene = SceneConfig(
         attachments=[
-            ModuleAttachment(module="right_arm", mjcf="assets/so106.xml", prefix="right/"),
+            ModuleAttachment(module="right_arm", mjcf="assets/arm1.xml", prefix="right/"),
             ModuleAttachment(
                 module="right_gripper",
                 mjcf="assets/umi_slim_gripper.xml",

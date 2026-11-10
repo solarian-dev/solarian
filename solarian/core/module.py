@@ -177,7 +177,7 @@ class Module(ABC):
         action_queue: ModuleActionQueue | None = None,
         execution_mode: ExecutionMode | str | None = None,
     ):
-        # Class-level declarations (``right_arm = So106ArmModule()``) are
+        # Class-level declarations (``right_arm = Arm1Module()``) are
         # placeholders resolved later against the module YAML.
         self._runner: Runner | None = None
 

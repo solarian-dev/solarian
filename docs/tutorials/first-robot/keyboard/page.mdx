@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'The Controller',
   description:
-    'Write the SO-106 controller: subclass Controller, react to keys with event handlers, and send a joint target every tick from control_step.',
+    'Write the Solarian Arm 1 controller: subclass Controller, react to keys with event handlers, and send a joint target every tick from control_step.',
 }
 
 # The Controller
@@ -12,7 +12,7 @@ The keyboard is the input device here because every computer has one. A controll
 
 ## What a controller is
 
-A controller is a Python class that extends Solarian's `Controller`. The scaffold already created yours, an empty `So106Controller` in `so106/controller.py`, and `so106/settings.py` points `CONTROLLER_CLASS` at it. `solarian run-controller` imports that class, builds it with the settings from `conf/controller.yaml`, and starts its loop.
+A controller is a Python class that extends Solarian's `Controller`. The scaffold already created yours, an empty `Arm1Controller` in `arm1/controller.py`, and `arm1/settings.py` points `CONTROLLER_CLASS` at it. `solarian run-controller` imports that class, builds it with the settings from `conf/controller.yaml`, and starts its loop.
 
 The base class does the plumbing: it connects to the relay server, receives every observation the robot sends, and runs the loop. Your subclass fills in two kinds of methods:
 
@@ -41,26 +41,26 @@ ui: pygame
 
 ## Hold a target
 
-The controller keeps one action for the whole run: the joint target the arm should be at. Keys change it, and every tick sends it. Create it when the controller is built, in `so106/controller.py`:
+The controller keeps one action for the whole run: the joint target the arm should be at. Keys change it, and every tick sends it. Create it when the controller is built, in `arm1/controller.py`:
 
-```python {{ title: 'so106/controller.py' }}
+```python {{ title: 'arm1/controller.py' }}
 from solarian.core import Controller
 from solarian.core.action import ActionType
 
-from so106.action import So106Action
+from arm1.action import Arm1Action
 
 
-class So106Controller(Controller):
+class Arm1Controller(Controller):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.target = So106Action.zeros()
+        self.target = Arm1Action.zeros()
         self.target.right_arm.action_type = ActionType.MOVE_J
 ```
 
 The lines that matter:
 
 - **`super().__init__(*args, **kwargs)`** lets the base class set up its connection and modules first. Anything you add comes after it.
-- **`So106Action.zeros()`** builds an action from the schema of the previous chapter, with every field at 0. For the arm, 0 is the middle of each joint's travel.
+- **`Arm1Action.zeros()`** builds an action from the schema of the previous chapter, with every field at 0. For the arm, 0 is the middle of each joint's travel.
 - **`action_type = ActionType.MOVE_J`** gives the arm's part of the action its meaning: go to these joint targets. It is the type the arm module's `@action_handler` accepts.
 
 ## React to keys: event handlers
@@ -69,14 +69,14 @@ An **event** is a record of something that happened at one instant: a key went d
 
 An **event handler** is a method that Solarian calls with each event of the type it names. You mark it with the `@event_handler` decorator. Solarian collects the events at the start of each tick and calls the handlers on the controller's own loop, one event at a time and in the order they happened. A handler can therefore change `self.target` freely, because `control_step` runs only after every handler of the tick has returned.
 
-This handler maps twelve keys to the six joints. Add it to `so106/controller.py`:
+This handler maps twelve keys to the six joints. Add it to `arm1/controller.py`:
 
-```python {{ title: 'so106/controller.py' }}
+```python {{ title: 'arm1/controller.py' }}
 from solarian.core import Controller
 from solarian.core.action import ActionType
 from solarian.core.event import Event, EventType, event_handler
 
-from so106.action import So106Action
+from arm1.action import Arm1Action
 
 # One key pair per joint: the first decreases, the second increases.
 _KEYS = {
@@ -95,10 +95,10 @@ _KEYS = {
 }
 
 
-class So106Controller(Controller):
+class Arm1Controller(Controller):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.target = So106Action.zeros()
+        self.target = Arm1Action.zeros()
         self.target.right_arm.action_type = ActionType.MOVE_J
 
     @event_handler(EventType.KEY_DOWN)
@@ -127,7 +127,7 @@ Several handlers can share an event type, and all of them run, the base class's 
 
 This controller's decision is already made by the time `control_step` runs, so it returns the target. Add it to the class:
 
-```python {{ title: 'so106/controller.py' }}
+```python {{ title: 'arm1/controller.py' }}
     def control_step(self):
         return self.target
 ```
@@ -138,14 +138,14 @@ The base class has its own `control_step`, which runs [skills](/docs/tutorials/s
 
 ## The whole file
 
-Put together, `so106/controller.py` is the key table and a class with three methods:
+Put together, `arm1/controller.py` is the key table and a class with three methods:
 
-```python {{ title: 'so106/controller.py' }}
+```python {{ title: 'arm1/controller.py' }}
 from solarian.core import Controller
 from solarian.core.action import ActionType
 from solarian.core.event import Event, EventType, event_handler
 
-from so106.action import So106Action
+from arm1.action import Arm1Action
 
 # One key pair per joint: the first decreases, the second increases.
 _KEYS = {
@@ -164,10 +164,10 @@ _KEYS = {
 }
 
 
-class So106Controller(Controller):
+class Arm1Controller(Controller):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.target = So106Action.zeros()
+        self.target = Arm1Action.zeros()
         self.target.right_arm.action_type = ActionType.MOVE_J
 
     @event_handler(EventType.KEY_DOWN)

@@ -42,7 +42,7 @@ def _answers(monkeypatch, replies):
 
 
 def _seam_sweep(cpr: int = CPR) -> EncoderRangeTracker:
-    """A gripper sweep like the so106 right_gripper: 3645 → 4095 → 0 → 598."""
+    """A gripper sweep like the arm1 right_gripper: 3645 → 4095 → 0 → 598."""
     tracker = EncoderRangeTracker(cpr=cpr)
     for pos in list(range(3645, 4096, 50)) + list(range(0, 599, 50)):
         tracker.update(pos % cpr)

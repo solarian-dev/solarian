@@ -110,7 +110,7 @@ def test_software_offset_wraps_raw_below_offset():
 
 
 def test_gripper_wrap_ends_stay_in_present_window():
-    """so106 right_gripper: seam in the middle of jaw travel."""
+    """arm1 right_gripper: seam in the middle of jaw travel."""
     bus = _bus(_SoftBus, offset=-1967, range_min=1530, range_max=2565)
     for raw in (3659, 598):
         present = bus._present_ticks("j", raw)

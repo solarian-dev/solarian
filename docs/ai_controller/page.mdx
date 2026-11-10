@@ -97,13 +97,13 @@ A skill whose behaviour comes from config overrides `tool_spec`: `UMISkill` read
 
 A move ends when the robot gets there, not after a fixed time, since every second a finished move keeps running delays the next step. `MoveSkill` ends when every targeted field reads within tolerance of its target, or when none has moved for 0.3 s, counted from 0.5 s after the move was sent: a gripper closed on an object, or a pose just out of reach. The tolerances are 2 units for joints, 2 mm for a gripper aperture, 5 mm and 0.05 rad for a Cartesian pose. `timeout_s` is only the cap. A pose the arm is already at ends on the first check. A skill of your own that sends an exclusive move can end the same way with `solarian_move_skill.Arrival(targets, sent_at).check(self.observations, now)`.
 
-A skill that reads its target from a tracker overrides `services_for(params)` to return `(module, field, service params)`: the harness starts those services with the planner's point and waits for the tracker's first result before starting the skill. When the action ends, the harness stops them, unless another running action reads the same field: a tracker left running keeps painting its mask over whatever the action left, such as an object now held in the gripper. With `max_target_area` set, it measures that first mask: on so106 a pick's object covers 0.1-0.7% of the policy's image, while a point beside it selected 22-48%, so `pick_object.yaml` refuses a mask over 5% of the camera image.
+A skill that reads its target from a tracker overrides `services_for(params)` to return `(module, field, service params)`: the harness starts those services with the planner's point and waits for the tracker's first result before starting the skill. When the action ends, the harness stops them, unless another running action reads the same field: a tracker left running keeps painting its mask over whatever the action left, such as an object now held in the gripper. With `max_target_area` set, it measures that first mask: on arm1 a pick's object covers 0.1-0.7% of the policy's image, while a point beside it selected 22-48%, so `pick_object.yaml` refuses a mask over 5% of the camera image.
 
 A skill reports a failure the planner can act on with `self.fail("reason")`. It raises `SkillFailed`, which ends the skill as `FAILED` wherever it runs; the reason reaches the planner through the controller (or the robot's status rows).
 
 ## Monitor questions
 
-A question costs a vision call every tick, 3-6 s with a model that judges a grasp correctly, so its answer can arrive after the moment it is about. so106's pick therefore has none: it runs to its `max_duration_s` and the planner checks the newest image, one turn instead of several calls. Its place keeps a `released` question, since a place that has let go is plain in one frame. This is how the pick was watched:
+A question costs a vision call every tick, 3-6 s with a model that judges a grasp correctly, so its answer can arrive after the moment it is about. arm1's pick therefore has none: it runs to its `max_duration_s` and the planner checks the newest image, one turn instead of several calls. Its place keeps a `released` question, since a place that has let go is plain in one frame. This is how the pick was watched:
 
 ```yaml
 # conf/skills/pick_object.yaml, before it moved to a time limit
@@ -141,10 +141,10 @@ Write questions the monitor can answer from the previous frame and the current o
 
 - Prefer one `progress` choice with a `failed` value over several failure predicates. A phase is judged from motion across frames, and "is this failing?" asked during the approach comes back yes.
 - Define each choice by what changes between the previous and current frame (closer, closing, reopened), or by what shows in the current one (the fingers bent around the target).
-- Give failure rules an `after_s` long enough for the policy to reach the object, and `consecutive: 2`: half-closed fingers on the way look like a miss in one frame pair, while a real miss lasts. Finish rules usually need neither. Judge wording by the per-pick replay, not per-tick accuracy: on so106, a looser `failed` was wrong on a quarter of ticks yet escalated every missed pick on the right tick, while a stricter one cut false answers to 3% and missed a whole failed pick.
+- Give failure rules an `after_s` long enough for the policy to reach the object, and `consecutive: 2`: half-closed fingers on the way look like a miss in one frame pair, while a real miss lasts. Finish rules usually need neither. Judge wording by the per-pick replay, not per-tick accuracy: on arm1, a looser `failed` was wrong on a quarter of ticks yet escalated every missed pick on the right tick, while a stricter one cut false answers to 3% and missed a whole failed pick.
 - Describe success by what shows in the camera, for any object ("pinched between the fingers, which bend under the pressure"), and the nearest miss too ("closer together than the target is wide, with nothing between them"). Robot-specific detail (finger colour and shape, camera angle) goes in `monitor.instructions`, once for every skill.
 
-Measure the questions on recorded ticks before trusting them. The [episode log](#episode-logs) keeps every monitor frame, the episode the readings. so106 has two scripts for this, run from the project root:
+Measure the questions on recorded ticks before trusting them. The [episode log](#episode-logs) keeps every monitor frame, the episode the readings. arm1 has two scripts for this, run from the project root:
 
 ```bash
 python scripts/label_monitor_ticks.py   # previous | current close-up over the prompt; keys 1-4 label, s unsure, b back, q quit
@@ -155,7 +155,7 @@ The first appends labels to `evals/pick_progress.jsonl` and resumes at the first
 
 The planner is told that a monitor flag can be wrong and to check it against the newest image before stopping an action. A timeout reaches it as "without the monitor confirming success", or for an unwatched tool as "ran its limit; judge from the newest image whether it succeeded", not as a failure, and it is told to look before undoing anything: a policy that never stops by itself may have finished its job long before.
 
-For a signal no camera shows (a force sensor, a limit switch, a policy that has stopped moving), override `check_agent_action(action_id, tool, elapsed_s)` on the controller and return `("finish" | "fail" | "escalate", reason)`, or with a third element, a tool to start once the action has stopped, as a rule's `then`. It is polled with the monitor; `action_id` changes with every action. Its flags reach the planner as a controller check, which the planner trusts. so106 fails a pick or place whose arm and gripper have stayed within a few millimetres for 5 s and starts `home_holding`: a stall is plain in the readings, whatever the object. Do not use it for hand-tuned thresholds on readings that only correlate with success, such as a gripper's aperture and height: soft fingers read the same holding as empty, and such rules break with every new object.
+For a signal no camera shows (a force sensor, a limit switch, a policy that has stopped moving), override `check_agent_action(action_id, tool, elapsed_s)` on the controller and return `("finish" | "fail" | "escalate", reason)`, or with a third element, a tool to start once the action has stopped, as a rule's `then`. It is polled with the monitor; `action_id` changes with every action. Its flags reach the planner as a controller check, which the planner trusts. arm1 fails a pick or place whose arm and gripper have stayed within a few millimetres for 5 s and starts `home_holding`: a stall is plain in the readings, whatever the object. Do not use it for hand-tuned thresholds on readings that only correlate with success, such as a gripper's aperture and height: soft fingers read the same holding as empty, and such rules break with every new object.
 
 A `watch_for` condition the planner adds is checked from 6 s into the action, like a failure rule with `after_s: 6`, and must be false while the action goes as it should.
 
@@ -211,7 +211,7 @@ agent:
     Also show the monitor the frames from when the action started, with the planner's point on the target (default true).
   </Property>
   <Property name="monitor.mark_target" type="bool">
-    Mark the tracked target on every monitor frame with a 1 px cyan box just outside the bounds of the tracker's mask, so none of the object is covered (default false). Measure it before turning it on: on so106's labelled picks it helped as often as it hurt, and a box enclosing the closed fingers read as "held" on a failed pick. Needs a skill that publishes a tracker mask or box on the camera image.
+    Mark the tracked target on every monitor frame with a 1 px cyan box just outside the bounds of the tracker's mask, so none of the object is covered (default false). Measure it before turning it on: on arm1's labelled picks it helped as often as it hurt, and a box enclosing the closed fingers read as "held" on a failed pick. Needs a skill that publishes a tracker mask or box on the camera image.
   </Property>
   <Property name="planner_heartbeat_s" type="float | None">
     Seconds between planner wakes while actions run and nothing else happened (default 20). <code>null</code> turns them off: actions ending, the monitor, the user and the operator wake it. A heartbeat costs a planner turn each time, for news the monitor and the actions already bring.
@@ -226,7 +226,7 @@ agent:
     Context and pointing: older images become a text stub; planner images carry a labelled pixel grid.
   </Property>
   <Property name="image_overlays" type="bool">
-    Draw the controller's overlays (tracker masks, boxes) on planner images (default true). so106 turns it off: a tracker's pink mask over a red block held in the orange fingers hid the grasp, and the planner pointed a new pick at it, which opened the gripper and dropped it. The monitor never sees overlays, whatever this says.
+    Draw the controller's overlays (tracker masks, boxes) on planner images (default true). arm1 turns it off: a tracker's pink mask over a red block held in the orange fingers hid the grasp, and the planner pointed a new pick at it, which opened the gripper and dropped it. The monitor never sees overlays, whatever this says.
   </Property>
   <Property name="dry_run" type="bool">
     Plan and point, but start nothing: try a prompt before trusting it with the arm.
@@ -263,7 +263,7 @@ The run id is the episode it started in, `<session>/<episode>`, for example `000
 
 Overlays are logged for the fields the controller draws on each camera, one line per new frame that has any: `{"ts": capture time, "size": [h, w], <field>: {"mask": base64 PNG} | {"point": [x, y, visibility %]} | {"box": [x0, y0, x1, y1]}}`, in the pixels of the frame as it arrived.
 
-so106's `scripts/episode_viewer.py` plays an episode's video with its events beside it, the agent's and the operator's alike, and the overlays drawn as the controller drew them live. **o** turns the overlays off and on, and clicking a planner turn prints what the planner was sent and replied. Sessions recorded before `logs/` have only the agent's events, in `agent/`; the viewer and `monitor_ticks.py` read both.
+arm1's `scripts/episode_viewer.py` plays an episode's video with its events beside it, the agent's and the operator's alike, and the overlays drawn as the controller drew them live. **o** turns the overlays off and on, and clicking a planner turn prints what the planner was sent and replied. Sessions recorded before `logs/` have only the agent's events, in `agent/`; the viewer and `monitor_ticks.py` read both.
 
 When the robot recorded the same episodes, its session has the same directory name, so after transferring it off the robot you can copy the logs in beside the robot's episodes:
 

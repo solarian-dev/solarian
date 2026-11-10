@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Inverse Kinematics',
   description:
-    'Give a module Cartesian (end-effector) control by declaring six CartesianIKActuators and an ik_backend spec. Solarian auto-wraps the joint bus with an IKActuatorBus that runs differential IK every tick. Works identically on real hardware and in simulation. Includes the contract and an SO-106 walkthrough for adding a new arm.',
+    'Give a module Cartesian (end-effector) control by declaring six CartesianIKActuators and an ik_backend spec. Solarian auto-wraps the joint bus with an IKActuatorBus that runs differential IK every tick. Works identically on real hardware and in simulation. Includes the contract and a Solarian Arm 1 walkthrough for adding a new arm.',
 }
 
 # Inverse Kinematics
@@ -124,7 +124,7 @@ Cartesian **reads** run forward kinematics on the current joint positions. Joint
 
 ## Smooth Cartesian motion (pose interpolation)
 
-Sparse controller / policy waypoints feel jerky if you latch them directly onto the IK bus. With `interpolator_type: pose` on the module yaml, [`Module`](/docs/modules) runs a [`PoseTrajectoryInterpolator`](https://github.com/solarian-dev/solarian/blob/main/solarian/utils/trajectory_interpolator.py) (linear position + Slerp rotation, with `max_speed` limits) — the same pattern UMI uses before UR `servoL`. Controllers send `SCHEDULE_L` with wall-clock timestamps; the module upsamples at `frequency` and writes `x..rz` each tick. See [Scheduling Waypoints](/docs/modules/scheduling-waypoints) for the pose + scalar contract, and [Adding a new arm](#adding-a-new-arm) for an SO-106 walkthrough.
+Sparse controller / policy waypoints feel jerky if you latch them directly onto the IK bus. With `interpolator_type: pose` on the module yaml, [`Module`](/docs/modules) runs a [`PoseTrajectoryInterpolator`](https://github.com/solarian-dev/solarian/blob/main/solarian/utils/trajectory_interpolator.py) (linear position + Slerp rotation, with `max_speed` limits) — the same pattern UMI uses before UR `servoL`. Controllers send `SCHEDULE_L` with wall-clock timestamps; the module upsamples at `frequency` and writes `x..rz` each tick. See [Scheduling Waypoints](/docs/modules/scheduling-waypoints) for the pose + scalar contract, and [Adding a new arm](#adding-a-new-arm) for a Solarian Arm 1 walkthrough.
 
 ## Extending: a custom backend
 
@@ -193,13 +193,13 @@ A new arm reuses the core path when it provides:
 
 No per-arm interpolator code. Optional extras: servo gains in `initialize()`, and `default_joint_speed` if 1.05 rad/s is the wrong `moveJ` limit for this arm.
 
-## Example: SO-106
+## Example: Solarian Arm 1
 
-The `so106` project arm is the reference implementation.
+The `arm1` project arm is the reference implementation.
 
 ### Module class
 
-The module is [the recipe](#the-recipe) above with the SO-106 model. Pose scheduling / sampling is inherited from [`Module`](/docs/modules) when yaml sets `interpolator_type: pose`:
+The module is [the recipe](#the-recipe) above with the Solarian Arm 1 model. Pose scheduling / sampling is inherited from [`Module`](/docs/modules) when yaml sets `interpolator_type: pose`:
 
 ```python
 IK_JOINT_ACTUATORS = [
@@ -211,7 +211,7 @@ class ArmModule(Module):
     # ... the six FeetechServo joints and six CartesianIKActuators ...
 
     ik_backend = MinkIK(
-        mjcf="assets/so106.xml",
+        mjcf="assets/arm1.xml",
         joints=dict(zip(IK_JOINT_ACTUATORS, IK_JOINT_ACTUATORS)),
         frame="tcp",
         position_cost=1.0,
@@ -219,7 +219,7 @@ class ArmModule(Module):
     )
 ```
 
-When the TCP is a CAD Frame on the gripper, pass that tool's flange-relative pose into the arm (`So106ArmModule(ik_tcp=UmiSlimFeetechModule.tcp_from_flange)`). MinkIK tracks the arm `flange` and applies the offset. Named poses a skill can drive live in `conf/skills/move.yaml`.
+When the TCP is a CAD Frame on the gripper, pass that tool's flange-relative pose into the arm (`Arm1Module(ik_tcp=UmiSlimFeetechModule.tcp_from_flange)`). MinkIK tracks the arm `flange` and applies the offset. Named poses a skill can drive live in `conf/skills/move.yaml`.
 
 ### Arm yaml
 
