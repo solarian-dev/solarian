@@ -1010,7 +1010,7 @@ code does: through a commit, which is the review gate.
 A hardware design ships the way a software plugin does: versioned, installable,
 and complete enough that an agent can take a non-expert from an empty desk to a
 calibrated robot. A hardware package (for example the hardware half of
-`solarian-arm-1`) holds:
+`solarian-arm1`) holds:
 
 - **`hardware.yaml`**: design name and revision, the modules it provides, and a
   bill of materials. Each line has a part, a quantity, a unit cost, suppliers

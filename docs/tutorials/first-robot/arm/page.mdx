@@ -186,12 +186,12 @@ In simulation the module needs a body: the arm's MuJoCo model, standing in a wor
 
 ### Copy the arm model
 
-The model is published with the [`solarian-arm-1`](https://github.com/solarian-dev/solarian-arm-1) package. Copy its assets folder into the project. This copies data only: the module class is the file you just wrote. `solarian-arm-1` also ships a maintained version of the same module, for projects that would rather install it than keep it.
+The model is published with the [`solarian-arm1`](https://github.com/solarian-dev/solarian-arm1) package. Copy its assets folder into the project. This copies data only: the module class is the file you just wrote. `solarian-arm1` also ships a maintained version of the same module, for projects that would rather install it than keep it.
 
 ```bash
-git clone --depth 1 https://github.com/solarian-dev/solarian-arm-1.git /tmp/solarian-arm-1
+git clone --depth 1 https://github.com/solarian-dev/solarian-arm1.git /tmp/solarian-arm1
 mkdir -p assets
-cp -R /tmp/solarian-arm-1/solarian_arm_1/assets assets/arm1
+cp -R /tmp/solarian-arm1/solarian_arm_1/assets assets/arm1
 ```
 
 You should now have `assets/arm1/arm1.xml` and an `arm1_description/` folder of meshes beside it. The XML finds its meshes by a path relative to itself, so keep the two together.
