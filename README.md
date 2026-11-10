@@ -155,3 +155,9 @@ watch -n 2 nvidia-smi
 ```bash
 python lerobot/find_port.py
 ```
+
+## License
+
+Solarian is licensed under the [Apache License 2.0](LICENSE). Copyright 2026 PrimaryKey Inc. Vendored third-party code keeps its own license; see [NOTICE](NOTICE). Model weights are downloaded separately and keep their upstream licenses.
+
+Solarian and the Solarian logo are trademarks of PrimaryKey Inc. See the [trademark policy](TRADEMARKS.md).
