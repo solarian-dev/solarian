@@ -136,11 +136,11 @@ Prefer a size that divides the sensor by a whole number. `cv2.resize` with `INTE
 
 ## Recording a session
 
-Recording is on while you teleop, so `solarian run-controller` already records. Press `r` to seal the episode and open the next one, `delete` to throw the current one away and re-record it.
+`solarian run-controller` starts idle. Press `r` to open an episode and `r` again to seal it, `delete` to throw the current one away and re-record it.
 
 The **Recording** panel, at the top of the pygame window and on the web controller page, has a switch per side. A switch decides where the *next* episode records: flip one mid-take and the take in progress still seals on the sides it started on. The status line says which sides are recording now, or between takes which ones are armed.
 
-To start idle instead and open the first episode by hand, set `record: false` in the controller's config. That is a different switch from the robot's `recording.enabled`, and the two answer different questions: `recording.enabled` is whether the robot can record at all, while `record` is only whether an operator has to press a key first. Turning `enabled` off to get a quiet startup also means the robot's switch does nothing. `solarian record` ignores `record` either way, since it opens and seals every episode itself.
+To open the first episode as soon as the session is up, set `record: true` in the controller's config. That is a different switch from the robot's `recording.enabled`, and the two answer different questions: `recording.enabled` is whether the robot can record at all, while `record` is only whether an operator has to press a key first. `solarian record` ignores `record` either way, since it opens and seals every episode itself.
 
 For a deliberate collection run, `solarian record` cuts the same teleop loop into episodes:
 

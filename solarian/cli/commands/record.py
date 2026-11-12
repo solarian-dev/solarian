@@ -15,7 +15,7 @@ _ROBOT_REPORT_TIMEOUT_S = 5.0
 
 @CommandRegistry.register('record', 'commands/record')
 class RecordCommand(BaseCommand):
-    category = "Recording & Replay"
+    category = "Recording"
     help = "Teleoperate and record a training dataset, episode by episode"
     description = """
     The same teleop loop as `run-controller`, cut into episodes: reset the scene,

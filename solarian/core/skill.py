@@ -1,7 +1,7 @@
 """
 Skill — Base class for control logic: consumes observations, produces actions.
 
-Skills are launched by the Controller or the ThinkProcess when it decides an
+Skills are launched by the Controller, or by its AI agent when it decides an
 action should be taken. Each skill runs at its own frequency, reads robot
 observations from shared-memory observation buffers, and produces actions
 pushed to the action queue.
@@ -12,7 +12,7 @@ runtime owns it and ``execution_mode`` says how it is scheduled there, and a
 
 Lifecycle::
 
-    Controller / ThinkProcess.decide()  →  launches Skill
+    Controller / AgentHarness tool call  →  launches Skill
           ↓
     Skill.begin()  → setup()
           ↓

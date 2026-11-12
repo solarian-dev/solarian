@@ -248,7 +248,7 @@ solarian run-server
 
 Starts a [`RelayServer`](/docs/servers) using `conf/server.yaml`. Run this on the relay machine — typically a small box on the same network as both the robot and the controller.
 
-## Recording & replay commands
+## Recording commands
 
 ### `record`
 
@@ -259,14 +259,6 @@ solarian record num_episodes=10 episode_time_s=20
 The same teleop loop as `run-controller`, cut into episodes: reset the scene, record for `episode_time_s`, seal, repeat. Press `delete` during an episode to throw it away and record it again — the index is reused, so a bad take leaves no gap — `r` to seal early, and quit the UI to end the session.
 
 `conf/commands/record.yaml` holds only the shape of the session (`name`, `num_episodes`, `episode_time_s`, `reset_time_s`, `tasks`). The `recording:` block in `conf/controller.yaml` picks which sides record: the robot, into `recordings/robot/`, and the controller, into `recordings/controller/`. The robot's `conf/robot.yaml` `recording:` block holds how the robot stores its episodes. The command refuses to start when neither side would record. See [Recording](/docs/recording).
-
-### `replay`
-
-```bash
-solarian replay episodes=[0,1,2]
-```
-
-Replays a previously recorded episode by streaming its actions back through the standard action path. Useful for debugging deterministic behavior.
 
 ## Training & data commands
 

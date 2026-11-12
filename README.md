@@ -158,7 +158,7 @@ Solarian is early, and contributions are welcome. A few guidelines to start with
   pytest tests/
   ```
 
-  On Apple Silicon, see the [installation notes](https://solarian.dev/docs/installation) for building `atomics` from source.
+  On Apple Silicon that install builds `atomics` from source, and `xformers` with the `ai` extra (`.[all]` includes it). It needs git and a C compiler.
 - New hardware support and skills usually belong in a plugin rather than in the core. Start one with `solarian create-plugin`, and list it in the [Plugin Directory](https://solarian.dev/plugins/submit).
 
 A `CONTRIBUTING.md` and a code of conduct are coming.

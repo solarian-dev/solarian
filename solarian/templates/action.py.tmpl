@@ -2,10 +2,11 @@ from solarian.core.action import ModuleAction, Action, ActuatorField
 from ${project_name}.robot import ${project_name_camel}Robot
 
 # Example arm module action
-class ArmAction(ModuleAction):
-    shoulder_pan = ActuatorField(${project_name_camel}Robot.arm.shoulder_pan.pos)
+class MyArmAction(ModuleAction):
+    #shoulder_pan = ActuatorField(${project_name_camel}Robot.arm.shoulder_pan.pos)
+    pass
     
 
 # Define your Action class here
 class ${project_name_camel}Action(Action):
-    arm = ArmAction()
+    arm = MyArmAction()

@@ -154,7 +154,7 @@ A class-attribute descriptor on a [`ModuleAction`](/docs/actions) that binds an 
 
 ### AI Controller
 
-A [Controller](/docs/controllers) subclass that runs a dual-process System 1 / System 2 architecture: fast reactive [Skills](/docs/skills) plus a slow VLM-driven `ThinkProcess`. See [AI Controller](/docs/ai_controller).
+A [Controller](/docs/controllers) with an `agent:` block: a planner model that calls the controller's tools, which start fast reactive [Skills](/docs/skills), and a monitor model that watches them. See [AI Controller](/docs/ai_controller).
 
 ### `BusClient` / `BusServer`
 
@@ -182,7 +182,7 @@ The node that decides what the robot does — keyboard teleop, learned policy, A
 
 ### `ControllerConfig`
 
-Pydantic model for `conf/controller.yaml` (`fps`, `tps`, `agent`, `policy_path`, `device`, `headless`, `connection`, `modules`; `system2_*` only for the legacy `AIController`).
+Pydantic model for `conf/controller.yaml` (`fps`, `agent`, `ui`, `recording`, `connection`, …).
 
 ### `AgentHarness`
 
@@ -303,10 +303,6 @@ Enum (`IDLE`, `RUNNING`, `COMPLETED`, `FAILED`, `STOPPED`) reported by skills vi
 ### System 1 / System 2
 
 The naming Solarian uses for its dual-process AI architecture. System 1 = fast reactive control loop running [Skills](/docs/skills). System 2 = the [AI Controller](/docs/ai_controller)'s planner, which calls those skills as tools.
-
-### `ThinkProcess`
-
-The legacy `AIController`'s System 2 process (`solarian.core.ai.old`): queried a VLM each tick to decide which skills to start or stop. Replaced by the `agent:` harness.
 
 ### ZeroMQ
 

@@ -61,11 +61,7 @@ Default `conf/controller.yaml`:
 connection: ${deployment.connection}
 
 fps: 30
-tps: 1
 # agent: {planner: ..., monitor: ...}   # the AI controller; see /docs/ai_controller
-policy_path: ""
-device: cpu
-modules: {}
 ```
 
 Mapped to [`ControllerConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py):
@@ -74,25 +70,15 @@ Mapped to [`ControllerConfig`](https://github.com/solarian-dev/solarian/blob/mai
   <Property name="fps" type="int">
     Rate of the control loop: how often <code>control_step()</code> runs and an action goes out.
   </Property>
-  <Property name="tps" type="int">
-    Rate at which the AI Controller's <code>ThinkProcess</code> runs (System 2). Ignored by plain controllers.
-  </Property>
   <Property name="headless" type="bool">
     If <code>True</code>, skip the OpenCV display loop and run the controller from a stdin loop instead.
   </Property>
   <Property name="connection" type="ConnectionConfig">
     ZMQ ports and IPs, read from <code>conf/deployment/&lt;name&gt;.yaml</code>. See <a href="/docs/servers">Server</a>.
   </Property>
-  <Property name="modules" type="dict[str, ModuleConfig]">
-    Per-module configuration for the controller-side modules, inline here rather than in <code>conf/modules/&lt;name&gt;.yaml</code>.
-  </Property>
-  <Property name="policy_path" type="str">
-    Path to a policy checkpoint the AI Controller loads. A skill's policy server reads its own, from the <code>server:</code> block of its conf; see <a href="/docs/services#the-server-block">Services</a>.
-  </Property>
-  <Property name="device" type="str">
-    Torch device (<code>cpu</code>, <code>cuda</code>, <code>mps</code>) for any policy / model the controller loads.
-  </Property>
 </Properties>
+
+Controller-side modules read their config from <code>conf/modules/&lt;name&gt;.yaml</code>, the same as the robot's. A skill's policy server reads its checkpoint from the <code>server:</code> block of the skill's conf; see [Services](/docs/services#the-server-block).
 
 ## Lifecycle
 

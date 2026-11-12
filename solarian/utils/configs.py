@@ -1,31 +1,409 @@
 from __future__ import annotations
 
-from omegaconf import DictConfig, OmegaConf
-from typing import TYPE_CHECKING, Any
-from pydantic import ValidationError
+import difflib
+import inspect
 import os
+import re
+import textwrap
+import types
+from enum import Enum
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin
+
+from omegaconf import DictConfig, OmegaConf
+from pydantic import BaseModel, ValidationError
+from pydantic.fields import FieldInfo
+from pydantic_core import PydanticUndefined
 
 if TYPE_CHECKING:
     from solarian.core.configs import ModuleConfig
 
 
-def parse_with_friendly_errors(model_class, data):
-    """Parse config data with user-friendly error messages"""
+#: Where a config class without its own ``Docs:`` line sends the reader.
+CONFIG_DOCS_URL = "https://solarian.dev/docs/project-configs"
+
+_DOCS_LINE = re.compile(r"^\s*Docs:\s*(\S+)", re.MULTILINE)
+_FIELD_LINE = re.compile(r"^(\s*)([A-Za-z_]\w*)\s*:(?!=)")
+_RST_ROLE = re.compile(r":\w+:`~?(?:[\w.]+\.)?([^`]+)`")
+
+_WIDTH = 88
+_MAX_INPUT_REPR = 60
+
+
+class ConfigError(ValueError):
+    """A config file that does not validate, already formatted for a person.
+
+    The message is the whole report, so it reads the same wherever it surfaces:
+    caught by the CLI, or printed as the last line of a child process's traceback.
+    """
+
+    def __init__(
+        self,
+        model_class: type[BaseModel],
+        errors: list[dict[str, Any]],
+        config_path: str | None = None,
+        cli_overridable: bool = False,
+    ):
+        self.model_class = model_class
+        self.errors = errors
+        self.config_path = config_path
+        super().__init__(
+            format_config_errors(model_class, errors, config_path, cli_overridable)
+        )
+
+
+def parse_with_friendly_errors(model_class, data, config_path: str | None = None):
+    """``model_class(**data)``, raising :class:`ConfigError` if it does not validate.
+
+    ``config_path`` names the file ``data`` came from. Unset, it is the command's
+    own config, which is also the one command-line overrides apply to.
+    """
     try:
         return model_class(**data)
     except ValidationError as e:
-        # Get the config filename if possible
-        config_path = os.environ.get("SOLARIAN_CURRENT_CONFIG", "")
-        
-        # Format a user-friendly error message
-        error_msg = f"Configuration Error in {model_class.__name__}:\n"
-        error_msg += f"  {str(e)}\n"
-        
-        if config_path:
-            error_msg += f"  Please check your configuration file: {config_path}\n"
-            
-        # Re-raise with the friendly message
-        raise ValueError(error_msg) from e
+        cli_overridable = config_path is None
+        if config_path is None:
+            config_path = os.environ.get("SOLARIAN_CURRENT_CONFIG") or None
+        raise ConfigError(
+            model_class, e.errors(include_url=False), config_path, cli_overridable
+        ) from None
+
+
+def docs_url(model_class: type) -> str | None:
+    """The ``Docs:`` link of the nearest class in ``model_class``'s MRO that has one."""
+    for klass in model_class.__mro__:
+        if klass is BaseModel:
+            break
+        doc = klass.__dict__.get("__doc__")
+        if doc:
+            match = _DOCS_LINE.search(doc)
+            if match:
+                return match.group(1)
+    return None
+
+
+def field_help(model_class: type[BaseModel]) -> dict[str, str]:
+    """Each field's help text: ``Field(description=...)``, else its ``#:`` comment."""
+    comments: dict[str, str] = {}
+    for klass in reversed(model_class.__mro__):
+        if isinstance(klass, type) and issubclass(klass, BaseModel) and klass is not BaseModel:
+            comments.update(_field_comments(klass))
+    return {
+        name: field.description or comments.get(name, "")
+        for name, field in model_class.model_fields.items()
+    }
+
+
+@lru_cache(maxsize=None)
+def _field_comments(klass: type) -> dict[str, str]:
+    """The ``#:`` comment block directly above each field declared in ``klass``'s body."""
+    try:
+        lines, _ = inspect.getsourcelines(klass)
+    except (OSError, TypeError):
+        return {}
+
+    body_indent = None
+    pending: list[str] = []
+    comments: dict[str, str] = {}
+    for line in lines[1:]:
+        stripped = line.strip()
+        if not stripped:
+            pending = []
+            continue
+        indent = len(line) - len(line.lstrip())
+        if body_indent is None:
+            body_indent = indent
+        if stripped.startswith("#:"):
+            pending.append(stripped[2:].strip())
+            continue
+        match = _FIELD_LINE.match(line)
+        if match and pending and indent == body_indent:
+            comments[match.group(2)] = " ".join(pending)
+        pending = []
+    return comments
+
+
+def format_config_errors(
+    model_class: type[BaseModel],
+    errors: list[dict[str, Any]],
+    config_path: str | None = None,
+    cli_overridable: bool = False,
+) -> str:
+    """A validation failure as a person fixing the yaml wants to read it."""
+    missing: dict[str, list[str]] = {}
+    invalid: dict[str, list[dict[str, Any]]] = {}
+    unknown: dict[str, list[str]] = {}
+    top_docs = docs_url(model_class) or CONFIG_DOCS_URL
+
+    for error in errors:
+        path, owner, field = _resolve(model_class, error["loc"])
+        if error["type"] == "missing":
+            if path not in missing:
+                missing[path] = _describe(path, field, owner, top_docs, missing=True)
+        elif error["type"] == "extra_forbidden":
+            unknown.setdefault(path, _describe_unknown(path, owner))
+        else:
+            invalid.setdefault(path, []).append(error)
+
+    where = _display_path(config_path) if config_path else None
+    title = f"Configuration error in {where} ({model_class.__name__})" if where else (
+        f"Configuration error in {model_class.__name__}"
+    )
+    out = [title, ""]
+
+    if missing:
+        out.append("  Missing required fields:")
+        for block in missing.values():
+            out.extend(block)
+        out.append("")
+
+    if invalid:
+        out.append("  Invalid values:")
+        for path, errs in invalid.items():
+            _, owner, field = _resolve(model_class, errs[0]["loc"])
+            out.extend(_describe_invalid(path, errs, field, owner, top_docs))
+        out.append("")
+
+    if unknown:
+        out.append("  Unknown fields:")
+        for block in unknown.values():
+            out.extend(block)
+        out.append("")
+
+    if missing:
+        first = next(iter(missing))
+        hint = f"  Add the missing fields to {where}" if where else "  Add the missing fields"
+        if cli_overridable:
+            hint += f", or set them on the command line, e.g. {first}=<value>"
+        out.append(hint + ".")
+    elif where:
+        out.append(f"  Fix the values above in {where}.")
+    out.append(f"  Docs: {top_docs}")
+    return "\n".join(out)
+
+
+def _describe(
+    path: str, field: FieldInfo | None, owner: type | None, top_docs: str, missing: bool
+) -> list[str]:
+    head = f"    {path}"
+    if field is not None:
+        head += f": {_type_name(field.annotation)}"
+    lines = [head]
+    if owner is not None and field is not None:
+        name = path.rsplit(".", 1)[-1]
+        lines.extend(_wrap(field_help(owner).get(name, "")))
+        choices = _choices(field.annotation)
+        if missing and choices:
+            lines.extend(_wrap("One of: " + ", ".join(repr(c) for c in choices)))
+    lines.extend(_nested_docs(owner, top_docs))
+    return lines
+
+
+def _describe_invalid(
+    path: str,
+    errors: list[dict[str, Any]],
+    field: FieldInfo | None,
+    owner: type | None,
+    top_docs: str,
+) -> list[str]:
+    label = path or "(whole section)"
+    head = f"    {label}"
+    if "input" in errors[0] and path:
+        head += f": got {_short_repr(errors[0]['input'])}"
+    lines = [head]
+    # A union reports one error per member it tried; the declared type says the
+    # same thing once.
+    if len(errors) > 1 and field is not None:
+        lines.extend(_wrap(f"Expected {_type_name(field.annotation)}"))
+    else:
+        lines.extend(_wrap(_clean_msg(errors[0]["msg"])))
+        if field is not None:
+            lines.extend(_wrap(f"Type: {_type_name(field.annotation)}"))
+    if field is not None and owner is not None:
+        name = path.rsplit(".", 1)[-1]
+        lines.extend(_wrap(field_help(owner).get(name, "")))
+        default = _default_repr(field)
+        if default is not None:
+            lines.extend(_wrap(f"Default: {default}"))
+    lines.extend(_nested_docs(owner, top_docs))
+    return lines
+
+
+def _describe_unknown(path: str, owner: type | None) -> list[str]:
+    name = path.rsplit(".", 1)[-1]
+    line = f"    {path}"
+    if owner is not None and issubclass(owner, BaseModel):
+        close = difflib.get_close_matches(name, owner.model_fields, n=1)
+        line += f": not a field of {owner.__name__}"
+        if close:
+            line += f" (did you mean '{close[0]}'?)"
+    return [line]
+
+
+def _nested_docs(owner: type | None, top_docs: str) -> list[str]:
+    if owner is None:
+        return []
+    url = docs_url(owner)
+    return _wrap(f"Docs: {url}") if url and url != top_docs else []
+
+
+def _resolve(
+    model_class: type[BaseModel], loc: tuple[Any, ...]
+) -> tuple[str, type | None, FieldInfo | None]:
+    """``loc`` as a dotted path, plus the model declaring its last field and that field.
+
+    Pydantic puts the name of the union member it tried into ``loc``; those
+    parts name no field, so they are dropped from the path.
+    """
+    current: Any = model_class
+    owner: type | None = None
+    field: FieldInfo | None = None
+    path = ""
+    for part in loc:
+        if isinstance(part, int):
+            current = _element_type(current, part)
+            path += f"[{part}]"
+            field = None
+            continue
+        model = _model_with_field(current, part)
+        if model is not None:
+            owner, field = model, model.model_fields[part]
+            current = field.annotation
+            path = f"{path}.{part}" if path else part
+            continue
+        value_type = _dict_value_type(current)
+        if value_type is not None:
+            current = value_type
+            path = f"{path}.{part}" if path else part
+            field = None
+            continue
+        member = _union_member(current, part)
+        if member is not None:
+            current = member
+            continue
+        # Unknown key: an extra field, or a model the walk could not follow.
+        owner = _first_model(current) or owner
+        path = f"{path}.{part}" if path else part
+        field = None
+    return path, owner, field
+
+
+def _members(tp: Any) -> list[Any]:
+    if get_origin(tp) in (Union, types.UnionType):
+        members = []
+        for arg in get_args(tp):
+            members.extend(_members(arg))
+        return members
+    return [] if tp is type(None) else [tp]
+
+
+def _model_with_field(tp: Any, name: str) -> type[BaseModel] | None:
+    for member in _members(tp):
+        if isinstance(member, type) and issubclass(member, BaseModel) and name in member.model_fields:
+            return member
+    return None
+
+
+def _first_model(tp: Any) -> type[BaseModel] | None:
+    for member in _members(tp):
+        if isinstance(member, type) and issubclass(member, BaseModel):
+            return member
+    return None
+
+
+def _dict_value_type(tp: Any) -> Any:
+    for member in _members(tp):
+        if get_origin(member) is dict:
+            args = get_args(member)
+            return args[1] if len(args) == 2 else Any
+    return None
+
+
+def _element_type(tp: Any, index: int) -> Any:
+    for member in _members(tp):
+        origin = get_origin(member)
+        args = get_args(member)
+        if origin in (list, set, frozenset) and args:
+            return args[0]
+        if origin is tuple and args:
+            if len(args) == 2 and args[1] is Ellipsis:
+                return args[0]
+            return args[index] if index < len(args) else Any
+    return Any
+
+
+def _union_member(tp: Any, tag: str) -> Any:
+    for member in _members(tp):
+        if _type_name(member) == tag or getattr(member, "__name__", None) == tag:
+            return member
+    return None
+
+
+def _type_name(tp: Any) -> str:
+    if tp is type(None):
+        return "None"
+    if tp is Any:
+        return "any"
+    origin = get_origin(tp)
+    if origin in (Union, types.UnionType):
+        return " | ".join(_type_name(arg) for arg in get_args(tp))
+    if origin is Literal:
+        return " | ".join(repr(arg) for arg in get_args(tp))
+    if origin is not None:
+        args = ", ".join("..." if a is Ellipsis else _type_name(a) for a in get_args(tp))
+        return f"{getattr(origin, '__name__', str(origin))}[{args}]"
+    if isinstance(tp, type):
+        return tp.__name__
+    return str(tp)
+
+
+def _choices(tp: Any) -> list[Any]:
+    choices: list[Any] = []
+    for member in _members(tp):
+        if get_origin(member) is Literal:
+            choices.extend(get_args(member))
+        elif isinstance(member, type) and issubclass(member, Enum):
+            choices.extend(m.value for m in member)
+    return choices
+
+
+def _default_repr(field: FieldInfo) -> str | None:
+    if field.default is PydanticUndefined or field.default_factory is not None:
+        return None
+    value = field.default
+    if isinstance(value, Enum):
+        value = value.value
+    if isinstance(value, BaseModel):
+        return None
+    return _short_repr(value)
+
+
+def _short_repr(value: Any) -> str:
+    text = repr(value)
+    if len(text) > _MAX_INPUT_REPR:
+        text = text[: _MAX_INPUT_REPR - 3] + "..."
+    return text
+
+
+def _clean_msg(msg: str) -> str:
+    return msg.removeprefix("Value error, ")
+
+
+def _wrap(text: str) -> list[str]:
+    if not text:
+        return []
+    text = _RST_ROLE.sub(r"`\1`", text).replace("``", "`")
+    return textwrap.wrap(
+        text, width=_WIDTH, initial_indent="      ", subsequent_indent="      "
+    )
+
+
+def _display_path(path: str) -> str:
+    try:
+        rel = os.path.relpath(path)
+    except ValueError:
+        return path
+    return path if rel.startswith("..") else rel
 
 
 DEFAULT_DEPLOYMENT = "localhost"
@@ -124,7 +502,7 @@ def resolve_with_deployment(cfg: DictConfig | dict) -> dict:
 
 def load_config_yaml(yaml_path: str, config_class: type) -> Any:
     data = resolve_with_deployment(OmegaConf.load(yaml_path))
-    return parse_with_friendly_errors(config_class, data)
+    return parse_with_friendly_errors(config_class, data, config_path=yaml_path)
 
 
 def load_module_config_yaml(yaml_path: str) -> ModuleConfig:

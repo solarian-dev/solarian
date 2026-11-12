@@ -1,2 +1,0 @@
---no-binary :all:
-atomics==1.0.3

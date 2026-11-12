@@ -76,7 +76,7 @@ _CATEGORY_ORDER = (
     "Project",
     "Robot",
     "Controller",
-    "Recording & Replay",
+    "Recording",
     "Training & Data",
     "Utilities",
 )
@@ -336,22 +336,26 @@ def main() -> None:
             # Load the config using hydra
             hydra_cfg = compose(config_name=config_name, overrides=searchpath + seeds + overrides)
 
-            if not cmd.resolve_config:
-                cfg = hydra_cfg
-            else:
-                # Convert to dict for Pydantic parsing, resolving ${deployment.*}
-                from solarian.utils.configs import parse_with_friendly_errors, resolve_with_deployment
-                cfg_dict = resolve_with_deployment(hydra_cfg)
-                if cmd.get_config_class() is not None:
-                    cfg = parse_with_friendly_errors(cmd.get_config_class(), cfg_dict)
-                else:
-                    cfg = OmegaConf.create(cfg_dict)
-                
-            from solarian.setup import setup
-            setup_modules = CommandRegistry.get_setup_modules(subcommand)
-            setup(modules=setup_modules)
+            from solarian.utils.configs import ConfigError
 
+            # Module configs are loaded while the command runs, so their
+            # errors surface from handle(), not from parsing the command's own.
             try:
+                if not cmd.resolve_config:
+                    cfg = hydra_cfg
+                else:
+                    # Convert to dict for Pydantic parsing, resolving ${deployment.*}
+                    from solarian.utils.configs import parse_with_friendly_errors, resolve_with_deployment
+                    cfg_dict = resolve_with_deployment(hydra_cfg)
+                    if cmd.get_config_class() is not None:
+                        cfg = parse_with_friendly_errors(cmd.get_config_class(), cfg_dict)
+                    else:
+                        cfg = OmegaConf.create(cfg_dict)
+
+                from solarian.setup import setup
+                setup_modules = CommandRegistry.get_setup_modules(subcommand)
+                setup(modules=setup_modules)
+
                 cmd.handle(cfg)
             except KeyboardInterrupt:
                 # Ctrl+C is how every long-running command is meant to end, and
@@ -359,10 +363,11 @@ def main() -> None:
                 # One that arrives during that shutdown lands here instead, and
                 # a stack trace is a poor way to report a clean stop.
                 print()
-        # except ValueError as e:
-        #     # Handle configuration validation errors
-        #     print(f"\n{colorama.Fore.RED}{str(e)}{colorama.Style.RESET_ALL}")
-        #     sys.exit(1)
+            except ConfigError as e:
+                if os.environ.get("SOLARIAN_DEBUG"):
+                    raise
+                print(f"\n{colorama.Fore.RED}{e}{colorama.Style.RESET_ALL}", file=sys.stderr)
+                sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -120,12 +120,6 @@ actuators:
   <Property name="get_max_k" type="int">
     Max number of observation samples kept in the shared-memory ring buffer (default 128).
   </Property>
-  <Property name="commands_per_cycle" type="int">
-    Max number of actions drained per control loop iteration.
-  </Property>
-  <Property name="command_queue_size" type="int">
-    Capacity of the shared-memory action queue.
-  </Property>
   <Property name="actuators" type="dict[str, ActuatorConfig]">
     Per-actuator configuration keyed by the class attribute name.
   </Property>

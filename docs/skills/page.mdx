@@ -189,25 +189,9 @@ execution_place: ${deployment.umi_target_execution_place}
 
 That is how to compare the two placements for one policy: run the same task with a deployment that sets `server` and one that sets `robot`. A skill that reads a calculated field must run where that field is computed or downstream of it. The relay sees robot-computed fields, but the robot never sees relay-computed ones.
 
-## How the think process selects skills
+## Starting skills from the AI controller
 
-`ThinkProcess.decide()` calls a VLM with the current observation, recent skill statuses, and the user message. The VLM returns JSON like:
-
-```json
-{
-  "skills_to_start": [
-    {"skill_name": "pick", "params": {"target": "red_cup"}}
-  ],
-  "skills_to_stop": ["explore"],
-  "reasoning": "Cup detected; switching from exploration to pick."
-}
-```
-
-For each entry in `skills_to_start`:
-
-The think process puts a `START_SKILL` action carrying `{"skill": name, "params": {...}}` on the controller's `skill_command_queue`. The controller looks the name up in its registry, constructs the class with those params, and hands the instance to `start_skill()` — which then decides where it runs. A `CONTROLLER` skill is launched locally; a `ROBOT`/`SERVER` one is forwarded as a `START_SKILL` action with the same shape, and the robot's generic handler constructs it there. The channel decides the direction, not the action type.
-
-For each entry in `skills_to_stop`, `request_stop()` is called on the active skill, or a `STOP_SKILL` action naming it is sent for a remote one.
+The [AI controller](/docs/ai_controller)'s planner starts skills by calling the controller's `tools`; see [Declaring tools](/docs/ai_controller#declaring-tools). Each call ends in `start_skill()`, which decides where the skill runs: a `CONTROLLER` skill is launched locally, while a `ROBOT`/`SERVER` one is forwarded as a `START_SKILL` action and the robot's generic handler constructs it there.
 
 ## Stopping yourself
 

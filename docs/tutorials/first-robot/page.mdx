@@ -14,11 +14,20 @@ The project is called `arm1`, and every later tutorial continues it. Do the chap
 
 ## Before you start
 
-Finish [Installation](/docs/installation), including the simulation extra:
+Finish [Installation](/docs/installation), including the simulation extra. From an editable checkout, add the extra in the cloned repository so the install stays editable:
 
-```bash
+<CodeGroup>
+
+```bash {{ title: 'pip' }}
 pip install "solarian[sim]"
 ```
+
+```bash {{ title: 'editable / from source' }}
+# In the cloned solarian repository
+pip install -e ".[sim]"
+```
+
+</CodeGroup>
 
 Check the two commands exist:
 

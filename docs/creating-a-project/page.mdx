@@ -1,110 +1,167 @@
 export const metadata = {
   title: 'Creating a Project',
   description:
-    'Scaffold a Solarian project, attach a hardware module, and run the relay server, robot, and a keyboard controller end-to-end.',
+    'Scaffold a Solarian project named my_robot, wire its arm module, and run the relay server, robot, and a keyboard controller end-to-end.',
 }
 
 # Creating a Project
 
-This guide walks through creating a brand-new Solarian project, adding a hardware module from a plugin, and running the three nodes — relay server, robot, and controller — for the first time. By the end you'll have a working keyboard teleop session against either a real arm or a simulated module. {{ className: 'lead' }}
+This guide walks through creating a brand-new Solarian project and running the three nodes — relay server, robot, and controller — for the first time. The scaffold includes a local arm. By the end you'll have a keyboard teleop session that nudges that arm. {{ className: 'lead' }}
 
 ## 1. Scaffold a project
 
 `create-solarian` is shipped as a separate entry point so it works before you have a project on disk.
 
 ```bash
-create-solarian myrobot
-cd myrobot
+create-solarian my_robot
+cd my_robot
 ```
+
+The name is the directory, the Python package, and the class prefix. `my_robot` imports as `my_robot`. Title-casing it gives `MyRobot`, so the generated classes are `MyRobotRobot`, `MyRobotController`, and `MyRobotServer`.
 
 The scaffolder produces a project with this layout:
 
-<ScaffoldFigure />
+<ScaffoldFigure name="my_robot" />
 
 `conf/` is organized by who reads each file; [Project Configs](/docs/project-configs#the-conf-folder) covers every folder. Skills you write go in a `skills/` package next to `modules/`, and custom [action types](/docs/actions#custom-action-types) in `action.py` beside the schema that uses them.
 
-The generated [`settings.py`](/docs/settings) wires the project together by class path:
+The generated [`my_robot/settings.py`](/docs/settings) wires the project together by class path:
 
 ```python
-ROBOT_CLASS = 'myrobot.robot.MyrobotRobot'
-CONTROLLER_CLASS = 'myrobot.controller.MyrobotController'
-SERVER_CLASS = 'myrobot.server.MyrobotServer'
+ROBOT_CLASS = 'my_robot.robot.MyRobotRobot'
+CONTROLLER_CLASS = 'my_robot.controller.MyRobotController'
+SERVER_CLASS = 'my_robot.server.MyRobotServer'
 ```
 
-Install your project so the package is importable:
+Install the project so the package is importable. `.[all]` is every node on one machine. Use `.[robot]`, `.[server]`, or `.[controller]` when the nodes run on separate machines:
 
 ```bash
-pip install -e .
+pip install -e ".[all]"
 ```
 
-## 2. Add a hardware module
+## 2. The arm module
 
-Solarian hardware drivers ship as standalone `solarian-<name>` packages. [`solarian install`](/docs/plugins#installing-a-plugin) installs the plugin and copies its default YAML config into your project's `conf/` directory.
-
-```bash
-solarian install ur5
-```
-
-This installs `solarian-ur5` and creates `conf/modules/ur5.yaml` from the plugin's `templates/modules/ur5.yaml`. The filename is the attribute name you'll use on your `Robot`. This guide calls the module `arm`, so rename the file to match:
-
-```bash
-mv conf/modules/ur5.yaml conf/modules/arm.yaml
-```
-
-See [Core Plugins](/docs/plugins#core-plugins) for the drivers to start with.
-
-Edit `myrobot/robot.py` to attach the module:
+The scaffold writes a local arm and attaches it. `my_robot/robot.py`:
 
 ```python
 from solarian.core import Robot
-from solarian_ur5.module import UR5ArmModule
 
-class MyrobotRobot(Robot):
-    arm = UR5ArmModule()
+# Import module classes from your local modules or third party module plugins
+from my_robot.modules.my_arm_module import MyArmModule
+
+# Define your robot here
+class MyRobotRobot(Robot):
+    # Define robot modules, eg:
+    arm = MyArmModule()
 ```
 
-The attribute name `arm` matches `conf/modules/arm.yaml` — that's how Solarian routes per-module configuration. See [Project Configs](/docs/project-configs) for details.
+The attribute name `arm` matches `conf/modules/arm.yaml`. That is how Solarian routes per-module configuration. The generated file sets the module's control rate:
+
+```yaml
+frequency: 30
+```
+
+`my_robot/modules/my_arm_module.py` subclasses [`ArmModule`](/docs/modules) with the actuator commented out, so the project runs before any servo driver is installed:
+
+```python
+from solarian.core.arm_module import ArmModule
+#from solarian_feetech.actuator import FeetechServo
+from solarian.core.action import ActionType, ModuleAction, action_handler
+
+
+class MyArmModule(ArmModule):
+    # declare actuators and sensors
+    #shoulder_pan = FeetechServo()
+    pass
+```
+
+To drive a Feetech servo, install the driver and uncomment those two lines:
+
+```bash
+solarian install feetech
+```
+
+```python
+from solarian.core.arm_module import ArmModule
+from solarian_feetech.actuator import FeetechServo
+from solarian.core.action import ActionType, ModuleAction, action_handler
+
+
+class MyArmModule(ArmModule):
+    # declare actuators and sensors
+    shoulder_pan = FeetechServo()
+```
+
+A ready-made module is the other path. [`solarian install`](/docs/plugins#installing-a-plugin) installs the plugin and copies its YAML into `conf/modules/`. The attribute name on the robot has to match that filename. See [Core Plugins](/docs/plugins#core-plugins).
 
 ## 3. Define an observation and an action schema
 
-Solarian uses Pydantic-typed [`Observation`](/docs/observations) and [`Action`](/docs/actions) classes to describe what flows over the wire. The scaffolder generates a starting point you can edit:
+Solarian uses Pydantic-typed [`Observation`](/docs/observations) and [`Action`](/docs/actions) classes to describe what flows over the wire. The scaffolder generates a schema whose `arm` attribute matches the robot, with the joint field commented out until the module declares it:
 
 ```python
 from solarian.core.observation import SensorField, ModuleObs, Observation
-from myrobot.robot import MyrobotRobot
+from my_robot.robot import MyRobotRobot
 
-class ArmObs(ModuleObs):
-    shoulder_pan_pos = SensorField(MyrobotRobot.arm.shoulder_pan.pos)
 
-class MyrobotObservation(Observation):
-    arm = ArmObs()
+class MyArmObs(ModuleObs):
+    # define fields here
+    # shoulder_pan_pos = SensorField(MyRobotRobot.arm.shoulder_pan.pos)
+    pass
+
+
+class MyRobotObservation(Observation):
+    arm = MyArmObs()
 ```
 
 ```python
 from solarian.core.action import ModuleAction, Action, ActuatorField
-from myrobot.robot import MyrobotRobot
+from my_robot.robot import MyRobotRobot
 
-class ArmAction(ModuleAction):
-    shoulder_pan = ActuatorField(MyrobotRobot.arm.shoulder_pan.pos)
+# Example arm module action
+class MyArmAction(ModuleAction):
+    #shoulder_pan = ActuatorField(MyRobotRobot.arm.shoulder_pan.pos)
+    pass
 
-class MyrobotAction(Action):
-    arm = ArmAction()
+
+# Define your Action class here
+class MyRobotAction(Action):
+    arm = MyArmAction()
+```
+
+Once `MyArmModule` declares `shoulder_pan`, uncomment the field and drop `pass`:
+
+```python
+class MyArmObs(ModuleObs):
+    shoulder_pan_pos = SensorField(MyRobotRobot.arm.shoulder_pan.pos)
+
+
+class MyRobotObservation(Observation):
+    arm = MyArmObs()
+```
+
+```python
+class MyArmAction(ModuleAction):
+    shoulder_pan = ActuatorField(MyRobotRobot.arm.shoulder_pan.pos)
+
+
+class MyRobotAction(Action):
+    arm = MyArmAction()
 ```
 
 ## 4. Wire up keyboard teleop in the controller
 
-Every controller comes with a keyboard module that turns key transitions into [events](/docs/events). Handle them with `@event_handler`, and return an action from `control_step`:
+The generated `my_robot/controller.py` is an empty `MyRobotController`. Every controller comes with a keyboard module that turns key transitions into [events](/docs/events). Handle them with `@event_handler`, and return an action from `control_step`:
 
 ```python
 from solarian.core import Controller
 from solarian.core.action import ActionType
 from solarian.core.event import Event, EventType, event_handler
-from myrobot.action import MyrobotAction
+from my_robot.action import MyRobotAction
 
-class MyrobotController(Controller):
+class MyRobotController(Controller):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.target = MyrobotAction.zeros()
+        self.target = MyRobotAction.zeros()
 
     @event_handler(EventType.KEY_DOWN)
     def on_key_down(self, event: Event):
@@ -113,7 +170,7 @@ class MyrobotController(Controller):
         elif event.data["key"] == 'd':
             self.target.arm.shoulder_pan.value += 0.05
 
-    def control_step(self) -> MyrobotAction:
+    def control_step(self) -> MyRobotAction:
         self.target.action_type = ActionType.MODULE_ACTION
         return self.target
 ```
@@ -157,6 +214,6 @@ In the controller window, press `a` and `d` to nudge `shoulder_pan`. You should 
 - **Calibrate the hardware** with `solarian calibrate` before first `run-robot` on a real arm or gripper — see [Calibration](/docs/modules/calibration).
 - **Add more modules** with `solarian install <plugin>` — see [Core Plugins](/docs/plugins#core-plugins).
 - **Record a dataset** of teleoperated demonstrations: `solarian record`.
-- **Curate it** with dataset ops, your own included: `solarian add-op <name>` writes one into `datasets/` — see [Dataset ops](/docs/datasets#dataset-ops).
+- **Curate it** with a dataset op: `solarian add-op <name>` writes one into `datasets/` — see [Dataset ops](/docs/datasets#dataset-ops).
 - **Replace the controller** with a learned policy, served with `solarian run-service <skill conf>` and driven by a skill, or with the [AI Controller](/docs/ai_controller) for VLM-driven control.
 - **Train a policy** with `solarian train --conf conf/training/<run>`.

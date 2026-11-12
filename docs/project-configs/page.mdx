@@ -21,8 +21,7 @@ conf/
 ├── skills/<skill>.yaml     # a skill's config
 ├── services/<service>.yaml # a service or processor config (bbox_tracker)
 ├── commands/
-│   ├── record.yaml         # used by `solarian record`
-│   └── replay.yaml         # used by `solarian replay`
+│   └── record.yaml         # used by `solarian record`
 ├── training/<run>.yaml     # one complete training run, for `solarian train`
 ├── calibrations/           # calibration results; cameras/<serial>.json
 └── deployment/
@@ -39,7 +38,6 @@ Every CLI subcommand declares a `config_name` in [`solarian/cli/commands/__init_
 | `run-controller` | `conf/controller.yaml` |
 | `run-server` | `conf/server.yaml` |
 | `record` | `conf/commands/record.yaml` |
-| `replay` | `conf/commands/replay.yaml` |
 | `train` | none: `--conf conf/training/<name>` |
 
 ## What is a config?

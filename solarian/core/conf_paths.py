@@ -7,7 +7,7 @@ can define::
     conf/modules/<module>.yaml        a module, named by the robot's attribute
     conf/skills/<skill>.yaml          a skill's config
     conf/services/<service>.yaml      a service or processor config
-    conf/commands/<command>.yaml      a command's config (record, replay)
+    conf/commands/<command>.yaml      a command's config (e.g. record)
     conf/training/<run>.yaml          one training run, complete
     conf/calibrations/                calibration results, cameras/ included
     conf/deployment/<profile>.yaml    host layout

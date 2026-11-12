@@ -37,17 +37,16 @@ PROJECT_FILES: Tuple[FileSpec, ...] = (
     FileSpec(Path("action.py.tmpl"), Path("{package_name}/action.py")),
     FileSpec(Path("observation.py.tmpl"), Path("{package_name}/observation.py")),
     FileSpec(Path("settings.py.tmpl"), Path("{package_name}/settings.py")),
-    FileSpec(Path("example_module.py.tmpl"), Path("{package_name}/modules/example_module.py")),
-    FileSpec(Path("dataset_op.py.tmpl"), Path("{package_name}/datasets/drop_short_episodes.py")),
+    FileSpec(Path("my_arm_module.py.tmpl"), Path("{package_name}/modules/my_arm_module.py")),
     # conf/
     
     FileSpec(Path("conf/controller.yaml.tmpl"), Path("conf/controller.yaml")),
     FileSpec(Path("conf/commands/record.yaml.tmpl"), Path("conf/commands/record.yaml")),
-    FileSpec(Path("conf/commands/replay.yaml.tmpl"), Path("conf/commands/replay.yaml")),
     FileSpec(Path("conf/robot.yaml.tmpl"), Path("conf/robot.yaml")),
     FileSpec(Path("conf/server.yaml.tmpl"), Path("conf/server.yaml")),
     FileSpec(Path("conf/training/umi_pick_object.yaml.tmpl"), Path("conf/training/umi_pick_object.yaml")),
     FileSpec(Path("conf/deployment/localhost.yaml.tmpl"), Path("conf/deployment/localhost.yaml")),
+    FileSpec(Path("conf/modules/arm.yaml.tmpl"), Path("conf/modules/arm.yaml")),
 )
 
 
@@ -156,15 +155,14 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print(f"  │   ├── server.py")
     print(f"  │   ├── action.py")
     print(f"  │   ├── observation.py")
-    print(f"  │   ├── modules/example_module.py")
-    print(f"  │   └── datasets/drop_short_episodes.py")
+    print(f"  │   ├── modules/my_arm_module.py")
     print(f"  └── conf/")
     print(f"      ├── robot.yaml")
     print(f"      ├── controller.yaml")
     print(f"      ├── server.yaml")
+    print(f"      ├── modules/arm.yaml")
     print(f"      ├── commands/")
-    print(f"      │   ├── record.yaml")
-    print(f"      │   └── replay.yaml")
+    print(f"      │   └── record.yaml")
     print(f"      ├── training/")
     print(f"      │   └── umi_pick_object.yaml")
     print(f"      └── deployment/")
@@ -172,7 +170,9 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print()
     print("Next steps:")
     print(f"  cd {project_name}")
-    print(f"  pip install -e \".[all]\"   # Install your project; .[robot], .[server] or .[controller] per machine")
-    print(f"  solarian install <plugin>          # Install a plugin")
-    print(f"  solarian run-robot        # Run the robot")
+    print(f"  pip install -e \".[all]\"     # Install your project; .[robot], .[server] or .[controller] per machine")
+    print(f"  solarian install <plugin>   # Install a plugin")
+    print(f"  solarian run-robot          # Run the robot")
+    print(f"  solarian run-server         # Run the server")
+    print(f"  solarian run-controller     # Run the controller")
     print()

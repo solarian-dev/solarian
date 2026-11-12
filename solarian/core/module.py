@@ -206,7 +206,6 @@ class Module(ABC):
         self.calibration = None
 
         self.launch_timeout = self.cfg.launch_timeout
-        self.commands_per_cycle = self.cfg.commands_per_cycle
         self.frequency = self.cfg.frequency
 
         # create actuators and sensors from class-level attributes

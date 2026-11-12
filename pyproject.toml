@@ -16,7 +16,9 @@ dependencies = [
     "msgpack==1.1.0",
     # WebSocket server behind ``ui=external`` (solarian/core/ui/external.py).
     "websockets>=13",
-    "atomics==1.0.3",
+    # The macOS wheels fail at dlopen on Apple Silicon. That platform builds
+    # atomics from source during install (solarian_build / ensure_atomics).
+    "atomics==1.0.3; sys_platform != 'darwin' or platform_machine != 'arm64'",
 
     # Data input, validation and settings
     "pynput>=1.7.7",
@@ -69,7 +71,10 @@ ai = [
     "easydict==1.13",
     "wandb>=0.22.3",
     "openai",
-    #"xformers==0.0.31.post1",
+    # xformers is not listed here. Its sdist always passes -fopenmp, and
+    # Apple clang rejects that, so a normal extra would fail the whole
+    # install. solarian_build / ensure_xformers builds 0.0.32.post1 (the
+    # release for torch==2.8.0) on Apple Silicon when this extra is installed.
 ]
 # The AI controller (`agent:` in conf/controller.yaml): the planner and monitor
 # clients. No torch, so a controller laptop can run it without the training stack.
@@ -93,9 +98,9 @@ all = [
 ]
 
 [tool.uv]
-# atomics only publishes x86_64 wheels; the macOS one loads on an Apple Silicon
-# machine and then fails at dlopen. Build it instead. Shared memory — and so
-# every module process and every recording encoder — is built on it.
+# The macOS wheel fails at dlopen on Apple Silicon. Installs of Solarian build
+# atomics from source there and do not depend on the wheel. If uv is asked for
+# atomics anyway, build that from source too.
 no-binary-package = ["atomics"]
 
 [project.scripts]
@@ -152,10 +157,12 @@ create-solarian = "solarian.cli.scaffolder:create_project"
 [tool.poetry]
 packages = [{include = "solarian"}]
 include = [
+    {path = "solarian_build.py", format = "sdist"},
     {path = "solarian/data/**/*.json", format = ["sdist", "wheel"]},
     {path = "solarian/data/**/*.png", format = ["sdist", "wheel"]},
 ]
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["poetry-core>=2.0.0,<3.0.0", "pip"]
+build-backend = "solarian_build"
+backend-path = ["."]

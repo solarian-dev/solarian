@@ -43,7 +43,7 @@ All three nodes speak the same protocol: a Pydantic-validated [`Action`](/docs/a
 - **Plug-and-play hardware.** Hardware drivers ship as standalone `solarian-<name>` [plugins](/docs/plugins). `solarian install ur5` installs the package and copies the default config straight into `conf/modules/ur5.yaml`.
 - **Hydra-driven configuration.** Every command takes its config from a YAML file (`robot.yaml`, `controller.yaml`, `server.yaml`, `commands/record.yaml`, …) composed via [Hydra defaults](/docs/project-configs). Each module's config lives in `conf/modules/<module_name>.yaml` matching the attribute name on your `Robot`. A [skill](/docs/skills) config lives in `conf/skills/<config_name>.yaml`, a [service](/docs/services) config in `conf/services/<name>.yaml`, and a [training](/docs/training) run in `conf/training/<name>.yaml`.
 - **AI Controller.** [Any controller](/docs/ai_controller) can take tasks in plain language: a planner model calls its [Skills](/docs/skills) as tools while a fast monitor model watches each one through the cameras.
-- **Recording, replay, and training.** First-class CLI commands ([`record`](/docs/commands), `replay`, `train`) let you go from teleoperated demonstrations to a trained policy without leaving the framework.
+- **Recording and training.** First-class CLI commands ([`record`](/docs/commands), `train`) let you go from teleoperated demonstrations to a trained policy without leaving the framework.
 - **Settings and lifecycle.** A simple `settings.py` pattern (à la Django) registers your `Robot`, `Controller`, and `Server` classes, so the CLI can discover and run any of them with the right configuration.
 
 ## How a typical project flows

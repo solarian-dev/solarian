@@ -1,11 +1,11 @@
-from solarian.core.configs import LoggerConfig
+from solarian.core.configs import TrainLoggerConfig
 from solarian.analytics.logger import Logger
 
 
 class LoggerFactory():
 
     @staticmethod
-    def create_logger(logger_cfg: LoggerConfig, **kwargs) -> Logger:
+    def create_logger(logger_cfg: TrainLoggerConfig, **kwargs) -> Logger:
         """A logger for ``logger_cfg``, whose ``type`` names a solarian.tracking backend.
 
         Raises:

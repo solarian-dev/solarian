@@ -98,23 +98,15 @@ pip install "solarian[all]"
 
 </CodeGroup>
 
-The `ai` extra installs PyTorch, torchvision, datasets, ultralytics, einops, openai, and Weights & Biases. The `sim` extra installs gymnasium, MuJoCo, and dm_control.
+The `ai` extra installs PyTorch, torchvision, datasets, ultralytics, einops, openai, and Weights & Biases. On Apple Silicon it also builds `xformers`. The `sim` extra installs gymnasium, MuJoCo, and dm_control.
 
 ## Platform-specific notes
 
 ### macOS on Apple Silicon (arm64)
 
-The `atomics` package only publishes x86_64 wheels, and the macOS one installs on Apple Silicon and then fails at `dlopen`. It has to be built from source. `uv` does that on its own (`no-binary-package` in `pyproject.toml`); under plain pip, from a checked-out source tree:
+`pip` and `uv` build `atomics` from source on Apple Silicon. The wheels on PyPI install and then fail at `dlopen`. Installing the `ai` extra also builds `xformers` against the pinned PyTorch. There is no macOS wheel, and the default source build passes `-fopenmp`, which Apple clang rejects, so Solarian compiles it without that flag.
 
-```bash
-pip install -r requirements-macos-arm64.txt
-```
-
-If you also installed the `ai` extra, install `xformers` separately for compatible wheels:
-
-```bash
-pip install xformers==0.0.31.post1
-```
+Both need git and a C compiler, which the Xcode Command Line Tools provide (`xcode-select --install`). A checkout does this while `pip` or `uv` is still installing. A prebuilt wheel does it the first time Solarian is imported, once PyTorch is installed for `xformers`.
 
 ### Linux (Ubuntu / Debian)
 
@@ -143,7 +135,7 @@ python -c "import solarian; print(solarian.__name__, 'OK')"
 solarian --help
 ```
 
-You should see the Solarian CLI help with grouped command categories (Project, Robot, Controller, Recording & Replay, Training & Data, Utilities).
+You should see the Solarian CLI help with grouped command categories (Project, Robot, Controller, Recording, Training & Data, Utilities).
 
 ## Next steps
 

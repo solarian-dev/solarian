@@ -18,7 +18,7 @@ from solarian.core import Action
 from solarian.core.action import ActionType
 from solarian.core import Observation
 from solarian.core.conf_paths import project_path
-from solarian.core.configs import ControllerConfig, ActionValue
+from solarian.core.configs import ControllerConfig
 from solarian.core.message import Message
 from solarian.core.module import Module
 from solarian.core.remote_input_module import RemoteInputModule
@@ -257,7 +257,7 @@ class Controller(EventHost, ABC):
 
         # Shared-memory infrastructure mirroring what Robot owns on its side.
         # The controller keeps a per-module ObservationBuffer so downstream
-        # consumers (e.g. ThinkProcess and skill processes) can read the
+        # consumers (e.g. the agent and skill processes) can read the
         # latest observation without draining the buffer; the buffer is a
         # ring and simply overwrites itself on each new ``put``.
         # ``skill_status_buffer`` collects status transitions the robot
@@ -899,7 +899,6 @@ class Controller(EventHost, ABC):
         return {
             "controller": type(self).__name__,
             "fps": self.cfg.fps,
-            "tps": self.cfg.tps,
             "key_help": [list(row) for row in self.gui_key_help()],
             "skills": [
                 {
