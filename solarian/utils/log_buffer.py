@@ -188,11 +188,6 @@ def setup_process_logging(
         sh.setFormatter(fmt)
         logger.addHandler(sh)
 
-    # Root is often DEBUG; quiet chatty third-party loggers (e.g. picamera2
-    # "Execute job" on every capture) while keeping their INFO+ messages.
-    for noisy in ("picamera2",):
-        logging.getLogger(noisy).setLevel(logging.INFO)
-
 
 def remove_fallback_handlers(logger_name: Optional[str] = None):
     """Remove all :class:`FallbackStreamHandler` instances from the logger.

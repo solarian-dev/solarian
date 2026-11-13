@@ -319,7 +319,7 @@ The bus implements `read(ImageData, [...])` by grabbing a frame from V4L2 / AVFo
 A module plugin composes actuators/sensors into a ready-to-use unit and ships a default config in `templates/modules/`. `solarian-gripper1` is a parallel gripper driven by a single Feetech servo — note it depends on `solarian-feetech` rather than reimplementing the driver:
 
 ```python
-# solarian_gripper_1/gripper_feetech.py
+# solarian_gripper1/gripper_feetech.py
 from solarian.core.gripper_module import GripperConfig, GripperModule
 from solarian.core.data import PosData
 from solarian_feetech.actuator import FeetechServo
@@ -350,7 +350,7 @@ Its `pyproject.toml` declares the module entry point and the dependency:
 dependencies = ["solarian>=0.1.0", "solarian-feetech>=0.1.0"]
 
 [project.entry-points."solarian.modules"]
-gripper-1 = "solarian_gripper_1.gripper_feetech:Gripper1FeetechModule"
+gripper-1 = "solarian_gripper1.gripper_feetech:Gripper1FeetechModule"
 ```
 
 ### Bundle a default config
@@ -358,7 +358,7 @@ gripper-1 = "solarian_gripper_1.gripper_feetech:Gripper1FeetechModule"
 Ship the config under `templates/`, in the folder of the `conf/` directory that reads it, so [`solarian install`](#installing-a-plugin) can seed it: `templates/modules/<name>.yaml` becomes `conf/modules/<name>.yaml`, a skill's `templates/skills/move.yaml` becomes `conf/skills/move.yaml`, and a service's `templates/services/bbox_tracker.yaml` becomes `conf/services/bbox_tracker.yaml`. Keep the module's tunables here:
 
 ```yaml
-# solarian_gripper_1/templates/modules/gripper1.yaml
+# solarian_gripper1/templates/modules/gripper1.yaml
 port: /dev/ttyUSB0
 frequency: 30
 aperture_closed_mm: 0.0
@@ -378,7 +378,7 @@ Non-Python files (config templates, MuJoCo models, meshes) must be declared as p
 
 ```toml
 [tool.setuptools.package-data]
-solarian_gripper_1 = [
+solarian_gripper1 = [
     "templates/modules/*.yaml",
     "assets/gripper1.xml",
     "assets/gripper1_description/meshes/*.stl",

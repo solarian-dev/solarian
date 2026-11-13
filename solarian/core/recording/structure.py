@@ -68,7 +68,7 @@ def _asset_ref(mjcf: str) -> str:
 
     A plugin resolves its assets to an absolute path, which names a directory on
     the recording machine and nothing on any other. The path relative to the
-    containing package's parent -- ``solarian_arm_1/assets/arm1.xml`` -- names
+    containing package's parent -- ``solarian_arm1/assets/arm1.xml`` -- names
     the same file wherever that plugin is installed. Anything already relative
     (a project path, or a ``robot_descriptions`` module name) passes through.
     """

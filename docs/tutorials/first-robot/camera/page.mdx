@@ -6,17 +6,25 @@ export const metadata = {
 
 # The camera
 
-The camera is the third kind of module in this project. You wrote the arm. You installed the gripper. The camera already ships with Solarian: `PiCameraModule`, for a Raspberry Pi CSI camera. In this chapter it renders the sim view. The real sensor is [Tutorial 3](/docs/tutorials/real-robot/camera). {{ className: 'lead' }}
+The camera is the third kind of module in this project. You wrote the arm. You installed the gripper. The camera is a plugin too: `PiCameraModule`, for a Raspberry Pi CSI camera. In this chapter it renders the sim view. The real sensor is [Tutorial 3](/docs/tutorials/real-robot/camera). {{ className: 'lead' }}
 
-There is no `solarian install` step.
+## Install the plugin
+
+From the project root:
+
+```bash
+solarian install picamera
+```
+
+That installs `solarian-picamera` and records the dependency. It imports without the Pi's camera stack, so simulation runs on any machine. The driver it opens on hardware is a system package, and the [real camera chapter](/docs/tutorials/real-robot/camera) installs it.
 
 ## Add the module
 
 In `my_robot/robot.py`:
 
 ```python
-from solarian.core.picamera_module import PiCameraModule
 from solarian.sim import CameraMount, ModuleAttachment, SceneConfig
+from solarian_picamera import PiCameraModule
 ```
 
 `CameraMount` joins the sim imports you already have. On the class:
@@ -108,7 +116,7 @@ Restart the robot and the controller. The controller window should show the wris
 | --- | --- | --- |
 | `arm` | your project, `my_robot/modules/my_arm_module.py` | joints, YAML, the arm MJCF |
 | `gripper` | `solarian-gripper1` | YAML, a site-to-site attachment |
-| `wrist_camera` | Solarian itself, `PiCameraModule` | YAML, a `CameraMount` |
+| `wrist_camera` | `solarian-picamera`, `PiCameraModule` | YAML, a `CameraMount` |
 
 The controller is still a keyboard. It reads observations and writes a joint target. That is the whole robot until [Tutorial 4](/docs/tutorials/skills), where a skill replaces `control_step`.
 

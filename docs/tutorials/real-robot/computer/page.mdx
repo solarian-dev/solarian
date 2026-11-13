@@ -18,7 +18,7 @@ pip install "solarian-feetech[hardware]"
 sudo apt install python3-picamera2
 ```
 
-Create the Pi's virtualenv with `--system-site-packages` so `picamera2` from apt is importable. The camera chapter is the one that opens the sensor. Installing the package now means you are not debugging apt in the middle of calibration.
+Create the Pi's virtualenv with `--system-site-packages` so `picamera2` from apt is importable. `solarian-picamera` comes in with the project, because Tutorial 2 recorded it as a dependency. The camera chapter is the one that opens the sensor. Installing the package now means you are not debugging apt in the middle of calibration.
 
 Plug in the USB-serial adapter with the servo supply **off**. Find the port:
 

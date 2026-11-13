@@ -166,7 +166,7 @@ An [Observation](/docs/observations) field whose value is *computed* from other 
 
 ### `CameraBus`
 
-A [`SensorBus`](#sensorbus) whose reads are frames. Adds the archive tap — every frame read is also handed to the episode encoder, stamped with when the sensor exposed it. Base class for `OpenCVCameraBus` and `PiCameraBus`. See [Recording](/docs/recording).
+A [`SensorBus`](#sensorbus) whose reads are frames. Adds the archive tap — every frame read is also handed to the episode encoder, stamped with when the sensor exposed it. Base class for `OpenCVCameraBus` and for plugin buses such as `PiCameraBus` from `solarian-picamera`. See [Recording](/docs/recording).
 
 ### Component
 

@@ -108,7 +108,7 @@ Each `FeetechServo` is one servo, so each line is one joint. `sts3250` and `sts3
 
 The gripper follows the same pattern. It ships in a plugin, so you install it instead of writing it. Its module declares a single servo:
 
-```python {{ title: 'solarian_gripper_1/gripper_feetech.py' }}
+```python {{ title: 'solarian_gripper1/gripper_feetech.py' }}
 class Gripper1FeetechModule(GripperModule):
     gripper = FeetechServo(model="sts3215")
 ```

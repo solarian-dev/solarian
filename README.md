@@ -43,13 +43,13 @@ This is a trimmed version of `arm1`, a [Solarian Arm 1](https://solarian.dev/har
 
 ```python
 from solarian.core import Robot
-from solarian.core.picamera_module import PiCameraModule
 from solarian.sim import CameraMount, ModuleAttachment, SceneConfig
-from solarian_arm_1 import ARM_MJCF_PATH
-from solarian_arm_1.arm import Arm1Module
+from solarian_arm1 import ARM_MJCF_PATH
+from solarian_arm1.arm import Arm1Module
+from solarian_picamera import PiCameraModule
 from solarian_umi_skill import UMISkill
-from solarian_gripper_1 import MJCF_FEETECH_PATH as GRIPPER_MJCF
-from solarian_gripper_1.gripper_feetech import Gripper1FeetechModule
+from solarian_gripper1 import MJCF_FEETECH_PATH as GRIPPER_MJCF
+from solarian_gripper1.gripper_feetech import Gripper1FeetechModule
 
 
 class Arm1Robot(Robot):
@@ -84,7 +84,7 @@ from solarian.core.event import Event, EventType, event_handler
 from solarian.core.skill import Tool
 from solarian_move_skill import MoveSkill
 from solarian_umi_skill import UMISkill
-from solarian_gripper_1.aperture import APERTURE_CLOSED_MM, APERTURE_OPEN_MM
+from solarian_gripper1.aperture import APERTURE_CLOSED_MM, APERTURE_OPEN_MM
 
 from arm1.skills import CartesianTeleopSkill
 

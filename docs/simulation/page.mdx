@@ -620,7 +620,7 @@ The worked example above keeps the model in the project's own `assets/`. When th
 ```text
 solarian-gripper1/
 ├── pyproject.toml
-└── solarian_gripper_1/            # the importable package
+└── solarian_gripper1/            # the importable package
     ├── __init__.py
     └── assets/
         ├── gripper1.xml          # the attachable model (output_xml)
@@ -632,7 +632,7 @@ solarian-gripper1/
 **2. Expose the path from the package.** MuJoCo resolves a model's `meshdir` relative to the MJCF file itself, so a scene only needs the absolute path to `gripper1.xml`. Publish it from the package `__init__.py`:
 
 ```python
-# solarian_gripper_1/__init__.py
+# solarian_gripper1/__init__.py
 from pathlib import Path
 
 #: Simulation assets shipped inside the package.
@@ -646,7 +646,7 @@ MJCF_PATH = str(ASSETS_DIR / "gripper1.xml")
 **3. Attach it by importing the path.** `ModuleAttachment.mjcf` accepts an [absolute path](#resolving-mjcf-paths), so pass `MJCF_PATH` straight through:
 
 ```python
-from solarian_gripper_1 import MJCF_PATH as GRIPPER_MJCF
+from solarian_gripper1 import MJCF_PATH as GRIPPER_MJCF
 
 ModuleAttachment(
     module="right_gripper",
@@ -660,12 +660,12 @@ ModuleAttachment(
 
 Meshes and MJCF are **not** Python files, so setuptools leaves them out of a built wheel unless you declare them — and then `MJCF_PATH` breaks for anyone who `pip install`s the plugin (it still works from an editable/source checkout, which is why this is easy to miss). Two requirements:
 
-- The `assets/` directory must live **inside** the importable package (`solarian_gripper_1/assets/`, as above). Data outside the package can't be shipped as importable package data.
+- The `assets/` directory must live **inside** the importable package (`solarian_gripper1/assets/`, as above). Data outside the package can't be shipped as importable package data.
 - Declare the files as [`package-data`](https://setuptools.pypa.io/en/latest/userguide/datafiles.html) in `pyproject.toml`. Ship only the runtime files — leave out the onshape-export byproducts (`*_raw.xml`, `scene.xml`, `meshes/*.part`):
 
 ```toml
 [tool.setuptools.package-data]
-solarian_gripper_1 = [
+solarian_gripper1 = [
     "assets/gripper1.xml",
     "assets/gripper1_description/config.json",
     "assets/gripper1_description/meshes/*.stl",

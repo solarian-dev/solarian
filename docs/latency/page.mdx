@@ -290,7 +290,7 @@ The third column is a sanity check on your measurement, not a value to copy. Cop
 
 ### What the camera's constant actually covers
 
-[`picamera_bus.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/picamera_bus.py) reads `SensorTimestamp` — the instant the sensor's first row was exposed, in `CLOCK_BOOTTIME` nanoseconds — and publishes it as `measured_capture_age`. That number is exact and evenly spaced, which matters as much for [recording coverage](/docs/recording) as for latency, because a stamp that jitters by half a frame interval puts two captures in one grid slot and leaves the next empty.
+The Pi camera bus ([`solarian_picamera/bus.py`](https://github.com/solarian-dev/solarian-picamera/blob/main/solarian_picamera/bus.py)) reads `SensorTimestamp` — the instant the sensor's first row was exposed, in `CLOCK_BOOTTIME` nanoseconds — and publishes it as `measured_capture_age`. That number is exact and evenly spaced, which matters as much for [recording coverage](/docs/recording) as for latency, because a stamp that jitters by half a frame interval puts two captures in one grid slot and leaves the next empty.
 
 It does not cover everything. On a Pi 5 the sensor age reads about 40 ms against a QR-measured pipeline of about 150 ms, so ISP, transfer and publish account for the rest. The camera's `receive_latency` covers that remainder and the bus **adds** the two:
 

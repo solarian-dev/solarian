@@ -52,8 +52,8 @@ _STATE_SNDHWM = 16
 # Both are judged in seconds, so checking at 20 Hz is already generous.
 _SUPERVISION_PERIOD_S = 0.05
 
-# A camera child blocked in one capture (1.5s) still has to notice the stop
-# and finish picamera2's close, which gives up after 2s.
+# A camera child blocked in one capture (1.5s on a Pi CSI camera) still has to
+# notice the stop and finish its driver's close, which gives up after 2s.
 _MODULE_STOP_JOIN_S = 5.0
 
 # terminate() is a SIGTERM, and the handler's close is the same 2s bound.

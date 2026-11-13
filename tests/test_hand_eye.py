@@ -695,12 +695,12 @@ def test_wait_until_still_waits_out_a_creeping_joint(monkeypatch):
 def test_collision_guard_sees_the_gripper_folded_into_the_arm():
     """On the real Solarian Arm 1 + solarian-gripper1 meshes: the home pose is clear, and a
     wrist folded back drives the gripper into the arm."""
-    pytest.importorskip("solarian_arm_1")
-    pytest.importorskip("solarian_gripper_1")
+    pytest.importorskip("solarian_arm1")
+    pytest.importorskip("solarian_gripper1")
     from solarian.sim import ModuleAttachment, SceneConfig
     from solarian.sim.collision import CollisionGuard
-    from solarian_arm_1 import ARM_MJCF_PATH
-    from solarian_gripper_1 import MJCF_FEETECH_PATH
+    from solarian_arm1 import ARM_MJCF_PATH
+    from solarian_gripper1 import MJCF_FEETECH_PATH
 
     scene = SceneConfig(attachments=[
         ModuleAttachment(module="right_arm", mjcf=ARM_MJCF_PATH, parent_body="world",
@@ -1878,10 +1878,10 @@ _ARM1_TCP = FrameOffset(pos=(0.0, 0.0, 0.19824), quat=(1.0, 0.0, 0.0, 0.0))
 
 
 def _arm1_backend():
-    pytest.importorskip("solarian_arm_1")
+    pytest.importorskip("solarian_arm1")
     from dataclasses import replace
 
-    from solarian_arm_1.arm import Arm1Module
+    from solarian_arm1.arm import Arm1Module
 
     return replace(Arm1Module.ik_backend, tcp_offset=_ARM1_TCP).build()
 

@@ -143,9 +143,9 @@ def test_docs_url_is_inherited():
 
 
 def test_field_help_reads_inherited_comments():
-    help_ = field_help(core_configs.PiCameraSensorConfig)
+    help_ = field_help(core_configs.CameraConfig)
     assert help_["fps"]
-    assert help_["shutter"]
+    assert help_["port"]
 
 
 def _core_config_classes():

@@ -325,7 +325,7 @@ Lists USB / serial devices currently connected to the host (port path and name).
 solarian list-cameras
 ```
 
-Detects and lists every camera available to the system (V4L2 on Linux, AVFoundation on macOS).
+Detects and lists every camera available to the system (V4L2 on Linux, AVFoundation on macOS), plus the cameras of any installed plugin that registers a `solarian.camera_backends` entry point, such as the Raspberry Pi CSI cameras from `solarian-picamera`.
 
 ### `onshape-export`
 
