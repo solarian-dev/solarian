@@ -10,22 +10,6 @@ License grants no rights to them; see TRADEMARKS.md.
 Third-party code
 ================
 
-solarian/perception/vision/depth_anything_v2/
-  Derived from Depth Anything V2
-  (https://github.com/DepthAnything/Depth-Anything-V2), Apache License 2.0,
-  and modified. The DINOv2 files are Copyright (c) Meta Platforms, Inc. and
-  affiliates, Apache License 2.0. Parts of dinov2_layers/ are modified from
-  pytorch-image-models (https://github.com/huggingface/pytorch-image-models),
-  Apache License 2.0.
-
-solarian/perception/vision/video_depth_anything/
-  Derived from Video Depth Anything
-  (https://github.com/DepthAnything/Video-Depth-Anything),
-  Copyright (2025) Bytedance Ltd. and/or its affiliates, Apache License 2.0,
-  and modified. motion_module/attention.py is Copyright 2022 The HuggingFace
-  Team, Apache License 2.0. The DINOv2 files are Copyright (c) Meta
-  Platforms, Inc. and affiliates, Apache License 2.0.
-
 examples/assets/trs_so_arm100/
   Standard Open Arm-100 MJCF model from MuJoCo Menagerie
   (https://github.com/google-deepmind/mujoco_menagerie), derived from the
@@ -37,6 +21,4 @@ Model weights
 =============
 
 Model weights are downloaded separately and are not covered by this
-license. Each checkpoint keeps its upstream license. Some Depth Anything V2
-and Video Depth Anything checkpoints are licensed CC-BY-NC-4.0, which does
-not allow commercial use.
+license. Each checkpoint keeps its upstream license.

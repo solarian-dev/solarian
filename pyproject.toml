@@ -66,9 +66,6 @@ ai = [
     "torchvision==0.23",
     "torchcodec==0.7; platform_machine != 'aarch64'",
     "datasets==3.6.0",
-    "ultralytics==8.3.179",
-    "einops==0.8.1",
-    "easydict==1.13",
     "wandb>=0.22.3",
     "openai",
     # xformers is not listed here. Its sdist always passes -fopenmp, and
