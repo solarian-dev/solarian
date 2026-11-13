@@ -114,26 +114,31 @@ def read_conf(path: Path) -> dict[str, Any]:
     """A conf as written, ``${...}`` left unresolved."""
     import yaml
 
+    from solarian.utils.configs import invalid_yaml
+
     with open(path) as f:
-        return yaml.safe_load(f) or {}
+        try:
+            return yaml.safe_load(f) or {}
+        except yaml.YAMLError as exc:
+            raise invalid_yaml(path, exc) from None
 
 
-def resolve_server_block(raw: dict[str, Any], checkpoint: str | None = None) -> dict[str, Any]:
+def resolve_server_block(
+    raw: dict[str, Any], checkpoint: str | None = None, source: Path | None = None
+) -> dict[str, Any]:
     """``raw``'s server block with ``${deployment.*}`` resolved for this host.
 
     Only the block is resolved, and ``checkpoint`` replaces the conf's before
     resolution, so a host whose deployment lacks the conf's other keys (a
     Solarian Base checkout has no ``conf/deployment``) can still serve it.
+    ``source`` is the conf ``raw`` was read from, named if a value is missing.
     """
-    from omegaconf import OmegaConf
-
-    from solarian.utils.configs import load_deployment_config
+    from solarian.utils.configs import resolve_with_deployment
 
     block = dict(raw.get(SERVER_KEY) or {})
     if checkpoint:
         block["checkpoint"] = checkpoint
-    merged = OmegaConf.merge({"deployment": load_deployment_config()}, {SERVER_KEY: block})
-    return OmegaConf.to_container(merged, resolve=True)[SERVER_KEY]
+    return resolve_with_deployment({SERVER_KEY: block}, source=source)[SERVER_KEY]
 
 
 def resolve_server(
@@ -151,7 +156,7 @@ def resolve_server(
         matches = [str(p) for p in confs] + ([f"the installed service {name!r}"] if is_service else [])
         raise ValueError(f"{name!r} is ambiguous: {', '.join(matches)}. Pass a conf's path instead.")
     if confs:
-        block = resolve_server_block(read_conf(confs[0]), checkpoint)
+        block = resolve_server_block(read_conf(confs[0]), checkpoint, source=confs[0])
         return server_spec(block, host=host, port=port, source=str(confs[0]))
     if is_service:
         return server_spec({"service": name}, checkpoint=checkpoint, host=host, port=port, source=f"service {name!r}")

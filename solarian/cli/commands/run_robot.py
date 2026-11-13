@@ -23,15 +23,17 @@ class RunRobotCommand(BaseCommand):
     cannot run at the same time.
 
     With --sim the same robot runs in MuJoCo instead of on hardware, in the
-    scene its class declares.
+    scene its class declares. Add --view to watch it in a window.
     """
-    usage = "[--sim] [key=value ...]"
+    usage = "[--sim [--view]] [key=value ...]"
     options = {
         "--sim": "Run in MuJoCo instead of on hardware; the robot must declare a scene.",
+        "--view": "With --sim, open a window that draws the simulation.",
     }
     examples = (
         "solarian run-robot",
         "solarian run-robot --sim",
+        "solarian run-robot --sim --view",
         "solarian run-robot -d pi",
         "solarian run-robot fps=60",
     )
@@ -39,8 +41,10 @@ class RunRobotCommand(BaseCommand):
     def parse_args(self, argv: list[str]) -> list[str]:
         parser = argparse.ArgumentParser(prog="solarian run-robot")
         parser.add_argument("--sim", action="store_true", help="Run in MuJoCo instead of on hardware.")
+        parser.add_argument("--view", action="store_true", help="With --sim, draw the simulation in a window.")
         ns, overrides = parser.parse_known_args(argv)
         self.sim = ns.sim
+        self.view = ns.view
         return overrides
 
     def get_config_class(self):
@@ -54,6 +58,8 @@ class RunRobotCommand(BaseCommand):
         setup_process_logging(level=log_level, logger_name=None)
         if self.sim:
             cfg.sim = True
+        if self.view:
+            cfg.view = True
         RobotClass = get_class(settings.ROBOT_CLASS)
         robot = RobotClass(cfg)
 

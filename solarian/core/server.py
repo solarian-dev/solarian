@@ -13,6 +13,7 @@ from solarian.core.execution import ExecutionPlace
 from solarian.core.optical_remap import use_one_opencv_thread
 from solarian.core import Observation
 from solarian.utils import StatusBoard
+from solarian.utils.configs import ConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,8 @@ class RelayServer:
 
             try:
                 self.skill_host = ServerSkillHost()
+            except ConfigError as exc:
+                logger.error("%s", exc)
             except Exception:
                 logger.exception("Cannot host skills on this relay; server skills are disabled")
 

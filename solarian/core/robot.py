@@ -25,6 +25,7 @@ from .module import Module
 from .bus_server import BusServer, BusClient
 from solarian.core import Observation
 from solarian.utils import profile, manual_profile, get_class, busy_wait, StatusBoard, setup_process_logging
+from solarian.utils.configs import ConfigError, config_error_in
 from solarian.utils.profiling import merge_stats as merge_profiling_stats
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 from solarian.utils.shared_memory.action_queue import ModuleActionQueue
@@ -170,10 +171,6 @@ class Robot(EventHost, ABC):
     #: how each module's MJCF attaches. Ignored on hardware.
     scene = None
 
-    #: Show a live overview window of the whole scene while running in sim.
-    #: Overridable at runtime with the ``SOLARIAN_SIM_VIEW`` env var.
-    view: bool = False
-
     #: Skill classes this robot can be asked to run, on top of the ones
     #: installed skill plugins publish. Declare a class here when the skill
     #: lives in the project rather than in a plugin.
@@ -229,6 +226,14 @@ class Robot(EventHost, ABC):
                 f"Robot '{type(self).__name__}' was asked to run in sim (--sim) "
                 f"but declares no `scene`. Set a `scene` (SceneConfig) describing "
                 f"the environment and how each module's MJCF attaches."
+            )
+        #: Draw the scene in a window. Per run, like ``is_sim``; the calibration
+        #: commands set it on hardware for their live mirror.
+        self.view = bool(getattr(cfg, "view", False))
+        if self.view and not self.is_sim:
+            raise ValueError(
+                "--view draws the simulation, so it needs --sim: "
+                "`solarian run-robot --sim --view`."
             )
         # Populated by solarian.sim.runtime when running in simulation.
         self._world_server = None
@@ -624,6 +629,9 @@ class Robot(EventHost, ABC):
             err = module.get_error()
             if err is not None:
                 mod_name, tb_str = err
+                config_error = config_error_in(tb_str)
+                if config_error is not None:
+                    raise ConfigError(message=f"Module '{mod_name}': {config_error}")
                 raise RuntimeError(f"Module '{mod_name}' crashed:\n{tb_str}")
         for srv in self._bus_servers:
             err = srv.get_error()
@@ -912,6 +920,9 @@ class Robot(EventHost, ABC):
                     status_mp_q=StatusBoard.get_mp_queue(),
                 )
             )
+        except ConfigError as exc:
+            logger.error("Could not start skill '%s': %s", name, exc)
+            return
         except Exception:
             logger.exception("Could not start skill '%s'", name)
             return

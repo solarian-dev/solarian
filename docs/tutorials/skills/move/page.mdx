@@ -20,7 +20,7 @@ Each pose is keyed by module name, and the template names them `right_arm` and `
 
 `MoveSkill` reads `poses[name]`, sends one `MOVE_J`, and finishes when a timeout elapses. The module drives the path. The skill does not interpolate.
 
-Your arm module from Tutorial 2 already handles `MOVE_J` by writing the joint values. So the plugin skill works on the class you wrote, before any kinematics.
+`MOVE_J` is `ArmModule`'s joint move. The arm from Tutorial 2 answers `MOVE_ARM` and replaces `control_step`, so this skill does not reach those servos until the kinematics section removes both. The gripper module already handles `MOVE_J`.
 
 ## A key for home
 
@@ -50,7 +50,7 @@ class MyRobotController(Controller):
             }))
 ```
 
-Restart the controller and the robot. Press `0`. The arm should fold toward the tucked pose in `move.yaml`, and the gripper should open to the width in that pose. If nothing moves and nothing fails, the pose's keys still say `right_arm`. Press `o` and only the gripper moves; the arm stays. Press `0` again and the tuck runs again. Starting is not a toggle.
+The handler is in place. Leave `0` unpressed until the kinematics model is on the arm: a `MOVE_J` with no joint limits raises inside the arm module. Press `o` to see a skill run; that one only commands the gripper. Pressing a key starts the skill again. It does not toggle.
 
 ## Name your own pose
 
@@ -80,13 +80,13 @@ elif key == "1":
     }))
 ```
 
-Restart the controller. `0` tucks, `1` reaches. If `1` raises `KeyError` naming `reach`, the YAML key and the string in `params` disagree, or the controller was started from a directory that is not the project root.
+Restart the controller so it loads the new key. If `1` raises `KeyError` naming `reach`, the YAML key and the string in `params` disagree, or the controller was started from a directory that is not the project root. The arm still waits for the kinematics model.
 
 ## Inverse kinematics
 
 Joint poses were enough for `home` and `reach`. A policy does not speak in joint angles. It speaks in where the fingertips should be: `x, y, z` and three rotations. Inverse kinematics is the arm module turning that into joints.
 
-Replace `my_robot/modules/my_arm_module.py`. The hand-written `MOVE_J` handler and `control_step` have to go. They replaced `ArmModule`'s own, which interpolate the motion and also handle Cartesian commands. Those need the joint limits from the kinematics model, which is why they take over now and not in Tutorial 2.
+Replace `my_robot/modules/my_arm_module.py`. `MyActions`, `_handle_move_arm`, and `control_step` have to go. `control_step` is what the loop calls, and `ArmModule`'s version is what samples a `MOVE_J` and writes the servos. Cartesian commands use the same model. The joint limits come from the kinematics backend, which is why this takes over now and not in Tutorial 2.
 
 ```python
 from solarian.core.arm_module import ArmModule
@@ -156,7 +156,7 @@ rz = ActuatorField(MyRobotRobot.arm.rz.pos)
 
 Do the same six lines on `MyArmObs`, with `SensorField`. The observation is how anything, including you in a log, reads the pose the kinematics produced.
 
-Restart the robot and the controller. `0` and `1` should still move the arm. They are joint poses, and `ArmModule` handles `MOVE_J` itself now. If they don't, the old `_handle_move_j` is still on the class.
+Restart the robot and the controller. Press `0`. The arm should fold toward the tucked pose in `move.yaml`, and the gripper should open to the width in that pose. Press `1` and the arm reaches. Both poses are joint targets, and `ArmModule` handles `MOVE_J` itself. If the arm stays, `_handle_move_arm` or `control_step` is still on the class. If nothing moves and nothing fails, the pose's keys still say `right_arm`.
 
 The contract you just implemented is the one in [Adding a new arm](/docs/ik#adding-a-new-arm): joint servos, six Cartesian actuators, a `MinkIK` backend, and `interpolator_type: pose`. The reference has the rest of the fields. You have enough for a policy to ask for a hand pose.
 

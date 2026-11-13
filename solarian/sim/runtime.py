@@ -24,7 +24,6 @@ so that ``import solarian`` never requires them; only running a robot with
 
 from __future__ import annotations
 
-import os
 import time
 from multiprocessing.connection import Pipe
 from typing import Any, Dict
@@ -40,19 +39,6 @@ logger = logging.getLogger("sim_runtime")
 
 #: How long to wait for the MuJoCo world server to finish building the scene.
 SIM_LAUNCH_TIMEOUT = 60.0
-
-
-def view_enabled(robot) -> bool:
-    """Whether to show the live overview window.
-
-    Defaults to the robot's ``view`` class attribute, overridable at runtime
-    with the ``SOLARIAN_SIM_VIEW`` env var (``1``/``0``). The window is
-    best-effort: with no display available the sim just runs headless.
-    """
-    env = os.environ.get("SOLARIAN_SIM_VIEW")
-    if env is not None:
-        return env.strip().lower() not in ("", "0", "false", "no")
-    return bool(getattr(robot, "view", False))
 
 
 def _conn_key(module_name: str, port: str) -> str:
@@ -186,8 +172,9 @@ def sim_connect(robot) -> None:
 
     # An extra connection for the live viewer process, if enabled. It talks to
     # the world server over the same RPC protocol (render_overview).
+    # Best-effort: with no display available the sim just runs headless.
     viewer_client_conn = None
-    if view_enabled(robot):
+    if robot.view:
         viewer_server_conn, viewer_client_conn = Pipe()
         server_conns["__viewer__"] = viewer_server_conn
         conn_modules["__viewer__"] = ""

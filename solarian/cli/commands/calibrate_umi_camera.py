@@ -28,6 +28,7 @@ from solarian.core.conf_paths import (
     module_config_path,
     skill_config_path,
 )
+from solarian.utils.configs import load_yaml
 
 _WINDOW = "calibrate-umi-camera"
 _DUMP_DEFAULT = ".cache/umi_image_compare"
@@ -74,7 +75,7 @@ def _load_skill_cfg(cfg=None):
     path = _skill_config_path(cfg)
     if not path.is_file():
         return OmegaConf.create({})
-    return OmegaConf.load(str(path))
+    return load_yaml(path)
 
 
 def _resolve_gold(cfg, skill_cfg) -> Path:
@@ -118,7 +119,7 @@ def _camera_yaml_path(cfg, skill_cfg) -> Path:
 def _load_camera_capture_size(yaml_path: Path) -> tuple[int | None, int | None]:
     if not yaml_path.is_file():
         return None, None
-    ycfg = OmegaConf.load(str(yaml_path))
+    ycfg = load_yaml(yaml_path)
     cam = (ycfg.get("sensors") or {}).get("camera") or {}
     w = cam.get("width")
     h = cam.get("height")
@@ -870,7 +871,7 @@ class CalibrateUmiCameraCommand(BaseCommand):
             selected = cameras[choice - 1]
             remap_raw = None
             if camera_yaml.is_file():
-                ycfg = OmegaConf.load(str(camera_yaml))
+                ycfg = load_yaml(camera_yaml)
                 remap_raw = ((ycfg.get("sensors") or {}).get("camera") or {}).get(
                     "optical_remap"
                 )

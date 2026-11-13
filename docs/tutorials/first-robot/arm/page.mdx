@@ -55,12 +55,16 @@ Simulation runs without it, so leave it for the [real robot](/docs/tutorials/rea
 
 ### Declare the joints
 
-The module class declares the six servos and handles one kind of command: a full set of joint targets. Replace `my_robot/modules/my_arm_module.py`:
+The module class declares the six servos and handles one kind of command: a full set of joint targets, under a type this project defines. Replace `my_robot/modules/my_arm_module.py`:
 
 ```python {{ title: 'my_robot/modules/my_arm_module.py' }}
 from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.arm_module import ArmModule
 from solarian_feetech.actuator import FeetechServo
+
+
+class MyActions(ActionType):
+    MOVE_ARM = ActionType.CUSTOM_START
 
 
 class MyArmModule(ArmModule):
@@ -74,8 +78,8 @@ class MyArmModule(ArmModule):
     def initialize(self):
         self._goal = None
 
-    @action_handler(ActionType.MOVE_J)
-    def _handle_move_j(self, action: ModuleAction, t_now: float) -> bool:
+    @action_handler(MyActions.MOVE_ARM)
+    def _handle_move_arm(self, action: ModuleAction, t_now: float) -> bool:
         # The controller streams a full joint target. Hold it and write it
         # on the module's own tick.
         self._goal = action.values()
@@ -88,10 +92,11 @@ class MyArmModule(ArmModule):
 
 The lines that matter:
 
-- **`class MyArmModule(ArmModule)`** builds on Solarian's base class for arms. `ArmModule` already knows joint and Cartesian moves, but its versions need a kinematics model of the arm, which arrives in [Tutorial 4](/docs/tutorials/skills/move). Until then this class replaces two of them, the `MOVE_J` handler and `control_step`, with the simple versions below.
-- **`shoulder_pan = FeetechServo(model="sts3250")`** declares one servo. The attribute name is the joint's name in observations, actions, and YAML. The model string picks the Feetech product: STS3250 on the four joints that carry the arm's weight, STS3215 on wrist yaw and roll. That matches the [Solarian Arm 1 hardware](/hardware/arm-1).
+- **`class MyActions(ActionType)`** names the command. Values from `ActionType.CUSTOM_START` up belong to the project. `MOVE_ARM` is the first of them: hold these six joint targets.
+- **`class MyArmModule(ArmModule)`** builds on Solarian's base class for arms. `ArmModule` already handles joint and Cartesian moves. This class adds `MOVE_ARM` for the meantime, and a `control_step` that writes that goal straight to the servos. The loop calls this `control_step`, so the built-in moves wait until Tutorial 4 removes it.
+- **`shoulder_pan = FeetechServo(model="sts3250")`** declares one servo. The attribute name is the joint's name in observations, actions, and YAML. The model string picks the Feetech product: STS3250 on the four joints that carry the arm's weight, STS3215 on wrist yaw and roll.
 - **`initialize`** runs once, when the module connects. It starts the module with no goal, so the arm holds still until a command arrives.
-- **`@action_handler(ActionType.MOVE_J)`** registers `_handle_move_j` for joint commands. A `MOVE_J` action carries six numbers, one per joint, and the handler keeps them as the current goal. Returning `True` keeps the module running. The method has the same name as `ArmModule`'s handler, so it replaces that one.
+- **`@action_handler(MyActions.MOVE_ARM)`** registers `_handle_move_arm` for that command. The action carries six numbers, one per joint, and the handler keeps them as the current goal. Returning `True` keeps the module running.
 - **`control_step`** runs on the module's own loop, at the rate in its YAML, and writes the goal to the servos. In simulation those servos are MuJoCo joints, and on hardware they are the bus. The class reads the same either way.
 
 This module works purely in joint coordinates. Poses and inverse kinematics come in [Tutorial 4](/docs/tutorials/skills).
@@ -236,8 +241,6 @@ from my_robot.modules.my_arm_module import MyArmModule
 
 
 class MyRobotRobot(Robot):
-    view = True
-
     arm = MyArmModule()
 
     scene = SceneConfig(
@@ -257,8 +260,7 @@ class MyRobotRobot(Robot):
 
 The lines that matter:
 
-- **`scene`** is what lets the robot run in MuJoCo. You choose sim per run with `solarian run-robot --sim`; without the flag the same class drives the hardware. In sim the servos become the model's joints, and the module class does not change.
-- **`view = True`** opens a window that draws the simulation.
+- **`scene`** is what lets the robot run in MuJoCo. You choose sim per run with `solarian run-robot --sim`; without the flag the same class drives the hardware. In sim the servos become the model's joints, and the module class does not change. Add `--view` to watch the simulation in a window.
 - **`world_mjcf`** is the world you just wrote.
 - **`module="arm"`** pairs the attachment with the module of that name, so the module's servos drive this model's joints.
 - **`parent_body="world"`** and **`pos=[0.0, -0.2, 0.0]`** bolt the arm's base to the world, 20 cm along −Y from the origin, on the floor.
@@ -266,7 +268,7 @@ The lines that matter:
 - **`timestep=0.002`** steps the physics at 500 Hz.
 
 <Note>
-  You can start the robot now with <code>solarian run-robot --sim</code>. The sim window should show the arm at mid-travel, holding still, because nothing sends it a command yet. A missing <code>arm1.xml</code> fails at startup with a file error. A <code>sim_joint</code> that does not match the prefixed model name fails when the world is built, and the message names the joint.
+  You can start the robot now with <code>solarian run-robot --sim --view</code>. The sim window should show the arm at mid-travel, holding still, because nothing sends it a command yet. A missing <code>arm1.xml</code> fails at startup with a file error. A <code>sim_joint</code> that does not match the prefixed model name fails when the world is built, and the message names the joint.
 </Note>
 
 Next: [observations and actions](/docs/tutorials/first-robot/observations-actions).

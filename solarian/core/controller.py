@@ -58,7 +58,7 @@ from solarian.perception.processor import field_name_for_input
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 from solarian.utils.shared_memory.action_queue import ModuleActionQueue
 from solarian.utils.shared_memory.skill_status_buffer import SkillStatusBuffer
-from solarian.utils.configs import load_config_yaml
+from solarian.utils.configs import ConfigError, load_config_yaml
 
 if TYPE_CHECKING:
     from solarian.core.recording import ControllerRecorder
@@ -1652,6 +1652,8 @@ class Controller(EventHost, ABC):
             return
         try:
             self.start_skill(spec["cls"](params=params))
+        except ConfigError as exc:
+            logger.error("Could not start skill '%s': %s", name, exc)
         except Exception:
             logger.exception("Could not start skill '%s'", name)
 
@@ -2012,7 +2014,7 @@ class Controller(EventHost, ABC):
                 continue
             try:
                 skill.dispatch(skill.step())
-            except SkillFailed as exc:
+            except (SkillFailed, ConfigError) as exc:
                 logger.warning("Inline skill '%s' failed: %s", name, exc)
                 finished.append((name, SkillStatus.FAILED, str(exc)))
                 continue

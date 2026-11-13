@@ -113,7 +113,7 @@ class MyRobotAction(Action):
 
 `MyRobotRobot.gripper.gripper` is the module `gripper`, then its one servo, which the plugin also calls `gripper`.
 
-In the controller's `__init__`, next to the arm's action type:
+The gripper speaks the built-in `MOVE_J`, the type `Gripper1FeetechModule` handles. Add `from solarian.core.action import ActionType` at the top of `my_robot/controller.py`, and in `__init__`, next to the arm's `MOVE_ARM`:
 
 ```python
 self.target.gripper.action_type = ActionType.MOVE_J
@@ -123,8 +123,8 @@ self.target.gripper.gripper.value = 40.0
 40 mm is half open, so you can see the fingers. Extend `_KEYS`:
 
 ```python
-"[": ("gripper", -5),
-"]": ("gripper", 5),
+"z": ("gripper", -5),
+"x": ("gripper", 5),
 ```
 
 and teach `on_key_down` to write the gripper field when the joint name is `gripper`, clamped to 0–85, and the arm field otherwise. The gripper value is millimetres, not the −100–100 range. A compact version of the handler:
@@ -146,7 +146,9 @@ def on_key_down(self, event: Event):
 
 ## Look at it
 
-Restart the robot and the controller. The sim arm should be wearing the gripper. `[` closes the fingers, `]` opens them. The arm keys from the previous chapter still work.
+Restart the robot, the server, and the controller. The sim arm should be wearing the gripper. `z` closes the fingers, `x` opens them. The arm keys from the previous chapter still work.
+
+![The sim window, with the arm at mid-travel and the gripper attached to it.](./gripper1-sim.png)
 
 <Note>
   If the gripper shows up on the floor, or the process dies naming <code>flange</code>, the parent site is wrong. It has to be <code>arm/flange</code>: the arm prefix plus the site in the arm model. <code>gripper/flange</code> is the gripper's own site after attachment, which is not the parent.

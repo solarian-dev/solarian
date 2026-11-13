@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from multiprocessing import Queue as MpQueue
 from typing import Any, Callable, Mapping
 
+from solarian.utils.configs import ConfigError
+
 _logger = logging.getLogger("event")
 
 
@@ -248,6 +250,8 @@ class EventHost:
         for handler_name in self._event_handlers.get(int(event.type), ()):
             try:
                 getattr(self, handler_name)(event)
+            except ConfigError as exc:
+                _logger.error("Event handler '%s' failed: %s", handler_name, exc)
             except Exception:
                 _logger.exception(
                     "Event handler '%s' failed for %r", handler_name, event

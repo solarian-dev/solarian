@@ -84,6 +84,11 @@ def failure_reason(traceback_str: str) -> str:
     A runner reports a crash as a traceback, whichever process the skill ran
     in, so the reason travels the same way: as the traceback's last line.
     """
+    from solarian.utils.configs import config_error_in
+
+    config_error = config_error_in(traceback_str)
+    if config_error is not None:
+        return str(config_error)
     lines = [line for line in traceback_str.strip().splitlines() if line.strip()]
     if not lines:
         return ""
@@ -387,11 +392,16 @@ class Skill(ABC):
         """Load the skill's bundled default config (``{}`` if none is shipped)."""
         import yaml
 
+        from solarian.utils.configs import invalid_yaml
+
         path = cls.default_config_path()
         if path is None:
             return {}
         with open(path, "r") as f:
-            return yaml.safe_load(f) or {}
+            try:
+                return yaml.safe_load(f) or {}
+            except yaml.YAMLError as exc:
+                raise invalid_yaml(path, exc) from None
 
     @staticmethod
     def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -424,11 +434,16 @@ class Skill(ABC):
         """Load the project-level config override (``{}`` if none present)."""
         import yaml
 
+        from solarian.utils.configs import invalid_yaml
+
         path = cls.project_config_path()
         if path is None:
             return {}
         with open(path, "r") as f:
-            return yaml.safe_load(f) or {}
+            try:
+                return yaml.safe_load(f) or {}
+            except yaml.YAMLError as exc:
+                raise invalid_yaml(path, exc) from None
 
     @classmethod
     def load_config(cls) -> Dict[str, Any]:
@@ -440,7 +455,8 @@ class Skill(ABC):
         from solarian.utils.configs import resolve_with_deployment
 
         merged = cls._deep_merge(cls.load_default_config(), cls.load_project_config())
-        return resolve_with_deployment(merged)
+        source = cls.project_config_path() or cls.default_config_path() or f"the {cls.__name__} config"
+        return resolve_with_deployment(merged, source=source)
 
     # ------------------------------------------------------------------
     # Stop control

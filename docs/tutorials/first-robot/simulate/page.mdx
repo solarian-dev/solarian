@@ -15,7 +15,7 @@ solarian run-server
 ```
 
 ```bash {{ title: 'Terminal 2' }}
-solarian run-robot --sim
+solarian run-robot --sim --view
 ```
 
 ```bash {{ title: 'Terminal 3' }}
@@ -26,14 +26,14 @@ solarian run-controller
 
 Two windows matter:
 
-- The **sim window**, opened by the robot because `view = True`. You should see the arm standing on the checker floor, at mid-travel. That pose is all zeros.
-- The **controller window**. It is mostly empty until the camera exists. It is still where the keys go, so click it before you type.
+- The **Solarian Sim** window, opened by the robot because of `--view`. You should see the arm standing on the checker floor, at mid-travel. That pose is all zeros.
+- The **Solarian Controller** window. It is mostly empty until the camera exists. It is still where the keys go, so click it before you type.
 
-Press `s` a few times. The shoulder should lift. Press `w` and it should come back. Walk the pairs from the [keyboard page](/docs/tutorials/first-robot/keyboard): pan, lift, elbow, then the three wrist joints. The wrist is small on screen. If pan and lift work and the wrist seems dead, move the camera in the sim window (drag to orbit) and look at the flange.
+Press `s` a few times from the controller window. The shoulder should lift. Press `w` and it should come back. Walk the pairs from the [keyboard page](/docs/tutorials/first-robot/keyboard): pan, lift, elbow, then the three wrist joints. The wrist is small on screen. If pan and lift work and the wrist seems dead, move the camera in the sim window (drag to orbit) and look at the flange.
 
-<Note>
-  **Figure to add.** The MuJoCo window with the arm at mid-travel, and the same arm after a few <code>s</code> presses. Drop the screenshots in as <code>public/images/tutorials/arm1-sim.png</code>.
-</Note>
+![The sim window, with the arm at mid-travel](./arm1-sim.png)
+
+![The controller window, only the joint values are visible](./arm1-controller.png)
 
 Quit with Control-C in each terminal when you are done looking.
 
@@ -47,7 +47,7 @@ The third is a `TypeError` before anything starts, naming `arm` or a joint. The 
 
 ## If there is no sim window
 
-`view = True` is best-effort. With no display, the sim runs headless and the arm is still moving; you just cannot see it. A laptop with a display should show the window. `SOLARIAN_SIM_VIEW=0` forces it off, and `SOLARIAN_SIM_VIEW=1` forces it on.
+First check that the robot command has `--view`. Without it the sim runs headless. `--view` is best-effort. With no display, the sim runs headless and the arm is still moving; you just cannot see it. A laptop with a display should show the window. Leave `--view` off to run headless on purpose.
 
 ## What you just ran
 

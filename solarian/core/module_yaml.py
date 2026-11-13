@@ -56,10 +56,12 @@ def read_module_field(module_name: str, key: str, default: float) -> float:
     """
     from omegaconf import OmegaConf
 
+    from solarian.utils.configs import load_yaml
+
     path = module_yaml_path(module_name)
     if path is None:
         return default
-    value = OmegaConf.select(OmegaConf.load(path), key)
+    value = OmegaConf.select(load_yaml(path), key)
     return default if value is None else float(value)
 
 

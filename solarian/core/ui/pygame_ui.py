@@ -31,7 +31,7 @@ class PygameUI:
 
     captures_keys = True
 
-    def __init__(self, title: str = "Solarian", chat: bool = False):
+    def __init__(self, title: str = "Solarian Controller", chat: bool = False):
         self._gui = ControllerGUI(title=title)
         self._chat = chat
         #: The switches as last rendered, so a click sends the flipped value

@@ -23,7 +23,7 @@ from solarian.core.execution import ExecutionPlace
 from solarian.core.module import Module
 from solarian.core.observation import Observation
 from solarian.utils import StatusBoard, get_class
-from solarian.utils.configs import load_config_yaml
+from solarian.utils.configs import ConfigError, load_config_yaml
 from solarian.utils.shared_memory.action_queue import ModuleActionQueue
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
 from solarian.utils.shared_memory.skill_status_buffer import SkillStatusBuffer
@@ -167,6 +167,9 @@ class ServerSkillHost:
             skill.skills_status_buffer = self.skills_status_buffer
             skill.event_inbox = event_inbox_for(skill)
             skill.start()
+        except ConfigError as exc:
+            logger.error("Could not start skill '%s': %s", name, exc)
+            return
         except Exception:
             logger.exception("Could not start skill '%s'", name)
             return

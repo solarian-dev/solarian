@@ -44,9 +44,9 @@ def load_processor_conf(conf: str):
     execution place of a field.
     """
     from omegaconf import OmegaConf
-    from solarian.utils.configs import resolve_with_deployment
+    from solarian.utils.configs import load_yaml, resolve_with_deployment
 
-    return OmegaConf.create(resolve_with_deployment(OmegaConf.load(conf)))
+    return OmegaConf.create(resolve_with_deployment(load_yaml(conf), source=conf))
 
 
 class Processor:

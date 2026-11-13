@@ -31,22 +31,33 @@ _MAX_INPUT_REPR = 60
 
 
 class ConfigError(ValueError):
-    """A config file that does not validate, already formatted for a person.
+    """A config file that cannot be loaded, already formatted for a person.
 
-    The message is the whole report, so it reads the same wherever it surfaces:
-    caught by the CLI, or printed as the last line of a child process's traceback.
+    Either it does not validate, or it names a ``${deployment.*}`` value the
+    deployment file does not set. The message is the whole report, so it reads
+    the same wherever it surfaces: caught by the CLI, or printed as the last
+    line of a child process's traceback.
     """
+
+    #: A runner logs this as an outcome, not as a crash with a traceback.
+    deliberate = True
 
     def __init__(
         self,
-        model_class: type[BaseModel],
-        errors: list[dict[str, Any]],
+        model_class: type[BaseModel] | None = None,
+        errors: list[dict[str, Any]] | None = None,
         config_path: str | None = None,
         cli_overridable: bool = False,
+        *,
+        message: str | None = None,
     ):
         self.model_class = model_class
-        self.errors = errors
+        self.errors = errors or []
         self.config_path = config_path
+        if message is not None:
+            super().__init__(message)
+            return
+        assert model_class is not None and errors is not None
         super().__init__(
             format_config_errors(model_class, errors, config_path, cli_overridable)
         )
@@ -475,7 +486,7 @@ def _load_deployment_file(
             f"  Select one with `--deployment <name>` or SOLARIAN_DEPLOYMENT=<name>."
         )
 
-    conf = OmegaConf.load(yaml_path)
+    conf = load_yaml(yaml_path)
     base_name = conf.pop(EXTENDS_KEY, None)
     if base_name is None:
         return conf
@@ -488,20 +499,95 @@ def _load_deployment_file(
     return OmegaConf.merge(base, conf)
 
 
-def resolve_with_deployment(cfg: DictConfig | dict) -> dict:
+_MISSING_KEY = re.compile(r"Interpolation key '([^']+)' not found")
+
+
+def _deployment_file() -> str:
+    from solarian.core.conf_paths import DEPLOYMENT, conf_dir
+
+    name = os.environ.get("SOLARIAN_DEPLOYMENT") or DEFAULT_DEPLOYMENT
+    return _display_path(os.path.join(str(conf_dir()), DEPLOYMENT, f"{name}.yaml"))
+
+
+def _source_label(source: str | os.PathLike | None) -> str:
+    """Which file a config came from, for an error message.
+
+    Unset, it is the command's own config, the one Hydra composed.
+    """
+    source = source or os.environ.get("SOLARIAN_CURRENT_CONFIG")
+    return _display_path(str(source)) if source else "the configuration"
+
+
+def load_yaml(path: str | os.PathLike) -> DictConfig:
+    """``OmegaConf.load``, with a syntax error reported as a :class:`ConfigError`."""
+    import yaml
+
+    try:
+        return OmegaConf.load(path)
+    except yaml.YAMLError as exc:
+        raise invalid_yaml(path, exc) from None
+
+
+def invalid_yaml(path: str | os.PathLike, exc: Exception) -> "ConfigError":
+    """A YAML syntax error in ``path`` as a :class:`ConfigError` that names the line."""
+    mark = getattr(exc, "problem_mark", None)
+    where = f", line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
+    problem = getattr(exc, "problem", None) or str(exc)
+    return ConfigError(
+        message=f"{_display_path(str(path))} is not valid YAML{where}: {problem}."
+    )
+
+
+def resolve_with_deployment(
+    cfg: DictConfig | dict, source: str | os.PathLike | None = None
+) -> dict:
     """Resolve ``${deployment.*}`` against the deployment selected for this run.
 
     The injected node is dropped from the result so it never reaches a Pydantic
-    model.
+    model. ``source`` names the file ``cfg`` came from, for the error raised
+    when an interpolation does not resolve.
     """
+    from omegaconf.errors import InterpolationKeyError, InterpolationResolutionError
+
     merged = OmegaConf.merge({"deployment": load_deployment_config()}, cfg)
-    data = OmegaConf.to_container(merged, resolve=True)
+    try:
+        data = OmegaConf.to_container(merged, resolve=True)
+    except InterpolationKeyError as exc:
+        match = _MISSING_KEY.search(exc.msg)
+        missing = match.group(1) if match else str(exc.child_node)
+        where = f"{exc.full_key} requires " if exc.full_key else ""
+        defined_in = (
+            _deployment_file() if missing.startswith("deployment.") else _source_label(source)
+        )
+        raise ConfigError(
+            message=(
+                f"Could not load {_source_label(source)}: {where}${{{missing}}}, "
+                f"which is not set in {defined_in}."
+            )
+        ) from None
+    except InterpolationResolutionError as exc:
+        key = f"{exc.full_key}: " if exc.full_key else ""
+        reason = exc.msg.splitlines()[0]
+        raise ConfigError(
+            message=f"Could not load {_source_label(source)}: {key}{reason}"
+        ) from None
     del data["deployment"]
     return data
 
 
+def config_error_in(traceback_str: str) -> "ConfigError | None":
+    """The :class:`ConfigError` a child process's traceback ends in, if it does.
+
+    A worker reports a crash as its formatted traceback. A config error is the
+    reader's to fix rather than a crash, so the host re-raises it as one.
+    """
+    marker = f"{ConfigError.__module__}.{ConfigError.__qualname__}: "
+    _, found, message = traceback_str.rpartition(marker)
+    return ConfigError(message=message.strip()) if found else None
+
+
 def load_config_yaml(yaml_path: str, config_class: type) -> Any:
-    data = resolve_with_deployment(OmegaConf.load(yaml_path))
+    data = resolve_with_deployment(load_yaml(yaml_path), source=yaml_path)
     return parse_with_friendly_errors(config_class, data, config_path=yaml_path)
 
 

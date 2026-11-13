@@ -24,8 +24,6 @@ from solarian.sim import SceneConfig, ModuleAttachment
 from myrobot.modules.arm import ArmModule
 
 class MyRobot(Robot):
-    view = True              # show the live overview window
-
     arm = ArmModule()        # the SAME module used on real hardware
 
     scene = SceneConfig(
@@ -42,9 +40,6 @@ Then start it with `--sim`. That's the whole difference from a real robot. The [
   <Property name="scene" type="SceneConfig">
     Required to run with <code>--sim</code> (a clear error is raised otherwise). See <a href="#scenes">Scenes</a>.
   </Property>
-  <Property name="view" type="bool">
-    Show a live overview window while running. Overridable at runtime with the <code>SOLARIAN_SIM_VIEW</code> env var (<code>1</code>/<code>0</code>). Best-effort: with no display available the sim runs headless.
-  </Property>
 </Properties>
 
 <Note>
@@ -56,11 +51,14 @@ Then start it with `--sim`. That's the whole difference from a real robot. The [
 Sim vs hardware is a choice per run, not a property of the robot class. The **same** class runs on either:
 
 ```bash
-solarian run-robot        # the real hardware
-solarian run-robot --sim  # MuJoCo, in the class's scene
+solarian run-robot               # the real hardware
+solarian run-robot --sim         # MuJoCo, in the class's scene
+solarian run-robot --sim --view  # the same, drawn in a window
 ```
 
 `--sim` sets the `sim` field on [`RobotConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py), and `Robot.__init__` copies it to `robot.is_sim`. Without the flag the robot always opens its hardware buses, so a forgotten setting can never send a "sim" run to real motors or the other way round.
+
+`--view` sets `view` the same way and opens a live overview window of the whole scene. It needs `--sim`; on its own it is refused. The window is best-effort: with no display available the sim runs headless.
 
 ## Running the stack
 

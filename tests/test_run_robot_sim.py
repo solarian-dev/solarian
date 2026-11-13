@@ -18,6 +18,13 @@ def test_hardware_is_the_default():
     cmd = RunRobotCommand()
     assert cmd.parse_args(["fps=60"]) == ["fps=60"]
     assert cmd.sim is False
+    assert cmd.view is False
+
+
+def test_view_flag_is_consumed():
+    cmd = RunRobotCommand()
+    assert cmd.parse_args(["--sim", "--view", "fps=60"]) == ["fps=60"]
+    assert cmd.view is True
 
 
 class _SceneRobot(Robot):
@@ -42,6 +49,23 @@ def _build(robot_cls, cfg):
 )
 def test_is_sim_follows_the_config(cfg, expected):
     assert _build(_SceneRobot, cfg).is_sim is expected
+
+
+@pytest.mark.parametrize(
+    "cfg, expected",
+    [
+        (SimpleNamespace(sim=True, view=True), True),
+        (SimpleNamespace(sim=True, view=None), False),
+        (SimpleNamespace(sim=True), False),
+    ],
+)
+def test_view_follows_the_config(cfg, expected):
+    assert _build(_SceneRobot, cfg).view is expected
+
+
+def test_view_without_sim_is_refused():
+    with pytest.raises(ValueError, match="--sim --view"):
+        _build(_SceneRobot, SimpleNamespace(sim=False, view=True))
 
 
 def test_sim_without_a_scene_is_refused():

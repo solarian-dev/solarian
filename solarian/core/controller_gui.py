@@ -395,7 +395,7 @@ class ControllerGUI:
 
     def __init__(
         self,
-        title: str = "Solarian",
+        title: str = "Solarian Controller",
         width: int = 1280,
         height: int = 760,
         font_size: int = 16,

@@ -51,6 +51,8 @@ class GripperConfig(ModuleConfig):
 
     aperture_closed_mm: float = 0.0
     aperture_open_mm: float = 0.0
+    #: Speed cap for interpolated moves, in mm/s. A value in the module yaml replaces it.
+    max_speed: float | list[float] = 300.0
     #: Ruler-measured aperture curve from ``solarian calibrate-gripper-ranges``.
     aperture_table: ApertureTable | None = None
 

@@ -482,6 +482,9 @@ class RobotConfig(BaseModel):
     #: Run in MuJoCo instead of on hardware; set by ``run-robot --sim``. Older
     #: robot.yaml files carry ``sim: null``, which means hardware.
     sim: bool | None = None
+    #: Open a window that draws the simulation; set by ``run-robot --view``.
+    #: Only with ``sim``.
+    view: bool | None = None
 
 class ModelEndpointConfig(BaseModel):
     """One model behind one API.

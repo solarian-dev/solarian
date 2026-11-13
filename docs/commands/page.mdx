@@ -95,9 +95,10 @@ These commands run on the robot machine. They import the modules listed under <c
 ```bash
 solarian run-robot
 solarian run-robot --sim
+solarian run-robot --sim --view
 ```
 
-Loads `conf/robot.yaml`, instantiates your `Robot` subclass, spawns one process per `Module`, and starts the action receiver / observation publisher. See [Robots](/docs/robots). `--sim` runs the same robot in MuJoCo, in the `scene` its class declares; see [Simulation](/docs/simulation).
+Loads `conf/robot.yaml`, instantiates your `Robot` subclass, spawns one process per `Module`, and starts the action receiver / observation publisher. See [Robots](/docs/robots). `--sim` runs the same robot in MuJoCo, in the `scene` its class declares, and `--view` adds a window that draws it; see [Simulation](/docs/simulation).
 
 ### `calibrate`
 

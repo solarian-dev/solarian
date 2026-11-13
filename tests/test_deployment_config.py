@@ -85,6 +85,63 @@ def test_an_unknown_deployment_lists_the_ones_there_are(conf_dir, monkeypatch):
         configs.load_deployment_config()
 
 
+def test_a_missing_deployment_key_names_the_file_and_the_port(conf_dir, tmp_path, monkeypatch):
+    write(conf_dir, "localhost", {"connection": {"ip": "127.0.0.1"}})
+    module = tmp_path / "arm.yaml"
+    module.write_text("actuator_port: ${deployment.actuator_port_arm}\n")
+    monkeypatch.delenv("SOLARIAN_DEPLOYMENT", raising=False)
+
+    with pytest.raises(configs.ConfigError, match="actuator_port_arm") as exc:
+        configs.load_config_yaml(str(module), dict)
+
+    message = str(exc.value)
+    assert "arm.yaml" in message
+    assert "actuator_port requires ${deployment.actuator_port_arm}" in message
+    assert "deployment/localhost.yaml" in message
+
+
+def test_a_missing_key_of_the_file_itself_names_that_file(conf_dir, tmp_path):
+    write(conf_dir, "localhost", {})
+    module = tmp_path / "arm.yaml"
+    module.write_text("actuators:\n  a:\n    port: ${actuator_port}\n")
+
+    with pytest.raises(configs.ConfigError) as exc:
+        configs.load_config_yaml(str(module), dict)
+
+    message = str(exc.value)
+    assert "actuators.a.port requires ${actuator_port}" in message
+    assert "deployment" not in message
+    assert message.endswith("arm.yaml.")
+
+
+def test_a_yaml_syntax_error_names_the_file_and_line(tmp_path):
+    module = tmp_path / "arm.yaml"
+    module.write_text("frequency: 50\nactuators:\n  - a\n  b: 1\n")
+
+    with pytest.raises(configs.ConfigError, match=r"arm\.yaml is not valid YAML, line 4"):
+        configs.load_yaml(module)
+
+
+def test_a_config_error_survives_a_child_traceback(conf_dir, tmp_path):
+    import traceback
+
+    from solarian.core.skill import failure_reason
+
+    write(conf_dir, "localhost", {})
+    module = tmp_path / "arm.yaml"
+    module.write_text("actuator_port: ${deployment.actuator_port_arm}\n")
+    try:
+        configs.load_config_yaml(str(module), dict)
+    except configs.ConfigError as exc:
+        tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        original = str(exc)
+
+    recovered = configs.config_error_in(tb_str)
+    assert recovered is not None and str(recovered) == original
+    assert failure_reason(tb_str) == original
+    assert configs.config_error_in("Traceback...\nValueError: nope") is None
+
+
 def test_a_project_with_no_deployment_directory_gets_an_empty_config(
     tmp_path, monkeypatch
 ):

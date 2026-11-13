@@ -26,7 +26,6 @@ from solarian.sim.runtime import (
     _conn_key,
     collect_component_specs,
     collect_tcp_frames,
-    view_enabled,
 )
 
 import logging
@@ -81,7 +80,7 @@ class SimMirror:
                 conn_modules[key] = name
 
         viewer_client_conn = None
-        if view_enabled(self.robot):
+        if self.robot.view:
             viewer_server_conn, viewer_client_conn = Pipe()
             server_conns["__viewer__"] = viewer_server_conn
             conn_modules["__viewer__"] = ""

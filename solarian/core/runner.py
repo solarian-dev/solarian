@@ -29,6 +29,7 @@ from multiprocessing import Event as MpEvent, Process, Queue as MpQueue
 from typing import Any, Protocol
 
 from solarian.core.execution import ExecutionMode, WorkerExit
+from solarian.utils.configs import ConfigError, config_error_in
 from solarian.utils.precise_sleep import precise_wait
 from solarian.utils.profiling import func_stats, get_stats_snapshot
 
@@ -255,6 +256,9 @@ class ProcessModuleRunner(Runner):
             error = self.get_error()
             if error:
                 worker_name, tb_str = error
+                config_error = config_error_in(tb_str)
+                if config_error is not None:
+                    raise ConfigError(message=f"'{worker_name}': {config_error}")
                 raise RuntimeError(
                     f"'{worker_name}' process died during startup:\n{tb_str}"
                 )

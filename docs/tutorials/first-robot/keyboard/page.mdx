@@ -41,23 +41,23 @@ The controller keeps one action for the whole run: the joint target the arm shou
 
 ```python {{ title: 'my_robot/controller.py' }}
 from solarian.core import Controller
-from solarian.core.action import ActionType
 
 from my_robot.action import MyRobotAction
+from my_robot.modules.my_arm_module import MyActions
 
 
 class MyRobotController(Controller):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.target = MyRobotAction.zeros()
-        self.target.arm.action_type = ActionType.MOVE_J
+        self.target.arm.action_type = MyActions.MOVE_ARM
 ```
 
 The lines that matter:
 
 - **`super().__init__(*args, **kwargs)`** lets the base class set up its connection and modules first. Anything you add comes after it.
 - **`MyRobotAction.zeros()`** builds an action from the schema of the previous chapter, with every field at 0. For the arm, 0 is the middle of each joint's travel.
-- **`action_type = ActionType.MOVE_J`** gives the arm's part of the action its meaning: go to these joint targets. It is the type the arm module's `@action_handler` accepts.
+- **`action_type = MyActions.MOVE_ARM`** gives the arm's part of the action its meaning: go to these joint targets. It is the type the arm module's `@action_handler` accepts.
 
 ## React to keys: event handlers
 
@@ -69,10 +69,10 @@ This handler maps twelve keys to the six joints. Add it to `my_robot/controller.
 
 ```python {{ title: 'my_robot/controller.py' }}
 from solarian.core import Controller
-from solarian.core.action import ActionType
 from solarian.core.event import Event, EventType, event_handler
 
 from my_robot.action import MyRobotAction
+from my_robot.modules.my_arm_module import MyActions
 
 # One key pair per joint: the first decreases, the second increases.
 _KEYS = {
@@ -82,12 +82,12 @@ _KEYS = {
     "s": ("shoulder_lift", 5),
     "e": ("elbow_flex", -5),
     "d": ("elbow_flex", 5),
-    "r": ("wrist_flex", -5),
-    "f": ("wrist_flex", 5),
-    "t": ("wrist_yaw", -5),
-    "g": ("wrist_yaw", 5),
-    "y": ("wrist_roll", -5),
-    "h": ("wrist_roll", 5),
+    "u": ("wrist_flex", -5),
+    "j": ("wrist_flex", 5),
+    "i": ("wrist_yaw", -5),
+    "k": ("wrist_yaw", 5),
+    "o": ("wrist_roll", -5),
+    "l": ("wrist_roll", 5),
 }
 
 
@@ -95,7 +95,7 @@ class MyRobotController(Controller):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.target = MyRobotAction.zeros()
-        self.target.arm.action_type = ActionType.MOVE_J
+        self.target.arm.action_type = MyActions.MOVE_ARM
 
     @event_handler(EventType.KEY_DOWN)
     def on_key_down(self, event: Event):
@@ -138,10 +138,10 @@ Put together, `my_robot/controller.py` is the key table and a class with three m
 
 ```python {{ title: 'my_robot/controller.py' }}
 from solarian.core import Controller
-from solarian.core.action import ActionType
 from solarian.core.event import Event, EventType, event_handler
 
 from my_robot.action import MyRobotAction
+from my_robot.modules.my_arm_module import MyActions
 
 # One key pair per joint: the first decreases, the second increases.
 _KEYS = {
@@ -151,12 +151,12 @@ _KEYS = {
     "s": ("shoulder_lift", 5),
     "e": ("elbow_flex", -5),
     "d": ("elbow_flex", 5),
-    "r": ("wrist_flex", -5),
-    "f": ("wrist_flex", 5),
-    "t": ("wrist_yaw", -5),
-    "g": ("wrist_yaw", 5),
-    "y": ("wrist_roll", -5),
-    "h": ("wrist_roll", 5),
+    "u": ("wrist_flex", -5),
+    "j": ("wrist_flex", 5),
+    "i": ("wrist_yaw", -5),
+    "k": ("wrist_yaw", 5),
+    "o": ("wrist_roll", -5),
+    "l": ("wrist_roll", 5),
 }
 
 
@@ -164,7 +164,7 @@ class MyRobotController(Controller):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.target = MyRobotAction.zeros()
-        self.target.arm.action_type = ActionType.MOVE_J
+        self.target.arm.action_type = MyActions.MOVE_ARM
 
     @event_handler(EventType.KEY_DOWN)
     def on_key_down(self, event: Event):
@@ -186,10 +186,10 @@ The letters run in pairs down the keyboard, one pair per joint from the shoulder
 | shoulder pan | `q` | `a` |
 | shoulder lift | `w` | `s` |
 | elbow | `e` | `d` |
-| wrist flex | `r` | `f` |
-| wrist yaw | `t` | `g` |
-| wrist roll | `y` | `h` |
+| wrist flex | `u` | `j` |
+| wrist yaw | `i` | `k` |
+| wrist roll | `o` | `l` |
 
-`r` also reaches the base class's recording handler. The base `control_step` is the one that sends recording requests, and yours replaces it, so `r` only moves the wrist for now. In Tutorial 4 skills take over the keys, and this table goes away.
+`r` is the base class's recording key, and it is not in this table. Recording still waits: the base `control_step` is what sends those requests, and yours replaces it. In Tutorial 4 skills take over the keys, and this table goes away.
 
 Next: [start the sim and move the arm](/docs/tutorials/first-robot/simulate).
