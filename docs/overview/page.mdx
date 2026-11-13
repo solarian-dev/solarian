@@ -16,7 +16,7 @@ Solarian sits between your hardware and your application code. It handles the pa
 
 Solarian is structured as a **Robot ↔ Server ↔ Controller** system. Each role is a separate process and can run on a separate machine.
 
-{/* <ArchitectureFigure /> */}
+<ArchitectureFigure />
 
 Zoomed in, each node is itself a set of processes and threads. On the robot, every module runs in its own process at its own rate and trades observations and actions with the robot loop through shared-memory ring buffers and queues. Skills run as their own processes or threads on the robot or the server, and policy-driven skills call a policy server. On the controller, the AI agentic controller plans the task with a vision-language model and starts skills as tools, while the controller loop records observations and merges teleop and skill actions into the `Action` it sends.
 

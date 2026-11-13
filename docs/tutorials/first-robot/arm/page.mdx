@@ -6,7 +6,7 @@ export const metadata = {
 
 # The Robot
 
-The robot is the program that owns the hardware. It talks to every motor and sensor, reports what they measure, and carries out the actions the controller sends. This chapter writes the robot class, its first module, the six-joint arm, and the scene where simulation gives that arm a body. {{ className: 'lead' }}
+The robot is the program that owns the hardware. It talks to every actuator and sensor, reports what they measure, and carries out the actions the controller sends. This chapter writes the robot class, its first module, the six-joint arm, and the scene where simulation gives that arm a body. {{ className: 'lead' }}
 
 ## What a robot is
 
@@ -29,7 +29,7 @@ Your subclass says what the robot is made of, in three pieces:
 
 <RobotDiagram />
 
-By the end of this tutorial `MyRobotRobot` carries all three modules in the diagram. This chapter fills in the first one, the arm the scaffold declared, and mounts its model in the scene. The gripper and the camera follow the same three steps in their own chapters.
+{/* By the end of this tutorial `MyRobotRobot` carries all three modules in the diagram. This chapter fills in the first one, the arm the scaffold declared, and mounts its model in the scene. The gripper and the camera follow the same three steps in their own chapters. */}
 
 ## First module: robot arm
 
@@ -37,7 +37,7 @@ The arm module is a Python class with one attribute per servo and a method that 
 
 ### Install the servo driver
 
-The Solarian Arm 1's joints are Feetech serial-bus servos. Their driver ships as a plugin, so install it first:
+The Feetech driver ships as a plugin, so install it first:
 
 ```bash
 solarian install feetech
