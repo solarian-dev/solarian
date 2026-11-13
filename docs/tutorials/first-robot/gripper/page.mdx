@@ -1,70 +1,70 @@
 export const metadata = {
   title: 'The gripper',
   description:
-    'Install the UMI-slim Feetech gripper from a plugin and attach its model to the arm flange.',
+    'Install the solarian-gripper1 Feetech gripper from a plugin and attach its model to the arm flange.',
 }
 
 # The gripper
 
 The arm was a class you wrote. The gripper is the other way: a module someone else already wrote, installed into the project in one command. {{ className: 'lead' }}
 
-![UMI-slim, the parallel gripper this chapter adds](/hardware/umi-slim/media/cover.png)
+![solarian-gripper1, the parallel gripper this chapter adds](/hardware/gripper-1/media/cover.png)
 
-[UMI-slim](/hardware/umi-slim) is a two-finger gripper. One servo drives both fingers, and you command it by how far apart the fingertips are, in millimetres. 0 is closed. About 85 is open. The Feetech variant is `UmiSlimFeetechModule`.
+[solarian-gripper1](/hardware/gripper-1) is a two-finger gripper. One servo drives both fingers, and you command it by how far apart the fingertips are, in millimetres. 0 is closed. About 85 is open. The Feetech variant is `Gripper1FeetechModule`.
 
 ## Install it
 
 From the project root:
 
 ```bash
-solarian install umi-slim
+solarian install gripper1
 ```
 
-That installs `solarian-umi-slim` (and the Feetech driver it depends on, if you skipped it) and records the dependency. This plugin ships the module class and the MuJoCo model inside the package. It does not ship a YAML template, so the config file is still yours to write. The class is what you did not have to write.
+That installs `solarian-gripper1` (and the Feetech driver it depends on, if you skipped it) and records the dependency. This plugin ships the module class and the MuJoCo model inside the package. It does not ship a YAML template, so the config file is still yours to write. The class is what you did not have to write.
 
 ## Mount it
 
-Add the attribute. The name `right_gripper` is the module name from here on. In `arm1/robot.py`:
+Add the attribute. The name `gripper` is the module name from here on. In `my_robot/robot.py`:
 
 ```python
-from solarian_umi_slim import MJCF_FEETECH_PATH
-from solarian_umi_slim.umi_slim_feetech import UmiSlimFeetechModule
+from solarian_gripper_1 import MJCF_FEETECH_PATH
+from solarian_gripper_1.gripper_feetech import Gripper1FeetechModule
 ```
 
-and on the class, under `right_arm`:
+and on the class, under `arm`:
 
 ```python
-right_gripper = UmiSlimFeetechModule()
+gripper = Gripper1FeetechModule()
 ```
 
 The gripper's model has to be bolted to the arm, not dropped on the floor. The arm model has a site named `flange`. The gripper model has a site of the same name. Mating site to site is the attachment. Add a second `ModuleAttachment` in the scene's `attachments` list:
 
 ```python
 ModuleAttachment(
-    module="right_gripper",
+    module="gripper",
     mjcf=MJCF_FEETECH_PATH,
-    parent_site="right/flange",
+    parent_site="arm/flange",
     child_site="flange",
-    prefix="right_gripper/",
+    prefix="gripper/",
 ),
 ```
 
-`parent_site` is a site in the scene *after* the arm's prefix, so it is `right/flange`, not `flange`. `child_site` is a site in the gripper's own file, before its prefix is applied. `MJCF_FEETECH_PATH` points at the model inside the installed package. You do not copy meshes for the gripper.
+`parent_site` is a site in the scene *after* the arm's prefix, so it is `arm/flange`, not `flange`. `child_site` is a site in the gripper's own file, before its prefix is applied. `MJCF_FEETECH_PATH` points at the model inside the installed package. You do not copy meshes for the gripper.
 
-`right_arm.py` does not change. The arm does not know it has a tool. The scene does.
+`my_arm_module.py` does not change. The arm does not know it has a tool. The scene does.
 
 ## Config
 
 Add a port to `conf/deployment/localhost.yaml`. On the real robot the gripper shares the arm's bus; using the same path now means Tutorial 3 does not have to invent a second adapter.
 
 ```yaml
-actuator_port_right_gripper: /dev/ttyUSB0
+actuator_port_gripper: /dev/ttyUSB0
 ```
 
-Create `conf/modules/right_gripper.yaml`:
+Create `conf/modules/gripper.yaml`:
 
 ```yaml
-actuator_port: ${deployment.actuator_port_right_gripper}
+actuator_port: ${deployment.actuator_port_gripper}
 frequency: 50
 interpolator_type: scalar
 
@@ -73,7 +73,7 @@ actuators:
     id: 7
     port: ${actuator_port}
     mode: range_m100_100
-    sim_joint: "right_gripper/left_manifold_to_rail"
+    sim_joint: "gripper/left_manifold_to_rail"
     sim_range_min: 0.0
     sim_range_max: 0.0545
     sim_drive_mode: 1
@@ -81,41 +81,43 @@ actuators:
 
 `id: 7` keeps the gripper off the arm's 1–6. `sim_joint` is the one prismatic joint the gripper model actuates; an equality in the model drives the other finger the opposite way, so one command opens both. `sim_drive_mode: 1` flips the direction so −100 in normalized space is closed and 100 is open, matching the module. You command millimetres. The module converts.
 
-The filename is `right_gripper.yaml` because the attribute is `right_gripper`.
+The filename is `gripper.yaml` because the attribute is `gripper`.
 
 ## Schema and keys
 
 Add the gripper to the observation and the action, or the class check fails at startup.
 
-In `arm1/observation.py`:
+In `my_robot/observation.py`:
 
 ```python
-class RightGripperObs(ModuleObs):
-    gripper = SensorField(Arm1Robot.right_gripper.gripper.pos)
+class MyGripperObs(ModuleObs):
+    gripper = SensorField(MyRobotRobot.gripper.gripper.pos)
 
 
-class Arm1Observation(Observation):
-    right_arm = RightArmObs()
-    right_gripper = RightGripperObs()
+class MyRobotObservation(Observation):
+    arm = MyArmObs()
+    gripper = MyGripperObs()
 ```
 
-In `arm1/action.py`:
+In `my_robot/action.py`:
 
 ```python
-class RightGripperAction(ModuleAction):
-    gripper = ActuatorField(Arm1Robot.right_gripper.gripper.pos)
+class MyGripperAction(ModuleAction):
+    gripper = ActuatorField(MyRobotRobot.gripper.gripper.pos)
 
 
-class Arm1Action(Action):
-    right_arm = RightArmAction()
-    right_gripper = RightGripperAction()
+class MyRobotAction(Action):
+    arm = MyArmAction()
+    gripper = MyGripperAction()
 ```
+
+`MyRobotRobot.gripper.gripper` is the module `gripper`, then its one servo, which the plugin also calls `gripper`.
 
 In the controller's `__init__`, next to the arm's action type:
 
 ```python
-self.target.right_gripper.action_type = ActionType.MOVE_J
-self.target.right_gripper.gripper.value = 40.0
+self.target.gripper.action_type = ActionType.MOVE_J
+self.target.gripper.gripper.value = 40.0
 ```
 
 40 mm is half open, so you can see the fingers. Extend `_KEYS`:
@@ -135,10 +137,10 @@ def on_key_down(self, event: Event):
         return
     joint, delta = step
     if joint == "gripper":
-        field = self.target.right_gripper.gripper
+        field = self.target.gripper.gripper
         field.value = max(0.0, min(85.0, field.value + delta))
         return
-    field = self.target.right_arm[joint]
+    field = self.target.arm[joint]
     field.value = max(-100.0, min(100.0, field.value + delta))
 ```
 
@@ -147,7 +149,7 @@ def on_key_down(self, event: Event):
 Restart the robot and the controller. The sim arm should be wearing the gripper. `[` closes the fingers, `]` opens them. The arm keys from the previous chapter still work.
 
 <Note>
-  If the gripper shows up on the floor, or the process dies naming <code>flange</code>, the parent site is wrong. It has to be <code>right/flange</code>: the arm prefix plus the site in the arm model. <code>right_gripper/flange</code> is the gripper's own site after attachment, which is not the parent.
+  If the gripper shows up on the floor, or the process dies naming <code>flange</code>, the parent site is wrong. It has to be <code>arm/flange</code>: the arm prefix plus the site in the arm model. <code>gripper/flange</code> is the gripper's own site after attachment, which is not the parent.
 </Note>
 
 Next: [the camera](/docs/tutorials/first-robot/camera).

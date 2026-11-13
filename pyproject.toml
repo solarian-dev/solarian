@@ -76,7 +76,7 @@ ai = [
     # install. solarian_build / ensure_xformers builds 0.0.32.post1 (the
     # release for torch==2.8.0) on Apple Silicon when this extra is installed.
 ]
-# The AI controller (`agent:` in conf/controller.yaml): the planner and monitor
+# The agentic controller (`agent:` in conf/controller.yaml): the planner and monitor
 # clients. No torch, so a controller laptop can run it without the training stack.
 agent = [
     "anthropic>=0.76",

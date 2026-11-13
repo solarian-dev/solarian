@@ -53,7 +53,7 @@ A scaffolded project lands in (2): `myrobot/myrobot/settings.py`.
 
 ## Environment variables
 
-Once located, the settings path is exported into the environment so that subprocesses (modules forked off the robot, the AI controller's think process) can re-resolve it without needing the original CLI args:
+Once located, the settings path is exported into the environment so that subprocesses (modules forked off the robot, skills running in their own process) can re-resolve it without needing the original CLI args:
 
 <Properties>
   <Property name="SOLARIAN_SETTINGS" type="env">

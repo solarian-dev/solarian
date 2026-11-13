@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Assemble',
   description:
-    'Assemble the Solarian Arm 1, then the UMI-slim gripper and the wrist camera.',
+    'Assemble the Solarian Arm 1, then the solarian-gripper1 and the wrist camera.',
 }
 
 # Assemble
@@ -10,7 +10,7 @@ Build the arm before you worry about software. The calibration command assumes t
 
 ## The arm
 
-Follow the assembly video from the base up: shoulder pan, shoulder lift, elbow, wrist flex, wrist yaw, wrist roll. Each servo gets an ID before it is buried in plastic. The IDs in your `conf/modules/right_arm.yaml` are already 1 through 6, in that joint order. `solarian calibrate-servo` sets the ID, resets the position registers, and parks the shaft at mid-encoder so you can fit the horn with the joint at mid-travel. Do it one servo at a time, alone on the bus. Two servos at the same ID will both answer. The steps are in [Calibration](/docs/modules/calibration).
+Follow the assembly video from the base up: shoulder pan, shoulder lift, elbow, wrist flex, wrist yaw, wrist roll. Each servo gets an ID before it is buried in plastic. The IDs in your `conf/modules/arm.yaml` are already 1 through 6, in that joint order. `solarian calibrate-servo` sets the ID, resets the position registers, and parks the shaft at mid-encoder so you can fit the horn with the joint at mid-travel. Do it one servo at a time, alone on the bus. Two servos at the same ID will both answer. The steps are in [Calibration](/docs/modules/calibration).
 
 <Note>
   **Video to add.** Assembling the Solarian Arm 1, base to wrist, including setting each servo ID. Embed the URL here when the cut exists.
@@ -24,10 +24,10 @@ A few checks while you still have the bench clear:
 
 ## The gripper
 
-Print the UMI-slim Feetech parts and mount the gripper servo as ID 7, the id in `right_gripper.yaml`. Bolt the gripper's flange to the arm's flange. The fingers should point the way they do in the sim window. If they point backward, you rotated the mate 180 degrees; the camera chapter will make that obvious, and it is easier to fix now.
+Print the solarian-gripper1 Feetech parts and mount the gripper servo as ID 7, the id in `gripper.yaml`. Bolt the gripper's flange to the arm's flange. The fingers should point the way they do in the sim window. If they point backward, you rotated the mate 180 degrees; the camera chapter will make that obvious, and it is easier to fix now.
 
 <Note>
-  **Video to add.** Mounting UMI-slim on the Solarian Arm 1 flange, ID 7, fingers in the sim orientation.
+  **Video to add.** Mounting solarian-gripper1 on the Solarian Arm 1 flange, ID 7, fingers in the sim orientation.
 </Note>
 
 ## The camera

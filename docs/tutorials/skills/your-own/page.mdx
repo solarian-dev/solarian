@@ -8,7 +8,7 @@ export const metadata = {
 
 The smallest skill that does something you can see: open the gripper, then finish. It lives in the project, the way the arm module did. {{ className: 'lead' }}
 
-Create `arm1/skills.py`:
+Create `my_robot/skills.py`:
 
 ```python
 from solarian.core.action import Action, ActionType
@@ -35,31 +35,31 @@ class OpenGripperSkill(Skill):
         )
 ```
 
-`params` is how the skill learns the module's name. It does not hold the module object. 85 is millimetres, fully open, which is the unit `UmiSlimFeetechModule` already accepts. `finish()` marks the skill done on the same step it commands the motion. A skill that returned forever would hold the gripper and refuse to be replaced cleanly.
+`params` is how the skill learns the module's name. It does not hold the module object. 85 is millimetres, fully open, which is the unit `Gripper1FeetechModule` already accepts. `finish()` marks the skill done on the same step it commands the motion. A skill that returned forever would hold the gripper and refuse to be replaced cleanly.
 
-A skill never imports `Arm1Robot`. The name `"right_gripper"` is the whole address. That is what lets the same class run on the controller or on the robot later.
+A skill never imports `MyRobotRobot`. The name `"gripper"` is the whole address. That is what lets the same class run on the controller or on the robot later.
 
 ## The controller only starts it
 
-Replace `arm1/controller.py`. The joint-nudge `control_step` has to go. An override of `control_step` replaces skill ticking, so a skill you start would never get a turn.
+Replace `my_robot/controller.py`. The joint-nudge `control_step` has to go. An override of `control_step` replaces skill ticking, so a skill you start would never get a turn.
 
 ```python
 from solarian.core import Controller
 from solarian.core.event import Event, EventType, event_handler
 
-from arm1.skills import OpenGripperSkill
+from my_robot.skills import OpenGripperSkill
 
 
-class Arm1Controller(Controller):
+class MyRobotController(Controller):
     skills = (OpenGripperSkill,)
 
     @event_handler(EventType.KEY_DOWN)
     def on_key_down(self, event: Event):
         if event.data["key"] == "o":
-            self.start_skill(OpenGripperSkill(params={"gripper": "right_gripper"}))
+            self.start_skill(OpenGripperSkill(params={"gripper": "gripper"}))
 ```
 
-`skills` is the list of classes this controller is willing to run. `start_skill` builds nothing for you: you construct the skill with the params you want, and it stops whatever else is commanding `right_gripper`.
+`skills` is the list of classes this controller is willing to run. `start_skill` builds nothing for you: you construct the skill with the params you want, and it stops whatever else is commanding `gripper`.
 
 There is no `control_step`. The base implementation ticks the running skills and sends what they return.
 

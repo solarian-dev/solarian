@@ -12,7 +12,7 @@ The keyboard is the input device here because every computer has one. A controll
 
 ## What a controller is
 
-A controller is a Python class that extends Solarian's `Controller`. The scaffold already created yours, an empty `Arm1Controller` in `arm1/controller.py`, and `arm1/settings.py` points `CONTROLLER_CLASS` at it. `solarian run-controller` imports that class, builds it with the settings from `conf/controller.yaml`, and starts its loop.
+A controller is a Python class that extends Solarian's `Controller`. The scaffold already created yours, an empty `MyRobotController` in `my_robot/controller.py`, and `my_robot/settings.py` points `CONTROLLER_CLASS` at it. `solarian run-controller` imports that class, builds it with the settings from `conf/controller.yaml`, and starts its loop.
 
 The base class does the plumbing: it connects to the relay server, receives every observation the robot sends, and runs the loop. Your subclass fills in two kinds of methods:
 
@@ -31,36 +31,32 @@ Each tick of the loop runs the same steps, in the same order:
 
 `fps` comes from `conf/controller.yaml`, and the scaffold sets it to 30. Handlers run first, so `control_step` always sees what this tick's keys changed.
 
-## Open a controller window
+## The controller window
 
-Keys reach the controller through its front end, the UI. The default is the terminal, which shows telemetry and reads characters as you type. This course uses a window instead: it receives real key presses and releases, and from [the camera chapter](/docs/tutorials/first-robot/camera) on it shows the wrist camera's picture. Add this line to `conf/controller.yaml`:
-
-```yaml {{ title: 'conf/controller.yaml' }}
-ui: pygame
-```
+Keys reach the controller through its front end, the UI. The default is a pygame window: it receives real key presses and releases, and from [the camera chapter](/docs/tutorials/first-robot/camera) on it shows the wrist camera's picture. On a machine without a display, `ui: console` in `conf/controller.yaml` runs the controller from the terminal instead, which shows telemetry and reads characters as you type.
 
 ## Hold a target
 
-The controller keeps one action for the whole run: the joint target the arm should be at. Keys change it, and every tick sends it. Create it when the controller is built, in `arm1/controller.py`:
+The controller keeps one action for the whole run: the joint target the arm should be at. Keys change it, and every tick sends it. Create it when the controller is built, in `my_robot/controller.py`:
 
-```python {{ title: 'arm1/controller.py' }}
+```python {{ title: 'my_robot/controller.py' }}
 from solarian.core import Controller
 from solarian.core.action import ActionType
 
-from arm1.action import Arm1Action
+from my_robot.action import MyRobotAction
 
 
-class Arm1Controller(Controller):
+class MyRobotController(Controller):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.target = Arm1Action.zeros()
-        self.target.right_arm.action_type = ActionType.MOVE_J
+        self.target = MyRobotAction.zeros()
+        self.target.arm.action_type = ActionType.MOVE_J
 ```
 
 The lines that matter:
 
 - **`super().__init__(*args, **kwargs)`** lets the base class set up its connection and modules first. Anything you add comes after it.
-- **`Arm1Action.zeros()`** builds an action from the schema of the previous chapter, with every field at 0. For the arm, 0 is the middle of each joint's travel.
+- **`MyRobotAction.zeros()`** builds an action from the schema of the previous chapter, with every field at 0. For the arm, 0 is the middle of each joint's travel.
 - **`action_type = ActionType.MOVE_J`** gives the arm's part of the action its meaning: go to these joint targets. It is the type the arm module's `@action_handler` accepts.
 
 ## React to keys: event handlers
@@ -69,14 +65,14 @@ An **event** is a record of something that happened at one instant: a key went d
 
 An **event handler** is a method that Solarian calls with each event of the type it names. You mark it with the `@event_handler` decorator. Solarian collects the events at the start of each tick and calls the handlers on the controller's own loop, one event at a time and in the order they happened. A handler can therefore change `self.target` freely, because `control_step` runs only after every handler of the tick has returned.
 
-This handler maps twelve keys to the six joints. Add it to `arm1/controller.py`:
+This handler maps twelve keys to the six joints. Add it to `my_robot/controller.py`:
 
-```python {{ title: 'arm1/controller.py' }}
+```python {{ title: 'my_robot/controller.py' }}
 from solarian.core import Controller
 from solarian.core.action import ActionType
 from solarian.core.event import Event, EventType, event_handler
 
-from arm1.action import Arm1Action
+from my_robot.action import MyRobotAction
 
 # One key pair per joint: the first decreases, the second increases.
 _KEYS = {
@@ -95,11 +91,11 @@ _KEYS = {
 }
 
 
-class Arm1Controller(Controller):
+class MyRobotController(Controller):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.target = Arm1Action.zeros()
-        self.target.right_arm.action_type = ActionType.MOVE_J
+        self.target = MyRobotAction.zeros()
+        self.target.arm.action_type = ActionType.MOVE_J
 
     @event_handler(EventType.KEY_DOWN)
     def on_key_down(self, event: Event):
@@ -107,7 +103,7 @@ class Arm1Controller(Controller):
         if step is None:
             return
         joint, delta = step
-        field = self.target.right_arm[joint]
+        field = self.target.arm[joint]
         field.value = max(-100.0, min(100.0, field.value + delta))
 ```
 
@@ -115,7 +111,7 @@ The lines that matter:
 
 - **`@event_handler(EventType.KEY_DOWN)`** registers `on_key_down` for key presses. The method name is yours.
 - **`event.data["key"]`** is the key, as a lowercase character. Every event also carries `event.source`, the module that emitted it, and `event.timestamp`, when it happened.
-- **`self.target.right_arm[joint]`** is one joint's field in the target action, and **`field.value`** is its number. The handler moves it 5 units and clamps it to −100…100, the joint's full travel.
+- **`self.target.arm[joint]`** is one joint's field in the target action, and **`field.value`** is its number. The handler moves it 5 units and clamps it to −100…100, the joint's full travel.
 
 Each press moves a joint one step of 5, a small bend. Holding a key still gives one step: the keyboard module reports the press once, so press again to move further.
 
@@ -127,7 +123,7 @@ Several handlers can share an event type, and all of them run, the base class's 
 
 This controller's decision is already made by the time `control_step` runs, so it returns the target. Add it to the class:
 
-```python {{ title: 'arm1/controller.py' }}
+```python {{ title: 'my_robot/controller.py' }}
     def control_step(self):
         return self.target
 ```
@@ -138,14 +134,14 @@ The base class has its own `control_step`, which runs [skills](/docs/tutorials/s
 
 ## The whole file
 
-Put together, `arm1/controller.py` is the key table and a class with three methods:
+Put together, `my_robot/controller.py` is the key table and a class with three methods:
 
-```python {{ title: 'arm1/controller.py' }}
+```python {{ title: 'my_robot/controller.py' }}
 from solarian.core import Controller
 from solarian.core.action import ActionType
 from solarian.core.event import Event, EventType, event_handler
 
-from arm1.action import Arm1Action
+from my_robot.action import MyRobotAction
 
 # One key pair per joint: the first decreases, the second increases.
 _KEYS = {
@@ -164,11 +160,11 @@ _KEYS = {
 }
 
 
-class Arm1Controller(Controller):
+class MyRobotController(Controller):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.target = Arm1Action.zeros()
-        self.target.right_arm.action_type = ActionType.MOVE_J
+        self.target = MyRobotAction.zeros()
+        self.target.arm.action_type = ActionType.MOVE_J
 
     @event_handler(EventType.KEY_DOWN)
     def on_key_down(self, event: Event):
@@ -176,7 +172,7 @@ class Arm1Controller(Controller):
         if step is None:
             return
         joint, delta = step
-        field = self.target.right_arm[joint]
+        field = self.target.arm[joint]
         field.value = max(-100.0, min(100.0, field.value + delta))
 
     def control_step(self):

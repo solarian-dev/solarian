@@ -19,7 +19,7 @@ robot  ── observation ──▶  server  ──▶  controller
 robot  ◀──── action ─────  server  ◀──  controller
 ```
 
-Both are classes you write, one file each: `arm1/observation.py` and `arm1/action.py`. The scaffold created them empty in [Create a project](/docs/tutorials/first-robot/project).
+Both are classes you write, one file each: `my_robot/observation.py` and `my_robot/action.py`. The scaffold created them in [Create a project](/docs/tutorials/first-robot/project), with an `arm` field that has nothing in it yet.
 
 ## Why they matter
 
@@ -31,62 +31,62 @@ Both are classes you write, one file each: `arm1/observation.py` and `arm1/actio
 
 ## Define the observation
 
-The observation lists, module by module, which readings the robot sends. For the arm that is each joint's position. Replace `arm1/observation.py`:
+The observation lists, module by module, which readings the robot sends. For the arm that is each joint's position. Replace `my_robot/observation.py`:
 
-```python {{ title: 'arm1/observation.py' }}
+```python {{ title: 'my_robot/observation.py' }}
 from solarian.core.observation import ModuleObs, Observation, SensorField
 
-from arm1.robot import Arm1Robot
+from my_robot.robot import MyRobotRobot
 
 
-class RightArmObs(ModuleObs):
-    shoulder_pan = SensorField(Arm1Robot.right_arm.shoulder_pan.pos)
-    shoulder_lift = SensorField(Arm1Robot.right_arm.shoulder_lift.pos)
-    elbow_flex = SensorField(Arm1Robot.right_arm.elbow_flex.pos)
-    wrist_flex = SensorField(Arm1Robot.right_arm.wrist_flex.pos)
-    wrist_yaw = SensorField(Arm1Robot.right_arm.wrist_yaw.pos)
-    wrist_roll = SensorField(Arm1Robot.right_arm.wrist_roll.pos)
+class MyArmObs(ModuleObs):
+    shoulder_pan = SensorField(MyRobotRobot.arm.shoulder_pan.pos)
+    shoulder_lift = SensorField(MyRobotRobot.arm.shoulder_lift.pos)
+    elbow_flex = SensorField(MyRobotRobot.arm.elbow_flex.pos)
+    wrist_flex = SensorField(MyRobotRobot.arm.wrist_flex.pos)
+    wrist_yaw = SensorField(MyRobotRobot.arm.wrist_yaw.pos)
+    wrist_roll = SensorField(MyRobotRobot.arm.wrist_roll.pos)
 
 
-class Arm1Observation(Observation):
-    right_arm = RightArmObs()
+class MyRobotObservation(Observation):
+    arm = MyArmObs()
 ```
 
 The lines that matter:
 
-- **`class RightArmObs(ModuleObs)`** groups the readings of one module. Each module with sensors you care about gets one of these.
-- **`SensorField(Arm1Robot.right_arm.shoulder_pan.pos)`** points at one piece of data on the robot, read as a path: the module `right_arm`, its servo `shoulder_pan`, and that servo's position `pos`. The field takes its type and unit from that data: a normalized position from −100 to 100, the same range the arm's YAML set.
+- **`class MyArmObs(ModuleObs)`** groups the readings of one module. Each module with sensors you care about gets one of these.
+- **`SensorField(MyRobotRobot.arm.shoulder_pan.pos)`** points at one piece of data on the robot, read as a path: the module `arm`, its servo `shoulder_pan`, and that servo's position `pos`. The field takes its type and unit from that data: a normalized position from −100 to 100, the same range the arm's YAML set.
 - **`shoulder_pan =`** is the field's name in the observation. It is yours to choose. Using the joint's own name keeps every later reading easy to follow.
-- **`right_arm = RightArmObs()`** attaches the group to the observation. This name has to equal the module's attribute on the robot.
+- **`arm = MyArmObs()`** attaches the group to the observation. This name has to equal the module's attribute on the robot.
 
 ## Define the action
 
-The action has the same shape, for the opposite direction: the same six joint positions, written by the controller instead of read from the servos. Replace `arm1/action.py`:
+The action has the same shape, for the opposite direction: the same six joint positions, written by the controller instead of read from the servos. Replace `my_robot/action.py`:
 
-```python {{ title: 'arm1/action.py' }}
+```python {{ title: 'my_robot/action.py' }}
 from solarian.core.action import Action, ActuatorField, ModuleAction
 
-from arm1.robot import Arm1Robot
+from my_robot.robot import MyRobotRobot
 
 
-class RightArmAction(ModuleAction):
-    shoulder_pan = ActuatorField(Arm1Robot.right_arm.shoulder_pan.pos)
-    shoulder_lift = ActuatorField(Arm1Robot.right_arm.shoulder_lift.pos)
-    elbow_flex = ActuatorField(Arm1Robot.right_arm.elbow_flex.pos)
-    wrist_flex = ActuatorField(Arm1Robot.right_arm.wrist_flex.pos)
-    wrist_yaw = ActuatorField(Arm1Robot.right_arm.wrist_yaw.pos)
-    wrist_roll = ActuatorField(Arm1Robot.right_arm.wrist_roll.pos)
+class MyArmAction(ModuleAction):
+    shoulder_pan = ActuatorField(MyRobotRobot.arm.shoulder_pan.pos)
+    shoulder_lift = ActuatorField(MyRobotRobot.arm.shoulder_lift.pos)
+    elbow_flex = ActuatorField(MyRobotRobot.arm.elbow_flex.pos)
+    wrist_flex = ActuatorField(MyRobotRobot.arm.wrist_flex.pos)
+    wrist_yaw = ActuatorField(MyRobotRobot.arm.wrist_yaw.pos)
+    wrist_roll = ActuatorField(MyRobotRobot.arm.wrist_roll.pos)
 
 
-class Arm1Action(Action):
-    right_arm = RightArmAction()
+class MyRobotAction(Action):
+    arm = MyArmAction()
 ```
 
 The lines that matter:
 
-- **`class RightArmAction(ModuleAction)`** is the command for one module. The robot delivers it to that module, and only to that module.
-- **`ActuatorField(Arm1Robot.right_arm.shoulder_pan.pos)`** points at the same data the observation reads. Here it is a target: the controller sets its value, and the module writes it to the servo.
-- **`right_arm = RightArmAction()`** routes the group. Like the observation, the name has to equal the module's attribute on the robot.
+- **`class MyArmAction(ModuleAction)`** is the command for one module. The robot delivers it to that module, and only to that module.
+- **`ActuatorField(MyRobotRobot.arm.shoulder_pan.pos)`** points at the same data the observation reads. Here it is a target: the controller sets its value, and the module writes it to the servo.
+- **`arm = MyArmAction()`** routes the group. Like the observation, the name has to equal the module's attribute on the robot.
 
 The schema fixes which numbers an action carries. What the module does with them is the **action type**, chosen each time the controller builds an action. The controller in the next chapter sets `MOVE_J`, the type the arm's `@action_handler` accepts: go to these joint targets.
 
@@ -94,11 +94,11 @@ The schema fixes which numbers an action carries. What the module does with them
 
 Every piece written so far takes part in a single keypress:
 
-1. The controller builds an `Arm1Action`, sets `right_arm.action_type` to `MOVE_J`, and changes `right_arm.shoulder_lift.value`.
+1. The controller builds a `MyRobotAction`, sets `arm.action_type` to `MOVE_J`, and changes `arm.shoulder_lift.value`.
 2. The relay server forwards it to the robot.
-3. The robot hands the `right_arm` part to `RightArmModule`, whose `MOVE_J` handler keeps the six targets as its goal.
+3. The robot hands the `arm` part to `MyArmModule`, whose `MOVE_J` handler keeps the six targets as its goal.
 4. The module's `control_step` writes the goal to the servos, 50 times a second.
-5. The servos move. The robot reads their new positions into an `Arm1Observation` and sends it back.
+5. The servos move. The robot reads their new positions into a `MyRobotObservation` and sends it back.
 
 If a name on either class differs from the robot, the import fails and the message names the field. Fix the name it prints. The [project page](/docs/tutorials/first-robot/project#where-the-name-has-to-match) lists the four places the module name has to match.
 

@@ -1,12 +1,14 @@
 export const metadata = {
-  title: 'AI Controller',
+  title: 'AI Agentic Controller',
   description:
-    'Give the robot a task in plain language: a planner model plans and calls the controller’s skills as tools, and a fast monitor model watches each one through the cameras.',
+    'Agentic control for any robot: a harness around any vision-language model takes a task from chat, plans it, and carries it out by calling the controller’s physical skills as tools, while a fast monitor model watches each one through the cameras.',
 }
 
-# AI Controller
+# AI Agentic Controller
 
-Any [Controller](/docs/controllers) becomes an AI controller by declaring **tools** and adding an `agent:` block to `conf/controller.yaml`. The operator types a task in the chat ("put all the batteries in the white box"); a **planner** model plans it and calls the tools, which start [Skills](/docs/skills) on the robot; a **monitor** model watches each running skill through the cameras and ends it, or wakes the planner, when something happens. {{ className: 'lead' }}
+The AI Agentic Controller turns any [Controller](/docs/controllers) into an AI agent that drives the robot. It is a harness around a vision-language model of your choice (Anthropic, OpenAI, or any OpenAI-compatible server such as vLLM or a gateway): you give it a high-level task in the chat, and it plans the task and carries it out using the robot's low-level physical [Skills](/docs/skills) as tools. {{ className: 'lead' }}
+
+To enable it, declare **tools** on the controller and add an `agent:` block to `conf/controller.yaml`. The operator types a task ("put all the batteries in the white box"); a **planner** model plans it and calls the tools, which start skills on the robot; a **monitor** model watches each running skill through the cameras and ends it, or wakes the planner, when something happens.
 
 The harness lives in [`solarian/core/ai/agent/`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/agent/harness.py). There is no separate controller class: the agent is a part of `Controller`, built when `agent:` is set.
 
@@ -237,8 +239,8 @@ Install the model clients with `pip install 'solarian[agent]'`.
 
 ## Chat
 
-- **pygame window** (`ui: pygame`): a chat column appears on the right. **Enter** (or a click on the input box) opens the input; while typing, keys type text and never drive the robot (held keys are released first). Enter sends, **Esc** drops the line. Drag over the conversation to select text and **Cmd/Ctrl+C** to copy it; **Cmd/Ctrl+V** pastes into the input, and the wheel scrolls back through the conversation. `/cancel` ends the run; `/reset` also forgets the conversation.
-- **Solarian Base** (`ui: external`): the controller page shows an AI controller panel with the plan, running actions, the conversation and an input. Cancel is a safety command: an observer without the control lock can send it.
+- **GUI window** (`ui: gui`, the default): a chat column appears on the right. **Enter** (or a click on the input box) opens the input; while typing, keys type text and never drive the robot (held keys are released first). Enter sends, **Esc** drops the line. Drag over the conversation to select text and **Cmd/Ctrl+C** to copy it; **Cmd/Ctrl+V** pastes into the input, and the wheel scrolls back through the conversation. `/cancel` ends the run; `/reset` also forgets the conversation.
+- **Solarian Base** (`ui: external`): the controller page shows an agentic controller panel with the plan, running actions, the conversation and an input. Cancel is a safety command: an observer without the control lock can send it.
 - **Any front end** sends `UICommandType.AGENT_MESSAGE` (`{"text": ...}`), `AGENT_CANCEL` and `AGENT_RESET`, and reads `UISnapshot.agent`. The image the planner last saw, with its chosen points marked, is drawn as `agent/view`.
 
 ## Episode logs

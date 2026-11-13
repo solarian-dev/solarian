@@ -22,7 +22,15 @@ Copy it so the example config stays untouched:
 cp conf/skills/umi.yaml conf/skills/pick.yaml
 ```
 
-`conf/skills/pick.yaml` already points at the arm, the gripper, and `right_wrist_camera`. It reads the policy server URL and the checkpoint path from the deployment, so a laptop and the Pi can disagree without editing the skill.
+`conf/skills/pick.yaml` names the three modules the skill uses. The template ships them as `right_arm`, `right_gripper`, and `right_wrist_camera`. Set them to this project's names:
+
+```yaml {{ title: 'conf/skills/pick.yaml' }}
+arm: arm
+camera: wrist_camera
+gripper: gripper
+```
+
+The skill also reads the policy server URL and the checkpoint path from the deployment, so a laptop and the Pi can disagree without editing the skill.
 
 Add two lines to `conf/deployment/localhost.yaml`:
 
@@ -62,7 +70,7 @@ solarian run-service pick
 
 ## The key
 
-In `arm1/controller.py`:
+In `my_robot/controller.py`:
 
 ```python
 from solarian_umi_skill import UMISkill

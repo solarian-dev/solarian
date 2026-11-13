@@ -1,69 +1,66 @@
 export const metadata = {
   title: 'Create a project',
   description:
-    'Scaffold a Solarian project named arm1, see what each file is for, and run the three processes on an empty robot.',
+    'Scaffold a Solarian project named my_robot, see what each file is for, and run the three processes on a robot with no hardware yet.',
 }
 
 # Create a project
 
-`create-solarian` writes a project: a Python package plus a `conf/` directory. The directory name is up to you. This course uses `arm1`, because that is the arm you are building. {{ className: 'lead' }}
+`create-solarian` writes a project: a Python package plus a `conf/` directory. The directory name is up to you. This course uses `my_robot`. {{ className: 'lead' }}
 
 ## Scaffold it
 
 From a directory where you keep code:
 
 ```bash
-create-solarian arm1
-cd arm1
+create-solarian my_robot
+cd my_robot
 ```
 
-You should see a short tree printed, and a new `arm1/` folder. The layout is:
+You should see a short tree printed, and a new `my_robot/` folder. The name is the directory, the Python package, and the class prefix: `my_robot` imports as `my_robot`, and title-casing it gives `MyRobot`, so the generated classes are `MyRobotRobot`, `MyRobotController`, and `MyRobotServer`. The layout is:
 
-<ScaffoldFigure name="arm1" />
+<ScaffoldFigure name="my_robot" />
 
 These files are:
 
-- `arm1/settings.py` tells Solarian which classes are your robot, controller, and server.
+- `my_robot/settings.py` tells Solarian which classes are your robot, controller, and server.
 - `robot.py` is the machine: one class attribute per module. The attribute's name is the module's name everywhere else.
+- `modules/my_arm_module.py` is the arm module, `MyArmModule`. It extends Solarian's `ArmModule` and declares no servos yet.
 - `controller.py` is the decision. Keys, and later skills, live here.
 - `server.py` is the relay. Leave the generated class alone.
 - `observation.py` and `action.py` are the schema of the messages between robot and controller. They have to name the same modules the robot declares. Solarian checks this when the classes are defined.
 - `conf/` is [Hydra](https://hydra.cc/) config. `localhost.yaml` is the only file that should contain a serial port or an IP address. The other files refer to it as `${deployment....}`, so moving the robot to another computer is a new deployment file, not a hunt through the project.
 - `pyproject.toml` makes the folder an installable package.
 
-The generated `robot.py` imports an example arm from `example_module.py`, and that example imports a Feetech servo driver you have not installed yet. For this chapter the robot is empty on purpose. Replace the three files below so the first run has nothing to connect to.
+The generated robot already has its first module. `my_robot/robot.py`:
 
-`arm1/robot.py`:
-
-```python
+```python {{ title: 'my_robot/robot.py' }}
 from solarian.core import Robot
 
+# Import module classes from your local modules or third party module plugins
+from my_robot.modules.my_arm_module import MyArmModule
 
-class Arm1Robot(Robot):
+# Define your robot here
+class MyRobotRobot(Robot):
+    # Define robot modules, eg:
+    arm = MyArmModule()
+```
+
+The module itself has its servo import commented out, so the project runs before any servo driver is installed. `my_robot/modules/my_arm_module.py`:
+
+```python {{ title: 'my_robot/modules/my_arm_module.py' }}
+from solarian.core.arm_module import ArmModule
+#from solarian_feetech.actuator import FeetechServo
+from solarian.core.action import ActionType, ModuleAction, action_handler
+
+
+class MyArmModule(ArmModule):
+    # declare actuators and sensors
+    #shoulder_pan = FeetechServo()
     pass
 ```
 
-`arm1/observation.py`:
-
-```python
-from solarian.core.observation import Observation
-
-
-class Arm1Observation(Observation):
-    pass
-```
-
-`arm1/action.py`:
-
-```python
-from solarian.core.action import Action
-
-
-class Arm1Action(Action):
-    pass
-```
-
-You can delete `arm1/modules/example_module.py` or leave it. Nothing imports it now.
+`observation.py` and `action.py` each declare an `arm` field, `MyArmObs` and `MyArmAction`, with nothing in them yet, and `conf/modules/arm.yaml` sets only the module's rate. For this chapter that is the point: the arm has no servos, so the first run has nothing to connect to. The next chapter fills all four in.
 
 ## Install the project
 
@@ -98,26 +95,26 @@ solarian run-controller
 What you should see:
 
 - The server starts and waits.
-- The robot connects to it and sits there. There is no hardware and no simulator yet, so this is quiet.
+- The robot connects to it and sits there. The arm has no servos and there is no simulator yet, so this is quiet.
 - A controller window opens. It has no camera image, because the robot has no camera.
 
 Quit each process with Control-C. You will start them again every chapter.
 
 <Note>
-  Run the commands from the project root, the directory that contains <code>pyproject.toml</code>. Solarian finds <code>arm1/settings.py</code> from there. From any other directory it will not know which project you mean.
+  Run the commands from the project root, the directory that contains <code>pyproject.toml</code>. Solarian finds <code>my_robot/settings.py</code> from there. From any other directory it will not know which project you mean.
 </Note>
 
 ## Where the name has to match
 
-One string is about to show up in four places, and they must be identical:
+One string shows up in four places, and they must be identical. The scaffold already wrote all four for the arm:
 
 | Place | Example |
 | --- | --- |
-| Attribute on the robot class | `right_arm = RightArmModule()` |
-| YAML filename | `conf/modules/right_arm.yaml` |
-| Field on the observation | `right_arm = RightArmObs()` |
-| Field on the action | `right_arm = RightArmAction()` |
+| Attribute on the robot class | `arm = MyArmModule()` |
+| YAML filename | `conf/modules/arm.yaml` |
+| Field on the observation | `arm = MyArmObs()` |
+| Field on the action | `arm = MyArmAction()` |
 
-The next chapter creates `right_arm`. If any of the four disagree, Solarian raises a `TypeError` when the class is defined, before the robot starts. That error is the useful kind: read the name it complains about and fix the one that differs.
+The next chapter gives `arm` its servos, and later chapters add `gripper` and `wrist_camera` the same way. If any of the four disagree, Solarian raises a `TypeError` when the class is defined, before the robot starts. That error is the useful kind: read the name it complains about and fix the one that differs.
 
 Next: [build the robot](/docs/tutorials/first-robot/arm).

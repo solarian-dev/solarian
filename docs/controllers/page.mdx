@@ -9,7 +9,7 @@ export const metadata = {
 A **Controller** is the deciding node in the Solarian three-node architecture. It runs on your laptop or workstation, next to the operator, and is responsible for: {{ className: 'lead' }}
 
 - Receiving [Observations](/docs/observations) from the relay server and keeping the latest one available.
-- Turning input into decisions: [events](/docs/events) from a keyboard, a gamepad, a leader arm, a click on a camera image, or the [AI Controller](/docs/ai_controller)'s think process.
+- Turning input into decisions: [events](/docs/events) from a keyboard, a gamepad, a leader arm, a click on a camera image, or the [AI Agentic Controller](/docs/agentic_controller)'s planner.
 - Running [Skills](/docs/skills), or your own `control_step()`, and sending the resulting [Action](/docs/actions) to the robot at a fixed rate.
 - Owning any controller-side hardware, such as a leader arm or an input device.
 
@@ -61,7 +61,7 @@ Default `conf/controller.yaml`:
 connection: ${deployment.connection}
 
 fps: 30
-# agent: {planner: ..., monitor: ...}   # the AI controller; see /docs/ai_controller
+# agent: {planner: ..., monitor: ...}   # the agentic controller; see /docs/agentic_controller
 ```
 
 Mapped to [`ControllerConfig`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/configs.py):
@@ -70,8 +70,8 @@ Mapped to [`ControllerConfig`](https://github.com/solarian-dev/solarian/blob/mai
   <Property name="fps" type="int">
     Rate of the control loop: how often <code>control_step()</code> runs and an action goes out.
   </Property>
-  <Property name="headless" type="bool">
-    If <code>True</code>, skip the OpenCV display loop and run the controller from a stdin loop instead.
+  <Property name="ui" type="str">
+    Front end that drives the controller. <code>gui</code> (default) opens a window, falling back to <code>opencv</code> without a display; <code>console</code> runs from the terminal, for a headless machine; <code>external</code> serves a WebSocket; <code>null</code> runs with no UI.
   </Property>
   <Property name="connection" type="ConnectionConfig">
     ZMQ ports and IPs, read from <code>conf/deployment/&lt;name&gt;.yaml</code>. See <a href="/docs/servers">Server</a>.
@@ -91,14 +91,14 @@ Controller(cfg)            # __init__ — opens ZMQ sockets, builds shared memor
    ├── initialize()        # one-time setup hook
    └── start()             # spawn _state_receiver thread, control_loop thread,
                            # optional pynput keyboard listener, then on_start(),
-                           # then display_loop() (or _headless_loop in headless mode)
+                           # then the UI loop on the main thread
 ```
 
 Three threads run from then on:
 
 - **`_state_receiver`** pulls every incoming `Observation` off the SUB socket and updates `self.last_observation` under a lock.
 - **`control_loop`** runs the tick below at `cfg.fps`, serializes the returned `Action`, and pushes it to the relay server.
-- **`display_loop`** (main thread) opens a window per camera and renders the most recent observation. In `headless` mode it is replaced by a stdin loop.
+- **The UI loop** (main thread) runs the front end `ui` names: by default a pygame window showing the cameras and reading keys, or with `ui: console` a status board in the terminal.
 
 Every tick of `control_loop` does the same three things in the same order:
 
@@ -439,4 +439,4 @@ Controller-side modules read their config from `cfg.modules[name]`, inline under
 - [Server](/docs/servers) — what sits between your controller and the robot.
 - [Events](/docs/events) — how input reaches your handlers and your skills.
 - [Actions](/docs/actions) — the schema you return from <code>control_step()</code>, and the action types.
-- [AI Controller](/docs/ai_controller) — the dual-process VLM-driven controller built on top of <code>Controller</code>.
+- [AI Agentic Controller](/docs/agentic_controller) — the agent harness around any VLM that turns a <code>Controller</code> into an AI agent running your skills as tools.

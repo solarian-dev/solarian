@@ -40,7 +40,7 @@ class ConsoleUI:
 
     Keys arrive in cbreak mode, which reports characters rather than
     transitions, so each one becomes a down *and* an up. Holding a key to jog an
-    arm therefore needs a window (``ui=pygame``) or a browser, not a terminal.
+    arm therefore needs a window (``ui=gui``) or a browser, not a terminal.
     """
 
     captures_keys = True

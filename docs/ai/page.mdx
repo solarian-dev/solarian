@@ -1,21 +1,21 @@
 export const metadata = {
   title: 'AI Overview',
   description:
-    'How Solarian layers artificial intelligence on top of the core control loop: a dual-process AI Controller that pairs a slow VLM planner (System 2) with fast reactive Skills (System 1), backed by trainable Policies.',
+    'How Solarian layers artificial intelligence on top of the core control loop: low-level Skills driven by learned policies (diffusion, ACT, VLAs) as System 1, and the AI Agentic Controller, an agent harness around any vision-language model that plans and calls those skills as tools, as System 2.',
 }
 
 # AI Overview
 
-Solarian's AI stack sits on top of the standard [Controller](/docs/controllers) contract and gives a robot the ability to plan, decide, and act autonomously. It follows a **dual-process** design: a slow, deliberative planner decides *what* to do, while fast reactive behaviors handle *how* to do it. {{ className: 'lead' }}
+Solarian's AI stack covers both levels of robot intelligence. At the low level, [Skills](/docs/skills) run learned [Policies](/docs/policies), typically diffusion, ACT or VLA models, that turn camera images and joint state into motor actions many times a second. At the high level, the [AI Agentic Controller](/docs/agentic_controller) wraps a vision-language model in an agent harness that gives the robot the ability to plan, decide, and act autonomously: it takes a task from the chat and carries it out by calling those skills as tools. Together they follow a **dual-process** design: the agentic controller decides *what* to do (System 2), and the learned policies handle *how* to do it (System 1). {{ className: 'lead' }}
 
 ## The pieces
 
 <Properties>
-  <Property name="AI Controller">
-    A <a href="/docs/controllers">Controller</a> subclass that runs a dual-process cognitive loop. A vision-language model (System 2) decides which behaviors to start or stop; the fast control loop (System 1) merges the actions those behaviors emit and forwards them to the robot. See <a href="/docs/ai_controller">AI Controller</a>.
+  <Property name="AI Agentic Controller">
+    Agentic control for any <a href="/docs/controllers">Controller</a>, enabled by an <code>agent:</code> block. A harness around any vision-language model (Anthropic, OpenAI, or any OpenAI-compatible server) takes a high-level task from the chat: a planner model plans it and carries it out by calling the controller's Skills as tools, while a fast monitor model watches each one through the cameras. See <a href="/docs/agentic_controller">AI Agentic Controller</a>.
   </Property>
   <Property name="Skills">
-    Self-contained, restartable behaviors that run in their own process — a diffusion policy, a motion plan, a scripted routine. The AI Controller orchestrates them based on the planner's decisions. See <a href="/docs/skills">Skills</a>.
+    Self-contained, restartable behaviors that run in their own process — a learned policy, a motion plan, a scripted routine. They are the agentic controller's tools, and they can also be started by the operator from a key or a button. See <a href="/docs/skills">Skills</a>.
   </Property>
   <Property name="Policies">
     The trainable models a Skill calls to produce actions (diffusion, ACT, VLAs, classical methods). Policies are trained and served independently of the Skill that consumes them. See <a href="/docs/policies">Policies</a>.
@@ -24,13 +24,13 @@ Solarian's AI stack sits on top of the standard [Controller](/docs/controllers) 
 
 ## System 1 and System 2
 
-- **System 2 — the planner.** Runs in its own process at a low rate (typically ~1 Hz). It reads the latest observation plus any user message, calls a VLM, and decides which Skills to start or stop.
-- **System 1 — the fast loop.** Reactive Skills push the next `Action` into a shared-memory queue. The controller drains the queue every tick and forwards a single merged action to the robot at control rate (30–500 Hz).
+- **System 2 — the agentic controller.** Slow and deliberative. The planner runs in its own thread on the controller and wakes only when something changes (a message, an action ending, a monitor flag). It reads the task, what happened and the newest camera images, calls a VLM, and starts or stops Skills through tool calls. The monitor checks each running skill about once a second (`monitor.period_s`) and ends it, or wakes the planner, when something goes wrong.
+- **System 1 — the learned policies.** Fast and reactive. Each running Skill drives its policy in a closed loop, from camera images and joint state to the next actions, at the policy's own rate (tens of Hz). The skill pushes those actions into a queue, and the controller merges what every running skill emits and forwards it to the robot every tick.
 
-This split lets the robot be both *smart enough to plan* (slow, may fail, returns JSON) and *fast enough to control* (predictable, jitter-free).
+This split lets the robot be both *smart enough to plan* (slow, may fail, returns tool calls) and *fast enough to control* (closed-loop, reacting to every frame).
 
 ## Where to go next
 
-- [AI Controller](/docs/ai_controller) — the orchestrator and its dual-process architecture.
+- [AI Agentic Controller](/docs/agentic_controller) — the agent harness, its planner and monitor, and how to declare tools.
 - [Policies](/docs/policies) — training and serving the models Skills call.
-- [Skills](/docs/skills) — the unit of behavior the AI Controller runs.
+- [Skills](/docs/skills) — the unit of behavior the agentic controller runs.

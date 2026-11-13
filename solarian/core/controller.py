@@ -147,12 +147,6 @@ class Controller(EventHost, ABC):
     #: several tools — one policy skill, a pick config and a place config.
     tools: dict[str, Tool] = {}
 
-    # Deprecated: which front end runs is deployment configuration, not a
-    # property of the controller class, so it belongs in ``conf/controller.yaml``
-    # as ``ui:``. Still honoured — ``use_gui = False`` selects ``ui=opencv`` —
-    # for subclasses that set it before ``ui`` existed.
-    use_gui = True
-
     def __init__(self, cfg: ControllerConfig):
         self.cfg = cfg
         self.context = zmq.Context()
@@ -278,6 +272,9 @@ class Controller(EventHost, ABC):
         # that class-level data descriptors (e.g. ``OpenCVCamera.rgb_image.shape``)
         # are populated before we call ``Observation.zeros()``.
         self.observation_buffers: dict[str, ObservationBuffer] = {}
+        #: Puts refused per module since the last one that succeeded, so a burst
+        #: is reported once rather than once per observation.
+        self._dropped_puts: dict[str, int] = {}
         self._setup_remote_observation_schema()
         self._create_observation_buffers()
         self._create_local_observation_buffers()
@@ -555,8 +552,20 @@ class Controller(EventHost, ABC):
         try:
             buffer.put(module_observation, wait=False)
         except Exception as e:
+            dropped = self._dropped_puts.get(module_name, 0)
+            if dropped == 0:
+                logger.warning(
+                    f"observation_buffers['{module_name}'].put failed: {e}; "
+                    f"dropping from its history until puts succeed again"
+                )
+            self._dropped_puts[module_name] = dropped + 1
+            return
+
+        dropped = self._dropped_puts.pop(module_name, 0)
+        if dropped:
             logger.warning(
-                f"observation_buffers['{module_name}'].put failed: {e}"
+                f"observation_buffers['{module_name}']: {dropped} observations "
+                f"dropped from its history"
             )
 
     def _state_receiver(self):

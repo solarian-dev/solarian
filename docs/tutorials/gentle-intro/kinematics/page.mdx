@@ -82,7 +82,7 @@ Every step starts from the joints the arm has now, so the solver returns the ans
 
 In [Tutorial 4](/docs/tutorials/skills/move) you add the solver to the arm module, next to the six task-coordinate actuators:
 
-```python {{ title: 'arm1/modules/right_arm.py' }}
+```python {{ title: 'my_robot/modules/my_arm_module.py' }}
 from solarian.core.arm_module import ArmModule
 from solarian.core.ik import CartesianIKActuator, MinkIK
 from solarian_feetech.actuator import FeetechServo
@@ -97,7 +97,7 @@ JOINTS = [
 ]
 
 
-class RightArmModule(ArmModule):
+class MyArmModule(ArmModule):
     # ... the six FeetechServo joints and six CartesianIKActuator axes ...
 
     ik_backend = MinkIK(

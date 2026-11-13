@@ -30,7 +30,7 @@ the module conf's ``sim_range_min`` / ``sim_range_max``.
 Examples:
     solarian onshape-export assets/arm1_description
     solarian onshape-export assets/arm1_description --update-yaml conf/right_arm.yaml
-    solarian onshape-export assets/umi_slim_gripper_description --clean-only
+    solarian onshape-export assets/gripper1_gripper_description --clean-only
 """
 
 import argparse
@@ -106,7 +106,7 @@ class OnshapeExportCommand(BaseCommand):
     examples = (
         "solarian onshape-export assets/arm1_description",
         "solarian onshape-export assets/arm1_description --update-yaml conf/right_arm.yaml",
-        "solarian onshape-export assets/umi_slim_gripper_description --clean-only",
+        "solarian onshape-export assets/gripper1_gripper_description --clean-only",
     )
 
     def parse_args(self, argv: list[str]) -> list[str]:

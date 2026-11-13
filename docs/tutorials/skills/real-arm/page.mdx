@@ -8,7 +8,7 @@ export const metadata = {
 
 The skill, the key, and the YAML do not change. Two measurements do, because a policy trained on a real wrist camera is aimed using a lens model and a camera-to-fingertip transform that simulation invented for you with `CameraMount`. Hardware has to measure them. {{ className: 'lead' }}
 
-You need the arm from [Tutorial 3](/docs/tutorials/real-robot), the inverse kinematics from [Move to a pose](/docs/tutorials/skills/move), and `ik_tcp` set to `UmiSlimFeetechModule.tcp_from_flange`. Hand-eye solves for the fingertips. Without that offset it solves for the flange and every reach is short by the length of the gripper.
+You need the arm from [Tutorial 3](/docs/tutorials/real-robot), the inverse kinematics from [Move to a pose](/docs/tutorials/skills/move), and `ik_tcp` set to `Gripper1FeetechModule.tcp_from_flange`. Hand-eye solves for the fingertips. Without that offset it solves for the flange and every reach is short by the length of the gripper.
 
 ## The lens
 
@@ -20,7 +20,7 @@ solarian --deployment lab calibrate-umi-camera
 
 It walks you through a printed checkerboard, fits a fisheye model, and writes a remap file that the camera YAML then points at. The remap is what makes this sensor's image look like the GoPro image the policy was trained on. A policy shown raw IMX477 frames will reach for an object that is not where the pixels say it is.
 
-The prompts are the procedure. Print the board at 100 percent, not fit-to-page. When the command finishes, `conf/modules/right_wrist_camera.yaml` should reference the new remap. Do not delete that block.
+The prompts are the procedure. Print the board at 100 percent, not fit-to-page. When the command finishes, `conf/modules/wrist_camera.yaml` should reference the new remap. Do not delete that block.
 
 ## Hand-eye
 
@@ -34,9 +34,9 @@ Stop `run-robot` again. This command moves the arm:
 solarian --deployment lab calibrate-hand-eye
 ```
 
-You set one pose by hand so the camera sees the marker. The arm then orbits the marker through a spread of tilts and rolls. It writes `conf/calibrations/right_wrist_camera_hand_eye.json` and prints what to do with the result.
+You set one pose by hand so the camera sees the marker. The arm then orbits the marker through a spread of tilts and rolls. It writes `conf/calibrations/wrist_camera_hand_eye.json` and prints what to do with the result.
 
-Read that printout. It compares the measured fingertip position, in the camera frame, with the position a UMI policy assumes. A difference of centimetres is the mount or the marker size: the policy commands deltas in tool axes, and no YAML key soaks up a camera that is bolted in the wrong place. If the printout tells you to change `ik_tcp`, put that orientation on `RightArmModule(ik_tcp=...)` and restart the robot. If it says the rotation is inside the noise, leave `ik_tcp` as the gripper's `tcp_from_flange`.
+Read that printout. It compares the measured fingertip position, in the camera frame, with the position a UMI policy assumes. A difference of centimetres is the mount or the marker size: the policy commands deltas in tool axes, and no YAML key soaks up a camera that is bolted in the wrong place. If the printout tells you to change `ik_tcp`, put that orientation on `MyArmModule(ik_tcp=...)` and restart the robot. If it says the rotation is inside the noise, leave `ik_tcp` as the gripper's `tcp_from_flange`.
 
 Re-run `calibrate-hand-eye` after any change to the remap. The axes move with it.
 

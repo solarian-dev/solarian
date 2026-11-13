@@ -63,14 +63,14 @@ FRAME_WH = (1920, 1080)
 MARKER_M = _MARKER_MM / 1000.0
 
 # The camera sits back and to the side of the flange, yawed 3 deg off it: the
-# umi-slim CAD mount plus exactly the kind of build error this has to recover.
+# solarian-gripper1 CAD mount plus exactly the kind of build error this has to recover.
 CAMERA_IN_FLANGE = np.eye(4)
 CAMERA_IN_FLANGE[:3, :3] = st.Rotation.from_rotvec(
     np.deg2rad([1.0, 3.0, -0.5])
 ).as_matrix()
 CAMERA_IN_FLANGE[:3, 3] = [-0.0002, -0.0847, 0.0217]
 
-# Declared TCP: the umi-slim CAD tip with identity rotation, as arm1 wires it.
+# Declared TCP: the solarian-gripper1 CAD tip with identity rotation, as arm1 wires it.
 IK_TCP = FrameOffset(pos=(0.0, -0.0157, 0.2057), quat=(1.0, 0.0, 0.0, 0.0))
 
 TAG_IN_BASE = np.eye(4)
@@ -693,14 +693,14 @@ def test_wait_until_still_waits_out_a_creeping_joint(monkeypatch):
 
 
 def test_collision_guard_sees_the_gripper_folded_into_the_arm():
-    """On the real Solarian Arm 1 + umi-slim meshes: the home pose is clear, and a
+    """On the real Solarian Arm 1 + solarian-gripper1 meshes: the home pose is clear, and a
     wrist folded back drives the gripper into the arm."""
     pytest.importorskip("solarian_arm_1")
-    pytest.importorskip("solarian_umi_slim")
+    pytest.importorskip("solarian_gripper_1")
     from solarian.sim import ModuleAttachment, SceneConfig
     from solarian.sim.collision import CollisionGuard
     from solarian_arm_1 import ARM_MJCF_PATH
-    from solarian_umi_slim import MJCF_FEETECH_PATH
+    from solarian_gripper_1 import MJCF_FEETECH_PATH
 
     scene = SceneConfig(attachments=[
         ModuleAttachment(module="right_arm", mjcf=ARM_MJCF_PATH, parent_body="world",

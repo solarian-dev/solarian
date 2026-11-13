@@ -20,7 +20,7 @@ The goal is to have modularized robots, that can be reused, not only their struc
 
 - **[Real-time modules](https://solarian.dev/docs/modules).** A robot is built from modules such as an arm, a gripper, or a camera. Each runs in its own process at its own rate, so a 500 Hz arm never waits on a 30 Hz camera.
 - **[Kinematics built in](https://solarian.dev/docs/ik).** Command the end effector, and the module solves inverse kinematics every tick. Command the joints, and the module solves forward kinematics too.
-- **[AI Controller](https://solarian.dev/docs/ai_controller).** A vision-language model plans the task and picks the skill to run, while skills handle the faster control underneath.
+- **[AI Agentic Controller](https://solarian.dev/docs/agentic_controller).** Agentic control for any robot: a harness around any vision-language model (Anthropic, OpenAI, or any OpenAI-compatible server) takes a high-level task from chat, plans it, and carries it out by calling your physical skills as tools, while a fast monitor model watches each one through the cameras.
 - **[Simulation built in](https://solarian.dev/docs/simulation).** `solarian run-robot --sim` runs the same robot class and YAML in MuJoCo instead of on hardware.
 - **[Plugins](https://solarian.dev/plugins).** Solarian is extensible by design: actuators and sensors (servos, cameras, etc), modules (arms, grippers, etc), skills (low level learned policies and heuristics) install as plugins, config included. `solarian create-plugin` starts your own.
 - **[Recording](https://solarian.dev/docs/recording), [datasets](https://solarian.dev/docs/datasets), and [training](https://solarian.dev/docs/training).** Record every camera and signal at its native rate, curate episodes, train diffusion, ACT, or UMI policies, and serve them back to the robot.
@@ -30,7 +30,7 @@ The goal is to have modularized robots, that can be reused, not only their struc
 
 ```bash
 pip install solarian
-pip install "solarian[all]"   # optional: AI, AI controller, and simulation extras
+pip install "solarian[all]"   # optional: AI, agentic controller, and simulation extras
 ```
 
 Visit our [Documentation](https://solarian.dev/docs/overview) to get started with Solarian.
@@ -48,13 +48,13 @@ from solarian.sim import CameraMount, ModuleAttachment, SceneConfig
 from solarian_arm_1 import ARM_MJCF_PATH
 from solarian_arm_1.arm import Arm1Module
 from solarian_umi_skill import UMISkill
-from solarian_umi_slim import MJCF_FEETECH_PATH as UMI_SLIM_MJCF
-from solarian_umi_slim.umi_slim_feetech import UmiSlimFeetechModule
+from solarian_gripper_1 import MJCF_FEETECH_PATH as GRIPPER_MJCF
+from solarian_gripper_1.gripper_feetech import Gripper1FeetechModule
 
 
 class Arm1Robot(Robot):
-    right_arm = Arm1Module(ik_tcp=UmiSlimFeetechModule.tcp_from_flange)
-    right_gripper = UmiSlimFeetechModule()
+    right_arm = Arm1Module(ik_tcp=Gripper1FeetechModule.tcp_from_flange)
+    right_gripper = Gripper1FeetechModule()
     right_wrist_camera = PiCameraModule()
 
     skills = (UMISkill,)
@@ -65,7 +65,7 @@ class Arm1Robot(Robot):
             ModuleAttachment(module="right_arm", mjcf=ARM_MJCF_PATH, parent_body="world", prefix="right/"),
             ModuleAttachment(
                 module="right_gripper",
-                mjcf=UMI_SLIM_MJCF,
+                mjcf=GRIPPER_MJCF,
                 parent_site="right/flange",
                 child_site="flange",
                 prefix="right_gripper/",
@@ -76,7 +76,7 @@ class Arm1Robot(Robot):
     )
 ```
 
-The controller decides what the robot does. Here it teleoperates the arm from the keyboard, binds keys to skills, and lists the skills the AI controller may call as tools:
+The controller decides what the robot does. Here it teleoperates the arm from the keyboard, binds keys to skills, and lists the skills the agentic controller may call as tools:
 
 ```python
 from solarian.core import Controller
@@ -84,7 +84,7 @@ from solarian.core.event import Event, EventType, event_handler
 from solarian.core.skill import Tool
 from solarian_move_skill import MoveSkill
 from solarian_umi_skill import UMISkill
-from solarian_umi_slim.aperture import APERTURE_CLOSED_MM, APERTURE_OPEN_MM
+from solarian_gripper_1.aperture import APERTURE_CLOSED_MM, APERTURE_OPEN_MM
 
 from arm1.skills import CartesianTeleopSkill
 
@@ -93,8 +93,6 @@ TELEOP = {**ARM, "frame": "ee", "gripper_min_mm": APERTURE_CLOSED_MM, "gripper_m
 
 
 class Arm1Controller(Controller):
-    use_gui = True
-
     skills = (CartesianTeleopSkill, MoveSkill, UMISkill)
 
     tools = {
@@ -128,7 +126,7 @@ The simulated arm going to its ground pose, jogged from the keyboard, then back 
   <img alt="Solarian Arm 1 in MuJoCo" src="./media/readme/sim.webp" width="720">
 </p>
 
-The controller window shows the live observations, the wrist camera, and the AI controller's chat:
+The controller window shows the live observations, the wrist camera, and the agentic controller's chat:
 
 <p align="center">
   <img alt="Solarian controller GUI" src="./media/readme/controller-gui.png" width="720">

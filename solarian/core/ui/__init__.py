@@ -20,7 +20,7 @@ from solarian.core.ui.base import (
 logger = logging.getLogger(__name__)
 
 #: Accepted values of ``ControllerConfig.ui``.
-UI_NAMES = ("console", "pygame", "opencv", "external", "null")
+UI_NAMES = ("console", "gui", "opencv", "external", "null")
 
 __all__ = [
     "ControllerUI",
@@ -36,22 +36,16 @@ __all__ = [
 def build_ui(controller) -> ControllerUI:
     """Construct the front end this controller's config asks for.
 
-    Takes the controller rather than the config alone because two of the front
-    ends need more than config: ``pygame`` honours the deprecated ``use_gui``
-    class attribute, and ``external`` serves the controller's own ``hello``
-    payload. The UI objects themselves get plain data, never the controller, so
-    a front end cannot reach past the snapshot/command protocol.
+    Takes the controller rather than the config alone because some front ends
+    need more than config: ``gui`` shows a chat box when there is an agent,
+    and ``external`` serves the controller's own ``hello`` payload. The UI
+    objects themselves get plain data, never the controller, so a front end
+    cannot reach past the snapshot/command protocol.
     """
     cfg = controller.cfg
-    # More than one class in the MRO declaring it means a project subclass did,
-    # on top of the base default — the difference between "opted in" and "never
-    # touched it", which is what decides whether a warning is useful.
-    declared = [k for k in type(controller).__mro__ if "use_gui" in k.__dict__]
-    name = _resolve_name(
-        cfg, use_gui=type(controller).use_gui, use_gui_declared=len(declared) > 1
-    )
+    name = _resolve_name(cfg)
 
-    if name == "pygame":
+    if name == "gui":
         from solarian.core.ui.pygame_ui import PygameUI
 
         try:
@@ -87,44 +81,10 @@ def build_ui(controller) -> ControllerUI:
     return ConsoleUI()
 
 
-def _resolve_name(cfg, use_gui: bool, use_gui_declared: bool) -> str:
-    """Resolve ``cfg.ui``, honouring the flags it replaced.
-
-    An explicit ``ui`` always wins; the deprecated flags only steer the default,
-    so a project that has migrated is never second-guessed by a stale flag.
-    """
-    name = (cfg.ui or "console").lower()
+def _resolve_name(cfg) -> str:
+    name = cfg.ui.lower()
     if name not in UI_NAMES:
         raise ValueError(
             f"Unknown ui '{cfg.ui}'; expected one of {', '.join(UI_NAMES)}"
         )
-    if name != "console":
-        return name
-
-    if cfg.headless:
-        # The old headless loop was the status board plus cbreak stdin, which is
-        # exactly ConsoleUI — so this maps to the default rather than to `null`,
-        # and a headless deployment keeps its key input.
-        logger.warning(
-            "controller.headless is deprecated; ui=console is the default and "
-            "behaves the same. Use ui=null for a controller with no UI at all."
-        )
-        return "console"
-
-    if not use_gui:
-        logger.warning(
-            "Controller.use_gui is deprecated; set ui=opencv in "
-            "conf/controller.yaml instead."
-        )
-        return "opencv"
-
-    if use_gui_declared:
-        # Silently swapping the front end under a project that asked for the
-        # window would look like the window broke.
-        logger.warning(
-            "Controller.use_gui is deprecated and no longer opens the pygame "
-            "window: ui=console is the default. Set ui=pygame in "
-            "conf/controller.yaml to keep the window."
-        )
-
     return name

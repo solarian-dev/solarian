@@ -489,7 +489,7 @@ class ModelEndpointConfig(BaseModel):
     ``provider`` picks the wire format, not the vendor: an OpenAI-compatible
     server (vLLM, a gateway) is ``openai`` with its ``base_url``.
 
-    Docs: https://solarian.dev/docs/ai_controller
+    Docs: https://solarian.dev/docs/agentic_controller
     """
 
     #: ``anthropic``, ``openai`` (chat completions), ``openai_responses``
@@ -517,7 +517,7 @@ class ModelEndpointConfig(BaseModel):
 class MonitorConfig(ModelEndpointConfig):
     """The model that watches a running action and finishes it or wakes the planner.
 
-    Docs: https://solarian.dev/docs/ai_controller
+    Docs: https://solarian.dev/docs/agentic_controller
     """
     #: Seconds between assessments while an agent action runs. A tick whose
     #: previous call is still in flight is skipped, never queued.
@@ -553,7 +553,7 @@ class MonitorConfig(ModelEndpointConfig):
 class AgentBudgets(BaseModel):
     """Limits that end an agent run.
 
-    Docs: https://solarian.dev/docs/ai_controller
+    Docs: https://solarian.dev/docs/agentic_controller
     """
     #: Planner calls per run.
     max_turns: int = 80
@@ -572,7 +572,7 @@ class AgentConfig(BaseModel):
     Different models because they are paid for differently: the planner is
     called a few times a minute, the monitor every ``period_s``.
 
-    Docs: https://solarian.dev/docs/ai_controller
+    Docs: https://solarian.dev/docs/agentic_controller
     """
 
     #: The model that reads the task, plans and calls the controller's tools.
@@ -621,9 +621,11 @@ class ControllerConfig(BaseModel):
     fps: int
     #: The supervising agent (see :class:`AgentConfig`). ``None``: no agent.
     agent: AgentConfig | None = None
-    #: Front end that drives this controller: ``console`` (default), ``pygame``,
-    #: ``opencv``, ``external`` or ``null``. See :mod:`solarian.core.ui`.
-    ui: str = "console"
+    #: Front end that drives this controller: ``gui`` (default, a pygame
+    #: window; falls back to ``opencv`` without a display), ``console`` for a
+    #: terminal-only status board, ``opencv``, ``external`` or ``null``. See
+    #: :mod:`solarian.core.ui`.
+    ui: str = "gui"
     #: ``host:port`` the ``external`` UI serves its WebSocket on. Loopback by
     #: default: the intended peer is a bridge beside it, not the internet.
     ui_bind: str = "127.0.0.1:8700"
@@ -649,9 +651,6 @@ class ControllerConfig(BaseModel):
     recording: ControllerRecordingConfig = ControllerRecordingConfig()
     #: Task string stamped on the episodes this session records.
     task: str | None = None
-    #: Deprecated, superseded by ``ui``. ``true`` still selects the console UI,
-    #: which is what the old headless loop was; use ``ui: null`` for no UI.
-    headless: bool = False
     #: Where the relay server is; see ``ConnectionConfig``.
     connection: ConnectionConfig
 

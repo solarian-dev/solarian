@@ -1,7 +1,7 @@
 export const metadata = {
   title: 'Skills',
   description:
-    'A Skill is a self-contained behavior — a diffusion policy, a motion plan, a scripted routine — that runs in its own process. The AI Controller orchestrates skills based on VLM decisions.',
+    'A Skill is a self-contained behavior — a diffusion policy, a motion plan, a scripted routine — that runs in its own process. The AI Agentic Controller calls skills as tools to carry out tasks given in chat.',
 }
 
 # Skills
@@ -189,9 +189,9 @@ execution_place: ${deployment.umi_target_execution_place}
 
 That is how to compare the two placements for one policy: run the same task with a deployment that sets `server` and one that sets `robot`. A skill that reads a calculated field must run where that field is computed or downstream of it. The relay sees robot-computed fields, but the robot never sees relay-computed ones.
 
-## Starting skills from the AI controller
+## Starting skills from the agentic controller
 
-The [AI controller](/docs/ai_controller)'s planner starts skills by calling the controller's `tools`; see [Declaring tools](/docs/ai_controller#declaring-tools). Each call ends in `start_skill()`, which decides where the skill runs: a `CONTROLLER` skill is launched locally, while a `ROBOT`/`SERVER` one is forwarded as a `START_SKILL` action and the robot's generic handler constructs it there.
+The [AI Agentic Controller](/docs/agentic_controller)'s planner starts skills by calling the controller's `tools`; see [Declaring tools](/docs/agentic_controller#declaring-tools). Each call ends in `start_skill()`, which decides where the skill runs: a `CONTROLLER` skill is launched locally, while a `ROBOT`/`SERVER` one is forwarded as a `START_SKILL` action and the robot's generic handler constructs it there.
 
 ## Stopping yourself
 
@@ -338,7 +338,7 @@ solarian run-service diffusion-policy --checkpoint <checkpoint.ckpt> --port 8001
 
 ## See also
 
-- [AI Controller](/docs/ai_controller) — the orchestrator that spawns and coordinates skills.
+- [AI Agentic Controller](/docs/agentic_controller) — the AI agent that plans a task and calls skills as tools.
 - [Action types](/docs/actions#action-types) — used by remote (`ROBOT`/`SERVER`) skills.
 - [Modules](/docs/modules) — the per-module action queues skills push into.
 - [Observations](/docs/observations) — the shared buffers skills read from.

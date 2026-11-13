@@ -49,9 +49,9 @@ connection:
   state_receiver_port: 5558
   clock_sync_port: 5559
 
-actuator_port_right_arm: /dev/ttyACM0
-actuator_port_right_gripper: /dev/ttyACM0
-camera_port_right_wrist_camera: "0"
+actuator_port_arm: /dev/ttyACM0
+actuator_port_gripper: /dev/ttyACM0
+camera_port_wrist_camera: "0"
 ```
 
 The arm and the gripper share one bus, so they share one path. The camera port is the CSI index.

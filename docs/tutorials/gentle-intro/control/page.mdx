@@ -117,23 +117,23 @@ Each Solarian piece maps onto one part of the loop.
 
 **Read: Observation as readings from sensors.** The readings from all sensors arrive as an [`Observation`](/docs/observations): a typed snapshot with one group of fields per module. You declare it as a small class. This one reads the six encoders and the wrist camera, each field references a particular sensor module and value:
 
-```python {{ title: 'arm1/observation.py' }}
-class RightArmObs(ModuleObs):
-    shoulder_pan = SensorField(Arm1Robot.right_arm.shoulder_pan.pos)
-    shoulder_lift = SensorField(Arm1Robot.right_arm.shoulder_lift.pos)
-    elbow_flex = SensorField(Arm1Robot.right_arm.elbow_flex.pos)
-    wrist_flex = SensorField(Arm1Robot.right_arm.wrist_flex.pos)
-    wrist_yaw = SensorField(Arm1Robot.right_arm.wrist_yaw.pos)
-    wrist_roll = SensorField(Arm1Robot.right_arm.wrist_roll.pos)
+```python {{ title: 'my_robot/observation.py' }}
+class MyArmObs(ModuleObs):
+    shoulder_pan = SensorField(MyRobotRobot.arm.shoulder_pan.pos)
+    shoulder_lift = SensorField(MyRobotRobot.arm.shoulder_lift.pos)
+    elbow_flex = SensorField(MyRobotRobot.arm.elbow_flex.pos)
+    wrist_flex = SensorField(MyRobotRobot.arm.wrist_flex.pos)
+    wrist_yaw = SensorField(MyRobotRobot.arm.wrist_yaw.pos)
+    wrist_roll = SensorField(MyRobotRobot.arm.wrist_roll.pos)
 
 
-class RightWristCameraObs(ModuleObs):
-    rgb_image = SensorField(Arm1Robot.right_wrist_camera.camera.rgb_image)
+class MyWristCameraObs(ModuleObs):
+    rgb_image = SensorField(MyRobotRobot.wrist_camera.camera.rgb_image)
 
 
-class Arm1Observation(Observation):
-    right_arm = RightArmObs()
-    right_wrist_camera = RightWristCameraObs()
+class MyRobotObservation(Observation):
+    arm = MyArmObs()
+    wrist_camera = MyWristCameraObs()
 ```
 
 **Decide.** Solarian splits the loop across three processes:
@@ -145,25 +145,25 @@ class Arm1Observation(Observation):
 
 **Write: Action as commands to actuators.** Commands travel as an [`Action`](/docs/actions), the same shape written the other way. You declare it as a small class. This one commands the six joint targets, and each field references the same servo the observation reads. The camera is only read, so it has no fields here:
 
-```python {{ title: 'arm1/action.py' }}
-class RightArmAction(ModuleAction):
-    shoulder_pan = ActuatorField(Arm1Robot.right_arm.shoulder_pan.pos)
-    shoulder_lift = ActuatorField(Arm1Robot.right_arm.shoulder_lift.pos)
-    elbow_flex = ActuatorField(Arm1Robot.right_arm.elbow_flex.pos)
-    wrist_flex = ActuatorField(Arm1Robot.right_arm.wrist_flex.pos)
-    wrist_yaw = ActuatorField(Arm1Robot.right_arm.wrist_yaw.pos)
-    wrist_roll = ActuatorField(Arm1Robot.right_arm.wrist_roll.pos)
+```python {{ title: 'my_robot/action.py' }}
+class MyArmAction(ModuleAction):
+    shoulder_pan = ActuatorField(MyRobotRobot.arm.shoulder_pan.pos)
+    shoulder_lift = ActuatorField(MyRobotRobot.arm.shoulder_lift.pos)
+    elbow_flex = ActuatorField(MyRobotRobot.arm.elbow_flex.pos)
+    wrist_flex = ActuatorField(MyRobotRobot.arm.wrist_flex.pos)
+    wrist_yaw = ActuatorField(MyRobotRobot.arm.wrist_yaw.pos)
+    wrist_roll = ActuatorField(MyRobotRobot.arm.wrist_roll.pos)
 
 
-class Arm1Action(Action):
-    right_arm = RightArmAction()
+class MyRobotAction(Action):
+    arm = MyArmAction()
 ```
 
 Each `FeetechServo` runs its PID inside the motor, so Solarian sends a target position and the servo produces the torque. On the Solarian Arm 1 the joints that hold the arm up use a small I term, which is what lifts the sag you saw in the figure. The shoulder pan carries no constant gravity load, so it runs with I at zero, which also keeps it from chattering inside its gear backlash.
 
 **Timing.** The arm module interpolates between targets. In [Tutorial 4](/docs/tutorials/skills/move) you set its limits in the module's config:
 
-```yaml {{ title: 'conf/modules/right_arm.yaml' }}
+```yaml {{ title: 'conf/modules/arm.yaml' }}
 interpolator_type: pose
 max_speed: [0.25, 0.6]    # metres/second, radians/second
 max_accel: [0.5, 3.0]

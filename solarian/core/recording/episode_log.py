@@ -2,7 +2,7 @@
 
 The controller keeps one log per episode it records, and everyone who acts on
 the robot writes into it: the controller its skill and service calls, tagged
-``by`` the agent or the operator; the AI controller what it was asked, saw,
+``by`` the agent or the operator; the agentic controller what it was asked, saw,
 said and did; the recorder each camera's tracker overlays::
 
     <project>/recordings/controller/<session>/episodes/<episode>/logs/
@@ -15,7 +15,7 @@ A sealed episode's log stays open until the next one starts, so what happens
 between takes lands after the end of the last video. Everything is stamped
 with the synced clock the episode's rows use, so an event lines up with the
 frame it was about. Older sessions have an ``agent/`` directory instead,
-holding only the AI controller's side.
+holding only the agentic controller's side.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from solarian.core.recording.session import EPISODES_DIR
 logger = logging.getLogger(__name__)
 
 LOGS_DIR = "logs"
-#: What sessions recorded before ``logs/`` keep the AI controller's runs in.
+#: What sessions recorded before ``logs/`` keep the agentic controller's runs in.
 LEGACY_AGENT_DIR = "agent"
 
 

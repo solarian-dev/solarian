@@ -1,4 +1,4 @@
-"""The AI controller's harness, against a fake controller, planner and monitor.
+"""The agentic controller's harness, against a fake controller, planner and monitor.
 
 The planner and monitor threads are not started: each test hands the harness
 its wakes and monitor ticks itself, so every step is deterministic.

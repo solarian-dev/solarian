@@ -17,7 +17,7 @@ recordings/robot/0004_2b8e51_pick/
 └── episodes/000000/
     ├── episode.json
     ├── episode.parquet
-    └── video/right_wrist_camera.rgb_image.mp4
+    └── video/wrist_camera.rgb_image.mp4
 ```
 
 `episode.parquet` is the numbers: joint positions, gripper width, actions, timestamps. The mp4 is the camera at the resolution the sensor produced, not the small crop the policy happens to want today. You can train a different crop later. You cannot invent pixels a downscale threw away.

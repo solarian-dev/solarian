@@ -10,7 +10,7 @@ The robot is the program that owns the hardware. It talks to every motor and sen
 
 ## What a robot is
 
-A robot is a Python class that extends Solarian's `Robot`. The scaffold already created yours, an empty `Arm1Robot` in `arm1/robot.py`, and `arm1/settings.py` points `ROBOT_CLASS` at it. `solarian run-robot` imports that class, builds it with the settings from `conf/robot.yaml`, and starts it.
+A robot is a Python class that extends Solarian's `Robot`. The scaffold already created yours, `MyRobotRobot` in `my_robot/robot.py`, with an arm that has no servos yet, and `my_robot/settings.py` points `ROBOT_CLASS` at it. `solarian run-robot` imports that class, builds it with the settings from `conf/robot.yaml`, and starts it.
 
 The base class does the plumbing: it connects to the relay server, runs every device, and moves messages between the devices and the controller. Once started, the robot does the same work for the whole run:
 
@@ -24,12 +24,12 @@ The base class does the plumbing: it connects to the relay server, runs every de
 Your subclass says what the robot is made of, in three pieces:
 
 - A **module** is one device: the arm, the gripper, a camera. Its class lists the device's components, its actuators and sensors, and says what to do with a command.
-- The **robot** class names its modules, one class attribute each. The attribute name, `right_arm` here, is the module's name everywhere else in the project.
+- The **robot** class names its modules, one class attribute each. The attribute name, `arm` here, is the module's name everywhere else in the project.
 - The **scene** is the simulated world: a floor, a light, and the MuJoCo model of each module, mounted where the real device stands.
 
 <RobotDiagram />
 
-By the end of this tutorial `Arm1Robot` carries all three modules in the diagram. This chapter builds the first one, adds it to the robot, and mounts its model in the scene. The gripper and the camera follow the same three steps in their own chapters.
+By the end of this tutorial `MyRobotRobot` carries all three modules in the diagram. This chapter fills in the first one, the arm the scaffold declared, and mounts its model in the scene. The gripper and the camera follow the same three steps in their own chapters.
 
 ## First module: robot arm
 
@@ -43,7 +43,7 @@ The Solarian Arm 1's joints are Feetech serial-bus servos. Their driver ships as
 solarian install feetech
 ```
 
-That installs `solarian-feetech` and adds it to your `pyproject.toml`. It brings the `FeetechServo` actuator class the arm uses. The arm module itself stays in your project.
+That installs `solarian-feetech` and adds it to your `pyproject.toml`. It brings the `FeetechServo` actuator class the arm uses, the one the scaffold left commented out. The arm module itself stays in your project.
 
 On the machine that will later be wired to the bus, the hardware extra adds the vendor SDK:
 
@@ -55,15 +55,15 @@ Simulation runs without it, so leave it for the [real robot](/docs/tutorials/rea
 
 ### Declare the joints
 
-The module class declares the six servos and handles one kind of command: a full set of joint targets. Create `arm1/modules/right_arm.py`:
+The module class declares the six servos and handles one kind of command: a full set of joint targets. Replace `my_robot/modules/my_arm_module.py`:
 
-```python {{ title: 'arm1/modules/right_arm.py' }}
+```python {{ title: 'my_robot/modules/my_arm_module.py' }}
 from solarian.core.action import ActionType, ModuleAction, action_handler
-from solarian.core.module import Module
+from solarian.core.arm_module import ArmModule
 from solarian_feetech.actuator import FeetechServo
 
 
-class RightArmModule(Module):
+class MyArmModule(ArmModule):
     shoulder_pan = FeetechServo(model="sts3250")
     shoulder_lift = FeetechServo(model="sts3250")
     elbow_flex = FeetechServo(model="sts3250")
@@ -88,27 +88,28 @@ class RightArmModule(Module):
 
 The lines that matter:
 
+- **`class MyArmModule(ArmModule)`** builds on Solarian's base class for arms. `ArmModule` already knows joint and Cartesian moves, but its versions need a kinematics model of the arm, which arrives in [Tutorial 4](/docs/tutorials/skills/move). Until then this class replaces two of them, the `MOVE_J` handler and `control_step`, with the simple versions below.
 - **`shoulder_pan = FeetechServo(model="sts3250")`** declares one servo. The attribute name is the joint's name in observations, actions, and YAML. The model string picks the Feetech product: STS3250 on the four joints that carry the arm's weight, STS3215 on wrist yaw and roll. That matches the [Solarian Arm 1 hardware](/hardware/arm-1).
 - **`initialize`** runs once, when the module connects. It starts the module with no goal, so the arm holds still until a command arrives.
-- **`@action_handler(ActionType.MOVE_J)`** registers `_handle_move_j` for joint commands. A `MOVE_J` action carries six numbers, one per joint, and the handler keeps them as the current goal. Returning `True` keeps the module running.
+- **`@action_handler(ActionType.MOVE_J)`** registers `_handle_move_j` for joint commands. A `MOVE_J` action carries six numbers, one per joint, and the handler keeps them as the current goal. Returning `True` keeps the module running. The method has the same name as `ArmModule`'s handler, so it replaces that one.
 - **`control_step`** runs on the module's own loop, at the rate in its YAML, and writes the goal to the servos. In simulation those servos are MuJoCo joints, and on hardware they are the bus. The class reads the same either way.
 
 This module works purely in joint coordinates. Poses and inverse kinematics come in [Tutorial 4](/docs/tutorials/skills).
 
 ### Configure the module
 
-Every module has a YAML file named after its attribute on the robot, in `conf/modules/`. It gives each servo its bus address and its range of travel. The attribute will be `right_arm`, so the file is `conf/modules/right_arm.yaml`.
+Every module has a YAML file named after its attribute on the robot, in `conf/modules/`. It gives each servo its bus address and its range of travel. The attribute is `arm`, so the file is `conf/modules/arm.yaml`. The scaffold wrote it with only `frequency` in it.
 
 The file reads the serial port from the deployment, so add one to `conf/deployment/localhost.yaml`. Simulation ignores it, and Tutorial 3 points it at the real adapter:
 
 ```yaml {{ title: 'conf/deployment/localhost.yaml' }}
-actuator_port_right_arm: /dev/ttyUSB0
+actuator_port_arm: /dev/ttyUSB0
 ```
 
-Then the module file, one block per joint:
+Then replace the module file, one block per joint:
 
-```yaml {{ title: 'conf/modules/right_arm.yaml' }}
-actuator_port: ${deployment.actuator_port_right_arm}
+```yaml {{ title: 'conf/modules/arm.yaml' }}
+actuator_port: ${deployment.actuator_port_arm}
 frequency: 50
 
 actuators:
@@ -116,42 +117,42 @@ actuators:
     id: 1
     port: ${actuator_port}
     mode: range_m100_100
-    sim_joint: "right/shoulder_pan"
+    sim_joint: "arm/shoulder_pan"
     sim_range_min: -2.2290
     sim_range_max: 2.0820
   shoulder_lift:
     id: 2
     port: ${actuator_port}
     mode: range_m100_100
-    sim_joint: "right/shoulder_lift"
+    sim_joint: "arm/shoulder_lift"
     sim_range_min: -1.7988
     sim_range_max: 1.7802
   elbow_flex:
     id: 3
     port: ${actuator_port}
     mode: range_m100_100
-    sim_joint: "right/elbow_flex"
+    sim_joint: "arm/elbow_flex"
     sim_range_min: -1.7802
     sim_range_max: 1.5708
   wrist_flex:
     id: 4
     port: ${actuator_port}
     mode: range_m100_100
-    sim_joint: "right/wrist_flex"
+    sim_joint: "arm/wrist_flex"
     sim_range_min: -3.1416
     sim_range_max: 3.1416
   wrist_yaw:
     id: 5
     port: ${actuator_port}
     mode: range_m100_100
-    sim_joint: "right/wrist_yaw"
+    sim_joint: "arm/wrist_yaw"
     sim_range_min: -3.1416
     sim_range_max: 3.1416
   wrist_roll:
     id: 6
     port: ${actuator_port}
     mode: range_m100_100
-    sim_joint: "right/wrist_roll"
+    sim_joint: "arm/wrist_roll"
     sim_range_min: -3.1416
     sim_range_max: 3.1416
 ```
@@ -161,24 +162,24 @@ The lines that matter:
 - **`frequency: 50`** is the rate of the module's loop, in hertz: how often `control_step` writes the goal. The controller runs at its own, slower rate, and the two are independent.
 - **`id`** is the servo's address on the Feetech bus. You set those IDs on the real servos in Tutorial 3.
 - **`mode: range_m100_100`** makes every command a normalized number: −100 is one end of the joint's travel, 100 is the other, and 0 is the middle.
-- **`sim_joint`** names the MuJoCo joint this servo drives. The `right/` in front is the prefix the scene gives the arm, further down this page.
+- **`sim_joint`** names the MuJoCo joint this servo drives. The `arm/` in front is the prefix the scene gives the arm, further down this page.
 - **`sim_range_min`** and **`sim_range_max`** are that same travel in radians, copied from the model's joint limits. Simulation maps −100…100 onto them. Hardware uses a calibration instead, recorded in Tutorial 3, and ignores the `sim_*` lines.
 
 ## Add the arm to the robot
 
-The robot class is where the module joins the machine. One class attribute creates the module, and its name, `right_arm`, ties together the YAML file above, the observation and action fields of the next chapter, and every log line about the arm. Replace the empty class in `arm1/robot.py`:
+The robot class is where the module joins the machine. One class attribute creates the module, and its name, `arm`, ties together the YAML file above, the observation and action fields of the next chapter, and every log line about the arm. The scaffold already wrote that line in `my_robot/robot.py`:
 
-```python {{ title: 'arm1/robot.py' }}
+```python {{ title: 'my_robot/robot.py' }}
 from solarian.core import Robot
 
-from arm1.modules.right_arm import RightArmModule
+from my_robot.modules.my_arm_module import MyArmModule
 
 
-class Arm1Robot(Robot):
-    right_arm = RightArmModule()
+class MyRobotRobot(Robot):
+    arm = MyArmModule()
 ```
 
-When the robot starts, Solarian finds `right_arm`, loads `conf/modules/right_arm.yaml` into it, connects it, and runs its loop. A second arm later is one more line with another name, such as `left_arm = LeftArmModule()`.
+When the robot starts, Solarian finds `arm`, loads `conf/modules/arm.yaml` into it, connects it, and runs its loop. A second arm later is one more line with another name, such as `left_arm = MyArmModule()`, configured by its own `conf/modules/left_arm.yaml`.
 
 ## Place the arm in the scene
 
@@ -203,7 +204,7 @@ The arm model has a site named `flange` at the wrist. The gripper bolts to it in
 The world around the arm holds what every scene shares: a floor and a light. Create `assets/scene.xml`:
 
 ```xml {{ title: 'assets/scene.xml' }}
-<mujoco model="arm1_scene">
+<mujoco model="my_robot_scene">
   <compiler angle="radian"/>
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3"/>
@@ -225,29 +226,29 @@ The arm stays out of this file. The robot attaches it in Python, which keeps the
 
 ### Attach the arm
 
-The robot class carries the scene, and the scene lists one attachment per module that has a body. Each attachment says which model belongs to which module and where it is mounted, the same way you would bolt the real arm to a table. Extend `Arm1Robot`:
+The robot class carries the scene, and the scene lists one attachment per module that has a body. Each attachment says which model belongs to which module and where it is mounted, the same way you would bolt the real arm to a table. Extend `MyRobotRobot`:
 
-```python {{ title: 'arm1/robot.py' }}
+```python {{ title: 'my_robot/robot.py' }}
 from solarian.core import Robot
 from solarian.sim import ModuleAttachment, SceneConfig
 
-from arm1.modules.right_arm import RightArmModule
+from my_robot.modules.my_arm_module import MyArmModule
 
 
-class Arm1Robot(Robot):
+class MyRobotRobot(Robot):
     view = True
 
-    right_arm = RightArmModule()
+    arm = MyArmModule()
 
     scene = SceneConfig(
         world_mjcf="assets/scene.xml",
         attachments=[
             ModuleAttachment(
-                module="right_arm",
+                module="arm",
                 mjcf="assets/arm1/arm1.xml",
                 parent_body="world",
                 pos=[0.0, -0.2, 0.0],
-                prefix="right/",
+                prefix="arm/",
             ),
         ],
         timestep=0.002,
@@ -259,9 +260,9 @@ The lines that matter:
 - **`scene`** is what lets the robot run in MuJoCo. You choose sim per run with `solarian run-robot --sim`; without the flag the same class drives the hardware. In sim the servos become the model's joints, and the module class does not change.
 - **`view = True`** opens a window that draws the simulation.
 - **`world_mjcf`** is the world you just wrote.
-- **`module="right_arm"`** pairs the attachment with the module of that name, so the module's servos drive this model's joints.
+- **`module="arm"`** pairs the attachment with the module of that name, so the module's servos drive this model's joints.
 - **`parent_body="world"`** and **`pos=[0.0, -0.2, 0.0]`** bolt the arm's base to the world, 20 cm along −Y from the origin, on the floor.
-- **`prefix="right/"`** renames the model's joints inside the scene, so `shoulder_pan` becomes `right/shoulder_pan`. That is why the YAML's `sim_joint` lines carry the prefix. It also lets a second arm join later without its joint names colliding.
+- **`prefix="arm/"`** renames the model's joints inside the scene, so `shoulder_pan` becomes `arm/shoulder_pan`. That is why the YAML's `sim_joint` lines carry the prefix. It also lets a second arm join later without its joint names colliding.
 - **`timestep=0.002`** steps the physics at 500 Hz.
 
 <Note>

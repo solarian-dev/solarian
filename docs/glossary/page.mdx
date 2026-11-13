@@ -120,7 +120,7 @@ A trajectory is a time-parameterized path through configuration space; a waypoin
 
 ### Vision-Language Model (VLM)
 
-A multimodal model that consumes images and text and returns text. Used by Solarian's [AI Controller](/docs/ai_controller) to decide which skills to start or stop.
+A multimodal model that consumes images and text and returns text. Used by Solarian's [AI Agentic Controller](/docs/agentic_controller) to plan a task and decide which skills to start or stop.
 
 ### Vision-Language-Action model (VLA)
 
@@ -152,9 +152,9 @@ A [`ComponentBus`](/docs/modules#buses) subclass that adds `write()`, `enable_to
 
 A class-attribute descriptor on a [`ModuleAction`](/docs/actions) that binds an action field to a `Data` reference on a [Robot](/docs/robots) actuator.
 
-### AI Controller
+### AI Agentic Controller
 
-A [Controller](/docs/controllers) with an `agent:` block: a planner model that calls the controller's tools, which start fast reactive [Skills](/docs/skills), and a monitor model that watches them. See [AI Controller](/docs/ai_controller).
+A [Controller](/docs/controllers) with an `agent:` block, which makes it an AI agent driving the robot: a harness around any vision-language model takes high-level tasks from the chat, a planner model plans them and calls the controller's tools, which start fast reactive [Skills](/docs/skills), and a monitor model watches them. See [AI Agentic Controller](/docs/agentic_controller).
 
 ### `BusClient` / `BusServer`
 
@@ -178,7 +178,7 @@ The abstract base for buses. Subclasses: `ActuatorBus`, `SensorBus` (and below i
 
 ### Controller
 
-The node that decides what the robot does — keyboard teleop, learned policy, AI controller. Subclasses either start [Skills](/docs/skills) and let the base `control_step()` merge what those skills emit, or override `control_step()` outright. See [Controllers](/docs/controllers).
+The node that decides what the robot does — keyboard teleop, learned policy, agentic controller. Subclasses either start [Skills](/docs/skills) and let the base `control_step()` merge what those skills emit, or override `control_step()` outright. See [Controllers](/docs/controllers).
 
 ### `ControllerConfig`
 
@@ -186,11 +186,11 @@ Pydantic model for `conf/controller.yaml` (`fps`, `agent`, `ui`, `recording`, `c
 
 ### `AgentHarness`
 
-The AI controller: a planner model that calls the controller's `tools`, and a monitor model that watches them. Enabled by `agent:` in `conf/controller.yaml`. See [AI Controller](/docs/ai_controller).
+The agent harness behind the agentic controller: a planner model that calls the controller's `tools`, and a monitor model that watches them. Enabled by `agent:` in `conf/controller.yaml`. See [AI Agentic Controller](/docs/agentic_controller).
 
 ### `Tool`
 
-A skill class plus the params a controller binds, as the AI controller's planner sees it. Declared in `Controller.tools`. See [AI Controller](/docs/ai_controller#declaring-tools).
+A skill class plus the params a controller binds, as the agentic controller's planner sees it. Declared in `Controller.tools`. See [AI Agentic Controller](/docs/agentic_controller#declaring-tools).
 
 ### `Data`
 
@@ -302,7 +302,7 @@ Enum (`IDLE`, `RUNNING`, `COMPLETED`, `FAILED`, `STOPPED`) reported by skills vi
 
 ### System 1 / System 2
 
-The naming Solarian uses for its dual-process AI architecture. System 1 = fast reactive control loop running [Skills](/docs/skills). System 2 = the [AI Controller](/docs/ai_controller)'s planner, which calls those skills as tools.
+The naming Solarian uses for its dual-process AI architecture. System 1 = fast reactive control loop running [Skills](/docs/skills). System 2 = the [AI Agentic Controller](/docs/agentic_controller)'s planner, which calls those skills as tools.
 
 ### ZeroMQ
 

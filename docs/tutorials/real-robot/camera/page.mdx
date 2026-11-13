@@ -18,7 +18,7 @@ sudo apt install python3-picamera2
 
 The virtualenv was created with `--system-site-packages` in the [computer chapter](/docs/tutorials/real-robot/computer). Without that, `import picamera2` fails inside a venv even when apt succeeded. Recreate the venv if you have to. Editable-install the project again afterward.
 
-`camera_port_right_wrist_camera: "0"` in `lab.yaml` is CSI connector 0. A second camera would be `"1"`. It is not `/dev/video0`. libcamera's index and the video-device number are not the same list.
+`camera_port_wrist_camera: "0"` in `lab.yaml` is CSI connector 0. A second camera would be `"1"`. It is not `/dev/video0`. libcamera's index and the video-device number are not the same list.
 
 ## A first frame
 

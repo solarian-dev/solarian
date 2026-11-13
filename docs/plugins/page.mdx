@@ -20,7 +20,7 @@ A Solarian plugin is a normal, `pip`-installable Python package that follows two
 Beyond that, it just provides one or more Solarian classes — an `Actuator`, a `Bus`, a `Module`, a `Robot`, a `Skill`, a policy `Trainer`/`PolicyServer`, a dataset op, or a CLI command — and (optionally) advertises them through **entry points** so Solarian can discover them automatically.
 
 <Note>
-  There is no mandatory "register me" call. Direct imports always work: `from solarian_feetech.actuator import FeetechServo`. Entry points are what make a plugin *discoverable* — so `solarian install`, the `AIController`, and `solarian train` can find your classes by name without the user importing anything.
+  There is no mandatory "register me" call. Direct imports always work: `from solarian_feetech.actuator import FeetechServo`. Entry points are what make a plugin *discoverable* — so `solarian install`, the controller, and `solarian train` can find your classes by name without the user importing anything.
 </Note>
 
 ## Kinds of plugins
@@ -32,13 +32,13 @@ A single package can ship any combination of these. The kind determines which fi
     A driver for a motor, servo, or sensor plus the <a href="/docs/modules#buses">Bus</a> that speaks its protocol. Example: <code>solarian-feetech</code>, <code>solarian-dynamixel</code>.
   </Property>
   <Property name="Module">
-    An opinionated <a href="/docs/modules">Module</a> that composes actuators/sensors into a ready-to-use unit (an arm, a gripper), usually with a bundled <code>templates/modules/</code> config. Example: <code>solarian-ur5</code>, <code>solarian-umi-slim</code>.
+    An opinionated <a href="/docs/modules">Module</a> that composes actuators/sensors into a ready-to-use unit (an arm, a gripper), usually with a bundled <code>templates/modules/</code> config. Example: <code>solarian-ur5</code>, <code>solarian-gripper1</code>.
   </Property>
   <Property name="Robot">
     A full <a href="/docs/robots">Robot</a> definition wiring several modules together.
   </Property>
   <Property name="Skill">
-    A self-contained <a href="/docs/skills">Skill</a> behavior the <a href="/docs/ai_controller">AI Controller</a> can orchestrate, auto-discovered by any <code>AIController</code>. Example: <code>solarian-umi-skill</code>.
+    A self-contained <a href="/docs/skills">Skill</a> behavior, auto-discovered by every controller, that the <a href="/docs/agentic_controller">AI Agentic Controller</a> can call as a tool. Example: <code>solarian-umi-skill</code>.
   </Property>
   <Property name="Policy">
     A trainable model: a <code>Trainer</code> (for <code>solarian train</code>) and/or a <code>PolicyServer</code> a skill calls over HTTP. Example: <code>solarian-policy-diffusion</code>. See <a href="/docs/policies">Policies</a>.
@@ -61,7 +61,7 @@ Discovery is powered by standard Python entry points read via `importlib.metadat
 | Sensor | `sensor` | `solarian.sensors`, `solarian.sensor_buses` | config `type:` resolution |
 | Module | `module` | `solarian.modules` | `solarian install` |
 | Robot | `robot` | `solarian.robots` | project wiring |
-| Skill | (part of `policy`) | `solarian.skills` | `AIController` |
+| Skill | (part of `policy`) | `solarian.skills` | `Controller`, `Robot` |
 | Policy | `policy` | `solarian.trainers`, `solarian.services`, `solarian.skills` | `solarian train`, `run-service` |
 | Service | (part of `policy`) | `solarian.services` | `run-service` |
 | Dataset op | `op` | `solarian.dataset_ops` | `solarian dataset` |
@@ -81,7 +81,7 @@ These are the official plugins most projects start from. Each name links to its 
 
 - [solarian-ur5](/plugins/solarian-ur5) — Universal Robots UR5 arm module, in joint space and Cartesian space.
 - [solarian-arm-1](/plugins/solarian-arm-1) — Solarian Arm 1 follower arm module.
-- [solarian-umi-slim](/plugins/solarian-umi-slim) — UMI slim gripper module, including the MuJoCo model used in simulation.
+- [solarian-gripper1](/plugins/solarian-gripper1) — parallel gripper module, including the MuJoCo model used in simulation.
 
 **Skills and policies**
 
@@ -122,7 +122,7 @@ Then edit `conf/modules/ur5.yaml` to set ports, servo IDs, frequency, and calibr
 Pass a path to skip PyPI and install that directory editable:
 
 ```bash
-solarian install plugins/solarian-umi-slim
+solarian install plugins/solarian-gripper1
 ```
 
 ### Checking what's installed
@@ -140,7 +140,7 @@ Hardware and module plugins are used by attaching their classes to your Robot. T
 
 ### Skill plugins
 
-[Skill](/docs/skills) plugins use the same install. Any package that advertises a `solarian.skills` entry point is **auto-discovered** by every [`AIController`](/docs/ai_controller) — Solarian reads the entry points via `importlib.metadata` at startup and merges them into `available_skills`. You can also import the class and start it yourself:
+[Skill](/docs/skills) plugins use the same install. Any package that advertises a `solarian.skills` entry point is **auto-discovered** by every [Controller](/docs/controllers), so the [AI Agentic Controller](/docs/agentic_controller) can call it as a tool — Solarian reads the entry points via `importlib.metadata` at startup and merges them into `available_skills`. You can also import the class and start it yourself:
 
 ```python
 from solarian_move_skill import MoveSkill
@@ -254,7 +254,7 @@ The scaffolder normalizes names so the three forms always line up:
 | Input | Distribution | Import package | Class prefix |
 | --- | --- | --- | --- |
 | `feetech` | `solarian-feetech` | `solarian_feetech` | `Feetech` |
-| `umi-slim` | `solarian-umi-slim` | `solarian_umi_slim` | `UmiSlim` |
+| `umi-gripper` | `solarian-umi-gripper` | `solarian_umi_gripper` | `UmiGripper` |
 
 ## Writing a hardware plugin
 
@@ -316,20 +316,20 @@ The bus implements `read(ImageData, [...])` by grabbing a frame from V4L2 / AVFo
 
 ## Writing a module plugin
 
-A module plugin composes actuators/sensors into a ready-to-use unit and ships a default config in `templates/modules/`. `solarian-umi-slim` is a parallel gripper driven by a single Feetech servo — note it depends on `solarian-feetech` rather than reimplementing the driver:
+A module plugin composes actuators/sensors into a ready-to-use unit and ships a default config in `templates/modules/`. `solarian-gripper1` is a parallel gripper driven by a single Feetech servo — note it depends on `solarian-feetech` rather than reimplementing the driver:
 
 ```python
-# solarian_umi_slim/module.py
+# solarian_gripper_1/gripper_feetech.py
 from solarian.core.gripper_module import GripperConfig, GripperModule
 from solarian.core.data import PosData
 from solarian_feetech.actuator import FeetechServo
 
-class UmiSlimConfig(GripperConfig):
+class Gripper1FeetechConfig(GripperConfig):
     aperture_closed_mm: float = 0.0                  # straight-line fallback
     aperture_open_mm: float = 85.0                   # until a table is measured
 
-class UmiSlimModule(GripperModule):
-    config_class = UmiSlimConfig
+class Gripper1FeetechModule(GripperModule):
+    config_class = Gripper1FeetechConfig
     scalar_actuator = "gripper"
     gripper = FeetechServo(model="sts3215")          # one logical actuator
 
@@ -350,7 +350,7 @@ Its `pyproject.toml` declares the module entry point and the dependency:
 dependencies = ["solarian>=0.1.0", "solarian-feetech>=0.1.0"]
 
 [project.entry-points."solarian.modules"]
-umi-slim = "solarian_umi_slim.module:UmiSlimModule"
+gripper-1 = "solarian_gripper_1.gripper_feetech:Gripper1FeetechModule"
 ```
 
 ### Bundle a default config
@@ -358,7 +358,7 @@ umi-slim = "solarian_umi_slim.module:UmiSlimModule"
 Ship the config under `templates/`, in the folder of the `conf/` directory that reads it, so [`solarian install`](#installing-a-plugin) can seed it: `templates/modules/<name>.yaml` becomes `conf/modules/<name>.yaml`, a skill's `templates/skills/move.yaml` becomes `conf/skills/move.yaml`, and a service's `templates/services/bbox_tracker.yaml` becomes `conf/services/bbox_tracker.yaml`. Keep the module's tunables here:
 
 ```yaml
-# solarian_umi_slim/templates/modules/umi_slim.yaml
+# solarian_gripper_1/templates/modules/gripper1.yaml
 port: /dev/ttyUSB0
 frequency: 30
 aperture_closed_mm: 0.0
@@ -374,14 +374,14 @@ actuators:
 
 ### Ship data files (models, configs)
 
-Non-Python files (config templates, MuJoCo models, meshes) must be declared as package data so they travel with the wheel. `solarian-umi-slim` ships its simulation model this way:
+Non-Python files (config templates, MuJoCo models, meshes) must be declared as package data so they travel with the wheel. `solarian-gripper1` ships its simulation model this way:
 
 ```toml
 [tool.setuptools.package-data]
-solarian_umi_slim = [
+solarian_gripper_1 = [
     "templates/modules/*.yaml",
-    "assets/umi_slim.xml",
-    "assets/umi_slim_description/meshes/*.stl",
+    "assets/gripper1.xml",
+    "assets/gripper1_description/meshes/*.stl",
 ]
 ```
 

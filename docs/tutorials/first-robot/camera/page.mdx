@@ -12,7 +12,7 @@ There is no `solarian install` step.
 
 ## Add the module
 
-In `arm1/robot.py`:
+In `my_robot/robot.py`:
 
 ```python
 from solarian.core.picamera_module import PiCameraModule
@@ -22,7 +22,7 @@ from solarian.sim import CameraMount, ModuleAttachment, SceneConfig
 `CameraMount` joins the sim imports you already have. On the class:
 
 ```python
-right_wrist_camera = PiCameraModule()
+wrist_camera = PiCameraModule()
 ```
 
 A MuJoCo camera is not part of the gripper model. You mount one onto the gripper's `camera` site, which is the CAD frame where the real lens sits. Add a `cameras` list on the `SceneConfig`:
@@ -30,8 +30,8 @@ A MuJoCo camera is not part of the gripper model. You mount one onto the gripper
 ```python
 cameras=[
     CameraMount(
-        name="right_wrist_cam",
-        site="right_gripper/camera",
+        name="wrist_cam",
+        site="gripper/camera",
         # 180 degrees about X: the site's +Z points out of the lens,
         # and a MuJoCo camera looks down its −Z.
         quat=[0.0, 1.0, 0.0, 0.0],
@@ -47,13 +47,13 @@ cameras=[
 Add the port to `conf/deployment/localhost.yaml`. On a Pi this is the CSI index, `"0"` for the first connector, not a `/dev/video` path. Simulation ignores it.
 
 ```yaml
-camera_port_right_wrist_camera: "0"
+camera_port_wrist_camera: "0"
 ```
 
-Create `conf/modules/right_wrist_camera.yaml`:
+Create `conf/modules/wrist_camera.yaml`:
 
 ```yaml
-camera_port: ${deployment.camera_port_right_wrist_camera}
+camera_port: ${deployment.camera_port_wrist_camera}
 frequency: 30
 
 sensors:
@@ -64,7 +64,7 @@ sensors:
     height: 480
     type: picamera
     sim:
-      camera: right_wrist_cam
+      camera: wrist_cam
 ```
 
 `sim.camera` is the `CameraMount` name. `type: picamera` selects the Pi camera driver, which simulation replaces with the renderer. 640×480 keeps the first run light. The real camera's resolution is a later edit; the field in the observation does not change when you change the size.
@@ -73,17 +73,17 @@ sensors:
 
 The controller draws every image field on the observation. Add one.
 
-In `arm1/observation.py`:
+In `my_robot/observation.py`:
 
 ```python
-class RightWristCameraObs(ModuleObs):
-    rgb_image = SensorField(Arm1Robot.right_wrist_camera.camera.rgb_image)
+class MyWristCameraObs(ModuleObs):
+    rgb_image = SensorField(MyRobotRobot.wrist_camera.camera.rgb_image)
 
 
-class Arm1Observation(Observation):
-    right_arm = RightArmObs()
-    right_gripper = RightGripperObs()
-    right_wrist_camera = RightWristCameraObs()
+class MyRobotObservation(Observation):
+    arm = MyArmObs()
+    gripper = MyGripperObs()
+    wrist_camera = MyWristCameraObs()
 ```
 
 The path is `module.camera.rgb_image`: the module, then the `PiCamera` component, then its image. The field name `rgb_image` is what shows up as the window's label.
@@ -106,9 +106,9 @@ Restart the robot and the controller. The controller window should show the wris
 
 | Module | Where the class lives | What you configured |
 | --- | --- | --- |
-| `right_arm` | your project, `arm1/modules/right_arm.py` | joints, YAML, the arm MJCF |
-| `right_gripper` | `solarian-umi-slim` | YAML, a site-to-site attachment |
-| `right_wrist_camera` | Solarian itself, `PiCameraModule` | YAML, a `CameraMount` |
+| `arm` | your project, `my_robot/modules/my_arm_module.py` | joints, YAML, the arm MJCF |
+| `gripper` | `solarian-gripper1` | YAML, a site-to-site attachment |
+| `wrist_camera` | Solarian itself, `PiCameraModule` | YAML, a `CameraMount` |
 
 The controller is still a keyboard. It reads observations and writes a joint target. That is the whole robot until [Tutorial 4](/docs/tutorials/skills), where a skill replaces `control_step`.
 

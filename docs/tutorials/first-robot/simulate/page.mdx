@@ -39,11 +39,11 @@ Quit with Control-C in each terminal when you are done looking.
 
 ## If the arm is there and will not move
 
-The usual cause is a `sim_joint` that does not exist in the composed scene. The model names the joint `shoulder_pan`. The attachment prefix turns that into `right/shoulder_pan`. The YAML has to use the prefixed name. The error at startup names the joint it could not find.
+The usual cause is a `sim_joint` that does not exist in the composed scene. The model names the joint `shoulder_pan`. The attachment prefix turns that into `arm/shoulder_pan`. The YAML has to use the prefixed name. The error at startup names the joint it could not find.
 
 The second cause is the controller window not having focus. Keys go to whichever window you clicked last. Click the controller, then press `s` again.
 
-The third is a `TypeError` before anything starts, naming `right_arm` or a joint. The robot attribute, the YAML filename, and the observation and action fields disagree. The [project page](/docs/tutorials/first-robot/project) has the table.
+The third is a `TypeError` before anything starts, naming `arm` or a joint. The robot attribute, the YAML filename, and the observation and action fields disagree. The [project page](/docs/tutorials/first-robot/project) has the table.
 
 ## If there is no sim window
 
@@ -51,7 +51,7 @@ The third is a `TypeError` before anything starts, naming `right_arm` or a joint
 
 ## What you just ran
 
-Same module class, same YAML, same controller as the real arm will use. Simulation swapped the Feetech bus for MuJoCo because you passed `--sim`. Nothing in `right_arm.py` mentions MuJoCo. The scene and the `sim_joint` lines are the entire simulation-specific part.
+Same module class, same YAML, same controller as the real arm will use. Simulation swapped the Feetech bus for MuJoCo because you passed `--sim`. Nothing in `my_arm_module.py` mentions MuJoCo. The scene and the `sim_joint` lines are the entire simulation-specific part.
 
 `solarian run-robot` without `--sim` would try to open `/dev/ttyUSB0` instead. Leave that until the arm exists on the desk.
 

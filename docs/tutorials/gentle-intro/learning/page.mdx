@@ -115,7 +115,7 @@ A **VLA** starts from a vision-language model, a network pretrained on a large s
 
 The language model is what VLAs add: they follow new instructions and handle objects their robot demonstrations never showed. They are also large, run on a GPU, and take longer per prediction, so they usually output chunks and run a few times a second.
 
-Solarian also uses a vision-language model one level higher. The [AI controller](/docs/ai_controller) reads the scene and the instruction and chooses *which skill* to start, and the skill's own policy moves the arm: a slow planner on top of a fast policy, the split the glossary calls [System 1 / System 2](/docs/glossary#system-1-system-2).
+Solarian also uses a vision-language model one level higher. The [AI Agentic Controller](/docs/agentic_controller) reads the scene and the instruction and chooses *which skill* to start, and the skill's own policy moves the arm: a slow planner on top of a fast policy, the split the glossary calls [System 1 / System 2](/docs/glossary#system-1-system-2).
 
 ## Reinforcement learning for robotics
 

@@ -16,39 +16,41 @@ solarian install move-skill
 
 This installs `solarian-move-skill` and copies `conf/skills/move.yaml` the first time. Open that file. It already has a `home` pose and a `ground` pose, both in the normalized −100 to 100 joint range, plus a gripper width in millimetres. Those numbers are a reasonable tuck for this arm. You will add one pose of your own in a moment.
 
+Each pose is keyed by module name, and the template names them `right_arm` and `right_gripper`. Rename those keys to `arm` and `gripper` in both poses. A pose whose keys match no module moves nothing, and no error says so.
+
 `MoveSkill` reads `poses[name]`, sends one `MOVE_J`, and finishes when a timeout elapses. The module drives the path. The skill does not interpolate.
 
 Your arm module from Tutorial 2 already handles `MOVE_J` by writing the joint values. So the plugin skill works on the class you wrote, before any kinematics.
 
 ## A key for home
 
-`arm1/controller.py`:
+`my_robot/controller.py`:
 
 ```python
 from solarian.core import Controller
 from solarian.core.event import Event, EventType, event_handler
 from solarian_move_skill import MoveSkill
 
-from arm1.skills import OpenGripperSkill
+from my_robot.skills import OpenGripperSkill
 
 
-class Arm1Controller(Controller):
+class MyRobotController(Controller):
     skills = (OpenGripperSkill, MoveSkill)
 
     @event_handler(EventType.KEY_DOWN)
     def on_key_down(self, event: Event):
         key = event.data["key"]
         if key == "o":
-            self.start_skill(OpenGripperSkill(params={"gripper": "right_gripper"}))
+            self.start_skill(OpenGripperSkill(params={"gripper": "gripper"}))
         elif key == "0":
             self.start_skill(MoveSkill(params={
                 "pose": "home",
-                "arm": "right_arm",
-                "gripper": "right_gripper",
+                "arm": "arm",
+                "gripper": "gripper",
             }))
 ```
 
-Restart the controller and the robot. Press `0`. The arm should fold toward the tucked pose in `move.yaml`, and the gripper should open to the width in that pose. Press `o` and only the gripper moves; the arm stays. Press `0` again and the tuck runs again. Starting is not a toggle.
+Restart the controller and the robot. Press `0`. The arm should fold toward the tucked pose in `move.yaml`, and the gripper should open to the width in that pose. If nothing moves and nothing fails, the pose's keys still say `right_arm`. Press `o` and only the gripper moves; the arm stays. Press `0` again and the tuck runs again. Starting is not a toggle.
 
 ## Name your own pose
 
@@ -56,14 +58,14 @@ In `conf/skills/move.yaml`, under `poses:`, add a pose you can recognize. These 
 
 ```yaml
     reach:
-        right_arm:
+        arm:
             shoulder_pan: 0.0
             shoulder_lift: 20.0
             elbow_flex: 40.0
             wrist_flex: -20.0
             wrist_yaw: 0.0
             wrist_roll: 0.0
-        right_gripper:
+        gripper:
             gripper: 40.0
 ```
 
@@ -73,8 +75,8 @@ Add a key:
 elif key == "1":
     self.start_skill(MoveSkill(params={
         "pose": "reach",
-        "arm": "right_arm",
-        "gripper": "right_gripper",
+        "arm": "arm",
+        "gripper": "gripper",
     }))
 ```
 
@@ -84,7 +86,7 @@ Restart the controller. `0` tucks, `1` reaches. If `1` raises `KeyError` naming 
 
 Joint poses were enough for `home` and `reach`. A policy does not speak in joint angles. It speaks in where the fingertips should be: `x, y, z` and three rotations. Inverse kinematics is the arm module turning that into joints.
 
-Replace `arm1/modules/right_arm.py`. The hand-written `MOVE_J` handler has to go. `ArmModule` already implements it, and a second handler on the subclass would hide that one. `ArmModule` also needs the joint limits from the kinematics model, which is why this arrives now and not in Tutorial 2.
+Replace `my_robot/modules/my_arm_module.py`. The hand-written `MOVE_J` handler and `control_step` have to go. They replaced `ArmModule`'s own, which interpolate the motion and also handle Cartesian commands. Those need the joint limits from the kinematics model, which is why they take over now and not in Tutorial 2.
 
 ```python
 from solarian.core.arm_module import ArmModule
@@ -101,7 +103,7 @@ JOINTS = [
 ]
 
 
-class RightArmModule(ArmModule):
+class MyArmModule(ArmModule):
     shoulder_pan = FeetechServo(model="sts3250")
     shoulder_lift = FeetechServo(model="sts3250")
     elbow_flex = FeetechServo(model="sts3250")
@@ -127,13 +129,13 @@ class RightArmModule(ArmModule):
     )
 ```
 
-The six `CartesianIKActuator`s are the pose. `frame="flange"` is the wrist site in the arm model. The fingertips are not the flange. They sit a fixed offset beyond it, which the gripper module already measured. Pass that offset when you construct the arm, in `arm1/robot.py`:
+The six `CartesianIKActuator`s are the pose. `frame="flange"` is the wrist site in the arm model. The fingertips are not the flange. They sit a fixed offset beyond it, which the gripper module already measured. Pass that offset when you construct the arm, in `my_robot/robot.py`:
 
 ```python
-right_arm = RightArmModule(ik_tcp=UmiSlimFeetechModule.tcp_from_flange)
+arm = MyArmModule(ik_tcp=Gripper1FeetechModule.tcp_from_flange)
 ```
 
-In `conf/modules/right_arm.yaml`, the module has to interpolate poses, not just hold a position. Add, next to `frequency`:
+In `conf/modules/arm.yaml`, the module has to interpolate poses, not just hold a position. Add, next to `frequency`:
 
 ```yaml
 interpolator_type: pose
@@ -141,18 +143,18 @@ max_speed: [0.25, 0.6]    # metres/second, radians/second
 max_accel: [0.5, 3.0]
 ```
 
-And the action schema has to grow the six axes, or a Cartesian command has nowhere to land. In `RightArmAction`:
+And the action schema has to grow the six axes, or a Cartesian command has nowhere to land. In `MyArmAction`:
 
 ```python
-x = ActuatorField(Arm1Robot.right_arm.x.pos)
-y = ActuatorField(Arm1Robot.right_arm.y.pos)
-z = ActuatorField(Arm1Robot.right_arm.z.pos)
-rx = ActuatorField(Arm1Robot.right_arm.rx.pos)
-ry = ActuatorField(Arm1Robot.right_arm.ry.pos)
-rz = ActuatorField(Arm1Robot.right_arm.rz.pos)
+x = ActuatorField(MyRobotRobot.arm.x.pos)
+y = ActuatorField(MyRobotRobot.arm.y.pos)
+z = ActuatorField(MyRobotRobot.arm.z.pos)
+rx = ActuatorField(MyRobotRobot.arm.rx.pos)
+ry = ActuatorField(MyRobotRobot.arm.ry.pos)
+rz = ActuatorField(MyRobotRobot.arm.rz.pos)
 ```
 
-Do the same six lines on `RightArmObs`, with `SensorField`. The observation is how anything, including you in a log, reads the pose the kinematics produced.
+Do the same six lines on `MyArmObs`, with `SensorField`. The observation is how anything, including you in a log, reads the pose the kinematics produced.
 
 Restart the robot and the controller. `0` and `1` should still move the arm. They are joint poses, and `ArmModule` handles `MOVE_J` itself now. If they don't, the old `_handle_move_j` is still on the class.
 

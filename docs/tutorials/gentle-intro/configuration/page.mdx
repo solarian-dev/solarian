@@ -26,7 +26,7 @@ The Solarian Arm 1 has six revolute joints, so six degrees of freedom, and its c
 
 Read a value of **q** as an instruction for drawing the arm: turn the base by the first angle, tilt the shoulder by the second, and so on out to the wrist. There is a second way to describe the same arm. You could say where the gripper is and how it is turned. That is also six numbers: the same arm, described in different coordinates. Those are the two kinds of coordinates.
 
-The figure is the Solarian Arm 1, the real MuJoCo model, with the UMI Slim gripper on its flange. Move any joint and both descriptions change together: the six joint angles on the left, and the pose of the tool frame on the right.
+The figure is the Solarian Arm 1, the real MuJoCo model, with the solarian-gripper1 on its flange. Move any joint and both descriptions change together: the six joint angles on the left, and the pose of the tool frame on the right.
 
 
 
@@ -78,13 +78,13 @@ Each joint is one actuator on the module, so the six servo lines from the previo
 
 Task coordinates arrive in [Tutorial 4](/docs/tutorials/skills/move), when a skill needs to name a pose. The arm module gains six more actuators, one per task coordinate:
 
-```python {{ title: 'arm1/modules/right_arm.py' }}
+```python {{ title: 'my_robot/modules/my_arm_module.py' }}
 from solarian.core.arm_module import ArmModule
 from solarian.core.ik import CartesianIKActuator
 from solarian_feetech.actuator import FeetechServo
 
 
-class RightArmModule(ArmModule):
+class MyArmModule(ArmModule):
     # Joint coordinates: one per servo.
     shoulder_pan = FeetechServo(model="sts3250")
     shoulder_lift = FeetechServo(model="sts3250")

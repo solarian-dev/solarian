@@ -6,17 +6,35 @@ export const metadata = {
 
 # Overview
 
-**Solarian** is an open-source Python framework for building, controlling, teleoperating, and training robots. It gives you a clean three-node architecture, real-time multi-process modules, plug-and-play hardware and skills, and a dual-process AI controller — all configured with [Hydra](https://hydra.cc/) and connected over [ZeroMQ](https://zeromq.org/). {{ className: 'lead' }}
+**Solarian** is an open-source Python framework for building, controlling, teleoperating, and training robots. It gives you a clean three-node architecture, real-time multi-process modules, plug-and-play hardware and skills, and an AI agentic controller that drives the robot from plain-language chat with any vision-language model — all configured with [Hydra](https://hydra.cc/) and connected over [ZeroMQ](https://zeromq.org/). {{ className: 'lead' }}
 
-## Intro
+{/* ## Intro
 
-Solarian sits between your hardware and your application code. It handles the parts of robotics that every project has to solve — networking, configuration, calibration, real-time loops, observation/action schemas, recording, training — and lets you focus on the parts that make your robot unique: which hardware you have and what you want them to do.
+Solarian sits between your hardware and your application code. It handles the parts of robotics that every project has to solve — networking, configuration, calibration, real-time loops, observation/action schemas, recording, training — and lets you focus on the parts that make your robot unique: which hardware you have and what you want them to do. */}
 
-A typical Solarian project looks like this:
+## Architecture
+
+Solarian is structured as a **Robot ↔ Server ↔ Controller** system. Each role is a separate process and can run on a separate machine.
+
+{/* <ArchitectureFigure /> */}
+
+Zoomed in, each node is itself a set of processes and threads. On the robot, every module runs in its own process at its own rate and trades observations and actions with the robot loop through shared-memory ring buffers and queues. Skills run as their own processes or threads on the robot or the server, and policy-driven skills call a policy server. On the controller, the AI agentic controller plans the task with a vision-language model and starts skills as tools, while the controller loop records observations and merges teleop and skill actions into the `Action` it sends.
+
+<ArchitectureExtendedFigure />
+
+- **Robot** runs on the robot. It owns the hardware: every `Module` subclass becomes its own OS process, polls actuators and sensors, and streams typed observations back out. Implementation: [`solarian/core/robot.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py).
+- **RelayServer** runs anywhere reachable from both ends. It forwards actions from controllers to robots and observations from robots to controllers, and can run server-side observation processors. Implementation: [`solarian/core/server.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/server.py).
+- **Controller** decides what the robot should do next. Subclass `Controller` for keyboard teleop, leader-arm teleop, a learned policy, or add an `agent:` block to turn it into an AI agent that takes tasks from a chat, plans them with a vision-language model, and runs your skills as tools. Implementation: [`solarian/core/controller.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/controller.py).
+
+All three nodes speak the same protocol: a Pydantic-validated [`Action`](/docs/actions) goes one way, a Pydantic-validated [`Observation`](/docs/observations) comes the other. Both are msgpack-serialized over ZeroMQ.
+
+
+
+{/* A typical Solarian project looks like this:
 
 <ProjectFigure />
 
-You write a few small classes, declare your hardware modules, and Solarian wires the rest together.
+You write a few small classes, declare your hardware modules, and Solarian wires the rest together. */}
 
 ## Vision
 
@@ -24,29 +42,18 @@ Robotics is hard because the *infrastructure* is hard. Hardware vendors ship the
 
 Solarian's vision is to **standardize the boring parts** so that hardware modules, controllers, and AI policies become reusable across projects. A Feetech-based arm should plug into the same `Module` interface as a UR5 arm. A keyboard teleop session should produce the same `Observation`/`Action` stream that a learned policy will later consume. A `Skill` written for one robot should run on another that exposes the same `ModuleAction`.
 
-## Architecture
-
-Solarian is structured as a **Robot ↔ Server ↔ Controller** system. Each role is a separate process and can run on a separate machine.
-
-<ArchitectureFigure />
-
-- **Robot** runs on the robot. It owns the hardware: every `Module` subclass becomes its own OS process, polls actuators and sensors, and streams typed observations back out. Implementation: [`solarian/core/robot.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/robot.py).
-- **RelayServer** runs anywhere reachable from both ends. It forwards actions from controllers to robots and observations from robots to controllers, and can run server-side observation processors. Implementation: [`solarian/core/server.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/server.py).
-- **Controller** decides what the robot should do next. Subclass `Controller` for keyboard teleop, leader-arm teleop, a learned policy, or add an `agent:` block to let a planner model drive it from a chat. Implementation: [`solarian/core/controller.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/controller.py).
-
-All three nodes speak the same protocol: a Pydantic-validated [`Action`](/docs/actions) goes one way, a Pydantic-validated [`Observation`](/docs/observations) comes the other. Both are msgpack-serialized over ZeroMQ.
 
 ## Key features
 
 - **Real-time multi-process modules.** Each hardware [`Module`](/docs/modules) runs in its own process at its own configurable rate (`frequency` Hz), talking to the robot loop through shared-memory ring buffers, so a 500 Hz arm and a 30 Hz camera coexist without blocking each other. Scheduling is a property, not a base class, so cheap input devices like a keyboard run inline instead of paying for a process.
 - **Typed observations and actions.** [`Observation`](/docs/observations) and [`Action`](/docs/actions) are Pydantic-typed schemas that bind directly to your modules. The same data flows from hardware through the wire to your controller, your dataset, and your policy.
 - **Plug-and-play hardware.** Hardware drivers ship as standalone `solarian-<name>` [plugins](/docs/plugins). `solarian install ur5` installs the package and copies the default config straight into `conf/modules/ur5.yaml`.
-- **Hydra-driven configuration.** Every command takes its config from a YAML file (`robot.yaml`, `controller.yaml`, `server.yaml`, `commands/record.yaml`, …) composed via [Hydra defaults](/docs/project-configs). Each module's config lives in `conf/modules/<module_name>.yaml` matching the attribute name on your `Robot`. A [skill](/docs/skills) config lives in `conf/skills/<config_name>.yaml`, a [service](/docs/services) config in `conf/services/<name>.yaml`, and a [training](/docs/training) run in `conf/training/<name>.yaml`.
-- **AI Controller.** [Any controller](/docs/ai_controller) can take tasks in plain language: a planner model calls its [Skills](/docs/skills) as tools while a fast monitor model watches each one through the cameras.
-- **Recording and training.** First-class CLI commands ([`record`](/docs/commands), `train`) let you go from teleoperated demonstrations to a trained policy without leaving the framework.
+- **Hydra-driven configuration.** Every command takes its config from a YAML file (`robot.yaml`, `controller.yaml`, `server.yaml`, `commands/record.yaml`, …) composed via [Hydra defaults](/docs/project-configs). Each module's config lives in `conf/modules/<module_name>.yaml` matching the attribute name on your `Robot`. A [skill](/docs/skills) config lives in `conf/skills/<skill_name>.yaml`, a [service](/docs/services) config in `conf/services/<service_name>.yaml`, and a [training](/docs/training) run in `conf/training/<training_name>.yaml`.
+- **AI Agentic Controller.** Agentic control for any robot. [Any controller](/docs/agentic_controller) can wrap a vision-language model (Anthropic, OpenAI, or any OpenAI-compatible server) in an agent harness: give it a high-level task in the chat, and it plans the task and carries it out by calling your physical [Skills](/docs/skills) as tools, while a fast monitor model watches each one through the cameras.
+- **Recording and training.** First-class CLI commands ([`record`](/docs/commands#recording-commands), ([`train`](/docs/commands#training-and-data-commands)) let you go from teleoperated demonstrations to a trained policy without leaving the framework.
 - **Settings and lifecycle.** A simple `settings.py` pattern (à la Django) registers your `Robot`, `Controller`, and `Server` classes, so the CLI can discover and run any of them with the right configuration.
 
-## How a typical project flows
+{/* ## How a typical project flows
 
 ```text
 1. create-solarian myrobot               (scaffold the project)
@@ -60,12 +67,12 @@ All three nodes speak the same protocol: a Pydantic-validated [`Action`](/docs/a
 9. solarian run-service <skill conf>     (serve the policy a skill drives)
 ```
 
-Each step uses the same `Robot`, `Controller`, `Observation`, and `Action` classes you defined once in your project package.
+Each step uses the same `Robot`, `Controller`, `Observation`, and `Action` classes you defined once in your project package. */}
 
 ## Where to next?
 
 - **New to Solarian?** Continue with [Installation](/docs/installation) and then [Creating a Project](/docs/creating-a-project).
-- **Want to learn by building?** Take the [tutorials](/docs/tutorials).
-- **Want the big picture of every concept?** Skim [Modules](/docs/modules), [Controllers](/docs/controllers), and [Server](/docs/servers).
-- **Looking for the AI side?** Read [AI Controller](/docs/ai_controller) and [Skills](/docs/skills).
+- **Want to learn by building?** Take the [Tutorials](/docs/tutorials).
+- **Want the big picture of every concept?** Skim [Robot](/docs/robot), [Modules](/docs/modules), [Controllers](/docs/controllers) and more.
+- **Looking for the AI side?** Read [AI Agentic Controller](/docs/agentic_controller) and [Skills](/docs/skills).
 - **Need to look up a term?** Try the [Glossary](/docs/glossary).
