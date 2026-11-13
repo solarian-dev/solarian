@@ -3,7 +3,7 @@
 <div align="center">
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/solarian-dev/solarian/blob/main/LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-orange)](https://pypi.org/project/solarian/)
 [![PyPI](https://img.shields.io/pypi/v/solarian)](https://pypi.org/project/solarian/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/S7rfmJfpm5)
@@ -123,18 +123,18 @@ solarian run-controller
 The simulated arm going to its ground pose, jogged from the keyboard, then back home:
 
 <p align="center">
-  <img alt="Solarian Arm 1 in MuJoCo" src="./media/readme/sim.webp" width="720">
+  <img alt="Solarian Arm 1 in MuJoCo" src="https://raw.githubusercontent.com/solarian-dev/solarian/main/media/readme/sim.webp" width="720">
 </p>
 
 The controller window shows the live observations, the wrist camera, and the agentic controller's chat:
 
 <p align="center">
-  <img alt="Solarian controller GUI" src="./media/readme/controller-gui.png" width="720">
+  <img alt="Solarian controller GUI" src="https://raw.githubusercontent.com/solarian-dev/solarian/main/media/readme/controller-gui.png" width="720">
 </p>
 
 <!-- The real Solarian Arm 1, seen from outside. Record media/readme/arm1-real.webp, then uncomment:
 <p align="center">
-  <img alt="Solarian Arm 1 on the real robot" src="./media/readme/arm1-real.webp" width="720">
+  <img alt="Solarian Arm 1 on the real robot" src="https://raw.githubusercontent.com/solarian-dev/solarian/main/media/readme/arm1-real.webp" width="720">
 </p>
 -->
 
@@ -163,6 +163,6 @@ A `CONTRIBUTING.md` and a code of conduct are coming.
 
 ## License
 
-Solarian is licensed under the [Apache License 2.0](LICENSE). Copyright 2026 PrimaryKey Inc. Vendored third-party code keeps its own license; see [NOTICE](NOTICE). Model weights are downloaded separately and keep their upstream licenses.
+Solarian is licensed under the [Apache License 2.0](https://github.com/solarian-dev/solarian/blob/main/LICENSE). Copyright 2026 PrimaryKey Inc. Vendored third-party code keeps its own license; see [NOTICE](https://github.com/solarian-dev/solarian/blob/main/NOTICE). Model weights are downloaded separately and keep their upstream licenses.
 
-Solarian and the Solarian logo are trademarks of PrimaryKey Inc. See the [trademark policy](TRADEMARKS.md).
+Solarian and the Solarian logo are trademarks of PrimaryKey Inc. See the [trademark policy](https://github.com/solarian-dev/solarian/blob/main/TRADEMARKS.md).
