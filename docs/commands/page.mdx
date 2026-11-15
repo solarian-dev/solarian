@@ -327,13 +327,32 @@ solarian list-cameras
 
 Detects and lists every camera available to the system (V4L2 on Linux, AVFoundation on macOS), plus the cameras of any installed plugin that registers a `solarian.camera_backends` entry point, such as the Raspberry Pi CSI cameras from `solarian-picamera`.
 
-### `onshape-export`
+### `cad-import`
 
 ```bash
-solarian onshape-export <assembly_dir> [--clean-only] [--keys-file PATH] [--update-yaml PATH]
+solarian cad-import <assembly_dir>
+solarian cad-import <assembly_dir> --urdf download.zip
+solarian cad-import <assembly_dir> --clean-only
+solarian cad-import <assembly_dir> --density 522
+solarian cad-import <assembly_dir> --update-yaml conf/modules/right_gripper.yaml
 ```
 
-Exports an Onshape CAD assembly into an attachable MuJoCo (MJCF) model for [simulation](/docs/simulation). `<assembly_dir>` holds a `config.json` describing the assembly and a `solarian` block controlling the export. With `--update-yaml conf/modules/<module>.yaml`, joint ranges from the cleaned MJCF are synced into that module conf's `sim_range_min`/`sim_range_max` and into `config.json` `joint_properties.*.limits`. See [Models from Onshape](/docs/simulation#models-from-onshape) for the full workflow. Part of the `[sim]` extra.
+Reads a URDF and the meshes a CAD tool already wrote to disk, and cleans them into an attachable MuJoCo model for [simulation](/docs/simulation). Nothing is fetched from a CAD server. The model name is `<assembly_dir>` with `_description` removed (`gripper1_description` writes `../gripper1.xml`, `gripper1_raw.xml`, and `meshes/`). The first import writes `config.yaml` in that directory; later imports keep your edits to it. `--density` overrides the file's density for one run.
+
+```text
+<assembly_dir>/
+  robot.urdf          # or urdf/robot.urdf
+  meshes/*.stl
+```
+
+Name mates `dof_<name>` (an actuated joint `<name>`; `dof_<name>_inv` flips the axis), frames `frame_<name>` (`frame_flange`, `frame_tcp`, `frame_camera` become sites `flange`, `tcp`, `camera`), fastened parts `fix_<name>`, link overrides `link_<name>`, and loop closures `closing_<name>`. The prefix is removed in the MJCF. A name containing `wheel` or `continuous` is a joint with no limits. A `<mimic>` follower gets no actuator.
+
+- **Onshape.** Right-click the assembly tab, Export, format URDF, geometry STL, and uncheck "Export rigid subassemblies as a single link". It downloads a zip file that contains the URDF and the meshes. You can reference it in the command like this: `solarian cad-import <assembly_dir> --urdf download.zip`.
+- **FreeCAD.** The RobotCAD workbench exports a URDF package. Meshes as STL, in meters.
+- **Blender.** The Phobos add-on, mesh format STL.
+- **SolidWorks.** SW2URDF writes `urdf/<robot>.urdf` and `meshes/`. Set the mesh format to STL; the package folder can be the assembly directory.
+
+`--density` overrides the `config.yaml` density for that run and does not rewrite the file. `--update-yaml` writes the imported joint ranges into that module conf's `sim_range_min`/`sim_range_max`. See [Models from CAD](/docs/simulation#models-from-cad) for the click-by-click export. Part of the `[sim]` extra.
 
 ### `shell`
 

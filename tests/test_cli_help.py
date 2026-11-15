@@ -128,9 +128,9 @@ def test_commands_with_their_own_argv_store_it_on_the_command():
             ["actuator", "feetech"],
             {"plugin_type": "actuator", "plugin_name": "feetech", "force": False},
         ),
-        "onshape-export": (
-            ["assets/arm", "--clean-only", "--keys-file", "keys.txt"],
-            {"assembly_dir": "assets/arm", "clean_only": True, "keys_file": "keys.txt"},
+        "cad-import": (
+            ["assets/arm", "--clean-only"],
+            {"assembly_dir": "assets/arm", "clean_only": True, "urdf": None},
         ),
         "export-dataset": (
             [

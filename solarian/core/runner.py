@@ -19,6 +19,8 @@ is a process, a thread, or ticked inline by its host.
 from __future__ import annotations
 
 import logging
+import multiprocessing
+import os
 import signal
 import threading
 import time
@@ -34,6 +36,30 @@ from solarian.utils.precise_sleep import precise_wait
 from solarian.utils.profiling import func_stats, get_stats_snapshot
 
 logger = logging.getLogger("runner")
+
+_PARENT_POLL_S = 0.5
+
+# Same bound the parent gives a terminated worker: a camera close gives up
+# after 2s.
+_ORPHAN_TEARDOWN_S = 3.0
+
+
+def _exit_with_parent(parent_pid: int) -> None:
+    """End this worker once the process that started it is gone.
+
+    The stop event is the only shutdown a worker answers to, and it ignores
+    Ctrl+C. A parent that dies before stopping it (a second Ctrl+C during
+    shutdown, SIGKILL, a crash) would otherwise leave it running for good,
+    holding the camera or serial port it opened.
+    """
+    while os.getppid() == parent_pid:
+        time.sleep(_PARENT_POLL_S)
+    logger.warning("Parent pid %s is gone; stopping this worker", parent_pid)
+    os.kill(os.getpid(), signal.SIGTERM)
+    # SIGTERM is ignored once teardown has begun, and a worker blocked in a
+    # device call or flushing a queue nobody reads never finishes it.
+    time.sleep(_ORPHAN_TEARDOWN_S)
+    os.kill(os.getpid(), signal.SIGKILL)
 
 
 class Runnable(Protocol):
@@ -157,6 +183,12 @@ class Runner(ABC):
             # terminate() is a SIGTERM, and a CSI camera stays locked until
             # teardown closes it.
             signal.signal(signal.SIGTERM, _on_sigterm)
+            threading.Thread(
+                target=_exit_with_parent,
+                args=(multiprocessing.parent_process().pid,),
+                name="ParentWatchdog",
+                daemon=True,
+            ).start()
             # A forked worker inherits every timing its parent has taken. The
             # snapshot it queues on exit is read only once it has exited, and
             # a queue holds its process until the pipe has taken the lot, so

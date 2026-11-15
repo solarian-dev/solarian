@@ -45,6 +45,16 @@ def _conn_key(module_name: str, port: str) -> str:
     return f"{module_name}::{port}"
 
 
+def _follower_spec(follower) -> Dict[str, Any]:
+    return {
+        "joint": follower.joint,
+        "actuator": follower.joint,
+        "range_min": float(follower.range_min),
+        "range_max": float(follower.range_max),
+        "drive_mode": int(follower.drive_mode or 0),
+    }
+
+
 def _joint_spec(component) -> Dict[str, Any]:
     cfg = component.cfg
     joint = getattr(cfg, "sim_joint", None)
@@ -56,6 +66,7 @@ def _joint_spec(component) -> Dict[str, Any]:
         "range_min": float(cfg.sim_range_min),
         "range_max": float(cfg.sim_range_max),
         "drive_mode": int(getattr(cfg, "sim_drive_mode", 0) or 0),
+        "followers": [_follower_spec(item) for item in getattr(cfg, "sim_followers", ())],
     }
 
 

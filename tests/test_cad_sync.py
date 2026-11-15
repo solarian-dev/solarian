@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from solarian.sim.onshape import (
+from solarian.sim.cad import (
     clear_joint_property_limits,
     read_joint_ranges,
     sync_joint_properties,

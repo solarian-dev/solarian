@@ -172,6 +172,22 @@ class MujocoWorldServer(Process):
                     spec["dofadr"] = int(self.model.jnt_dofadr[spec["joint_id"]])
                 else:
                     self._virtual.setdefault(name, 0.0)
+                bound = []
+                for follower in spec.get("followers") or []:
+                    follower["joint_id"] = self._name2id(mujoco.mjtObj.mjOBJ_JOINT, follower["joint"])
+                    follower["actuator_id"] = self._name2id(
+                        mujoco.mjtObj.mjOBJ_ACTUATOR, follower["actuator"]
+                    )
+                    if follower["joint_id"] is None or follower["actuator_id"] is None:
+                        logger.warning(
+                            "Sim follower '%s' for %s was not found in the scene.",
+                            follower["joint"],
+                            name,
+                        )
+                        continue
+                    follower["qposadr"] = int(self.model.jnt_qposadr[follower["joint_id"]])
+                    bound.append(follower)
+                spec["followers"] = bound
             elif spec["kind"] == "camera":
                 spec["camera_id"] = self._name2id(mujoco.mjtObj.mjOBJ_CAMERA, spec.get("camera"))
 
@@ -290,6 +306,22 @@ class MujocoWorldServer(Process):
                 if snap and spec.get("qposadr") is not None:
                     self.data.qpos[spec["qposadr"]] = target
                     snapped = True
+                for follower in spec.get("followers") or []:
+                    # Same normalized command, this joint's own exported limits.
+                    # An unnormalized write is already in the primary joint's units.
+                    if not normalize:
+                        continue
+                    followed = _unnormalize(
+                        value,
+                        spec["mode"],
+                        follower["range_min"],
+                        follower["range_max"],
+                        follower["drive_mode"],
+                    )
+                    self.data.ctrl[follower["actuator_id"]] = followed
+                    if snap:
+                        self.data.qpos[follower["qposadr"]] = followed
+                        snapped = True
             if snapped:
                 mujoco.mj_forward(self.model, self.data)
         return None

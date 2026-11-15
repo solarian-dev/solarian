@@ -65,7 +65,7 @@ class CameraMount(BaseModel):
 
     Mount the camera either directly on a body (``parent_body``) or at a named
     ``site`` (frame) already present in the composed scene -- e.g. a frame
-    exported from Onshape by ``onshape-to-robot`` (which becomes a ``<site>``),
+    imported from a CAD URDF (a ``frame_<name>`` mate, which becomes a ``<site>``),
     namespaced by the owning module's attach ``prefix``. When ``site`` is set it
     takes precedence over ``parent_body``, the camera is placed on the site's
     own body, and ``pos``/``quat`` are interpreted as an offset relative to the

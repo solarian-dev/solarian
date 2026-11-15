@@ -603,9 +603,7 @@ class StatusBoard:
         try:
             with Live(self.render(), console=self._console, auto_refresh=False) as live:
                 while not self._stop_event.is_set():
-                    new_logs = self._drain_queues()
-                    for rec in new_logs:
-                        live.console.print(self._log_buf.format_record(rec))
+                    self._drain_queues()
                     live.update(self.render())
                     live.refresh()
                     time.sleep(_REFRESH_S)
@@ -620,9 +618,7 @@ class StatusBoard:
     def ui_loop_plain(self):
         try:
             while not self._stop_event.is_set():
-                new_logs = self._drain_queues()
-                for rec in new_logs:
-                    self._console.print(self._log_buf.format_record(rec))
+                self._drain_queues()
                 self._console.print(self.render())
                 self._console.print()
                 time.sleep(1.0)

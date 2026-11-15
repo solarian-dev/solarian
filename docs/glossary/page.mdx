@@ -12,7 +12,7 @@ A reference for robotics terms you'll see across the docs and the Solarian-speci
 
 ### ACT (Action Chunking Transformer)
 
-An imitation-learning policy that predicts a chunk of the next *k* actions at once with a transformer, and averages overlapping chunks with temporal ensembling. `solarian-policy-lerobot` trains it with the `lerobot_act` trainer. See [Policies and learning](/docs/tutorials/gentle-intro/learning#act-the-action-chunking-transformer).
+An imitation-learning policy that predicts a chunk of the next *k* actions at once with a transformer, and averages overlapping chunks with temporal ensembling. `solarian-policy-lerobot` trains it with the `lerobot_act` trainer. See [Policies and learning](/docs/tutorials/gentle-intro-to-robotics/learning#act-the-action-chunking-transformer).
 
 ### Actuator
 
@@ -44,7 +44,7 @@ An independent axis of motion. A 6-DoF arm can position its end effector in any 
 
 ### Diffusion policy
 
-A policy that generates a short trajectory of actions by starting from random noise and removing predicted noise step by step, conditioned on the observation. It learns the whole distribution of demonstrated actions, so each sample commits to one way of doing the task. The UMI policy in the tutorials is one. See [Policies and learning](/docs/tutorials/gentle-intro/learning#learning-a-distribution).
+A policy that generates a short trajectory of actions by starting from random noise and removing predicted noise step by step, conditioned on the observation. It learns the whole distribution of demonstrated actions, so each sample commits to one way of doing the task. The UMI policy in the tutorials is one. See [Policies and learning](/docs/tutorials/gentle-intro-to-robotics/learning#learning-a-distribution).
 
 ### End effector
 
@@ -84,7 +84,7 @@ The geometry of motion — how joint values map to end-effector poses (forward k
 
 ### Markov decision process (MDP)
 
-The standard model of a decision problem: states, actions, dynamics that give the next state from the current state and action, and a reward. *Markov* means the next state depends only on the current state and action. A robot sees observations, a part of the state, so its real problem is partially observed. See [Policies and learning](/docs/tutorials/gentle-intro/learning#states-observations-and-actions).
+The standard model of a decision problem: states, actions, dynamics that give the next state from the current state and action, and a reward. *Markov* means the next state depends only on the current state and action. A robot sees observations, a part of the state, so its real problem is partially observed. See [Policies and learning](/docs/tutorials/gentle-intro-to-robotics/learning#states-observations-and-actions).
 
 ### Policy
 
@@ -100,7 +100,7 @@ A robot's sense of its own state — joint positions, joint velocities, end-effe
 
 ### Reinforcement learning (RL)
 
-Learning a policy from reward by trial and error: the policy acts, a reward scores the result, and training changes the policy to collect more total reward, the *return*. Most robot RL trains in simulation and transfers the policy to hardware. See [Policies and learning](/docs/tutorials/gentle-intro/learning#reinforcement-learning-for-robotics).
+Learning a policy from reward by trial and error: the policy acts, a reward scores the result, and training changes the policy to collect more total reward, the *return*. Most robot RL trains in simulation and transfers the policy to hardware. See [Policies and learning](/docs/tutorials/gentle-intro-to-robotics/learning#reinforcement-learning-for-robotics).
 
 ### Sensor
 
@@ -124,7 +124,7 @@ A multimodal model that consumes images and text and returns text. Used by Solar
 
 ### Vision-Language-Action model (VLA)
 
-A [VLM](#vision-language-model-vlm) trained further to output robot actions: camera images, an instruction, and the joint state go in, and actions come out, either as action tokens or as a continuous chunk from an action expert. See [Policies and learning](/docs/tutorials/gentle-intro/learning#vlas-vision-language-action-models).
+A [VLM](#vision-language-model-vlm) trained further to output robot actions: camera images, an instruction, and the joint state go in, and actions come out, either as action tokens or as a continuous chunk from an action expert. See [Policies and learning](/docs/tutorials/gentle-intro-to-robotics/learning#vlas-vision-language-action-models).
 
 ## Solarian terms
 

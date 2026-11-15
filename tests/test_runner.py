@@ -1,6 +1,8 @@
 """Runner machinery: the same worker protocol under process, thread, and inline."""
 
 import multiprocessing as mp
+import os
+import signal
 import time
 
 import pytest
@@ -245,3 +247,43 @@ class TestProcess:
 
         assert target.shared_teardown.value == 1
         assert not runner.is_alive()
+
+    def test_a_worker_whose_parent_died_runs_teardown_and_exits(self):
+        """A run-robot killed mid-shutdown never sets the stop event, and a
+        worker left blocked in a tick would hold its camera forever."""
+        target = BlocksUntilSignaled()
+        ctx = mp.get_context("fork")
+        pid_q = ctx.Queue()
+
+        def host():
+            runner = ProcessModuleRunner(target)
+            runner.start(wait=False)
+            pid_q.put(runner.pid)
+            time.sleep(60)
+
+        parent = ctx.Process(target=host)
+        parent.start()
+        worker_pid = pid_q.get(timeout=5)
+        try:
+            deadline = time.monotonic() + 5
+            while target.shared_ticks.value == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            parent.kill()
+            parent.join(timeout=2)
+
+            deadline = time.monotonic() + 5
+            while _pid_alive(worker_pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert not _pid_alive(worker_pid)
+            assert target.shared_teardown.value == 1
+        finally:
+            if _pid_alive(worker_pid):
+                os.kill(worker_pid, signal.SIGKILL)
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True

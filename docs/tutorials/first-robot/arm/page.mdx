@@ -216,6 +216,7 @@ The world around the arm holds what every scene shares: a floor and a light. Cre
     <global azimuth="120" elevation="-20"/>
   </visual>
   <asset>
+    <texture type="skybox" builtin="flat" rgb1="0.6 0.6 0.6" width="512" height="512"/>
     <texture name="grid" type="2d" builtin="checker" rgb1="0.2 0.3 0.4" rgb2="0.1 0.15 0.2"
              width="512" height="512" mark="edge" markrgb="0.8 0.8 0.8"/>
     <material name="grid" texture="grid" texrepeat="8 8"/>
@@ -227,7 +228,7 @@ The world around the arm holds what every scene shares: a floor and a light. Cre
 </mujoco>
 ```
 
-The arm stays out of this file. The robot attaches it in Python, which keeps the arm model reusable in any other scene.
+The arm stays out of this file. The robot attaches it in Python, which keeps the arm model reusable in any other scene. The skybox is a flat grey. The camera chapter is why: a fisheye leaves black corners, and a black sky would hide the edge of the lens.
 
 ### Attach the arm
 

@@ -38,40 +38,26 @@ You write a few small classes, declare your hardware modules, and Solarian wires
 
 ## Vision
 
-Robotics is hard because the *infrastructure* is hard. Hardware vendors ship their own SDKs, every research lab invents its own networking layer, and every team rewrites the same calibration, recording, and replay tools.
+Solarian's vision is to **standardize the architecture of a robotics project**, so the next robot reuses what the last one already proved. Hardware modules, policies, models, and skills share one set of interfaces. A Feetech arm and a UR5 are both a `Module`. A keyboard teleop session and a learned policy consume the same `Observation` and produce the same `Action`. A `Skill` written for one robot runs on another that exposes the same `ModuleAction`.
 
-Solarian's vision is to **standardize the boring parts** so that hardware modules, controllers, and AI policies become reusable across projects. A Feetech-based arm should plug into the same `Module` interface as a UR5 arm. A keyboard teleop session should produce the same `Observation`/`Action` stream that a learned policy will later consume. A `Skill` written for one robot should run on another that exposes the same `ModuleAction`.
+Those interfaces hold classical control and learned policies together. Inverse kinematics, waypoints, and teleoperation run alongside a diffusion policy or a vision-language model, reading one observation stream and writing one action stream. A project combines them because they already agree on the types.
+
+New functionality ships as a plugin instead of landing in one monolithic repository. A driver, a skill, or a policy is its own package, and a project installs the ones it needs. What stays in the project is small and obvious — a few classes and a `conf/` tree — and flexible.
 
 
 ## Key features
 
 - **Real-time multi-process modules.** Each hardware [`Module`](/docs/modules) runs in its own process at its own configurable rate (`frequency` Hz), talking to the robot loop through shared-memory ring buffers, so a 500 Hz arm and a 30 Hz camera coexist without blocking each other. Scheduling is a property, not a base class, so cheap input devices like a keyboard run inline instead of paying for a process.
 - **Typed observations and actions.** [`Observation`](/docs/observations) and [`Action`](/docs/actions) are Pydantic-typed schemas that bind directly to your modules. The same data flows from hardware through the wire to your controller, your dataset, and your policy.
-- **Plug-and-play hardware.** Hardware drivers ship as standalone `solarian-<name>` [plugins](/docs/plugins). `solarian install ur5` installs the package and copies the default config straight into `conf/modules/ur5.yaml`.
-- **Hydra-driven configuration.** Every command takes its config from a YAML file (`robot.yaml`, `controller.yaml`, `server.yaml`, `commands/record.yaml`, …) composed via [Hydra defaults](/docs/project-configs). Each module's config lives in `conf/modules/<module_name>.yaml` matching the attribute name on your `Robot`. A [skill](/docs/skills) config lives in `conf/skills/<skill_name>.yaml`, a [service](/docs/services) config in `conf/services/<service_name>.yaml`, and a [training](/docs/training) run in `conf/training/<training_name>.yaml`.
+- **Plug-and-play hardware and skills.** Both ship as standalone [plugins](/docs/plugins). `solarian install ur5` installs the hardware driver and copies its config into `conf/modules/ur5.yaml`. `solarian install move-skill` installs the skill and copies its config into `conf/skills/move.yaml`.
 - **AI Agentic Controller.** Agentic control for any robot. [Any controller](/docs/agentic_controller) can wrap a vision-language model (Anthropic, OpenAI, or any OpenAI-compatible server) in an agent harness: give it a high-level task in the chat, and it plans the task and carries it out by calling your physical [Skills](/docs/skills) as tools, while a fast monitor model watches each one through the cameras.
 - **Recording and training.** First-class CLI commands ([`record`](/docs/commands#recording-commands), ([`train`](/docs/commands#training-and-data-commands)) let you go from teleoperated demonstrations to a trained policy without leaving the framework.
-- **Settings and lifecycle.** A simple `settings.py` pattern (à la Django) registers your `Robot`, `Controller`, and `Server` classes, so the CLI can discover and run any of them with the right configuration.
-
-{/* ## How a typical project flows
-
-```text
-1. create-solarian myrobot               (scaffold the project)
-2. solarian install ur5                  (install a plugin and copy its config)
-3. edit conf/modules/ur5.yaml            (set port, ID, frequency, …)
-4. solarian run-server                   (relay machine)
-5. solarian run-robot                    (on the robot)
-6. solarian run-controller               (your laptop — keyboard teleop)
-7. solarian record                       (capture an episode)
-8. solarian train ...                    (train a policy)
-9. solarian run-service <skill conf>     (serve the policy a skill drives)
-```
-
-Each step uses the same `Robot`, `Controller`, `Observation`, and `Action` classes you defined once in your project package. */}
+- **Hydra-driven configuration.** Every command takes its config from a YAML file (`robot.yaml`, `controller.yaml`, `server.yaml`, `commands/record.yaml`, …) composed via [Hydra defaults](/docs/project-configs). Each module's config lives in `conf/modules/<module_name>.yaml` matching the attribute name on your `Robot`. A [skill](/docs/skills) config lives in `conf/skills/<skill_name>.yaml`, a [service](/docs/services) config in `conf/services/<service_name>.yaml`, and a [training](/docs/training) run in `conf/training/<training_name>.yaml`.
 
 ## Where to next?
 
 - **New to Solarian?** Continue with [Installation](/docs/installation) and then [Creating a Project](/docs/creating-a-project).
+- **New to robotics?** Check out [A Gentle Introduction to Robotics](/docs/tutorials/gentle-intro-to-robotics/).
 - **Want to learn by building?** Take the [Tutorials](/docs/tutorials).
 - **Want the big picture of every concept?** Skim [Robot](/docs/robot), [Modules](/docs/modules), [Controllers](/docs/controllers) and more.
 - **Looking for the AI side?** Read [AI Agentic Controller](/docs/agentic_controller) and [Skills](/docs/skills).

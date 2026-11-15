@@ -43,12 +43,12 @@ cameras=[
         # 180 degrees about X: the site's +Z points out of the lens,
         # and a MuJoCo camera looks down its −Z.
         quat=[0.0, 1.0, 0.0, 0.0],
-        fovy=90.0,
+        fovy=160.0,
     ),
 ],
 ```
 
-`site` is the gripper site after the gripper's prefix. `name` is the name the YAML will look up. `fovy` is the vertical field of view in degrees. 90 is wide enough to see the floor in front of the fingers. The real lens is wider, and Tutorial 4's calibration is what makes sim and hardware agree. For looking around, 90 is enough.
+`site` is the gripper site after the gripper's prefix. `name` is the name the YAML will look up. `fovy` is the vertical field of view in degrees. 160 covers the fisheye below. A narrower mount leaves the corners black, because a ray past the mount's field of view has nothing to sample.
 
 ## Config
 
@@ -68,14 +68,33 @@ sensors:
   camera:
     port: ${camera_port}
     fps: 30
-    width: 640
-    height: 480
+    width: 2028
+    height: 1520
+    resize_width: 1014
+    resize_height: 760
     type: picamera
     sim:
       camera: wrist_cam
+      distortion:
+        K:
+          - [491.675396895272, 0.0, 1088.339902607592]
+          - [0.0, 491.5475188272582, 838.6250290993801]
+          - [0.0, 0.0, 1.0]
+        D: [-0.008826263634177264, -0.0016119623519468152, -0.0008418817584951424, -4.8955137146841194e-05]
+        calib_width: 2028
+        calib_height: 1520
+        render_scale: 2.0
 ```
 
-`sim.camera` is the `CameraMount` name. `type: picamera` selects the Pi camera driver, which simulation replaces with the renderer. 640×480 keeps the first run light. The real camera's resolution is a later edit; the field in the observation does not change when you change the size.
+`sim.camera` is the `CameraMount` name. `type: picamera` selects the Pi camera driver, which simulation replaces with the renderer.
+
+MuJoCo draws a pinhole picture. A UMI policy is trained on a GoPro with a fisheye lens, and it runs the same remap on a simulated frame that it runs on the real camera. That remap was solved from this fisheye, so the render has to be that fisheye first or the policy is shown a picture it was not trained on. `distortion` is the wrist lens: `K` and `D` are its intrinsics at `calib_width` × `calib_height`, and `render_scale` draws the pinhole larger before the warp so the stretched edges stay sharp. The policy's remap then lands on the GoPro image. The GoPro's own intrinsics do not belong in this block. The policy would apply them a second time, and the hand would reach to the wrong place.
+
+The corners of that image are black, because those rays miss the mount. The sky in `assets/scene.xml` is grey so the black reads as the lens. If the scene has no skybox yet, add one inside `<asset>`:
+
+```xml
+<texture type="skybox" builtin="flat" rgb1="0.6 0.6 0.6" width="512" height="512"/>
+```
 
 ## Show it
 
@@ -96,15 +115,24 @@ class MyRobotObservation(Observation):
 
 The path is `module.camera.rgb_image`: the module, then the `PiCamera` component, then its image. The field name `rgb_image` is what shows up as the window's label.
 
-A camera has no actuators. The action class does not need a field for it.
+A camera has no actuators, so its action is empty. The robot still requires one entry per module. In `my_robot/action.py`:
+
+```python
+class MyWristCameraAction(ModuleAction):
+    pass
+
+
+class MyRobotAction(Action):
+    arm = MyArmAction()
+    gripper = MyGripperAction()
+    wrist_camera = MyWristCameraAction()
+```
 
 ## Look through it
 
 Restart the robot and the controller. The controller window should show the wrist view: the floor, and the fingers if they are in frame. Press `s` and `d` to swing the arm, and watch the picture move with it. `z` and `x` still open and close the gripper, in that same picture.
 
-<Note>
-  **Figure to add.** The controller window with the wrist image, fingers in frame. <code>public/images/tutorials/wrist-view.png</code>.
-</Note>
+![The controller window with the wrist image, fingers in frame.](./gripper1-controller-sim.png)
 
 <Note>
   A black image usually means the mount name and <code>sim.camera</code> disagree, or the camera is looking away from the scene. The quaternion above turns the lens toward the fingers. If the picture is black with a valid name, orbit is not the problem — a MuJoCo camera looks down −Z, and a mount without that flip looks out the back of the gripper.
@@ -120,4 +148,4 @@ Restart the robot and the controller. The controller window should show the wris
 
 The controller is still a keyboard. It reads observations and writes a joint target. That is the whole robot until [Tutorial 4](/docs/tutorials/skills), where a skill replaces `control_step`.
 
-[Tutorial 3](/docs/tutorials/real-robot) builds this same project in hardware. You can also go straight to skills and stay in simulation: Tutorial 4's real-arm chapter is the only part that needs the physical robot.
+[Tutorial 3](/docs/tutorials/real-robot) builds this same project in hardware. You can also go straight to skills and stay in simulation: [Tutorial 4](/docs/tutorials/skills). Tutorial 4's real-arm chapter is the only part that needs the physical robot.

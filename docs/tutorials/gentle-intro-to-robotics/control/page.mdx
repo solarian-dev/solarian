@@ -56,7 +56,7 @@ An **actuator** is the part that moves a joint. It takes a command, a voltage or
 ### Types of actuators
 
 - An **electric motor** turns current into rotation. It is clean, precise, and easy to control from a computer, so almost every arm and most mobile robots use one. **Brushed DC** motors are cheap and simple. **Brushless** motors are stronger for their size and last longer. **Stepper** motors move in fixed small steps, which suits 3D printers.
-- A **servo** packs an electric motor with a gearbox, an encoder, and a small controller in one box. You send a target angle, and it moves there and holds. [The robot's body](/docs/tutorials/gentle-intro/body) shows the inside of one. The Solarian Arm 1 is built from Feetech servos.
+- A **servo** packs an electric motor with a gearbox, an encoder, and a small controller in one box. You send a target angle, and it moves there and holds. [The robot's body](/docs/tutorials/gentle-intro-to-robotics/body) shows the inside of one. The Solarian Arm 1 is built from Feetech servos.
 - A **quasi-direct-drive** actuator pairs a large brushless motor with a small gear ratio. It is fast, and it can feel forces pushed back through the joint, so it suits legged robots and arms that touch people. Solarian has a plugin for [Robstride](https://github.com/solarian-dev/solarian-robstride) motors of this kind.
 - **Hydraulic** actuators push with pressurised oil. They give the most force for their weight, and they drive excavators and some large humanoids.
 - **Pneumatic** actuators push with compressed air. They are light and naturally springy, and they drive many industrial grippers and soft robots.
@@ -109,7 +109,7 @@ PID is the workhorse, and it is far from the only option. A few names you will m
 - **Feedforward** adds the torque a model predicts the motion needs, such as the torque to hold up the arm's weight, so the feedback term only corrects what the model missed.
 - **Impedance control** makes a joint behave like a spring and damper around its target, so the arm gives way when it touches something.
 - **Model predictive control** simulates the next fraction of a second for many candidate commands, and sends the first step of the best one, again on every tick.
-- A **learned policy** replaces the upper layer with a neural network trained from examples. It reads the sensors and outputs the next targets, and PID in the servos still follows them. [Policies and learning](/docs/tutorials/gentle-intro/learning) covers these.
+- A **learned policy** replaces the upper layer with a neural network trained from examples. It reads the sensors and outputs the next targets, and PID in the servos still follows them. [Policies and learning](/docs/tutorials/gentle-intro-to-robotics/learning) covers these.
 
 ## In Solarian
 
@@ -171,4 +171,4 @@ max_accel: [0.5, 3.0]
 
 The path itself comes from whoever chose the targets: you with the keyboard, a skill naming a pose, or a policy trained on human demonstrations, which already avoided the obstacles when the person did the task.
 
-Next: [policies and learning](/docs/tutorials/gentle-intro/learning).
+Next: [policies and learning](/docs/tutorials/gentle-intro-to-robotics/learning).

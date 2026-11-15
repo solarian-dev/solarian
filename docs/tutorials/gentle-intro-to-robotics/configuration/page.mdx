@@ -14,7 +14,7 @@ The **configuration** of a robot is a complete description of where every part o
 
 For an arm that description is short. The links are rigid, so they never bend or stretch. Once you know the angle of each joint, every link follows. The configuration is one number per joint.
 
-The fewest numbers that pin down the configuration is the robot's number of degrees of freedom. That is the same count as in the [previous chapter](/docs/tutorials/gentle-intro/body), seen from the other side: each degree of freedom is one number you have to write down.
+The fewest numbers that pin down the configuration is the robot's number of degrees of freedom. That is the same count as in the [previous chapter](/docs/tutorials/gentle-intro-to-robotics/body), seen from the other side: each degree of freedom is one number you have to write down.
 
 <ArmConfigurationFigure />
 
@@ -40,7 +40,7 @@ The figure is the Solarian Arm 1, the real MuJoCo model, with the solarian-gripp
 | Numbers on the Solarian Arm 1 | 6 angles | 3 for position, 3 for orientation |
 | Natural for | motors, logging, replaying a motion | goals in the world, camera-guided motion |
 
-Both describe the same robot, so you can convert from one to the other. That conversion is **kinematics**, the subject of the [next chapter](/docs/tutorials/gentle-intro/kinematics).
+Both describe the same robot, so you can convert from one to the other. That conversion is **kinematics**, the subject of the [next chapter](/docs/tutorials/gentle-intro-to-robotics/kinematics).
 
 ## Frames
 
@@ -111,4 +111,4 @@ Declaring the task coordinates as `CartesianIKActuator`s is all it takes to work
 
 Now is time to understand how to translate between joint coordinates and task coordinates.
 
-Next: [kinematics](/docs/tutorials/gentle-intro/kinematics).
+Next: [kinematics](/docs/tutorials/gentle-intro-to-robotics/kinematics).

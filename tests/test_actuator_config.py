@@ -34,6 +34,55 @@ def test_actuator_config_flattens_legacy_sim_block() -> None:
     assert not hasattr(cfg, "type")
 
 
+def test_actuator_config_reads_sim_followers() -> None:
+    cfg = ActuatorConfig.model_validate(
+        {
+            "id": 1,
+            "sim_joint": "gripper/left_manifold_to_rail",
+            "sim_followers": [
+                {
+                    "joint": "gripper/right_manifold_to_rail",
+                    "range_min": -0.0545,
+                    "range_max": 0,
+                }
+            ],
+        }
+    )
+    assert cfg.sim_followers[0].joint == "gripper/right_manifold_to_rail"
+    assert cfg.sim_followers[0].drive_mode == 0
+
+
+def test_joint_spec_carries_followers() -> None:
+    from types import SimpleNamespace
+
+    from solarian.sim.runtime import _joint_spec
+
+    cfg = ActuatorConfig.model_validate(
+        {
+            "id": 1,
+            "mode": "range_m100_100",
+            "sim_joint": "gripper/left_manifold_to_rail",
+            "sim_range_min": 0,
+            "sim_range_max": 0.0545,
+            "sim_drive_mode": 1,
+            "sim_followers": [
+                {"joint": "gripper/right_manifold_to_rail", "range_min": -0.0545, "range_max": 0}
+            ],
+        }
+    )
+    spec = _joint_spec(SimpleNamespace(cfg=cfg))
+    assert spec["joint"] == "gripper/left_manifold_to_rail"
+    assert spec["followers"] == [
+        {
+            "joint": "gripper/right_manifold_to_rail",
+            "actuator": "gripper/right_manifold_to_rail",
+            "range_min": -0.0545,
+            "range_max": 0.0,
+            "drive_mode": 0,
+        }
+    ]
+
+
 def test_actuator_config_reads_legacy_homing_offset() -> None:
     cfg = ActuatorConfig.model_validate({"id": 1, "homing_offset": -776})
     assert cfg.center_offset == -776

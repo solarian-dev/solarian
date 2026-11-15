@@ -96,6 +96,9 @@ class RelayServer:
 
         #: ``{(module_name, field_name): Processor}`` for the fields computed here.
         self._processors = Observation.create_processors(ExecutionPlace.SERVER)
+        # Drop the console handler before a config error is logged. The UI
+        # thread stays down: the skill host may fork, and start() opens the panel.
+        StatusBoard(start_ui=False)
         self.skill_host = None
         if cfg.host_skills:
             from solarian.core.server_skill_host import ServerSkillHost

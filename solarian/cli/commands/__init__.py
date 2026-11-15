@@ -47,9 +47,9 @@ CommandRegistry.register_lazy(
     category="Project",
 )
 CommandRegistry.register_lazy(
-    "onshape-export",
-    module_path=f"{_pkg}.onshape_export",
-    help="Export an Onshape assembly into an attachable MuJoCo sim model",
+    "cad-import",
+    module_path=f"{_pkg}.cad_import",
+    help="Import a downloaded CAD URDF and meshes into an attachable MuJoCo sim model",
     setup_modules=(),
     category="Utilities",
 )

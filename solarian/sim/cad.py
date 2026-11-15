@@ -1,55 +1,24 @@
-"""Export an Onshape assembly into an attachable MuJoCo (MJCF) sim model.
+"""Turn a downloaded CAD URDF into an attachable MuJoCo (MJCF) sim model.
 
-This generalizes the two bespoke scripts originally written for the Solarian
-Arm 1 into a single, config-driven pipeline that any assembly can reuse. It is the engine behind the ``solarian
-onshape-export`` CLI command.
+This is the engine behind the ``solarian cad-import`` command. The URDF and
+its meshes are files already downloaded from a CAD tool (see
+:mod:`solarian.sim.cad_urdf`). The clean stage then drops the base
+``<freejoint>``, infers link mass and inertia from the collision meshes at a
+fixed density, points ``meshdir`` at those meshes, and makes the mechanism's
+own collision geoms non-self-colliding. Frames (``flange``, ``tcp``,
+``camera``, …) are already ``<site>`` elements in the raw MJCF.
 
-The pipeline has two stages:
-
-1. **Raw export** (needs the Onshape API + network). Uses
-   `onshape-to-robot <https://onshape-to-robot.readthedocs.io>`_ to pull the
-   assembly and write a raw MJCF + STL meshes. Two things onshape-to-robot does
-   not do out of the box are patched in, driven by the ``solarian`` block of the
-   assembly's ``config.json``:
-
-   * onshape-to-robot only treats a mate as a *joint* when its name is prefixed
-     with ``dof_``. Rather than editing the CAD, the ``dof_mates`` are renamed to
-     ``dof_<name>`` on the fly in the API responses (both the assembly and the
-     features response, the latter being where joint limits are read).
-   * the kinematic tree is rooted at the assembly's base (``base_dof``) so the
-     model attaches to the world / a parent body at its base, not at the tool.
-   * stale ``joint_properties.*.limits`` in ``config.json`` are ignored during
-     the pull (Onshape mate limits win); after cleaning, those CAD limits are
-     written back into ``config.json``. Set ``solarian.prefer_config_limits``
-     to keep config.json as the source of truth instead.
-
-   Free-floating shells that carry no mate (duplicate CAD bodies) are dropped so
-   the exported model is a single connected mechanism.
-
-2. **Clean** (no network). Turns the raw MJCF into an *attachable* model:
-   drops the base ``<freejoint>`` so it can be composed into a scene, infers
-   link mass/inertia from the collision meshes at a fixed density (the CAD
-   assigns no materials), points ``meshdir`` at the exported meshes, and makes
-   the mechanism's own collision geoms non-self-colliding. CAD Frames
-   (``flange``, ``tcp``, ``camera``, …) are already ``<site>`` elements in the
-   raw export — the clean stage does not invent extra sites.
-
-Credentials are read by onshape-to-robot from the environment
-(``ONSHAPE_API``, ``ONSHAPE_ACCESS_KEY``, ``ONSHAPE_SECRET_KEY``); the CLI
-command sets these up (see :mod:`solarian.cli.commands.onshape_export`).
-
-MuJoCo / onshape-to-robot / numpy-stl are imported lazily inside the functions,
-so importing this module never requires the ``[sim]`` extras.
+``commentjson`` is imported at module level. MuJoCo is not: importing this
+module never requires the ``[sim]`` extra.
 """
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Iterator, Optional
+from typing import Optional
 
 import commentjson
 
@@ -61,23 +30,28 @@ import commentjson
 #: Uniform density (kg/m^3) used to infer link masses from solid mesh volumes
 #: when the CAD assigns no materials. ~1400 gives a ~1 kg SO-ARM-sized part.
 DEFAULT_DENSITY = 1400.0
+#: Position-actuator stiffness. N/m on a slide, N·m/rad on a hinge.
+DEFAULT_KP = 50.0
+DEFAULT_DAMPRATIO = 1.0
+#: Joint friction loss. N on a slide, N·m on a hinge.
+DEFAULT_FRICTIONLOSS = 0.1
+DEFAULT_ARMATURE = 0.005
 
 
 @dataclass
 class SolarianExportSpec:
     """The ``solarian`` block of an assembly ``config.json``.
 
-    Everything specific to turning an Onshape assembly into an attachable
+    Everything specific to turning a downloaded CAD URDF into an attachable
     Solarian sim model. All fields have defaults that reproduce the Solarian Arm 1's
     original behaviour.
     """
 
-    #: Revolute / prismatic mates (by CAD name) to expose as actuated joints.
+    #: Unused. Kept so a config.json written for the old Onshape API export still parses.
     dof_mates: list[str] = field(default_factory=list)
-    #: Root the kinematic tree at the body of this DOF that no other DOF
-    #: touches (the mechanism base). ``None`` keeps onshape-to-robot's default.
+    #: Unused. The URDF's root link is the MJCF base.
     base_dof: Optional[str] = None
-    #: Drop links that have no mate at all (duplicate free-floating shells).
+    #: Unused. A URDF already contains only the links its joints connect.
     drop_unmated_links: bool = True
     #: Where to write the cleaned, attachable MJCF, relative to the assembly
     #: dir. Defaults to ``../<robot_name>.xml`` (i.e. the project ``assets/``).
@@ -87,6 +61,14 @@ class SolarianExportSpec:
     meshdir: Optional[str] = None
     #: Density for mass/inertia inference from the collision meshes.
     density: float = DEFAULT_DENSITY
+    #: Position-actuator stiffness written onto the robot default class.
+    kp: float = DEFAULT_KP
+    #: Damping ratio of those position actuators.
+    dampratio: float = DEFAULT_DAMPRATIO
+    #: Joint friction loss written onto the robot default class.
+    frictionloss: float = DEFAULT_FRICTIONLOSS
+    #: Reflected rotor inertia written onto the robot default class.
+    armature: float = DEFAULT_ARMATURE
     #: Drop the base ``<freejoint>`` so the model attaches rigidly into a scene.
     attach: bool = True
     #: Strip the placeholder inertials and infer mass/inertia from geometry.
@@ -96,10 +78,7 @@ class SolarianExportSpec:
     #: MuJoCo does not auto-exclude parent/child contacts, so self-collision
     #: produces permanent interpenetrations that fight the actuators.
     self_collision: bool = False
-    #: When ``False`` (default), ``joint_properties.*.limits`` in config.json are
-    #: ignored during the Onshape pull so mate limits from the assembly win;
-    #: after export those CAD limits are written back into config.json. Set
-    #: ``True`` only when you intentionally want config.json to override CAD.
+    #: Unused. Joint limits in the imported MJCF are written back into config.json.
     prefer_config_limits: bool = False
 
     @classmethod
@@ -111,8 +90,7 @@ def clear_joint_property_limits(joint_properties: dict) -> list[str]:
     """Remove ``limits`` overrides from a ``joint_properties`` mapping (in-place).
 
     Returns the joint names (including ``default`` / ``*``) whose ``limits``
-    entry was cleared. Leaves other properties (``range``, effort, …) intact so
-    onshape-to-robot still emits ``range=`` from the CAD mate limits.
+    entry was cleared. Leaves other properties (``range``, effort, …) intact.
     """
     cleared: list[str] = []
     if not isinstance(joint_properties, dict):
@@ -123,155 +101,6 @@ def clear_joint_property_limits(joint_properties: dict) -> list[str]:
         del entry["limits"]
         cleared.append(name)
     return cleared
-
-
-# --------------------------------------------------------------------------- #
-# Stage 1: raw Onshape export (patched)                                       #
-# --------------------------------------------------------------------------- #
-
-def _prefix_dof_mates(assembly: dict, features: dict, dof_mates: set[str]):
-    """Rename the ``dof_mates`` to ``dof_<name>`` in the API responses so
-    onshape-to-robot treats them as joints (in-place)."""
-    for feature in assembly.get("rootAssembly", {}).get("features", []):
-        data = feature.get("featureData", {})
-        if data.get("name") in dof_mates:
-            data["name"] = f"dof_{data['name']}"
-    for feature in features.get("features", []):
-        msg = feature.get("message", {})
-        if msg.get("name") in dof_mates:
-            msg["name"] = f"dof_{msg['name']}"
-
-
-@contextlib.contextmanager
-def _onshape_patches(spec: SolarianExportSpec) -> Iterator[None]:
-    """Monkeypatch the onshape-to-robot client/assembly for the duration of an
-    export: expose ``dof_mates`` as joints and (optionally) root the tree at
-    ``base_dof``. Everything is restored on exit so the patch never leaks."""
-    from onshape_to_robot.onshape_api.client import Client
-    from onshape_to_robot.assembly import Assembly
-
-    dof_mates = set(spec.dof_mates)
-    base_dof = spec.base_dof
-
-    orig_get_assembly = Client.get_assembly
-    orig_get_features = Client.get_features
-    orig_process_mates = Assembly.process_mates
-
-    def patched_get_assembly(self, *args, **kwargs):
-        result = orig_get_assembly(self, *args, **kwargs)
-        _prefix_dof_mates(result, {"features": []}, dof_mates)
-        return result
-
-    def patched_get_features(self, *args, **kwargs):
-        result = orig_get_features(self, *args, **kwargs)
-        _prefix_dof_mates({}, result, dof_mates)
-        return result
-
-    def patched_process_mates(self):
-        orig_process_mates(self)
-        if base_dof is None:
-            return
-        # Root the tree at the base: the body of ``base_dof`` that no other DOF
-        # touches. build_trees() starts at the first body in instance_body, so
-        # reorder to put the base first.
-        dof_bodies = [b for dof in self.dofs for b in (dof.body1_id, dof.body2_id)]
-        base_candidates = [
-            b
-            for dof in self.dofs
-            if dof.name == base_dof
-            for b in (dof.body1_id, dof.body2_id)
-            if dof_bodies.count(b) == 1
-        ]
-        if base_candidates:
-            base_body = base_candidates[0]
-            reordered = {
-                occ: bid for occ, bid in self.instance_body.items() if bid == base_body
-            }
-            for occ, bid in self.instance_body.items():
-                if bid != base_body:
-                    reordered[occ] = bid
-            self.instance_body = reordered
-            print(f"* Rooting kinematic tree at base body {base_body} ({base_dof})")
-
-    Client.get_assembly = patched_get_assembly
-    Client.get_features = patched_get_features
-    Assembly.process_mates = patched_process_mates
-    try:
-        yield
-    finally:
-        Client.get_assembly = orig_get_assembly
-        Client.get_features = orig_get_features
-        Assembly.process_mates = orig_process_mates
-
-
-def _reachable_links(robot, root) -> set[int]:
-    seen: set[int] = set()
-    stack = [root]
-    while stack:
-        link = stack.pop()
-        if id(link) in seen:
-            continue
-        seen.add(id(link))
-        for joint in robot.get_link_joints(link):
-            stack.append(joint.child)
-    return seen
-
-
-def _drop_unmated_links(robot) -> None:
-    """Keep only the single connected mechanism rooted at the base link,
-    dropping free-floating duplicate shells that carry no mate."""
-    chain_root = robot.base_links[0]
-    chain_ids = _reachable_links(robot, chain_root)
-    for link in robot.base_links:
-        if id(link) not in chain_ids:
-            print(f"* Dropping unmated link {link.name} {[p.name for p in link.parts]}")
-    robot.base_links = [chain_root]
-    robot.links = [link for link in robot.links if id(link) in chain_ids]
-
-
-def _export_raw(assembly_dir: str, spec: SolarianExportSpec) -> tuple[str, "object"]:
-    """Run onshape-to-robot to produce the raw MJCF. Returns (raw_xml_path, config)."""
-    from onshape_to_robot.config import Config
-    from onshape_to_robot.robot_builder import RobotBuilder
-    from onshape_to_robot.exporter_mujoco import ExporterMuJoCo
-
-    config = Config(assembly_dir)
-    if config.output_format != "mujoco":
-        raise ValueError(
-            f"solarian onshape-export requires output_format=\"mujoco\" "
-            f"(got {config.output_format!r})."
-        )
-
-    # onshape-to-robot treats joint_properties.*.limits as an override of the
-    # mate limits. Default workflow: drop those overrides so the assembly wins,
-    # then rewrite config.json from the exported MJCF after cleaning.
-    if not spec.prefer_config_limits:
-        cleared = clear_joint_property_limits(config.joint_properties)
-        if cleared:
-            print(
-                "* Using Onshape mate limits "
-                f"(cleared joint_properties limits for: {', '.join(cleared)})"
-            )
-    else:
-        print("* prefer_config_limits=true: joint_properties.*.limits override CAD")
-
-    exporter = ExporterMuJoCo(config)
-
-    with _onshape_patches(spec):
-        robot = RobotBuilder(config).robot
-
-    if spec.drop_unmated_links:
-        _drop_unmated_links(robot)
-
-    for processor in config.processors:
-        processor.process(robot)
-
-    raw_xml = os.path.join(
-        config.output_directory, config.output_filename + "." + exporter.ext
-    )
-    exporter.write_xml(robot, raw_xml)
-    print(f"* Wrote raw export {raw_xml}")
-    return raw_xml, config
 
 
 # --------------------------------------------------------------------------- #
@@ -307,6 +136,14 @@ def _clean(raw_xml: str, out_xml: str, spec: SolarianExportSpec, meshdir: str) -
             if not spec.self_collision:
                 g.set("contype", "2")
                 g.set("conaffinity", "1")
+        joint = d.find("joint")
+        if joint is not None:
+            joint.set("frictionloss", str(spec.frictionloss))
+            joint.set("armature", str(spec.armature))
+        position = d.find("position")
+        if position is not None:
+            position.set("kp", str(spec.kp))
+            position.set("dampratio", str(spec.dampratio))
 
     worldbody = root.find("worldbody")
     for body in worldbody.iter("body"):
@@ -447,20 +284,20 @@ def sync_joint_properties(
 def sync_limits_from_mjcf(
     mjcf_path: str,
     *,
-    config_path: str,
+    config_path: str | None = None,
     yaml_path: str | None = None,
 ) -> dict[str, list[str]]:
-    """Sync MJCF joint ranges into the assembly config.json (and optionally a module yaml).
+    """Sync MJCF joint ranges into config.json (when it exists) and a module yaml.
 
-    ``config.json`` ``joint_properties.*.limits`` are always rewritten from the
-    MJCF so they mirror the Onshape mate limits that produced the export.
-    When ``yaml_path`` is set, ``sim_range_min`` / ``sim_range_max`` are updated too.
+    ``joint_properties.*.limits`` are rewritten from the MJCF so they mirror the
+    URDF joint limits that produced the import. When ``yaml_path`` is set,
+    ``sim_range_min`` / ``sim_range_max`` are updated too.
 
     Returns ``{"yaml": [...], "config": [...], "unmatched_mjcf": [...],
     "unmatched_yaml": [...]}`` for the caller to print a summary.
     """
     ranges = read_joint_ranges(mjcf_path)
-    config_updated = sync_joint_properties(config_path, ranges)
+    config_updated = sync_joint_properties(config_path, ranges) if config_path else []
     yaml_updated: list[str] = []
     unmatched_mjcf: list[str] = []
     unmatched_yaml: list[str] = []
@@ -493,21 +330,106 @@ def sync_limits_from_mjcf(
 # Entry points                                                                 #
 # --------------------------------------------------------------------------- #
 
+def model_name(assembly_dir: str) -> str:
+    """``gripper1_description`` → ``gripper1``. A directory without that suffix keeps its name."""
+    name = os.path.basename(os.path.abspath(assembly_dir))
+    suffix = "_description"
+    if name.endswith(suffix) and name != suffix:
+        return name[: -len(suffix)]
+    return name
+
+
 def _load_config(assembly_dir: str) -> dict:
     path = assembly_dir
     if os.path.isdir(path):
         path = os.path.join(path, "config.json")
     if not os.path.exists(path):
-        raise FileNotFoundError(f"No config.json found at {path}")
+        return {}
     with open(path, "r", encoding="utf-8") as f:
         return commentjson.load(f)
+
+
+_CONFIG_YAML_NAME = "config.yaml"
+_CONFIG_YAML_KEYS = (
+    "density",
+    "kp",
+    "dampratio",
+    "frictionloss",
+    "armature",
+    "attach",
+    "strip_inertials",
+    "self_collision",
+)
+_DEFAULT_CONFIG_YAML = """\
+# cad-import reads this file and does not rewrite it.
+# Edit a value, then run the import again.
+
+# kg/m³ used to infer link mass from the collision meshes.
+density: 1400
+
+# Position-actuator stiffness. N/m on a slide, N·m/rad on a hinge.
+kp: 50
+# Damping ratio of the position actuators.
+dampratio: 1
+# Joint friction loss. N on a slide, N·m on a hinge.
+frictionloss: 0.1
+# Rotor inertia reflected onto the joint.
+armature: 0.005
+
+# Drop the base freejoint so the model attaches into a scene.
+attach: true
+# Infer mass from geometry instead of the URDF inertials.
+strip_inertials: true
+# Let the mechanism's own links collide with each other.
+self_collision: false
+"""
+
+
+def _config_yaml_path(assembly_dir: str) -> str:
+    return os.path.join(os.path.abspath(assembly_dir), _CONFIG_YAML_NAME)
+
+
+def _load_config_yaml(assembly_dir: str) -> dict:
+    """Read ``config.yaml``, writing the defaults when the file is absent.
+
+    An existing file is returned unchanged, including keys this version does
+    not understand. Missing keys keep the :class:`SolarianExportSpec` defaults.
+    """
+    import yaml
+
+    path = _config_yaml_path(assembly_dir)
+    if not os.path.isfile(path):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(_DEFAULT_CONFIG_YAML)
+        print(f"* Wrote {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        loaded = yaml.safe_load(f)
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path} must be a mapping")
+    return loaded
+
+
+def _apply_config_yaml(spec: SolarianExportSpec, data: dict) -> None:
+    for key in _CONFIG_YAML_KEYS:
+        if key not in data or data[key] is None:
+            continue
+        setattr(spec, key, data[key])
+
+
+def _fill_names(assembly_dir: str, config: dict) -> None:
+    name = model_name(assembly_dir)
+    config.setdefault("robot_name", name)
+    config.setdefault("assets_directory", "meshes")
+    config.setdefault("output_filename", f"{name}_raw")
 
 
 def _resolve_defaults(assembly_dir: str, config: dict, spec: SolarianExportSpec) -> tuple[str, str]:
     """Fill in ``output_xml`` / ``meshdir`` defaults; return absolute out path
     and the meshdir string to embed."""
-    robot_name = config.get("robot_name") or os.path.basename(os.path.abspath(assembly_dir))
-    assets_dir = config.get("assets_directory", "assets")
+    robot_name = config.get("robot_name") or model_name(assembly_dir)
+    assets_dir = config.get("assets_directory") or "meshes"
 
     out_rel = spec.output_xml or os.path.join("..", f"{robot_name}.xml")
     out_xml = os.path.normpath(os.path.join(os.path.abspath(assembly_dir), out_rel))
@@ -537,37 +459,57 @@ def export(
     *,
     clean_only: bool = False,
     update_yaml: str | None = None,
+    urdf: str | None = None,
+    density: float | None = None,
 ) -> str:
-    """Run the Onshape → attachable-MJCF pipeline for ``assembly_dir``.
+    """Import a downloaded URDF into an attachable MJCF for ``assembly_dir``.
 
-    ``assembly_dir`` holds a ``config.json`` (onshape-to-robot fields plus a
-    ``solarian`` block, see :class:`SolarianExportSpec`). Returns the path to the
-    cleaned MJCF.
+    The model name is the assembly directory with a trailing ``_description``
+    removed. Meshes go in ``meshes/``, the raw MJCF is ``<name>_raw.xml``, and
+    the attachable model is ``../<name>.xml``. ``config.yaml`` in the assembly
+    directory holds density, actuator gain, and the other clean-stage values.
+    The first import writes that file with the defaults; later imports read it
+    and do not change it. ``density`` overrides the file's density for this
+    run only.
 
-    With ``clean_only=True`` the network export is skipped and only the clean
-    stage is re-run on the previously-exported raw MJCF — handy for iterating on
-    the cleaning options without re-hitting the Onshape API.
+    With ``clean_only=True`` only the clean stage re-runs on the raw MJCF this
+    command already wrote. ``urdf`` is a ``.urdf`` or a ``.zip`` when the
+    download is not already laid out in ``assembly_dir``.
 
-    Joint limits flow **CAD → MJCF → config.json**: stale
-    ``joint_properties.*.limits`` are ignored during the Onshape pull (unless
-    ``solarian.prefer_config_limits`` is set), and after cleaning the MJCF ranges
-    are always written back into ``config.json``. With ``update_yaml`` set to a
-    module conf path (e.g. ``conf/right_arm.yaml``), those same ranges are also
-    written into that yaml's ``sim_range_min`` / ``sim_range_max``.
+    When ``config.json`` exists, MJCF joint ranges are written back into its
+    ``joint_properties``. With ``update_yaml`` set to a module conf path
+    (e.g. ``conf/right_arm.yaml``), those same ranges are also written into
+    that yaml's ``sim_range_min`` / ``sim_range_max``.
     """
+    if clean_only and urdf:
+        raise ValueError("--clean-only does not read a URDF; pass only one of them.")
     config = _load_config(assembly_dir)
+    _fill_names(assembly_dir, config)
     spec = SolarianExportSpec.from_config(config)
+    _apply_config_yaml(spec, _load_config_yaml(assembly_dir))
+    if density is not None:
+        spec.density = density
     out_xml, meshdir = _resolve_defaults(assembly_dir, config, spec)
 
     if clean_only:
         raw_xml = _raw_xml_path(assembly_dir, config)
         if not os.path.exists(raw_xml):
             raise FileNotFoundError(
-                f"--clean-only needs a previous raw export at {raw_xml}; "
+                f"--clean-only needs a previous raw MJCF at {raw_xml}; "
                 f"run without --clean-only first."
             )
     else:
-        raw_xml, _ = _export_raw(assembly_dir, spec)
+        from solarian.sim.cad_urdf import write_raw_mjcf
+
+        raw_xml = write_raw_mjcf(
+            assembly_dir,
+            config,
+            urdf_path=urdf,
+            frictionloss=spec.frictionloss,
+            armature=spec.armature,
+            kp=spec.kp,
+            dampratio=spec.dampratio,
+        )
 
     _clean(raw_xml, out_xml, spec, meshdir)
 
@@ -578,14 +520,18 @@ def export(
         if not os.path.isfile(yaml_path):
             raise FileNotFoundError(f"--update-yaml path not found: {yaml_path}")
 
-    result = sync_limits_from_mjcf(
-        out_xml, config_path=config_path, yaml_path=yaml_path
-    )
-    print(f"* Synced joint limits from {out_xml}")
-    if result["config"]:
-        print(f"  config.json joint_properties: {', '.join(result['config'])}")
-    else:
-        print("  config.json joint_properties: no matching entries updated")
+    if os.path.isfile(config_path) or yaml_path:
+        result = sync_limits_from_mjcf(
+            out_xml,
+            config_path=config_path if os.path.isfile(config_path) else None,
+            yaml_path=yaml_path,
+        )
+        print(f"* Synced joint limits from {out_xml}")
+        if os.path.isfile(config_path):
+            if result["config"]:
+                print(f"  config.json joint_properties: {', '.join(result['config'])}")
+            else:
+                print("  config.json joint_properties: no matching entries updated")
     if yaml_path:
         if result["yaml"]:
             print(f"  yaml ({yaml_path}): {', '.join(result['yaml'])}")

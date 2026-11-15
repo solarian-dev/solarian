@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator, model_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from enum import Enum
 from typing import Literal, Any
 
@@ -91,15 +91,15 @@ class SensorConfig(ComponentConfig):
     #: Capture height (px) requested from the sensor.
     height: int
     #: Rotation applied to each frame, in degrees: ``0``, ``90``, ``180`` or
-    #: ``-90``. ``None`` leaves the frame as captured.
-    rotation: int | None
-    #: Channels per pixel in the observation image, e.g. ``3`` for color.
-    channels: int
+    #: ``-90``. ``0`` leaves the frame as captured.
+    rotation: int | None = 0
+    #: Channels per pixel in the observation image. ``3`` is color.
+    channels: int = 3
     #: Channel order of the observation image: ``rgb`` or ``bgr``.
-    color_mode: str
-    #: FOURCC code requested from an OpenCV camera, e.g. ``MJPG``. Ignored by
-    #: the Raspberry Pi camera.
-    video_format: str
+    color_mode: str = "rgb"
+    #: FOURCC code requested from an OpenCV camera. Ignored by the Raspberry
+    #: Pi camera.
+    video_format: str = "MJPG"
     #: Width (px) the observation image is resized to. ``None`` (with
     #: ``resize_height``) keeps the capture size.
     resize_width: int | None
@@ -137,6 +137,22 @@ class CameraConfig(SensorConfig):
     """
 
 
+class SimFollower(BaseModel):
+    """A second MJCF joint driven by the same normalized servo command.
+
+    URDF exports carry each joint and its limits. They do not carry the mate
+    relation that ties two jaws to one servo, so the command is mapped through
+    each joint's own range.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    joint: str
+    range_min: float
+    range_max: float
+    drive_mode: int = 0
+
+
 class ActuatorConfig(ComponentConfig):
     """Per-actuator yaml: deployment + measured values.
 
@@ -169,6 +185,9 @@ class ActuatorConfig(ComponentConfig):
     #: ``1`` inverts the direction in simulation, the counterpart of
     #: ``drive_mode`` on hardware.
     sim_drive_mode: int = 0
+    #: Other joints this one servo drives in simulation, each through its own
+    #: exported limits. Reads still come from ``sim_joint``.
+    sim_followers: list[SimFollower] = Field(default_factory=list)
     #: Measured low end of travel, in raw encoder ticks. Written by
     #: ``solarian calibrate``.
     real_range_min: int | None = None
