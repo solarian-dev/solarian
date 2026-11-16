@@ -67,27 +67,9 @@ Discovery is powered by standard Python entry points read via `importlib.metadat
 | Dataset op | `op` | `solarian.dataset_ops` | `solarian dataset` |
 | Command | `command` | `solarian.commands` | `solarian` CLI |
 
-## Core plugins
+## Plugin directory
 
-These are the official plugins most projects start from. Each name links to its page in the [Plugin Directory](/plugins), where you can also find community plugins and [submit your own](/plugins/submit) for review.
-
-**Actuators**
-
-- [solarian-feetech](/plugins/solarian-feetech) — Feetech servos (STS3215, SCS) and the bus that talks to them, plus a `feetech-set-id` command.
-- [solarian-dynamixel](/plugins/solarian-dynamixel) — Dynamixel servos (XL330, XM430, and the rest) and the DynamixelBus.
-- [solarian-robstride](/plugins/solarian-robstride) — Robstride actuators and the bus that drives them.
-
-**Arms and grippers**
-
-- [solarian-ur5](/plugins/solarian-ur5) — Universal Robots UR5 arm module, in joint space and Cartesian space.
-- [solarian-arm-1](/plugins/solarian-arm-1) — Solarian Arm 1 follower arm module.
-- [solarian-gripper1](/plugins/solarian-gripper1) — parallel gripper module, including the MuJoCo model used in simulation.
-
-**Skills and policies**
-
-- [solarian-move-skill](/plugins/solarian-move-skill) — Move to a named pose. Poses live in `conf/skills/move.yaml`; add one there and start the skill with that name.
-- [solarian-umi-skill](/plugins/solarian-umi-skill) — Run a UMI diffusion policy. Each policy is a yaml in `conf/`; start `UMISkill` with that filename.
-- [solarian-policy-diffusion](/plugins/solarian-policy-diffusion) — Trains and serves the diffusion policy that `UMISkill` calls.
+Published plugins live in the [Plugin Directory](/plugins). That list is the database: official packages and ones [submitted for review](/plugins/submit). Each page has the install name, description, and source.
 
 ## Installing a plugin
 
@@ -143,14 +125,14 @@ Hardware and module plugins are used by attaching their classes to your Robot. T
 [Skill](/docs/skills) plugins use the same install. Any package that advertises a `solarian.skills` entry point is **auto-discovered** by every [Controller](/docs/controllers), so the [AI Agentic Controller](/docs/agentic_controller) can call it as a tool — Solarian reads the entry points via `importlib.metadata` at startup and merges them into `available_skills`. You can also import the class and start it yourself:
 
 ```python
-from solarian_move_skill import MoveSkill
+from solarian_move import MoveSkill
 from solarian_umi_skill import UMISkill
 
 MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"})
 UMISkill(params={"config": "cup_arrange.yaml"})
 ```
 
-`pose` is any name under `poses:` in `conf/skills/move.yaml`, which `solarian install solarian-move-skill` creates from the plugin's template when the file is not already there. `config` is a yaml in `conf/`. `solarian install solarian-umi-skill` copies `templates/umi.yaml` to `conf/skills/umi.yaml`; copy that file for each policy.
+`pose` is any name under `poses:` in `conf/skills/move.yaml`, which `solarian install solarian-move` creates from the plugin's template when the file is not already there. `config` is a yaml in `conf/`. `solarian install solarian-umi-skill` copies `templates/umi.yaml` to `conf/skills/umi.yaml`; copy that file for each policy.
 
 Class-attribute skills you declare on your controller take priority over a discovered skill of the same name, so you can still override one by declaring it explicitly.
 

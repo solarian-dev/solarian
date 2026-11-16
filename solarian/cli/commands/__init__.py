@@ -170,14 +170,6 @@ CommandRegistry.register_lazy(
     category="Controller",
 )
 CommandRegistry.register_lazy(
-    "calibrate-umi-camera",
-    module_path=f"{_pkg}.calibrate_umi_camera",
-    help="Calibrate a connected camera onto GoPro Hero 10 + Max Lens Mod optics and overlay vs UMI gold.",
-    config_name="controller",
-    setup_modules=(),
-    category="Controller",
-)
-CommandRegistry.register_lazy(
     "write-controller-calibration",
     module_path=f"{_pkg}.write_controller_calibration",
     help="Write the calibration in the controller's yamls onto its hardware",

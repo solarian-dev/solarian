@@ -22,7 +22,7 @@ Subclass `Controller`. Like a [Robot](/docs/robots), it is declared with class a
 ```python
 from solarian.core import Controller
 from solarian.core.skill import Tool
-from solarian_move_skill import MoveSkill
+from solarian_move import MoveSkill
 
 from myrobot.modules.leader_arm import LeaderArmModule
 from myrobot.skills import CartesianTeleopSkill
@@ -164,10 +164,10 @@ An input only ever *starts*. `start_skill()` stops whatever already holds the mo
 
 ### Using a skill from a plugin
 
-Many skills are already written and ship as plugins. [`solarian-move-skill`](/docs/tutorials/skills/move) moves an arm to a named pose:
+Many skills are already written and ship as plugins. [`solarian-move`](/docs/tutorials/skills/move) moves an arm to a named pose:
 
 ```bash
-solarian install solarian-move-skill
+solarian install solarian-move
 ```
 
 That installs the package, adds it to `pyproject.toml` and copies its config to `conf/skills/move.yaml`. The poses are yours to edit there, because they are calibration numbers for your robot, not code:
@@ -190,12 +190,12 @@ poses:
 Then import the class and start it, as above:
 
 ```python
-from solarian_move_skill import MoveSkill
+from solarian_move import MoveSkill
 
 self.start_skill(MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"}))
 ```
 
-A plugin declares its skill under the `solarian.skills` entry point, so an installed skill can be started by its class name even when no tool names it: the think process can send `move` with the params it wants. `solarian-umi-skill` (a diffusion policy) and `solarian-place-skill` (place a held object at a clicked point) are started the same way.
+A plugin declares its skill under the `solarian.skills` entry point, so an installed skill can be started by its class name even when no tool names it: the think process can send `move` with the params it wants. `solarian-umi` (a diffusion policy) and `solarian-place-skill` (place a held object at a clicked point) are started the same way.
 
 ### Writing your own skill
 

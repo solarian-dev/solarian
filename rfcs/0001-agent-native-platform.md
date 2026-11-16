@@ -302,7 +302,7 @@ What is wrong today:
   `solarian/core/recording/session.py`, `solarian_base/scripts/solarian_io.py`
   (whose docstring says the layout is "restated here" because neither package
   is installed), `solarian_base/backend/api/dataset_utils.py:SolarianDataset`,
-  and `solarian_umi_skill/diffusion_policy/dataset/solarian_session.py`. Every
+  and `solarian_umi/diffusion_policy/dataset/solarian_session.py`. Every
   format change has to land in four places.
 - **The same model is implemented twice.** Offline tracking for training
   (`solarian_base/scripts/solarian_track.py`, `sam2_tracking.py`,

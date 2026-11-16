@@ -23,7 +23,6 @@ DATA_PACKAGE = "solarian.data.umi_gopro"
 GOPRO_INTRINSICS_NAME = "gopro_hero10_max_lens_mod_1080p.json"
 COVERAGE_MASK_NAME = "gopro_coverage_mask.png"
 CHECKERBOARD_NAME = "checkerboard_9x6.png"
-GOLD_IMAGE_NAME = "umi_gold_camera0_rgb_t0.png"
 CHECKERBOARD_URL = "https://github.com/opencv/opencv/blob/master/doc/pattern.png"
 REPROJ_PASS_PX = 2.0
 REPROJ_GREAT_PX = 1.0
@@ -47,10 +46,6 @@ def shipped_coverage_mask_path() -> Path:
 
 def shipped_checkerboard_path() -> Path:
     return package_data_path(CHECKERBOARD_NAME)
-
-
-def shipped_gold_image_path() -> Path:
-    return package_data_path(GOLD_IMAGE_NAME)
 
 
 def load_shipped_gopro_intrinsics(

@@ -11,10 +11,10 @@ One skill, one checkpoint, one key. The checkpoint picks an object the wrist cam
 ## Install
 
 ```bash
-solarian install umi-skill
+solarian install umi
 ```
 
-That installs `solarian-umi-skill` and copies `conf/skills/umi.yaml` and the training files under `conf/training/`. Leave the training files for Tutorial 5. The skill file is the one this chapter edits.
+That installs `solarian-umi` and copies `conf/skills/umi.yaml` and the training files under `conf/training/`. Leave the training files for Tutorial 5. The skill file is the one this chapter edits.
 
 Copy it so the example config stays untouched:
 
@@ -73,7 +73,7 @@ solarian run-service pick
 In `my_robot/controller.py`:
 
 ```python
-from solarian_umi_skill import UMISkill
+from solarian_umi import UMISkill
 ```
 
 Add a `pick` tool, and a key:

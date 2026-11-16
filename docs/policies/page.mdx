@@ -50,11 +50,11 @@ To serve it on a cloud GPU instead, Solarian Base serves the checkpoints its tra
 
 ## Policy plugins
 
-Policies ship as installable **policy plugins** (`solarian-policy-*`), separate from the skill plugins that drive them. A policy plugin provides the trainer, the `PolicyServer`, and a `Service` advertising it, so training and serving live in one package:
+Policies ship as installable **policy plugins**, separate from the skill plugins that drive them. A policy plugin provides the trainer, the `PolicyServer`, and a `Service` advertising it, so training and serving live in one package:
 
 | Plugin | Service | Checkpoint |
 | --- | --- | --- |
-| `solarian-policy-diffusion` | `diffusion-policy` | A `.ckpt` from the `diffusion` trainer |
+| `solarian-diffusion` | `diffusion-policy` | A `.ckpt` from the `diffusion` trainer |
 | `solarian-policy-lerobot` | `lerobot-act` | A LeRobot checkpoint directory |
 
 ## Writing a policy server

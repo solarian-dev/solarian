@@ -31,7 +31,7 @@ That writes `pick.lumi.zip` next to the folder. Deleted episodes are left out. T
 Turn the zip into a training session. This step runs SLAM: it recovers the hand's motion from the video and the IMU, and writes the parquet-and-mp4 session `solarian train` reads. It needs Docker images the command will offer to pull. Say yes when it asks, or pass `--yes` if you already trust the images.
 
 ```bash
-pip install "solarian-umi-skill[slam]"
+pip install "solarian-umi[slam]"
 solarian umi-slam ~/lumi/datasets/pick.lumi.zip
 ```
 

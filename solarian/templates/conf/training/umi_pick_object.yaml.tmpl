@@ -3,7 +3,7 @@
 # as a 4th image channel and conditioned on the ViT summary (CLS) token. Copy
 # this file per run.
 #
-#   solarian install umi-skill        # the `umi` trainer below
+#   solarian install umi              # the `umi` trainer below
 #   solarian train --conf conf/training/umi_pick_object
 #
 # The datasets need a `bbox` per frame. In a .zarr.zip: run solarian_base
@@ -42,7 +42,7 @@ modal: null
 # beside this package.
 
 name: train_diffusion_unet_timm
-_target_: solarian_umi_skill.diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
+_target_: solarian_umi.diffusion_policy.workspace.train_diffusion_unet_image_workspace.TrainDiffusionUnetImageWorkspace
 
 # The task, UMI's task/umi_pick_bbox.yaml inlined.
 task:
@@ -164,10 +164,10 @@ task:
     action_pose_repr: relative # abs or rel or delta
 
   env_runner:
-    _target_: solarian_umi_skill.diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
+    _target_: solarian_umi.diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
 
   dataset:
-    _target_: solarian_umi_skill.diffusion_policy.dataset.umi_dataset.UmiDataset
+    _target_: solarian_umi.diffusion_policy.dataset.umi_dataset.UmiDataset
     shape_meta: *shape_meta
     dataset_path: ${task.dataset_path}
     # Decoded once per machine, then copied by every GPU rank; must be local disk.
@@ -220,7 +220,7 @@ bbox_mode: ${task.shape_meta.obs.bbox.bbox_mode}
 n_action_steps: 8
 
 policy:
-  _target_: solarian_umi_skill.diffusion_policy.policy.diffusion_unet_timm_policy.DiffusionUnetTimmPolicy
+  _target_: solarian_umi.diffusion_policy.policy.diffusion_unet_timm_policy.DiffusionUnetTimmPolicy
 
   shape_meta: ${shape_meta}
   
@@ -238,7 +238,7 @@ policy:
     prediction_type: epsilon # or sample
 
   obs_encoder:
-    _target_: solarian_umi_skill.diffusion_policy.model.vision.timm_obs_encoder.TimmObsEncoder
+    _target_: solarian_umi.diffusion_policy.model.vision.timm_obs_encoder.TimmObsEncoder
     shape_meta: ${shape_meta}
 
     ##### from scratch #####
@@ -319,7 +319,7 @@ policy:
   train_diffusion_n_samples: 1
 
 ema:
-  _target_: solarian_umi_skill.diffusion_policy.model.diffusion.ema_model.EMAModel
+  _target_: solarian_umi.diffusion_policy.model.diffusion.ema_model.EMAModel
   update_after_step: 0
   inv_gamma: 1.0
   power: 0.75

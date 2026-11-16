@@ -25,7 +25,6 @@ from solarian.core.optical_remap import (
     save_remap,
     shipped_checkerboard_path,
     shipped_coverage_mask_path,
-    shipped_gold_image_path,
     shipped_gopro_intrinsics_path,
 )
 
@@ -50,31 +49,11 @@ def test_shipped_gopro_assets_exist():
     assert shipped_gopro_intrinsics_path().is_file()
     assert shipped_coverage_mask_path().is_file()
     assert shipped_checkerboard_path().is_file()
-    assert shipped_gold_image_path().is_file()
     data = json.loads(shipped_gopro_intrinsics_path().read_text())
     assert data["image_width"] == 1920
     assert data["image_height"] == 1080
     assert data["intrinsic_type"] == "FISHEYE"
-    import cv2
 
-    gold = cv2.imread(str(shipped_gold_image_path()), cv2.IMREAD_COLOR)
-    assert gold is not None
-    assert gold.shape[:2] == (224, 224)
-
-
-def test_resolve_gold_defaults_to_shipped_and_honors_override(tmp_path):
-    import cv2
-    from omegaconf import OmegaConf
-
-    from solarian.cli.commands.calibrate_umi_camera import _resolve_gold
-
-    default = _resolve_gold(OmegaConf.create({}), OmegaConf.create({}))
-    assert default == shipped_gold_image_path()
-
-    custom = tmp_path / "custom_gold.png"
-    cv2.imwrite(str(custom), np.zeros((224, 224, 3), dtype=np.uint8))
-    override = _resolve_gold(OmegaConf.create({"gold": str(custom)}), OmegaConf.create({}))
-    assert override == custom
 
 
 def test_identity_aligner_roundtrip_same_intrinsics():
@@ -99,38 +78,6 @@ def test_identity_aligner_roundtrip_same_intrinsics():
     assert warped.shape == frame.shape
     assert warped[int(cy), int(cx)].min() > 200
 
-
-def test_view_rotation_recovers_a_camera_tilted_on_its_mount():
-    """Outlines seen through a view pitched 4.6 deg come back onto gold."""
-    from scipy.spatial.transform import Rotation
-
-    from solarian.cli.commands.calibrate_umi_camera import _solve_view_rotation
-    from solarian_umi_skill.umi.gripper_align import RegionPolygons
-
-    intr = load_shipped_gopro_intrinsics()
-    aligner = identity_aligner(intr, intr)
-    tilt = Rotation.from_rotvec(np.radians([-4.6, -0.8, 0.1])).as_matrix()
-    tilted = Aligner(intr, intr, tilt.T, out_size=GOPRO_OUT_SIZE)
-    scale, x0 = 1080 / 224, (1920 - 1080) / 2
-
-    def seen_tilted(poly):
-        px = np.array([[x0 + x * scale, y * scale] for x, y in poly])
-        out = tilted.forward_points(px)
-        return [((u - x0) / scale, v / scale) for u, v in out]
-
-    gold = RegionPolygons(
-        orange=[[(65, 158), (93, 145), (74, 177)], [(130, 146), (148, 178), (157, 158)]],
-        white=[[(42, 169), (60, 155), (72, 175), (71, 182)]],
-    )
-    live = RegionPolygons(
-        orange=[seen_tilted(p) for p in gold.orange],
-        white=[seen_tilted(p) for p in gold.white],
-    )
-
-    rot, before, after, move = _solve_view_rotation(gold, live, aligner, (224, 224))
-    assert before > 4.0 and after < 0.5
-    assert np.degrees(np.linalg.norm(Rotation.from_matrix(rot @ tilt.T).as_rotvec())) < 0.3
-    assert np.allclose(move(live.orange[0]), gold.orange[0], atol=1.0)
 
 
 def _smooth_frame(h=1080, w=1920):
@@ -384,24 +331,3 @@ def test_remapped_gopro_frame_umi_crop_is_224():
     x0 = (rw - ow) // 2
     crop = resized[:, x0 : x0 + ow]
     assert crop.shape == (224, 224, 3)
-
-
-def test_yaml_patch_sets_optical_remap_and_16_9_resize():
-    from solarian.cli.commands.calibrate_umi_camera import _upsert_yaml_key
-
-    text = (
-        "sensors:\n"
-        "  camera:\n"
-        "    width: 2028\n"
-        "    height: 1520\n"
-        "    resize_width: 480\n"
-        "    resize_height: 360\n"
-        "    type: picamera\n"
-    )
-    text = _upsert_yaml_key(text, "optical_remap", "conf/calibrations/cam_gopro_remap.json")
-    text = _upsert_yaml_key(text, "resize_width", "640")
-    text = _upsert_yaml_key(text, "resize_height", "360")
-    assert "optical_remap: conf/calibrations/cam_gopro_remap.json" in text
-    assert "resize_width: 640" in text
-    assert "resize_height: 360" in text
-    assert "resize_width: 480" not in text

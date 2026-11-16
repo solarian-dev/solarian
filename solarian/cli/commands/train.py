@@ -10,7 +10,7 @@ trainer's :meth:`config_class`, and runs it on this machine. The
 Modal.
 
 Concrete training lives entirely in policy plugins (e.g.
-``solarian-umi-skill``, ``solarian-policy-lerobot``).
+``solarian-umi``, ``solarian-policy-lerobot``).
 """
 
 import os
@@ -27,7 +27,7 @@ class TrainCommand(BaseCommand):
     help = 'Train a policy via an installed policy trainer plugin.'
     description = """
     Runs one training file, conf/training/<name>.yaml. Its trainer key selects
-    the installed trainer plugin (solarian-umi-skill, solarian-policy-lerobot,
+    the installed trainer plugin (solarian-umi, solarian-policy-lerobot,
     ...), which validates the whole file against its schema and runs it.
 
     Checkpoints land in output_dir, defaulting to models/<job_name>. To run the

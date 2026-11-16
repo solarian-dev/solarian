@@ -224,7 +224,7 @@ What a controller can start by name has two sources:
 1. **The `tools` class attribute.** Named ways to start a skill, each a skill class plus the params bound to it (`"home": Tool(MoveSkill, {"pose": "home", "arm": "right_arm"})`). The GUI's skill bar lists them, and `start_tool(name)` starts one.
 2. **Installed plugins.** Any package that declares a `solarian.skills` entry point is discovered automatically (see [`skill_registry.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/skill_registry.py)), so the think process can start it by its registry name with the params it supplies.
 
-A robot or relay needs neither. The `START_SKILL` the controller sends carries the class's import path (`"solarian_umi_skill.skill:UMISkill"`), and the host imports it, so any skill its environment can import runs there with nothing declared on the `Robot`. The same message carries a run id that the skill's status rows report back, so the controller tells the end of one run from the end of an earlier run of the same skill. A skill defined in `__main__` cannot be imported by another host, so the controller refuses to send one.
+A robot or relay needs neither. The `START_SKILL` the controller sends carries the class's import path (`"solarian_umi.skill:UMISkill"`), and the host imports it, so any skill its environment can import runs there with nothing declared on the `Robot`. The same message carries a run id that the skill's status rows report back, so the controller tells the end of one run from the end of an earlier run of the same skill. A skill defined in `__main__` cannot be imported by another host, so the controller refuses to send one.
 
 ## Configuration
 
@@ -244,7 +244,7 @@ needs and inherits the rest:
 frequency: 10
 ```
 
-`UMISkill` is the exception: the yaml you pass as `params["config"]` is the whole config, not a thin override. `solarian install solarian-umi-skill` copies `templates/skills/umi.yaml` to `conf/skills/umi.yaml`; copy that file per policy.
+`UMISkill` is the exception: the yaml you pass as `params["config"]` is the whole config, not a thin override. `solarian install solarian-umi` copies `templates/skills/umi.yaml` to `conf/skills/umi.yaml`; copy that file per policy.
 
 ```yaml
 # <your-project>/conf/skills/cup_arrange.yaml
@@ -329,7 +329,7 @@ to via `policy_server_url`.
 
 ### Example plugin
 
-`plugins/solarian-umi-skill` is a complete reference *skill* plugin: it ships `UMISkill`, auto-discovered through its `solarian.skills` entry point (`umi`). Copy `conf/skills/umi.yaml` per policy and start the skill with that filename, then run its policy server (the `diffusion-policy` service of the `solarian-policy-diffusion` policy plugin):
+`plugins/solarian-umi` is a complete reference *skill* plugin: it ships `UMISkill`, auto-discovered through its `solarian.skills` entry point (`umi`). Copy `conf/skills/umi.yaml` per policy and start the skill with that filename, then run its policy server (the `diffusion-policy` service of the `solarian-diffusion` policy plugin):
 
 ```bash
 # the checkpoint and port from conf/skills/cup_arrange.yaml

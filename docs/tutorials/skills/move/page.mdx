@@ -11,10 +11,10 @@ Opening the gripper was one number. Moving the arm to "home" is six numbers with
 ## Install the skill
 
 ```bash
-solarian install move-skill
+solarian install move
 ```
 
-This installs `solarian-move-skill` and copies `conf/skills/move.yaml` the first time. Open that file. It already has a `home` pose and a `ground` pose, both in the normalized −100 to 100 joint range, plus a gripper width in millimetres. Those numbers are a reasonable tuck for this arm. You will add one pose of your own in a moment.
+This installs `solarian-move` and copies `conf/skills/move.yaml` the first time. Open that file. It already has a `home` pose and a `ground` pose, both in the normalized −100 to 100 joint range, plus a gripper width in millimetres. Those numbers are a reasonable tuck for this arm. You will add one pose of your own in a moment.
 
 Each pose is keyed by module name, and the template names them `right_arm` and `right_gripper`. Rename those keys to `arm` and `gripper` in both poses. A pose whose keys match no module moves nothing, and no error says so.
 
@@ -27,7 +27,7 @@ Each pose is keyed by module name, and the template names them `right_arm` and `
 `1` already opens the gripper. Add a `home` tool beside it, and a `0` branch in the same handler. In `my_robot/controller.py`:
 
 ```python
-from solarian_move_skill import MoveSkill
+from solarian_move import MoveSkill
 ```
 
 ```python

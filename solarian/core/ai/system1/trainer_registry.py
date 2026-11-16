@@ -6,7 +6,7 @@ subclasses under the ``solarian.trainers`` entry-point group, e.g. in a
 plugin's ``pyproject.toml``::
 
     [project.entry-points."solarian.trainers"]
-    diffusion = "solarian_policy_diffusion.trainer:DiffusionTrainer"
+    diffusion = "solarian_diffusion.trainer:DiffusionTrainer"
 
 The framework's ``solarian train`` command reads the ``trainer`` key from the
 config (``trainer: diffusion``) and calls :func:`get_trainer_class` to resolve

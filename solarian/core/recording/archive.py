@@ -507,7 +507,7 @@ def iter_zip(session: Session) -> Iterator[bytes]:
 
 
 def targets_bytes(**arrays) -> bytes:
-    """A targets npz, as solarian_umi_skill's ``write_targets`` writes it."""
+    """A targets npz, as solarian_umi's ``write_targets`` writes it."""
     buffer = io.BytesIO()
     np.savez_compressed(buffer, **arrays)
     return buffer.getvalue()

@@ -119,7 +119,7 @@ def test_plugin_command_declares_its_own_section_and_config():
 
 def test_commands_with_their_own_argv_store_it_on_the_command():
     cases = {
-        "install": (["solarian-move-skill"], {"target": "solarian-move-skill"}),
+        "install": (["solarian-move"], {"target": "solarian-move"}),
         "create-project": (
             ["my_robot", "--force"],
             {"project_name": "my_robot", "force": True},
@@ -182,7 +182,7 @@ def test_install_requires_a_target():
 
 
 def test_overrides_are_listed_with_their_help():
-    text = _render("calibrate-umi-camera")
+    text = _render("derive-model-limits")
     assert "config overrides (key=value)" in text
-    assert "overlay_only" in text
-    assert "solarian calibrate-umi-camera overlay_only=true" in text
+    assert "sweep" in text
+    assert "solarian derive-model-limits module=right_arm sweep=true" in text

@@ -79,8 +79,8 @@ The controller decides what the robot does. Here it teleoperates the arm from th
 from solarian.core import Controller
 from solarian.core.event import Event, EventType, event_handler
 from solarian.core.skill import Tool
-from solarian_move_skill import MoveSkill
-from solarian_umi_skill import UMISkill
+from solarian_move import MoveSkill
+from solarian_umi import UMISkill
 from solarian_gripper1.aperture import APERTURE_CLOSED_MM, APERTURE_OPEN_MM
 
 from arm1.skills import CartesianTeleopSkill

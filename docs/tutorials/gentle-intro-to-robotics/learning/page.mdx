@@ -99,7 +99,7 @@ ACT then smooths the motion with **temporal ensembling**. It predicts a fresh ch
 
 <ActionChunkFigure />
 
-In Solarian, the [`solarian-umi-skill`](/plugins/solarian-umi-skill) plugin trains diffusion policies from data collected from a UMI handheld device, and serves it for inference as policy service. See [Training](/docs/training).
+In Solarian, the [`solarian-umi`](/plugins/solarian-umi) plugin trains diffusion policies from data collected from a UMI handheld device, and serves it for inference as policy service. See [Training](/docs/training).
 
 ## VLAs, vision-language-action models
 
@@ -163,7 +163,7 @@ The checkpoint is what a **[trainer](/docs/training)** writes. A trainer reads a
 
 Notice what the policy leaves to the earlier chapters. Its action can be in **[joint space](/docs/tutorials/gentle-intro-to-robotics/configuration#joint-coordinates-and-task-coordinates)** or in **[task space](/docs/tutorials/gentle-intro-to-robotics/configuration#joint-coordinates-and-task-coordinates)**, and Solarian supports both. A joint-space action is one target per joint, so the motors can follow it directly, and it fits only the arm it was recorded on: another arm, jointed differently, cannot replay those angles. A task-space action is the hand's pose. Inverse kinematics has to turn it into joint targets, and that fails when the pose is out of reach, but the motion itself does not depend on how the arm is jointed.
 
-Solarian leans toward task space, through the [`solarian-umi-skill`](/plugins/solarian-umi-skill) plugin. A UMI model transfers to a new arm with no new training, as long as that arm wears the same UMI gripper and has at least six degrees of freedom, enough for inverse kinematics to meet the commanded pose. The demonstrations are faster to collect too: a hand-held UMI collector records the person's own hand, instead of teleoperating the robot for every episode.
+Solarian leans toward task space, through the [`solarian-umi`](/plugins/solarian-umi) plugin. A UMI model transfers to a new arm with no new training, as long as that arm wears the same UMI gripper and has at least six degrees of freedom, enough for inverse kinematics to meet the commanded pose. The demonstrations are faster to collect too: a hand-held UMI collector records the person's own hand, instead of teleoperating the robot for every episode.
 
 Either way, the interpolator times the motion and PID in each servo holds the joints. The person who demonstrated the task already chose a path around the obstacles.
 

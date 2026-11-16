@@ -1,8 +1,8 @@
 """
 Install a plugin into the current environment and project.
 
-    solarian install solarian-move-skill
-    solarian install plugins/solarian-move-skill
+    solarian install solarian-move
+    solarian install plugins/solarian-move
     solarian install ur5
 """
 
@@ -229,12 +229,12 @@ class InstallCommand(BaseCommand):
     """
     usage = "<package-or-path>"
     options = {
-        "<package-or-path>": "Distribution name (solarian-move-skill, or a short "
+        "<package-or-path>": "Distribution name (solarian-move, or a short "
                              "name such as ur5) or a path to a plugin directory.",
     }
     examples = (
-        "solarian install solarian-move-skill",
-        "solarian install plugins/solarian-move-skill",
+        "solarian install solarian-move",
+        "solarian install plugins/solarian-move",
         "solarian install ur5",
     )
 
@@ -250,8 +250,8 @@ class InstallCommand(BaseCommand):
         if not arg:
             raise InstallError(
                 "Usage: solarian install <package-or-path>\n"
-                "  e.g. solarian install solarian-move-skill\n"
-                "  e.g. solarian install plugins/solarian-move-skill"
+                "  e.g. solarian install solarian-move\n"
+                "  e.g. solarian install plugins/solarian-move"
             )
         project = Path(os.environ.get("SOLARIAN_PROJECT_PATH", os.getcwd()))
         package, local_path = resolve_source(arg, project, pypi_has_project)

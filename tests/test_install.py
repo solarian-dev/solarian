@@ -21,14 +21,14 @@ def _package(root: Path, name: str = "solarian-widget") -> Path:
 
 
 def test_an_explicit_path_does_not_ask_pypi(tmp_path):
-    plugin = _package(tmp_path / "plugins" / "solarian-move-skill")
+    plugin = _package(tmp_path / "plugins" / "solarian-move")
 
     def boom(_name):
         raise AssertionError("PyPI should not be consulted for a path")
 
-    package, local = resolve_source("plugins/solarian-move-skill", tmp_path, boom)
+    package, local = resolve_source("plugins/solarian-move", tmp_path, boom)
 
-    assert package == "solarian-move-skill"
+    assert package == "solarian-move"
     assert local == plugin.resolve()
 
 
@@ -53,16 +53,16 @@ def test_pypi_wins_over_a_local_directory(tmp_path):
 
 
 def test_a_name_missing_from_pypi_uses_the_current_folder_then_plugins(tmp_path):
-    _package(tmp_path / "plugins" / "solarian-move-skill")
+    _package(tmp_path / "plugins" / "solarian-move")
     package, local = resolve_source(
-        "solarian-move-skill", tmp_path, lambda _name: False
+        "solarian-move", tmp_path, lambda _name: False
     )
-    assert local == (tmp_path / "plugins" / "solarian-move-skill").resolve()
-    assert package == "solarian-move-skill"
+    assert local == (tmp_path / "plugins" / "solarian-move").resolve()
+    assert package == "solarian-move"
 
-    nearer = _package(tmp_path / "solarian-move-skill")
-    package, local = resolve_source("move-skill", tmp_path, lambda _name: False)
-    assert package == "solarian-move-skill"
+    nearer = _package(tmp_path / "solarian-move")
+    package, local = resolve_source("move", tmp_path, lambda _name: False)
+    assert package == "solarian-move"
     assert local == nearer.resolve()
 
 
@@ -72,11 +72,11 @@ def test_a_name_found_nowhere_fails(tmp_path):
 
 
 def test_an_unreachable_pypi_still_uses_a_local_package(tmp_path):
-    plugin = _package(tmp_path / "plugins" / "solarian-move-skill")
+    plugin = _package(tmp_path / "plugins" / "solarian-move")
     package, local = resolve_source(
-        "solarian-move-skill", tmp_path, lambda _name: None
+        "solarian-move", tmp_path, lambda _name: None
     )
-    assert package == "solarian-move-skill"
+    assert package == "solarian-move"
     assert local == plugin.resolve()
 
 
@@ -86,13 +86,13 @@ def test_an_unreachable_pypi_with_no_local_package_fails(tmp_path):
 
 
 def test_templates_are_copied_once(tmp_path):
-    plugin = tmp_path / "solarian-move-skill"
-    templates = plugin / "solarian_move_skill" / "templates"
+    plugin = tmp_path / "solarian-move"
+    templates = plugin / "solarian_move" / "templates"
     (templates / "skills").mkdir(parents=True)
     (templates / "skills" / "move.yaml").write_text("poses: {home: {}}\n", encoding="utf-8")
     _package(plugin)
 
-    sources = config_sources("solarian-move-skill", plugin)
+    sources = config_sources("solarian-move", plugin)
     assert [name for _src, name in sources] == ["skills/move.yaml"]
 
     conf = tmp_path / "conf"
@@ -104,15 +104,15 @@ def test_templates_are_copied_once(tmp_path):
 
 
 def test_template_subdirectories_keep_their_path(tmp_path):
-    plugin = tmp_path / "solarian-umi-skill"
-    templates = plugin / "solarian_umi_skill" / "templates"
+    plugin = tmp_path / "solarian-umi"
+    templates = plugin / "solarian_umi" / "templates"
     (templates / "skills").mkdir(parents=True)
     (templates / "training").mkdir()
     (templates / "skills" / "umi.yaml").write_text("config_name: umi\n", encoding="utf-8")
     (templates / "training" / "umi_pick.yaml").write_text("trainer: umi\n", encoding="utf-8")
     _package(plugin)
 
-    sources = config_sources("solarian-umi-skill", plugin)
+    sources = config_sources("solarian-umi", plugin)
     assert [name for _src, name in sources] == ["skills/umi.yaml", "training/umi_pick.yaml"]
 
     conf = tmp_path / "conf"
@@ -149,16 +149,16 @@ def test_dependency_is_inserted_once(tmp_path):
         "[project]\nname = 'demo'\ndependencies = [\n    \"solarian>=0.1.0\",\n]\n",
         encoding="utf-8",
     )
-    assert add_dependency(pyproject, "solarian-move-skill") == "added"
-    assert add_dependency(pyproject, "solarian-move-skill") == "present"
+    assert add_dependency(pyproject, "solarian-move") == "added"
+    assert add_dependency(pyproject, "solarian-move") == "present"
     text = pyproject.read_text(encoding="utf-8")
-    assert text.count("solarian-move-skill") == 1
-    assert '"solarian-move-skill>=0.1.0"' in text
+    assert text.count("solarian-move") == 1
+    assert '"solarian-move>=0.1.0"' in text
 
 
 def test_install_from_a_local_path_seeds_config_and_the_dependency(tmp_path, monkeypatch):
-    plugin = tmp_path / "plugins" / "solarian-move-skill"
-    templates = plugin / "solarian_move_skill" / "templates"
+    plugin = tmp_path / "plugins" / "solarian-move"
+    templates = plugin / "solarian_move" / "templates"
     (templates / "skills").mkdir(parents=True)
     (templates / "skills" / "move.yaml").write_text("frequency: 10\n", encoding="utf-8")
     _package(plugin)
@@ -181,11 +181,11 @@ def test_install_from_a_local_path_seeds_config_and_the_dependency(tmp_path, mon
     )
 
     cmd = InstallCommand()
-    cmd.parse_args(["plugins/solarian-move-skill"])
+    cmd.parse_args(["plugins/solarian-move"])
     cmd.handle(None)
 
-    assert installed == [("solarian-move-skill", plugin.resolve())]
+    assert installed == [("solarian-move", plugin.resolve())]
     assert (tmp_path / "conf" / "skills" / "move.yaml").read_text(encoding="utf-8") == "frequency: 10\n"
-    assert "solarian-move-skill>=0.1.0" in (tmp_path / "pyproject.toml").read_text(
+    assert "solarian-move>=0.1.0" in (tmp_path / "pyproject.toml").read_text(
         encoding="utf-8"
     )
