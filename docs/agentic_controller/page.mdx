@@ -42,7 +42,7 @@ The operator always wins. Any key, click, skill start or stop from the operator 
 
 ## Declaring tools
 
-A tool is a skill class plus the params the controller binds. The planner fills in the rest:
+A tool is a skill class plus the params the controller binds. The same `tools` the operator starts with `start_tool()` ([Controllers](/docs/controllers#starting-a-skill)) are what the planner may call, but only those marked `agent_enabled=True`; the planner fills in the rest of their params:
 
 ```python
 from solarian.core import Controller
@@ -52,17 +52,18 @@ ARM = {"arm": "right_arm", "gripper": "right_gripper"}
 
 class MyController(Controller):
     tools = {
-        "move_to_pose": Tool(MoveSkill, ARM),
-        "nudge_gripper": Tool(MoveSkill, {**ARM, "offer": "delta"}),
-        "pick_object": Tool(UMISkill, {"config": "pick_object.yaml"}),
-        "place_at": Tool(PlaceSkill, {**ARM, "camera": "right_wrist_camera"}),
+        "teleop": Tool(CartesianTeleopSkill, ARM),
+        "move_to_pose": Tool(MoveSkill, ARM, agent_enabled=True),
+        "nudge_gripper": Tool(MoveSkill, {**ARM, "offer": "delta"}, agent_enabled=True),
+        "pick_object": Tool(UMISkill, {"config": "pick_object.yaml"}, agent_enabled=True),
+        "place_at": Tool(PlaceSkill, {**ARM, "camera": "right_wrist_camera"}, agent_enabled=True),
     }
 
     def on_agent_idle(self):
-        self.start_skill(CartesianTeleopSkill(params=ARM))
+        self.start_tool("teleop")
 ```
 
-The bound params (module names, which policy config) never reach the model. A tool whose skill has no `description` is left off the planner's list, with a warning.
+`agent_enabled` is off by default, so an operator-only tool such as teleop never reaches the model by omission. The bound params (module names, which policy config) never reach the model either. An enabled tool whose skill has no `description` is left off the planner's list, with a warning.
 
 ## The skill contract
 

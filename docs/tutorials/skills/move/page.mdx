@@ -24,33 +24,30 @@ Each pose is keyed by module name, and the template names them `right_arm` and `
 
 ## A key for home
 
-`my_robot/controller.py`:
+`1` already opens the gripper. Add a `home` tool beside it, and a `0` branch in the same handler. In `my_robot/controller.py`:
 
 ```python
-from solarian.core import Controller
-from solarian.core.event import Event, EventType, event_handler
 from solarian_move_skill import MoveSkill
-
-from my_robot.skills import OpenGripperSkill
-
-
-class MyRobotController(Controller):
-    skills = (OpenGripperSkill, MoveSkill)
-
-    @event_handler(EventType.KEY_DOWN)
-    def on_key_down(self, event: Event):
-        key = event.data["key"]
-        if key == "o":
-            self.start_skill(OpenGripperSkill(params={"gripper": "gripper"}))
-        elif key == "0":
-            self.start_skill(MoveSkill(params={
-                "pose": "home",
-                "arm": "arm",
-                "gripper": "gripper",
-            }))
 ```
 
-The handler is in place. Leave `0` unpressed until the kinematics model is on the arm: a `MOVE_J` with no joint limits raises inside the arm module. Press `o` to see a skill run; that one only commands the gripper. Pressing a key starts the skill again. It does not toggle.
+```python
+tools = {
+    "open_gripper": Tool(OpenGripperSkill, {"gripper": "gripper"}),
+    "home": Tool(MoveSkill, {"pose": "home", "arm": "arm", "gripper": "gripper"}),
+}
+```
+
+```python
+        if key == "1":
+            self.target.gripper.gripper.value = 85.0
+            self.start_tool("open_gripper")
+            return
+        if key == "0":
+            self.start_tool("home")
+            return
+```
+
+The joint keys stay below those two branches. Leave `0` unpressed until the kinematics model is on the arm: a `MOVE_J` with no joint limits raises inside the arm module. Press `1` to see a skill run; that one only commands the gripper. Pressing a key starts the skill again. It does not toggle.
 
 ## Name your own pose
 
@@ -69,18 +66,15 @@ In `conf/skills/move.yaml`, under `poses:`, add a pose you can recognize. These 
             gripper: 40.0
 ```
 
-Add a key:
+Add a `2` branch next to the `0` branch. It reuses the `home` tool and overrides its pose:
 
 ```python
-elif key == "1":
-    self.start_skill(MoveSkill(params={
-        "pose": "reach",
-        "arm": "arm",
-        "gripper": "gripper",
-    }))
+if key == "2":
+    self.start_tool("home", pose="reach")
+    return
 ```
 
-Restart the controller so it loads the new key. If `1` raises `KeyError` naming `reach`, the YAML key and the string in `params` disagree, or the controller was started from a directory that is not the project root. The arm still waits for the kinematics model.
+Restart the controller so it loads the new key. If `2` raises `KeyError` naming `reach`, the YAML key and the `pose` string disagree, or the controller was started from a directory that is not the project root. The arm still waits for the kinematics model.
 
 ## Inverse kinematics
 
@@ -156,7 +150,7 @@ rz = ActuatorField(MyRobotRobot.arm.rz.pos)
 
 Do the same six lines on `MyArmObs`, with `SensorField`. The observation is how anything, including you in a log, reads the pose the kinematics produced.
 
-Restart the robot and the controller. Press `0`. The arm should fold toward the tucked pose in `move.yaml`, and the gripper should open to the width in that pose. Press `1` and the arm reaches. Both poses are joint targets, and `ArmModule` handles `MOVE_J` itself. If the arm stays, `_handle_move_arm` or `control_step` is still on the class. If nothing moves and nothing fails, the pose's keys still say `right_arm`.
+Restart the robot and the controller. Press `0`. The arm should fold toward the tucked pose in `move.yaml`, and the gripper should open to the width in that pose. Press `2` and the arm reaches. Both poses are joint targets, and `ArmModule` handles `MOVE_J` itself. If the arm stays, `_handle_move_arm` or `control_step` is still on the class. If nothing moves and nothing fails, the pose's keys still say `right_arm`.
 
 The contract you just implemented is the one in [Adding a new arm](/docs/ik#adding-a-new-arm): joint servos, six Cartesian actuators, a `MinkIK` backend, and `interpolator_type: pose`. The reference has the rest of the fields. You have enough for a policy to ask for a hand pose.
 

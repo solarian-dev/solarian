@@ -114,6 +114,10 @@ def scaffold_project(project_name: str, target_dir: Path | None = None, force: b
     (modules_dir / "__init__.py").touch()
     # create a module.py file in the modules directory
 
+    skills_dir = project_root / project_name / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    (skills_dir / "__init__.py").touch()
+
     ctx = {
         "project_name": project_name,
         "package_name": project_name.replace("-", "_"),
@@ -156,6 +160,7 @@ def _print_success(project_name: str, project_root: Path) -> None:
     print(f"  │   ├── action.py")
     print(f"  │   ├── observation.py")
     print(f"  │   ├── modules/my_arm_module.py")
+    print(f"  │   ├── skills/__init__.py")
     print(f"  └── conf/")
     print(f"      ├── robot.yaml")
     print(f"      ├── controller.yaml")

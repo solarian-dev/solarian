@@ -56,7 +56,7 @@ Add a cube to `assets/scene.xml`, inside `<worldbody>`, so the wrist camera has 
 </body>
 ```
 
-Restart the robot after saving. Press `1` so the arm is at `reach`, and confirm the cube shows up in the controller's wrist image. If it does not, nudge `pos` until it does. A policy cannot pick what the camera does not see. This cube is a stand-in. A checkpoint trained on a different object will not develop a taste for red cubes just because you put one in the scene. It will do whatever it did in its training data, aimed at whatever is in frame.
+Restart the robot after saving. Press `2` so the arm is at `reach`, and confirm the cube shows up in the controller's wrist image. If it does not, nudge `pos` until it does. A policy cannot pick what the camera does not see. This cube is a stand-in. A checkpoint trained on a different object will not develop a taste for red cubes just because you put one in the scene. It will do whatever it did in its training data, aimed at whatever is in frame.
 
 ## Start the policy server
 
@@ -76,11 +76,16 @@ In `my_robot/controller.py`:
 from solarian_umi_skill import UMISkill
 ```
 
-Add `UMISkill` to the `skills` tuple, and a key:
+Add a `pick` tool, and a key:
 
 ```python
-elif key == "4":
-    self.start_skill(UMISkill(params={"config": "pick.yaml"}))
+"pick": Tool(UMISkill, {"config": "pick.yaml"}),
+```
+
+```python
+if key == "4":
+    self.start_tool("pick")
+    return
 ```
 
 `config` is the filename in `conf/skills/`, not a full path. Restart the controller. With the server up and the robot in sim, press `4`.

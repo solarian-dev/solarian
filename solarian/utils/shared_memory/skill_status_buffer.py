@@ -9,8 +9,8 @@ Each record is a fixed-width tuple::
 
     (skill_id: int64, status: int64, timestamp: float64)
 
-``skill_id`` is an integer assigned by the orchestrator (e.g. the index of
-the skill in the ``available_skills`` registry).  ``status`` is the integer
+``skill_id`` is the run id the controller assigned when it started the skill,
+unique per start.  ``status`` is the integer
 value of a :class:`solarian.core.skill.SkillStatus` member.
 """
 

@@ -17,22 +17,28 @@ Defined in [`solarian/core/controller.py`](https://github.com/solarian-dev/solar
 
 ## Defining a Controller
 
-Subclass `Controller`. Like a [Robot](/docs/robots), it is declared with class attributes: the skills it can start by name, and any controller-side [modules](/docs/modules).
+Subclass `Controller`. Like a [Robot](/docs/robots), it is declared with class attributes: its tools, the named ways it starts a skill, and any controller-side [modules](/docs/modules).
 
 ```python
 from solarian.core import Controller
+from solarian.core.skill import Tool
 from solarian_move_skill import MoveSkill
 
 from myrobot.modules.leader_arm import LeaderArmModule
 from myrobot.skills import CartesianTeleopSkill
 
+ARM = {"arm": "right_arm", "gripper": "right_gripper"}
+
 
 class MyController(Controller):
-    skills = (CartesianTeleopSkill, MoveSkill)
+    tools = {
+        "teleop": Tool(CartesianTeleopSkill, ARM),
+        "home": Tool(MoveSkill, {**ARM, "pose": "home"}),
+    }
     leader_arm = LeaderArmModule()
 
     def on_start(self):
-        self.start_skill(CartesianTeleopSkill(params={"arm": "right_arm", "gripper": "right_gripper"}))
+        self.start_tool("teleop")
 ```
 
 No `__init__` and no loop to write. `Controller.__init__` opens the sockets to the relay, discovers the controller-side modules, and builds the observation buffers every skill reads from.
@@ -128,26 +134,31 @@ from solarian.core.event import Event, EventType, event_handler
 
 
 class MyController(Controller):
-    skills = (CartesianTeleopSkill, MoveSkill)
+    tools = {
+        "teleop": Tool(CartesianTeleopSkill, ARM),
+        "home": Tool(MoveSkill, {**ARM, "pose": "home"}),
+    }
 
     def on_start(self):
-        self.start_skill(CartesianTeleopSkill(params={"arm": "right_arm", "gripper": "right_gripper"}))
+        self.start_tool("teleop")
 
     @event_handler(EventType.KEY_DOWN)
     def start_bound_skill(self, event: Event):
         match event.data.get("key"):
             case "t":
-                self.start_skill(CartesianTeleopSkill(params={"arm": "right_arm", "gripper": "right_gripper"}))
+                self.start_tool("teleop")
             case "h":
-                self.start_skill(MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"}))
+                self.start_tool("home")
+            case "g":
+                self.start_tool("home", pose="ground")
 
     @event_handler(EventType.BUTTON_DOWN)
     def home_on_pedal(self, event: Event):
         if event.data.get("button") == "pedal":
-            self.start_skill(MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"}))
+            self.start_tool("home")
 ```
 
-A skill is constructed with the module **names** it commands (`arm`, `gripper`) and handed to `start_skill()`. Which input starts which skill is application policy, so it lives in your own `@event_handler` rather than in a framework-level binding table. Skills can also be started without any handler: by name from the GUI's skill bar, or by the think process, which is what the `skills` tuple is for.
+A tool is a skill class plus the params bound to it, including the module **names** it commands (`arm`, `gripper`). `start_tool()` builds the skill, with any keyword arguments laid over the bound params, and starts it. A skill you build yourself goes to `start_skill()` instead: `self.start_skill(MoveSkill(params={"pose": "home", **ARM}))` does what `start_tool("home")` does. Which input starts which skill is application policy, so it lives in your own `@event_handler` rather than in a framework-level binding table. Tools can also be started without any handler: by name from the GUI's skill bar, and, for those marked `agent_enabled=True`, by the [agentic controller](/docs/agentic_controller#declaring-tools).
 
 An input only ever *starts*. `start_skill()` stops whatever already holds the modules the new skill commands, including an earlier instance of the same skill, so pressing `h` twice re-runs the move rather than leaving the arm with nothing driving it. When the move finishes, nothing takes the arm back until something starts teleop again. `space` on the keyboard is the one binding the framework claims, and it stops every skill.
 
@@ -184,7 +195,7 @@ from solarian_move_skill import MoveSkill
 self.start_skill(MoveSkill(params={"pose": "home", "arm": "right_arm", "gripper": "right_gripper"}))
 ```
 
-A plugin declares its skill under the `solarian.skills` entry point, so an installed skill is in the controller's registry even when it is not listed in `skills`: the think process and the GUI's skill bar can start it by name. `solarian-umi-skill` (a diffusion policy) and `solarian-place-skill` (place a held object at a clicked point) are started the same way.
+A plugin declares its skill under the `solarian.skills` entry point, so an installed skill can be started by its class name even when no tool names it: the think process can send `move` with the params it wants. `solarian-umi-skill` (a diffusion policy) and `solarian-place-skill` (place a held object at a clicked point) are started the same way.
 
 ### Writing your own skill
 
@@ -234,17 +245,21 @@ class LiftSkill(Skill):
         )
 ```
 
-The skill addresses the arm by name and builds the action itself; it never holds a `Module`. Add it to `skills` and bind it to an input like any other:
+The skill addresses the arm by name and builds the action itself; it never holds a `Module`. Give it a tool and bind it to an input like any other:
 
 ```python
 class MyController(Controller):
-    skills = (CartesianTeleopSkill, MoveSkill, LiftSkill)
+    tools = {
+        "teleop": Tool(CartesianTeleopSkill, ARM),
+        "home": Tool(MoveSkill, {**ARM, "pose": "home"}),
+        "lift": Tool(LiftSkill, {"arm": "right_arm", "dz": 0.05}),
+    }
 
     @event_handler(EventType.KEY_DOWN)
     def start_bound_skill(self, event: Event):
         match event.data.get("key"):
             case "u":
-                self.start_skill(LiftSkill(params={"arm": "right_arm", "dz": 0.05}))
+                self.start_tool("lift")
 ```
 
 [Skills](/docs/skills) covers the rest: what a step can read, returning chunks of waypoints, reporting status, per-project config in `conf/skills/`, and packaging a skill as a plugin. The [skills tutorial](/docs/tutorials/skills) builds several on the Solarian Arm 1, starting with [a one-shot skill you write](/docs/tutorials/skills/your-own).
@@ -254,11 +269,12 @@ class MyController(Controller):
 From the controller's side, every skill goes through the same stages, whoever started it:
 
 ```text
-LiftSkill(params={...})       built by your handler, or by name (skill bar, think process)
+LiftSkill(params={...})       built by your handler, by start_tool(), or by name (skill bar, think process)
    │
 start_skill(skill)            stop every running skill that commands the same modules
    │
-   ├── remote (ROBOT/SERVER)  send START_SKILL; that host runs the stages below
+   ├── remote (ROBOT/SERVER)  send START_SKILL with the class's import path; that host
+   │                          imports it and runs the stages below
    │
    ├── wire it up             observations, an event inbox, one action queue per module
    ├── setup()                INLINE: here, on the control thread

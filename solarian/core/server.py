@@ -141,10 +141,9 @@ class RelayServer:
             self.skill_host.start_named_skill(data)
             return True
         if action_type == ActionType.STOP_SKILL:
-            name = str(data.get("skill") or "")
-            if not self.skill_host.runs(name):
+            if not self.skill_host.runs(str(data.get("skill") or "")):
                 return False
-            self.skill_host.stop_skill(name)
+            self.skill_host.stop_named_skill(data)
             return True
         return False
 

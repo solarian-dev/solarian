@@ -23,7 +23,7 @@ The scaffolder produces a project with this layout:
 
 <ScaffoldFigure name="my_robot" />
 
-`conf/` is organized by who reads each file; [Project Configs](/docs/project-configs#the-conf-folder) covers every folder. Skills you write go in a `skills/` package next to `modules/`, and custom [action types](/docs/actions#custom-action-types) in `action.py` beside the schema that uses them.
+`conf/` is organized by who reads each file; [Project Configs](/docs/project-configs#the-conf-folder) covers every folder. The scaffolder writes a `skills/` package next to `modules/`, with an `__init__.py`, for skills you write. Custom [action types](/docs/actions#custom-action-types) go in `action.py` beside the schema that uses them.
 
 The generated [`my_robot/settings.py`](/docs/settings) wires the project together by class path:
 

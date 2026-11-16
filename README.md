@@ -47,7 +47,6 @@ from solarian.sim import CameraMount, ModuleAttachment, SceneConfig
 from solarian_arm1 import ARM_MJCF_PATH
 from solarian_arm1.arm import Arm1Module
 from solarian_picamera import PiCameraModule
-from solarian_umi_skill import UMISkill
 from solarian_gripper1 import MJCF_FEETECH_PATH as GRIPPER_MJCF
 from solarian_gripper1.gripper_feetech import Gripper1FeetechModule
 
@@ -56,8 +55,6 @@ class Arm1Robot(Robot):
     right_arm = Arm1Module(ik_tcp=Gripper1FeetechModule.tcp_from_flange)
     right_gripper = Gripper1FeetechModule()
     right_wrist_camera = PiCameraModule()
-
-    skills = (UMISkill,)
 
     scene = SceneConfig(
         world_mjcf="assets/sim_scene.xml",
@@ -76,7 +73,7 @@ class Arm1Robot(Robot):
     )
 ```
 
-The controller decides what the robot does. Here it teleoperates the arm from the keyboard, binds keys to skills, and lists the skills the agentic controller may call as tools:
+The controller decides what the robot does. Here it teleoperates the arm from the keyboard, names its tools (a skill plus the params it binds), binds keys to them, and marks the ones the agentic controller may call:
 
 ```python
 from solarian.core import Controller
@@ -93,23 +90,23 @@ TELEOP = {**ARM, "frame": "ee", "gripper_min_mm": APERTURE_CLOSED_MM, "gripper_m
 
 
 class Arm1Controller(Controller):
-    skills = (CartesianTeleopSkill, MoveSkill, UMISkill)
-
     tools = {
-        "move_to_pose": Tool(MoveSkill, ARM),
-        "pick_object": Tool(UMISkill, {"config": "pick_object.yaml"}),
+        "teleop": Tool(CartesianTeleopSkill, TELEOP),
+        "home": Tool(MoveSkill, {**ARM, "pose": "home"}),
+        "move_to_pose": Tool(MoveSkill, ARM, agent_enabled=True),
+        "pick_object": Tool(UMISkill, {"config": "pick_object.yaml"}, agent_enabled=True),
     }
 
     def on_start(self):
-        self.start_skill(CartesianTeleopSkill(params=TELEOP))
+        self.start_tool("teleop")
 
     @event_handler(EventType.KEY_DOWN)
     def start_bound_skill(self, event: Event) -> None:
         match event.data.get("key"):
             case "0":
-                self.start_skill(MoveSkill(params={"pose": "home", **ARM}))
+                self.start_tool("home")
             case "4":
-                self.start_skill(UMISkill(params={"config": "pick_object.yaml"}))
+                self.start_tool("pick_object")
 ```
 
 Run the relay server, the robot, and the controller from the project directory. Each can run on a different machine; `--deployment` picks the profile in `conf/deployment/` that says where.

@@ -35,6 +35,7 @@ from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.event import EventHost, event_inbox_for
 from solarian.core.execution import ExecutionMode
 from solarian.core.skill import SkillStatus, failure_reason
+from solarian.core.skill_registry import load_skill_class
 
 import logging
 logger = logging.getLogger("robot")
@@ -170,15 +171,6 @@ class Robot(EventHost, ABC):
     #: to run with ``solarian run-robot --sim``; describes the environment and
     #: how each module's MJCF attaches. Ignored on hardware.
     scene = None
-
-    #: Skill classes this robot can be asked to run, on top of the ones
-    #: installed skill plugins publish. Declare a class here when the skill
-    #: lives in the project rather than in a plugin.
-    skills: tuple[type, ...] = ()
-
-    #: Filled on first use by :meth:`_skill_classes`; entry-point discovery
-    #: reads installed package metadata, so it is worth doing once.
-    _skill_class_cache: dict[str, type] | None = None
 
     
     @classmethod
@@ -855,54 +847,35 @@ class Robot(EventHost, ABC):
         """Drop a stopped skill from the registry so it stops receiving events."""
         self._local_skills.pop(skill.skill_name, None)
 
-    @classmethod
-    def _skill_classes(cls) -> dict[str, type]:
-        """Skill classes this robot can be asked to run, by registry name.
-
-        The ``solarian.skills`` entry points plus this class's own ``skills``,
-        so a skill becomes startable on the robot by being installed or
-        declared rather than by the robot growing a handler for it.
-        """
-        if cls.__dict__.get("_skill_class_cache") is None:
-            from solarian.core.skill_registry import discover_skill_classes
-
-            found = {
-                skill_cls.registry_name(): skill_cls
-                for skill_cls in discover_skill_classes().values()
-                if isinstance(skill_cls, type)
-            }
-            found.update(
-                {skill_cls.registry_name(): skill_cls for skill_cls in cls.skills}
-            )
-            cls._skill_class_cache = found
-        return cls._skill_class_cache
-
     @action_handler(ActionType.START_SKILL)
     def start_named_skill(self, action, t_now: float) -> bool:
-        """Start the skill the controller named, with the params it sent.
+        """Start the skill class at the import path the controller sent.
 
-        Generic on purpose: a project adds a robot-side skill by publishing it
-        as a skill plugin, not by writing a per-skill action type and handler
-        on both sides of the link.
+        Generic on purpose: any skill the robot's environment can import can
+        run here, with no per-skill action type or handler on either side of
+        the link, and nothing to declare on the robot.
 
         Every read here is a ``.get``: this payload was deserialized off the
-        wire, and an unknown or missing skill name should log and carry on
-        rather than take the control loop down with a ``KeyError``.
+        wire, and an unknown or missing skill should log and carry on rather
+        than take the control loop down with a ``KeyError``.
         """
         data = action.data
         name = str(data.get("skill") or "")
-        skill_cls = self._skill_classes().get(name)
-        if skill_cls is None:
-            logger.warning(
-                "Cannot start unknown skill '%s'; installed: %s",
-                name,
-                sorted(self._skill_classes()),
-            )
+        path = str(data.get("path") or "")
+        try:
+            load_skill_class(path)
+        except Exception as exc:
+            logger.warning("Cannot start skill '%s' from %r: %s", name, path, exc)
             return True
+        run_id = int(data.get("run_id") or 0)
         running = self._local_skills.get(name)
         if running is not None and running.is_alive():
-            logger.info("Skill '%s' already running (pid=%s)", name, running.pid)
-            return True
+            if running.skill_id == run_id:
+                logger.info("Skill '%s' already running (pid=%s)", name, running.pid)
+                return True
+            # A newer run whose STOP for the old one was lost on the conflated
+            # socket: it replaces the old run rather than being dropped.
+            self.stop_skill(name)
         if name in self._stopping_skills:
             # A second process would command the same modules as the one still
             # winding down, and both would own the same hardware.
@@ -915,8 +888,9 @@ class Robot(EventHost, ABC):
     def _launch_named_skill(self, name: str, data: dict) -> None:
         try:
             skill = self.start_skill(
-                self._skill_classes()[name](
+                load_skill_class(str(data.get("path") or ""))(
                     params=data.get("params", {}),
+                    skill_id=int(data.get("run_id") or 0),
                     status_mp_q=StatusBoard.get_mp_queue(),
                 )
             )
@@ -931,7 +905,23 @@ class Robot(EventHost, ABC):
 
     @action_handler(ActionType.STOP_SKILL)
     def stop_named_skill(self, action, t_now: float) -> bool:
-        self.stop_skill(str(action.data.get("skill") or ""))
+        """Stop the run the controller named; a retried stop for a run already gone is ignored.
+
+        Without the run id check, a stop the controller retries for a run
+        that has since been replaced would stop its replacement.
+        """
+        data = action.data
+        name = str(data.get("skill") or "")
+        run_id = data.get("run_id")
+        if run_id is None:
+            self.stop_skill(name)
+            return True
+        deferred = self._deferred_starts.get(name)
+        if deferred is not None and int(deferred.get("run_id") or 0) == int(run_id):
+            self._deferred_starts.pop(name)
+        running = self._local_skills.get(name)
+        if running is not None and running.skill_id == int(run_id):
+            self.stop_skill(name)
         return True
 
     @action_handler(ActionType.START_SERVICE)

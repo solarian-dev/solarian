@@ -10,7 +10,7 @@ from solarian.core.action import Action, ActionType
 from solarian.core.configs import ControllerRecordingConfig, ModuleConfig
 from solarian.core.event import Event, EventType, event_handler
 from solarian.core.execution import ExecutionMode, ExecutionPlace
-from solarian.core.skill import Skill, SkillStatus
+from solarian.core.skill import Skill, SkillStatus, Tool
 from solarian.core.controller import (
     _REMOTE_STOP_RETRY_S,
     _REMOTE_STOP_TIMEOUT_S,
@@ -99,7 +99,6 @@ class OneShotSkill(Skill):
 
 class RemoteSkill(Skill):
     execution_place = ExecutionPlace.ROBOT
-    skill_id = 7
     config_name = "cup_arrange"
 
     def control_step(self, dt):
@@ -125,7 +124,10 @@ class FakeCommandQueue:
 class TeleopCtrl(Controller):
     """Controller with only skill orchestration wired up (no zmq / shared memory)."""
 
-    skills = (HoldSkill, OneShotSkill, RemoteSkill)
+    tools = {
+        "home": Tool(OneShotSkill, {"arm": RIGHT_ARM, "value": 1.0}),
+        "cup": Tool(RemoteSkill, {"arm": RIGHT_ARM, "gripper": RIGHT_GRIPPER}, agent_enabled=True),
+    }
 
     def __init__(self):
         self._init_skill_orchestration()
@@ -300,16 +302,63 @@ def test_overlapping_modules_preempt():
     assert "arm_and_grip" not in ctrl.running_skills
 
 
+def run_id(ctrl, name):
+    return ctrl._remote_running[name].skill_id
+
+
+def ended(ctrl, skill_id, status=SkillStatus.STOPPED):
+    ctrl._ingest_skill_status_records([SimpleNamespace(skill_id=skill_id, status=int(status))])
+
+
 def test_running_skills_includes_robot_status():
     ctrl = TeleopCtrl()
     ctrl.press("c")
     ctrl._tick_skills()
     ctrl._ingest_skill_status_records(
-        [SimpleNamespace(skill_id=7, status=int(SkillStatus.RUNNING))]
+        [SimpleNamespace(skill_id=run_id(ctrl, "cup_arrange"), status=int(SkillStatus.RUNNING))]
     )
     rec = ctrl.running_skills["cup_arrange"]
     assert rec.execution_place is ExecutionPlace.ROBOT
     assert rec.modules == {"right_arm", "right_gripper"}
+
+
+def test_a_status_row_ends_the_run_it_names():
+    ctrl = _agent_ctrl()
+    name = _as_agent(ctrl, lambda: ctrl.start_tool("cup"))
+    invocation = ctrl.skill_invocation(name)
+
+    ended(ctrl, run_id(ctrl, name), SkillStatus.COMPLETED)
+
+    assert name not in ctrl.running_skills
+    assert ctrl.agent.ended == [(invocation, SkillStatus.COMPLETED, "")]
+
+
+def test_a_row_from_a_replaced_run_does_not_end_its_replacement():
+    """Re-running a robot skill stops the old run first; its late STOPPED row is
+    about that run, not the one now holding the arm."""
+    ctrl = TeleopCtrl()
+    ctrl.press("c")
+    first = run_id(ctrl, "cup_arrange")
+    ctrl.press("c")
+    second = run_id(ctrl, "cup_arrange")
+    assert second != first
+    assert ctrl._remote_stopping["cup_arrange"][2] == first
+
+    ended(ctrl, first)
+
+    assert "cup_arrange" in ctrl.running_skills
+    assert ctrl._remote_stopping == {}
+
+    ended(ctrl, second)
+
+    assert "cup_arrange" not in ctrl.running_skills
+
+
+def test_a_row_for_no_run_the_controller_started_is_ignored():
+    ctrl = TeleopCtrl()
+    ended(ctrl, 0, SkillStatus.RUNNING)
+    ended(ctrl, 0)
+    assert ctrl.running_skills == {}
 
 
 def test_inline_skill_actions_are_merged():
@@ -418,6 +467,8 @@ def test_a_remote_skill_is_sent_as_start_skill():
 
     assert int(action.action_type) == int(ActionType.START_SKILL)
     assert action.data["skill"] == "cup_arrange"
+    assert action.data["path"] == f"{__name__}:RemoteSkill"
+    assert action.data["run_id"] == run_id(ctrl, "cup_arrange")
     assert action.data["params"]["arm"] == RIGHT_ARM
     assert action.data["params"]["gripper"] == RIGHT_GRIPPER
     assert "modules" not in action.data
@@ -434,12 +485,13 @@ def test_stopping_a_remote_skill_is_sent_as_stop_skill():
 
     assert int(action.action_type) == int(ActionType.STOP_SKILL)
     assert action.data["skill"] == "cup_arrange"
+    assert action.data["run_id"] == run_id(ctrl, "cup_arrange")
 
 
 def stopping_since(ctrl, name, first_offset=0.0, last_offset=0.0):
     """Backdate a pending stop so the retry and deadline logic can be exercised."""
-    first, last = ctrl._remote_stopping[name]
-    ctrl._remote_stopping[name] = (first - first_offset, last - last_offset)
+    first, last, run = ctrl._remote_stopping[name]
+    ctrl._remote_stopping[name] = (first - first_offset, last - last_offset, run)
 
 
 def test_a_remote_skill_stays_preemptable_until_the_robot_confirms():
@@ -453,9 +505,7 @@ def test_a_remote_skill_stays_preemptable_until_the_robot_confirms():
 
     assert ctrl.running_skills["cup_arrange"].modules == {RIGHT_ARM, RIGHT_GRIPPER}
 
-    ctrl._ingest_skill_status_records(
-        [SimpleNamespace(skill_id=7, status=int(SkillStatus.STOPPED))]
-    )
+    ended(ctrl, run_id(ctrl, "cup_arrange"))
 
     assert "cup_arrange" not in ctrl.running_skills
     assert ctrl._remote_stopping == {}
@@ -515,6 +565,51 @@ def test_the_think_process_names_a_skill_and_the_controller_builds_it():
 
     assert "OneShotSkill" in ctrl.running_skills
     assert action.to_dict()["data"]["right_arm"]["params"]["speed"] is None
+
+
+def test_a_tool_name_from_a_ui_starts_the_tool():
+    ctrl = TeleopCtrl()
+    ctrl.start_skill_by_name("home", {"value": 3.0})
+
+    data = ctrl._tick_skills().to_dict()["data"]
+
+    assert "OneShotSkill" in ctrl.running_skills
+    assert data["right_arm"]["data"]["x"]["value"] == 3.0
+
+
+def test_start_tool_lays_params_over_the_bound_ones():
+    ctrl = TeleopCtrl()
+    name = ctrl.start_tool("home", value=5.0)
+
+    skill = ctrl._local_skills[name]
+    assert skill.params == {"arm": RIGHT_ARM, "value": 5.0}
+    assert TeleopCtrl.tools["home"].params["value"] == 1.0
+
+
+def test_start_tool_with_an_unknown_name_raises():
+    with pytest.raises(KeyError):
+        TeleopCtrl().start_tool("nope")
+
+
+def test_only_agent_enabled_tools_reach_the_agent(monkeypatch):
+    import solarian.core.ai.agent as agent
+
+    monkeypatch.setattr(agent, "AgentHarness", lambda host, cfg, tools: tools)
+    ctrl = TeleopCtrl()
+    ctrl.cfg = SimpleNamespace(agent=object())
+
+    assert list(ctrl._build_agent()) == ["cup"]
+
+
+def test_a_remote_skill_defined_in_main_is_refused():
+    main_skill = type("MainSkill", (RemoteSkill,), {"__module__": "__main__"})
+    ctrl = TeleopCtrl()
+    ctrl.hold_everything()
+
+    with pytest.raises(ValueError, match="__main__"):
+        ctrl.start_skill(main_skill(params={"arm": RIGHT_ARM}))
+
+    assert "hold_all" in ctrl.running_skills
 
 
 def test_a_name_the_registry_does_not_have_is_refused(caplog):

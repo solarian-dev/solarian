@@ -190,7 +190,7 @@ The agent harness behind the agentic controller: a planner model that calls the 
 
 ### `Tool`
 
-A skill class plus the params a controller binds, as the agentic controller's planner sees it. Declared in `Controller.tools`. See [AI Agentic Controller](/docs/agentic_controller#declaring-tools).
+A named way to start a skill: a skill class plus the params a controller binds. Declared in `Controller.tools` and started with `start_tool(name)`; the agentic controller's planner may call the ones marked `agent_enabled=True`. See [Controllers](/docs/controllers#starting-a-skill) and [AI Agentic Controller](/docs/agentic_controller#declaring-tools).
 
 ### `Data`
 

@@ -98,18 +98,27 @@ def failure_reason(traceback_str: str) -> str:
 
 
 class Tool(NamedTuple):
-    """A skill as a planner sees it: the class, plus the params the controller binds.
+    """A named way to start a skill: the class, plus the params the controller binds.
 
-    The planner fills in the rest of the params (those in the skill's
-    :meth:`Skill.tool_spec`); the bound ones — module names, which policy
-    config — are the controller's to choose and never reach the model.
+    The operator starts one with :meth:`Controller.start_tool`; the agent
+    planner may call it only when ``agent_enabled``. The planner fills in the
+    rest of the params (those in the skill's :meth:`Skill.tool_spec`); the
+    bound ones — module names, which policy config — are the controller's to
+    choose and never reach the model.
     """
 
     skill: "type[Skill]"
     params: Mapping[str, Any] = {}
+    #: Offered to the agent planner. Off by default, so teleop and other
+    #: operator-only tools never reach the model by omission.
+    agent_enabled: bool = False
 
     def spec(self) -> Dict[str, Any]:
         return self.skill.tool_spec(self.params)
+
+    def build(self, **params: Any) -> "Skill":
+        """The skill with ``params`` laid over the bound ones."""
+        return self.skill(params={**self.params, **params})
 
 
 class Skill(ABC):
@@ -145,8 +154,9 @@ class Skill(ABC):
 
     Args:
         name: Unique identifier for this skill instance.
-        skill_id: Integer id assigned by the orchestrator (e.g. index in
-            ``available_skills``).  Used as the key in
+        skill_id: The run id of this start, assigned by the controller's
+            :meth:`~solarian.core.controller.Controller.start_skill` and sent
+            with a ``START_SKILL``. The key of this skill's
             :class:`SkillStatusBuffer` records.
         observations: Dict mapping module names to their
             :class:`ObservationBuffer`. Populated by whichever host starts
@@ -255,10 +265,7 @@ class Skill(ABC):
         resolved_name = name or type(self).registry_name()
         self.name = f"Skill-{resolved_name}"
         self.skill_name = resolved_name
-        if skill_id is None:
-            class_id = type(self).__dict__.get("skill_id")
-            skill_id = class_id if isinstance(class_id, int) else 0
-        self.skill_id = int(skill_id)
+        self.skill_id = int(skill_id or 0)
         #: Every module's :class:`ObservationBuffer`, keyed by module name.
         #: The host that starts this skill points it at its own buffers.
         self.observations = observations or {}

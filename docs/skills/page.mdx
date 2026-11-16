@@ -191,7 +191,7 @@ That is how to compare the two placements for one policy: run the same task with
 
 ## Starting skills from the agentic controller
 
-The [AI Agentic Controller](/docs/agentic_controller)'s planner starts skills by calling the controller's `tools`; see [Declaring tools](/docs/agentic_controller#declaring-tools). Each call ends in `start_skill()`, which decides where the skill runs: a `CONTROLLER` skill is launched locally, while a `ROBOT`/`SERVER` one is forwarded as a `START_SKILL` action and the robot's generic handler constructs it there.
+The [AI Agentic Controller](/docs/agentic_controller)'s planner starts skills by calling the controller's `tools` marked `agent_enabled=True`; see [Declaring tools](/docs/agentic_controller#declaring-tools). Each call ends in `start_skill()`, which decides where the skill runs: a `CONTROLLER` skill is launched locally, while a `ROBOT`/`SERVER` one is forwarded as a `START_SKILL` action carrying the class's import path, and the robot's generic handler imports and constructs it there.
 
 ## Stopping yourself
 
@@ -217,12 +217,14 @@ class TimedSkill(Skill):
 
 ## Discovering skills
 
-A controller's registry has two sources, keyed by `Skill.registry_name()` — the skill's `config_name` if it has one, otherwise its class name. That one string is the skill's identity everywhere a name has to travel: the menu the VLM picks from, the `START_SKILL` action the controller sends the robot, and the robot's lookup of what to construct.
+A running skill is known by `Skill.registry_name()`: the skill's `config_name` if it has one, otherwise its class name. That is the name in logs, in the GUI, and in the `STOP_SKILL` the controller sends.
 
-1. **The `skills` class attribute.** A tuple of skill *classes* the controller can run. Classes rather than configured instances, so the VLM names a class and supplies its arguments as params — `MoveSkill` with `{"pose": "home", "arm": "right_arm"}` rather than a pre-built `home` entry.
-2. **Installed plugins.** Any package that declares a `solarian.skills` entry point is discovered automatically (see [`registry.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/ai/system1/registry.py)). A declared class wins over a discovered one of the same name.
+What a controller can start by name has two sources:
 
-A robot has the same two sources for what a `START_SKILL` name may resolve to, and the same `skills` attribute for skills that live in the project rather than in a plugin.
+1. **The `tools` class attribute.** Named ways to start a skill, each a skill class plus the params bound to it (`"home": Tool(MoveSkill, {"pose": "home", "arm": "right_arm"})`). The GUI's skill bar lists them, and `start_tool(name)` starts one.
+2. **Installed plugins.** Any package that declares a `solarian.skills` entry point is discovered automatically (see [`skill_registry.py`](https://github.com/solarian-dev/solarian/blob/main/solarian/core/skill_registry.py)), so the think process can start it by its registry name with the params it supplies.
+
+A robot or relay needs neither. The `START_SKILL` the controller sends carries the class's import path (`"solarian_umi_skill.skill:UMISkill"`), and the host imports it, so any skill its environment can import runs there with nothing declared on the `Robot`. The same message carries a run id that the skill's status rows report back, so the controller tells the end of one run from the end of an earlier run of the same skill. A skill defined in `__main__` cannot be imported by another host, so the controller refuses to send one.
 
 ## Configuration
 

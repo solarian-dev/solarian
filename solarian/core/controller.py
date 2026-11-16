@@ -92,22 +92,6 @@ class SkillRecord:
     modules: set[str] = field(default_factory=set)
 
 
-def _skill_spec(cls) -> dict:
-    """Registry entry for a skill, read off the class without constructing it.
-
-    A declared skill class may be an expensive one that only ever runs on the
-    robot, so nothing here instantiates it.
-    """
-    skill_id = cls.__dict__.get("skill_id")
-    return {
-        "cls": cls,
-        "execution_place": ExecutionPlace(cls.execution_place),
-        "execution_mode": ExecutionMode(cls.execution_mode),
-        "skill_id": int(skill_id) if isinstance(skill_id, int) and skill_id else None,
-        "docstring": (cls.__doc__ or "").strip(),
-    }
-
-
 def _deep_merge_module_actions(base: dict, overlay: dict) -> dict:
     for key, value in overlay.items():
         if key in base and isinstance(base[key], dict) and isinstance(value, dict):
@@ -135,16 +119,12 @@ class Controller(EventHost, ABC):
     # Clicks on displayed camera images, reported by whichever front end runs.
     mouse = MouseModule()
 
-    # Skill classes this controller can run. Only a registry: it is what the
-    # think process picks from and what a ``START_SKILL`` name resolves to,
-    # not a set of ready-made instances — a key handler constructs the skill
-    # it wants with the arguments it wants.
-    skills: tuple[type[Skill], ...] = ()
-
-    #: What the agent may call, by tool name: a skill class and the params this
-    #: controller binds (module names, which policy config). The agent fills in
-    #: the rest from the skill's :meth:`~Skill.tool_spec`. One skill can back
-    #: several tools — one policy skill, a pick config and a place config.
+    #: Named ways to start a skill: a skill class and the params this
+    #: controller binds (module names, which policy config). The operator
+    #: starts one with :meth:`start_tool`; the agent may call those marked
+    #: ``agent_enabled``, filling in the rest from the skill's
+    #: :meth:`~Skill.tool_spec`. One skill can back several tools — one policy
+    #: skill, a pick config and a place config.
     tools: dict[str, Tool] = {}
 
     def __init__(self, cfg: ControllerConfig):
@@ -296,9 +276,10 @@ class Controller(EventHost, ABC):
             return None
         from solarian.core.ai.agent import AgentHarness
 
-        if not self.tools:
-            logger.warning("agent is configured but %s declares no tools", type(self).__name__)
-        return AgentHarness(host=self, cfg=self.cfg.agent, tools=self.tools)
+        tools = {name: tool for name, tool in self.tools.items() if tool.agent_enabled}
+        if not tools:
+            logger.warning("agent is configured but %s has no agent_enabled tools", type(self).__name__)
+        return AgentHarness(host=self, cfg=self.cfg.agent, tools=tools)
 
     def load_module_config(self, module_name: str, module_class: type):
         """Load module config from YAML using the module's own config class.
@@ -884,7 +865,7 @@ class Controller(EventHost, ABC):
             agent=agent,
             key_help=self.gui_key_help(),
             skills={
-                "available": sorted(self._skill_registry),
+                "available": sorted(self.tools),
                 "running": running,
             },
             telemetry=telemetry,
@@ -912,11 +893,11 @@ class Controller(EventHost, ABC):
             "skills": [
                 {
                     "name": name,
-                    "execution_place": spec["execution_place"].value,
-                    "execution_mode": spec["execution_mode"].value,
-                    "docstring": spec["docstring"],
+                    "execution_place": ExecutionPlace(tool.skill.execution_place).value,
+                    "execution_mode": ExecutionMode(tool.skill.execution_mode).value,
+                    "docstring": (tool.skill.__doc__ or "").strip(),
                 }
-                for name, spec in sorted(self._skill_registry.items())
+                for name, tool in sorted(self.tools.items())
             ],
             "observation_schema": self._ui_observation_schema(),
             "agent": None if self.agent is None else {
@@ -1085,31 +1066,23 @@ class Controller(EventHost, ABC):
         if keyboard is not None:
             keyboard.stop_listener()
 
-    def _collect_controller_skills(self) -> dict:
-        """Registry of this controller's ``skills`` plus plugin entry points.
+    def _collect_controller_skills(self) -> dict[str, type[Skill]]:
+        """Skill classes a ``START_SKILL`` that names no tool may start.
 
-        Keyed by :meth:`Skill.registry_name`, the same identity a
-        ``START_SKILL`` action carries, so a name that reaches the controller
-        from the think process resolves to the same class the robot would
-        resolve it to.
+        This controller's tool classes plus plugin entry points, keyed by
+        :meth:`Skill.registry_name`: the name a UI or the legacy think
+        process sends when it means a class rather than one of :attr:`tools`.
         """
-        from solarian.core.skill_registry import discover_available_skills
+        from solarian.core.skill_registry import discover_skill_classes
 
-        skills: dict = {}
-        for cls in (*type(self).skills, *(tool.skill for tool in type(self).tools.values())):
-            skills[cls.registry_name()] = _skill_spec(cls)
         try:
-            discovered = discover_available_skills()
+            discovered = discover_skill_classes().values()
         except Exception:
             logger.exception("Skill plugin discovery failed")
-            discovered = {}
-        for name, spec in discovered.items():
-            if name in skills:
-                if not skills[name].get("skill_id"):
-                    skills[name]["skill_id"] = spec.get("skill_id")
-            else:
-                skills[name] = spec
-        return skills
+            discovered = ()
+        classes = [cls for cls in discovered if isinstance(cls, type) and issubclass(cls, Skill)]
+        classes += [tool.skill for tool in type(self).tools.values()]
+        return {cls.registry_name(): cls for cls in classes}
 
     # ========= observations ============
     def _tick_local_modules(self) -> None:
@@ -1165,11 +1138,11 @@ class Controller(EventHost, ABC):
         self._pending_actions: list[Action] = []
         self._remote_running: dict[str, SkillRecord] = {}
         #: Remote skills asked to stop but not yet confirmed stopped, as
-        #: ``name -> (first_request_t, last_request_t)`` in monotonic seconds.
-        self._remote_stopping: dict[str, tuple[float, float]] = {}
-        self._skill_registry: dict[str, dict[str, Any]] = (
-            self._collect_controller_skills()
-        )
+        #: ``name -> (first_request_t, last_request_t, run_id)``, times in
+        #: monotonic seconds. The run id keeps a retried stop from reaching a
+        #: later run of the same skill.
+        self._remote_stopping: dict[str, tuple[float, float, int | None]] = {}
+        self._skill_registry = self._collect_controller_skills()
         #: Each start of a skill is one invocation; this maps a running skill's
         #: name to its invocation, so whoever started it can tell its end from
         #: the end of an earlier run of the same skill.
@@ -1564,6 +1537,11 @@ class Controller(EventHost, ABC):
         runs. A remote skill is not launched here at all — the robot or server
         owns it, and gets a ``START_SKILL`` naming the class and its params.
         """
+        if skill.execution_place.is_remote and type(skill).__module__ == "__main__":
+            raise ValueError(
+                f"{type(skill).__name__} is defined in __main__, which the "
+                f"{skill.execution_place.value} cannot import; move it into a module"
+            )
         name = skill.skill_name
         self._log_episode_event("skill_started", skill=name, params=skill.params)
         if not self._agent_dispatching:
@@ -1584,17 +1562,23 @@ class Controller(EventHost, ABC):
         self._invocation_seq += 1
         self._invocations[name] = self._invocation_seq
         self._stop_reasons.pop(name, None)
+        # The run id is what the skill's status rows carry back, so a row from
+        # an earlier run of the same skill is told apart from this one's.
+        skill.skill_id = self._invocation_seq
         if skill.execution_place.is_remote:
+            cls = type(skill)
             self._pending_actions.append(
                 Action(
                     action_type=ActionType.START_SKILL,
                     data={
-                        "skill": type(skill).registry_name(),
+                        "skill": cls.registry_name(),
+                        "path": f"{cls.__module__}:{cls.__qualname__}",
                         "params": skill.params,
                         # The relay starts the ones placed on it and passes
                         # the rest on, so one skill can run on either host
                         # by configuration alone.
                         "execution_place": skill.execution_place.value,
+                        "run_id": skill.skill_id,
                     },
                 )
             )
@@ -1603,7 +1587,7 @@ class Controller(EventHost, ABC):
                 execution_place=skill.execution_place,
                 execution_mode=skill.execution_mode,
                 status=SkillStatus.RUNNING,
-                skill_id=int(skill.skill_id) if skill.skill_id else None,
+                skill_id=skill.skill_id,
                 modules=skill.commanded_module_names(),
             )
         else:
@@ -1635,23 +1619,28 @@ class Controller(EventHost, ABC):
         )
         return name
 
-    def start_skill_by_name(self, name: str, params: dict) -> None:
-        """Start a registered skill by the name a ``START_SKILL`` carries.
+    def start_tool(self, name: str, **params: Any) -> str:
+        """Start the tool declared as ``name``, with ``params`` over its bound ones."""
+        return self.start_skill(self.tools[name].build(**params))
 
-        The registry is the one the think process picks from, so a name arriving
-        from a UI, from the skill command queue or from the robot all resolve to
-        the same class.
+    def start_skill_by_name(self, name: str, params: dict) -> None:
+        """Start what a ``START_SKILL`` off a UI or the skill command queue names.
+
+        A tool name first, so the operator's buttons start the same thing its
+        keys do; otherwise a skill class by :meth:`Skill.registry_name`.
         """
-        spec = self._skill_registry.get(name)
-        if spec is None:
+        tool = self.tools.get(name)
+        cls = self._skill_registry.get(name)
+        if tool is None and cls is None:
             logger.warning(
-                "Cannot start unknown skill '%s'; known: %s",
+                "Cannot start unknown skill '%s'; tools: %s; classes: %s",
                 name,
+                sorted(self.tools),
                 sorted(self._skill_registry),
             )
             return
         try:
-            self.start_skill(spec["cls"](params=params))
+            self.start_skill(tool.build(**params) if tool is not None else cls(params=params))
         except ConfigError as exc:
             logger.error("Could not start skill '%s': %s", name, exc)
         except Exception:
@@ -1703,9 +1692,12 @@ class Controller(EventHost, ABC):
         if reason:
             self._stop_reasons[remote_name] = reason
         now = time.monotonic()
-        self._remote_stopping[remote_name] = (now, now)
+        self._remote_stopping[remote_name] = (now, now, rec.skill_id)
         self._pending_actions.append(
-            Action(action_type=ActionType.STOP_SKILL, data={"skill": remote_name})
+            Action(
+                action_type=ActionType.STOP_SKILL,
+                data={"skill": remote_name, "run_id": rec.skill_id},
+            )
         )
         logger.info("Stopping remote skill '%s'", remote_name)
 
@@ -1719,7 +1711,7 @@ class Controller(EventHost, ABC):
         deadline: this gives up rather than asking forever.
         """
         now = time.monotonic()
-        for name, (first, last) in list(self._remote_stopping.items()):
+        for name, (first, last, run_id) in list(self._remote_stopping.items()):
             if now - first > _REMOTE_STOP_TIMEOUT_S:
                 logger.warning(
                     "Robot never confirmed skill '%s' stopped after %.1f s; "
@@ -1728,14 +1720,19 @@ class Controller(EventHost, ABC):
                     now - first,
                 )
                 self._remote_stopping.pop(name, None)
-                self._remote_running.pop(name, None)
-                self._skill_ended(name, SkillStatus.STOPPED, "stop never confirmed by the robot")
+                current = self._remote_running.get(name)
+                if current is not None and current.skill_id == run_id:
+                    self._remote_running.pop(name)
+                    self._skill_ended(name, SkillStatus.STOPPED, "stop never confirmed by the robot")
                 continue
             if now - last < _REMOTE_STOP_RETRY_S:
                 continue
-            self._remote_stopping[name] = (first, now)
+            self._remote_stopping[name] = (first, now, run_id)
             self._pending_actions.append(
-                Action(action_type=ActionType.STOP_SKILL, data={"skill": name})
+                Action(
+                    action_type=ActionType.STOP_SKILL,
+                    data={"skill": name, "run_id": run_id},
+                )
             )
 
     def stop_all_skills(self, reason: str = "stopped by the operator") -> None:
@@ -1893,11 +1890,16 @@ class Controller(EventHost, ABC):
         logger.info("Stopping service %s/%s", module, field)
 
     def _ingest_skill_status_records(self, records) -> None:
-        """Update remote-running table from robot/server ``skill_status`` rows."""
+        """End remote skills whose robot/server ``skill_status`` rows say they ended.
+
+        Rows carry the run id :meth:`start_skill` sent, so only the run the
+        controller believes is current can be ended by one; a row from an
+        earlier run of the same skill only confirms that run's stop.
+        """
         id_to_name = {
-            int(spec["skill_id"]): name
-            for name, spec in self._skill_registry.items()
-            if spec.get("skill_id") is not None
+            rec.skill_id: name
+            for name, rec in self._remote_running.items()
+            if rec.skill_id is not None
         }
         for rec in records:
             # Deserialized off the wire (rows) or read from shared memory
@@ -1910,33 +1912,21 @@ class Controller(EventHost, ABC):
                 skill_id = int(getattr(rec, "skill_id", 0))
                 status = int(getattr(rec, "status", 0))
                 reason = ""
-            name = id_to_name.get(skill_id)
-            if name is None:
-                continue
-            if status == int(SkillStatus.RUNNING):
-                spec = self._skill_registry.get(name, {})
-                existing = self._remote_running.get(name)
-                self._remote_running[name] = SkillRecord(
-                    name=name,
-                    execution_place=spec.get("execution_place", ExecutionPlace.ROBOT),
-                    execution_mode=spec.get(
-                        "execution_mode", ExecutionMode.PROCESS
-                    ),
-                    status=SkillStatus.RUNNING,
-                    skill_id=skill_id,
-                    # Status rows carry no params; keep what start_skill stored.
-                    modules=existing.modules if existing is not None else set(),
-                )
-            elif status in (
+            if status not in (
                 int(SkillStatus.COMPLETED),
                 int(SkillStatus.FAILED),
                 int(SkillStatus.STOPPED),
             ):
-                was_running = self._remote_running.pop(name, None) is not None
-                self._local_skills.pop(name, None)
-                self._remote_stopping.pop(name, None)
-                if was_running:
-                    self._skill_ended(name, SkillStatus(status), reason)
+                continue
+            for stopping_name, (_, _, run_id) in list(self._remote_stopping.items()):
+                if run_id == skill_id:
+                    self._remote_stopping.pop(stopping_name)
+            name = id_to_name.pop(skill_id, None)
+            if name is None:
+                continue
+            self._remote_running.pop(name)
+            self._local_skills.pop(name, None)
+            self._skill_ended(name, SkillStatus(status), reason)
 
     def _drain_skill_actions(self, skill, slots: list[dict]) -> None:
         """Merge everything *skill* queued into *slots*, one per queue position."""

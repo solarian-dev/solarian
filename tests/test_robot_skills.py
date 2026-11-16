@@ -1,4 +1,4 @@
-"""The robot starts and stops skills by name, without a handler per skill."""
+"""The robot starts skills by import path and stops them by run, without a handler per skill."""
 
 from __future__ import annotations
 
@@ -77,10 +77,11 @@ class StubbornWaveSkill(WaveSkill):
         return self.did_start and not self.was_terminated
 
 
+CLASSES = {cls.config_name: cls for cls in (WaveSkill, ArmWaveSkill, StubbornWaveSkill)}
+
+
 class FakeRobot(Robot):
     """Enough of a robot for the skill handlers: no zmq, no shared memory."""
-
-    skills = (WaveSkill, ArmWaveSkill, StubbornWaveSkill)
 
     def __init__(self):
         self.modules = {"arm": module("arm"), "gripper": module("gripper")}
@@ -100,20 +101,17 @@ class FakeRobot(Robot):
         pass
 
 
-@pytest.fixture(autouse=True)
-def clear_skill_cache():
-    FakeRobot._skill_class_cache = None
-    yield
-    FakeRobot._skill_class_cache = None
-
-
-def start(robot, **data):
+def start(robot, skill, run_id=1, path=None, **data):
+    """Send what the controller's ``start_skill`` sends for ``skill``."""
+    if path is None:
+        path = f"{__name__}:{CLASSES[skill].__qualname__}"
+    data = {"skill": skill, "path": path, "run_id": run_id, **data}
     robot.start_named_skill(Action(action_type=ActionType.START_SKILL, data=data), 0.0)
 
 
-def stop(robot, name):
+def stop(robot, name, run_id=1):
     robot.stop_named_skill(
-        Action(action_type=ActionType.STOP_SKILL, data={"skill": name}), 0.0
+        Action(action_type=ActionType.STOP_SKILL, data={"skill": name, "run_id": run_id}), 0.0
     )
 
 
@@ -157,13 +155,22 @@ def test_absent_writer_params_command_nothing():
     assert robot._local_skills["arm_wave"].commanded_module_names() == set()
 
 
-def test_a_name_no_plugin_publishes_is_refused(caplog):
+def test_the_skill_carries_the_run_id_its_status_rows_report():
+    robot = FakeRobot()
+
+    start(robot, skill="wave", run_id=42)
+
+    assert robot._local_skills["wave"].skill_id == 42
+
+
+@pytest.mark.parametrize("path", ["nope", "no_such_module:Wave", f"{__name__}:Missing", "builtins:dict"])
+def test_a_path_that_is_not_an_importable_skill_is_refused(caplog, path):
     robot = FakeRobot()
 
     with caplog.at_level("WARNING"):
-        start(robot, skill="nope")
+        start(robot, skill="nope", path=path)
 
-    assert "unknown skill 'nope'" in caplog.text
+    assert "Cannot start skill 'nope'" in caplog.text
     assert robot._local_skills == {}
 
 
@@ -175,6 +182,33 @@ def test_starting_a_skill_that_is_already_running_is_a_no_op():
     start(robot, skill="wave")
 
     assert robot._local_skills["wave"] is first
+
+
+def test_a_newer_run_replaces_one_whose_stop_was_lost():
+    """The STOP for the old run was conflated away; dropping the new start would
+    leave the controller waiting on a run the robot never had."""
+    robot = FakeRobot()
+    start(robot, skill="wave", params={"arm": "arm"}, run_id=1)
+    first = robot._local_skills["wave"]
+
+    start(robot, skill="wave", params={"arm": "arm"}, run_id=2)
+    robot._reap_stopping_skills()
+
+    assert first.was_asked_to_stop
+    assert robot._local_skills["wave"].skill_id == 2
+
+
+def test_a_retried_stop_for_a_replaced_run_does_not_stop_its_replacement():
+    robot = FakeRobot()
+    start(robot, skill="wave", run_id=1)
+    stop(robot, "wave", run_id=1)
+    robot._reap_stopping_skills()
+    start(robot, skill="wave", run_id=2)
+
+    stop(robot, "wave", run_id=1)
+
+    assert robot._local_skills["wave"].skill_id == 2
+    assert not robot._local_skills["wave"].was_asked_to_stop
 
 
 def test_stop_skill_asks_the_skill_to_stop_and_forgets_it():
@@ -253,7 +287,7 @@ def test_a_skill_that_is_still_stopping_is_restarted_once_it_has_stopped():
     first = robot._local_skills["stubborn_wave"]
     stop(robot, "stubborn_wave")
 
-    start(robot, skill="stubborn_wave", params={"arm": "arm", "amplitude": 3.0})
+    start(robot, skill="stubborn_wave", params={"arm": "arm", "amplitude": 3.0}, run_id=2)
 
     assert robot._local_skills == {}
     assert robot._stopping_skills["stubborn_wave"][0] is first
@@ -271,9 +305,9 @@ def test_a_restart_waiting_on_a_stop_is_dropped_when_it_is_stopped_too():
     robot = FakeRobot()
     start(robot, skill="stubborn_wave", params={"arm": "arm"})
     stop(robot, "stubborn_wave")
-    start(robot, skill="stubborn_wave", params={"arm": "arm"})
+    start(robot, skill="stubborn_wave", params={"arm": "arm"}, run_id=2)
 
-    stop(robot, "stubborn_wave")
+    stop(robot, "stubborn_wave", run_id=2)
     robot._reap_stopping_skills(force=True)
 
     assert robot._local_skills == {}

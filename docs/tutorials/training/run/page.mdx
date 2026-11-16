@@ -20,7 +20,7 @@ That path is relative to the project root, which is where you launch the server.
 solarian run-service pick
 ```
 
-Restart the robot and the controller if they are not already up. Simulation is the right place to look at a smoke-test checkpoint: press `1` for the reach pose, confirm the cube is in the wrist image, press `4`.
+Restart the robot and the controller if they are not already up. Simulation is the right place to look at a smoke-test checkpoint: press `2` for the reach pose, confirm the cube is in the wrist image, press `4`.
 
 What you should see depends on the run. A one-epoch smoke test may only twitch. A full run on the example dataset should move toward the object the dataset contains. If the dataset's object is not a red cube, swap the scene's geom for something shaped like the demonstrations, or accept that the policy is hunting for an object you did not put in frame.
 

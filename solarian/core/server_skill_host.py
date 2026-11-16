@@ -17,7 +17,7 @@ import time
 from multiprocessing.managers import SharedMemoryManager
 
 from solarian.core.action import Action, ActionType, ModuleAction
-from solarian.core.skill_registry import discover_skill_classes
+from solarian.core.skill_registry import load_skill_class
 from solarian.core.event import event_inbox_for
 from solarian.core.execution import ExecutionPlace
 from solarian.core.module import Module
@@ -94,7 +94,6 @@ class ServerSkillHost:
         #: ``START_SKILL`` payloads that arrived while a skill of the same name
         #: was still stopping, started once :meth:`reap` retires it.
         self._deferred_starts: dict[str, dict] = {}
-        self._skill_classes: dict[str, type] | None = None
 
     # -- observations ---------------------------------------------------------
 
@@ -122,36 +121,29 @@ class ServerSkillHost:
 
     # -- skills ---------------------------------------------------------------
 
-    def skill_classes(self) -> dict[str, type]:
-        if self._skill_classes is None:
-            self._skill_classes = {
-                skill_cls.registry_name(): skill_cls
-                for skill_cls in discover_skill_classes().values()
-                if isinstance(skill_cls, type)
-            }
-        return self._skill_classes
-
     def runs(self, name: str) -> bool:
-        return name in self._local_skills
+        return name in self._local_skills or name in self._deferred_starts
 
     def start_named_skill(self, data: dict) -> None:
-        """Start the skill a ``START_SKILL`` addressed to the server names.
+        """Start the skill class at the import path a ``START_SKILL`` addressed to the server carries.
 
         Every read is a ``.get``: the payload was deserialized off the wire.
         """
         name = str(data.get("skill") or "")
-        skill_cls = self.skill_classes().get(name)
-        if skill_cls is None:
-            logger.warning(
-                "Cannot start unknown skill '%s'; installed: %s",
-                name,
-                sorted(self.skill_classes()),
-            )
+        path = str(data.get("path") or "")
+        try:
+            skill_cls = load_skill_class(path)
+        except Exception as exc:
+            logger.warning("Cannot start skill '%s' from %r: %s", name, path, exc)
             return
+        run_id = int(data.get("run_id") or 0)
         running = self._local_skills.get(name)
         if running is not None and running.is_alive():
-            logger.info("Skill '%s' already running (pid=%s)", name, running.pid)
-            return
+            if running.skill_id == run_id:
+                logger.info("Skill '%s' already running (pid=%s)", name, running.pid)
+                return
+            # A newer run whose STOP for the old one was lost: it replaces the old run.
+            self.stop_skill(name)
         if name in self._stopping:
             logger.info("Skill '%s' is still stopping; starting it once it has", name)
             self._deferred_starts[name] = data
@@ -159,6 +151,7 @@ class ServerSkillHost:
         try:
             skill = skill_cls(
                 params=data.get("params", {}),
+                skill_id=run_id,
                 execution_place=ExecutionPlace.SERVER,
                 status_mp_q=StatusBoard.get_mp_queue(),
             )
@@ -175,6 +168,20 @@ class ServerSkillHost:
             return
         self._local_skills[name] = skill
         logger.info("Started skill '%s' on the server (pid=%s)", name, skill.pid)
+
+    def stop_named_skill(self, data: dict) -> None:
+        """Stop the run a ``STOP_SKILL`` names; a retried stop for a run already gone is ignored."""
+        name = str(data.get("skill") or "")
+        run_id = data.get("run_id")
+        if run_id is None:
+            self.stop_skill(name)
+            return
+        deferred = self._deferred_starts.get(name)
+        if deferred is not None and int(deferred.get("run_id") or 0) == int(run_id):
+            self._deferred_starts.pop(name)
+        running = self._local_skills.get(name)
+        if running is not None and running.skill_id == int(run_id):
+            self.stop_skill(name)
 
     def stop_skill(self, name: str) -> None:
         self._deferred_starts.pop(name, None)

@@ -26,6 +26,7 @@ These files are:
 - `my_robot/settings.py` tells Solarian which classes are your robot, controller, and server.
 - `robot.py` is the machine: one class attribute per module. The attribute's name is the module's name everywhere else.
 - `modules/my_arm_module.py` is the arm module, `MyArmModule`. It extends Solarian's `ArmModule` and declares no servos yet.
+- `skills/` is a package with only `__init__.py`. Skills you write go here, one file per skill.
 - `controller.py` is the decision. Keys, and later skills, live here.
 - `server.py` is the relay. Leave the generated class alone.
 - `observation.py` and `action.py` are the schema of the messages between robot and controller. They have to name the same modules the robot declares. Solarian checks this when the classes are defined.

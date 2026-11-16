@@ -17,6 +17,8 @@ from solarian.core.message import Message
 from solarian.core.observation import CalculatedField
 from solarian.core.robot import Robot
 from solarian.core.server import RelayServer
+from solarian.core.server_skill_host import ServerSkillHost
+from solarian.core.skill import Skill
 from solarian.services import ServiceProcessor
 from solarian.utils.log_buffer import LogRecord
 
@@ -57,8 +59,8 @@ class _Host:
     def start_named_skill(self, data):
         self.started.append(data)
 
-    def stop_skill(self, name):
-        self.stopped.append(name)
+    def stop_named_skill(self, data):
+        self.stopped.append(data["skill"])
 
 
 def _relay(processors=None, host=None):
@@ -119,6 +121,53 @@ def test_relay_hosts_skills_placed_on_the_server_only():
     assert host.stopped == ["umi_pnp"]
     forwarded = [m.data.get("action", {}).get("data", {}).get("skill") for m in relay.robot_cmd_sender.sent]
     assert forwarded == [None, "umi_pnp", None, "umi"]
+
+
+class _ServerSkill(Skill):
+    config_name = "server_wave"
+
+    def start(self):
+        self.stop_requested = False
+
+    def is_alive(self):
+        return not self.stop_requested
+
+    def request_stop(self):
+        self.stop_requested = True
+
+    def control_step(self, dt):
+        return None
+
+
+def _server_skill_host():
+    host = ServerSkillHost.__new__(ServerSkillHost)
+    host.observation_buffers, host.action_queues, host.skills_status_buffer = {}, {}, None
+    host._local_skills, host._stopping, host._deferred_starts = {}, {}, {}
+    return host
+
+
+def test_the_server_starts_a_skill_by_path_with_its_run_id():
+    host = _server_skill_host()
+
+    host.start_named_skill(
+        {"skill": "server_wave", "path": f"{__name__}:_ServerSkill", "run_id": 9}
+    )
+
+    skill = host._local_skills["server_wave"]
+    assert skill.skill_id == 9 and skill.execution_place is ExecutionPlace.SERVER
+
+
+def test_the_server_ignores_a_retried_stop_for_another_run():
+    host = _server_skill_host()
+    host.start_named_skill(
+        {"skill": "server_wave", "path": f"{__name__}:_ServerSkill", "run_id": 2}
+    )
+
+    host.stop_named_skill({"skill": "server_wave", "run_id": 1})
+    assert "server_wave" in host._local_skills
+
+    host.stop_named_skill({"skill": "server_wave", "run_id": 2})
+    assert "server_wave" not in host._local_skills
 
 
 def test_robot_reads_every_queued_message_and_batches_in_order():

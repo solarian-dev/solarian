@@ -141,6 +141,11 @@ def test_add_op_writes_a_working_op(project, tmp_path, monkeypatch):
     assert summary.episodes == 0
 
 
+def test_the_project_template_has_a_skills_package(tmp_path):
+    root = scaffold_project("newbot", target_dir=tmp_path)
+    assert (root / "newbot" / "skills" / "__init__.py").is_file()
+
+
 def test_the_project_template_carries_an_example_op(tmp_path):
     root = scaffold_project("newbot", target_dir=tmp_path)
     example = root / "newbot" / "datasets" / "drop_short_episodes.py"

@@ -1,5 +1,5 @@
 """
-Skill registry — discovery of installed skill plugins via entry points.
+Skill registry — discovery of installed skill plugins, and loading a skill by path.
 
 Skill plugins advertise their :class:`Skill` subclasses under the
 ``solarian.skills`` entry-point group, e.g. in a plugin's ``pyproject.toml``::
@@ -10,20 +10,23 @@ Skill plugins advertise their :class:`Skill` subclasses under the
 Installing such a package makes the skill discoverable by any
 :class:`~solarian.core.controller.Controller` without editing its code — the
 foundation the skill marketplace builds on.
+
+Starting a skill on the robot or server does not go through discovery: a
+``START_SKILL`` carries the class's import path, and :func:`load_skill_class`
+imports it there.
 """
 
+import importlib
 import importlib.metadata
 import logging
-from typing import Any, Dict
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
 #: Entry-point group skill plugins register under.
 SKILL_ENTRY_POINT_GROUP = "solarian.skills"
 
-#: Auto-assigned skill ids for discovered skills start here, to avoid
-#: colliding with the small, hand-assigned ids projects typically use.
-_AUTO_SKILL_ID_START = 1000
+_loaded: Dict[str, type] = {}
 
 
 def _iter_entry_points(group: str):
@@ -50,58 +53,27 @@ def discover_skill_classes() -> Dict[str, type]:
     return out
 
 
-def discover_available_skills(
-    start_skill_id: int = _AUTO_SKILL_ID_START,
-) -> Dict[str, Dict[str, Any]]:
-    """Build an ``available_skills``-style registry from installed plugins.
+def load_skill_class(path: str) -> type:
+    """The :class:`Skill` subclass at ``"package.module:QualName"``.
 
-    The returned mapping has the same shape as the one
-    :meth:`Controller._collect_controller_skills` builds from its own
-    ``skills`` list: ``name -> {cls, execution_place, execution_mode,
-    skill_id, docstring}``.  Those fields are read from a
-    default-constructed template instance when possible; skills that cannot
-    be default-constructed fall back to sensible defaults.
+    Raises:
+        ValueError: ``path`` is malformed or names something that is not a
+            ``Skill`` subclass.
+        ImportError, AttributeError: the module or the class does not exist.
     """
+    cls = _loaded.get(path)
+    if cls is not None:
+        return cls
     # Imported here to avoid a circular import at module load time.
-    from solarian.core.execution import ExecutionMode, ExecutionPlace
     from solarian.core.skill import Skill
 
-    skills: Dict[str, Dict[str, Any]] = {}
-    next_id = start_skill_id
-    for name, cls in discover_skill_classes().items():
-        if not (isinstance(cls, type) and issubclass(cls, Skill)):
-            logger.warning(
-                "Skill entry point %r does not point to a Skill subclass (%r); skipping",
-                name,
-                cls,
-            )
-            continue
-
-        execution_place: Any = ExecutionPlace.CONTROLLER
-        execution_mode: Any = ExecutionMode.PROCESS
-        skill_id = None
-        try:
-            template = cls()
-            execution_place = template.execution_place
-            execution_mode = template.execution_mode
-            skill_id = template.skill_id or None
-        except Exception:  # noqa: BLE001 - skill may require constructor args
-            logger.debug(
-                "Could not default-construct skill %r for introspection; "
-                "using defaults",
-                name,
-                exc_info=True,
-            )
-
-        if not skill_id:
-            skill_id = next_id
-            next_id += 1
-
-        skills[name] = {
-            "cls": cls,
-            "execution_place": execution_place,
-            "execution_mode": execution_mode,
-            "skill_id": skill_id,
-            "docstring": (cls.__doc__ or "").strip(),
-        }
-    return skills
+    module_name, sep, qualname = path.partition(":")
+    if not (sep and module_name and qualname):
+        raise ValueError(f"skill path {path!r} is not 'module:QualName'")
+    obj = importlib.import_module(module_name)
+    for part in qualname.split("."):
+        obj = getattr(obj, part)
+    if not (isinstance(obj, type) and issubclass(obj, Skill)):
+        raise ValueError(f"{path!r} is not a Skill subclass")
+    _loaded[path] = obj
+    return obj

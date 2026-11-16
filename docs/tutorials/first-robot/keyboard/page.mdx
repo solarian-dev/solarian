@@ -130,7 +130,7 @@ This controller's decision is already made by the time `control_step` runs, so i
 
 Sending the same target 30 times a second keeps the arm commanded at all times: a key changes where the arm should be, and the very next tick carries the new target to the robot. A control step can also compute its action from scratch. `self.last_observation` holds the newest observation from the robot, so a controller can read the arm's measured joints and decide from those.
 
-The base class has its own `control_step`, which runs [skills](/docs/tutorials/skills) and sends what they produce. Defining yours replaces it, which is what a hand-written controller wants. In Tutorial 4 you delete this method and let skills drive the arm.
+The base class has its own `control_step`, which runs [skills](/docs/tutorials/skills) and sends what they produce. Defining yours replaces it, which is what a hand-written controller wants. In Tutorial 4 the method stays, and it calls this base implementation first so a skill can take a turn. The joint target goes out on every other tick.
 
 ## The whole file
 

@@ -6,11 +6,11 @@ export const metadata = {
 
 # A skill you write
 
-The smallest skill that does something you can see: open the gripper, then finish. It lives in the project, the way the arm module did. {{ className: 'lead' }}
+The smallest skill that does something you can see: open the gripper, then finish. The scaffold already made `my_robot/skills/` a package. Add the skill there, the way the arm module lives in `modules/`. {{ className: 'lead' }}
 
-Create `my_robot/skills.py`:
+Create `my_robot/skills/open_gripper.py`:
 
-```python
+```python {{ title: 'my_robot/skills/open_gripper.py' }}
 from solarian.core.action import Action, ActionType
 from solarian.core.skill import Skill
 from solarian.core.execution import ExecutionMode
@@ -39,40 +39,96 @@ class OpenGripperSkill(Skill):
 
 A skill never imports `MyRobotRobot`. The name `"gripper"` is the whole address. That is what lets the same class run on the controller or on the robot later.
 
-## The controller only starts it
+## Add it to the controller
 
-Replace `my_robot/controller.py`. The joint-nudge `control_step` has to go. An override of `control_step` replaces skill ticking, so a skill you start would never get a turn.
+The controller already nudges the arm and the gripper. `o` decreases wrist roll, and `z` / `x` move the fingers. `1` is free, so that key starts the skill. The letter keys stay.
 
-```python
+Replace `my_robot/controller.py`. Highlighted lines are what this chapter adds.
+
+```python {{ title: 'my_robot/controller.py', highlight: '4, 8, 30-32, 43-50, 62-67' }}
 from solarian.core import Controller
+from solarian.core.action import ActionType
 from solarian.core.event import Event, EventType, event_handler
+from solarian.core.skill import Tool
 
-from my_robot.skills import OpenGripperSkill
+from my_robot.action import MyRobotAction
+from my_robot.modules.my_arm_module import MyActions
+from my_robot.skills.open_gripper import OpenGripperSkill
+
+# One key pair per joint: the first decreases, the second increases.
+_KEYS = {
+    "q": ("shoulder_pan", -5),
+    "a": ("shoulder_pan", 5),
+    "w": ("shoulder_lift", -5),
+    "s": ("shoulder_lift", 5),
+    "e": ("elbow_flex", -5),
+    "d": ("elbow_flex", 5),
+    "u": ("wrist_flex", -5),
+    "j": ("wrist_flex", 5),
+    "i": ("wrist_yaw", -5),
+    "k": ("wrist_yaw", 5),
+    "o": ("wrist_roll", -5),
+    "l": ("wrist_roll", 5),
+    "z": ("gripper", -5),
+    "x": ("gripper", 5),
+}
 
 
 class MyRobotController(Controller):
-    skills = (OpenGripperSkill,)
+    tools = {
+        "open_gripper": Tool(OpenGripperSkill, {"gripper": "gripper"}),
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.target = MyRobotAction.zeros()
+        self.target.arm.action_type = MyActions.MOVE_ARM
+        self.target.gripper.action_type = ActionType.MOVE_J
+        self.target.gripper.gripper.value = 40.0
 
     @event_handler(EventType.KEY_DOWN)
     def on_key_down(self, event: Event):
-        if event.data["key"] == "o":
-            self.start_skill(OpenGripperSkill(params={"gripper": "gripper"}))
+        key = event.data["key"]
+        if key == "1":
+            # The next tick sends self.target again. Leave the fingers at
+            # the width the skill just commanded.
+            self.target.gripper.gripper.value = 85.0
+            self.start_tool("open_gripper")
+            return
+        step = _KEYS.get(key)
+        if step is None:
+            return
+        joint, delta = step
+        if joint == "gripper":
+            field = self.target.gripper.gripper
+            field.value = max(0.0, min(85.0, field.value + delta))
+            return
+        field = self.target.arm[joint]
+        field.value = max(-100.0, min(100.0, field.value + delta))
+
+    def control_step(self):
+        # The base method ticks skills. Send what a skill returned;
+        # otherwise keep streaming the key target.
+        skill_action = super().control_step()
+        if skill_action is not None:
+            return skill_action
+        return self.target
 ```
 
-`skills` is the list of classes this controller is willing to run. `start_skill` builds nothing for you: you construct the skill with the params you want, and it stops whatever else is commanding `gripper`.
+`tools` names the ways this controller starts a skill: a skill class plus the params bound to it. `start_tool("open_gripper")` builds the skill from them and starts it, stopping whatever other skill is commanding `gripper`. A skill you build yourself goes to `start_skill` instead: `self.start_skill(OpenGripperSkill(params={"gripper": "gripper"}))` does the same thing.
 
-There is no `control_step`. The base implementation ticks the running skills and sends what they return.
+The letter keys still edit `self.target`, and `control_step` still sends it every tick. Defining `control_step` replaces the base method, and the base method is what ticks skills, so this one calls it first. On a tick where the skill returned an action, that action goes out instead of the target. The skill finishes on that same tick. The handler writes 85 into the remembered gripper width because the following tick sends `self.target` again, and the fingers would otherwise close back to wherever `z` and `x` had left them.
 
 ## Try it
 
-Restart the controller and the robot (simulation is fine). Close the fingers in your mind first: they may already be open. Press `o`.
+Restart the controller and the robot (simulation is fine). The joint keys and `z` / `x` still nudge. Close the fingers partway with `z` if they are already open. Press `1`.
 
-The fingers should go to fully open and the skill should exit. Press `o` again and the same thing happens; it does not toggle shut. A key starts. It does not reverse.
+The fingers should go to fully open and the skill should exit. Press `1` again and the same thing happens. A key starts. It does not reverse.
 
-The arm no longer nudges. That is the point of deleting `control_step`. The next chapter puts motion back, as a pose instead of a key-per-joint.
+`o` still decreases wrist roll. The next chapter adds a pose on `0`, and leaves these keys in place.
 
 <Note>
-  If <code>o</code> does nothing and the terminal is silent, the controller still has your old <code>control_step</code>. Skills do not run alongside that override. Delete it.
+  If <code>1</code> does nothing and the terminal is silent, <code>control_step</code> is still only <code>return self.target</code>. Call the base method so the skill gets a turn.
 </Note>
 
 Next: [move to a pose](/docs/tutorials/skills/move).
