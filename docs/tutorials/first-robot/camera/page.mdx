@@ -146,6 +146,6 @@ Restart the robot and the controller. The controller window should show the wris
 | `gripper` | `solarian-gripper1` | YAML, a site-to-site attachment |
 | `wrist_camera` | `solarian-picamera`, `PiCameraModule` | YAML, a `CameraMount` |
 
-The controller is still a keyboard. It reads observations and writes a joint target. That is the whole robot until [Tutorial 4](/docs/tutorials/skills), where a skill replaces `control_step`.
+The controller runs one skill, keyboard teleop, which reads observations and sends joint targets. [Tutorial 4](/docs/tutorials/skills) adds more skills next to it, each on its own key.
 
 [Tutorial 3](/docs/tutorials/real-robot) builds this same project in hardware. You can also go straight to skills and stay in simulation: [Tutorial 4](/docs/tutorials/skills). Tutorial 4's real-arm chapter is the only part that needs the physical robot.

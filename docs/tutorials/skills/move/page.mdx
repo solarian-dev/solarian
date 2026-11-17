@@ -6,7 +6,7 @@ export const metadata = {
 
 # Move to a pose
 
-Opening the gripper was one number. Moving the arm to "home" is six numbers with a name. That name is a skill's vocabulary, so it lives in the skill's config, not on the arm. The arm still just receives joint targets. {{ className: 'lead' }}
+Teleop moves the arm one key press at a time. Moving it to "home" is six numbers with a name. That name is a skill's vocabulary, so it lives in the skill's config, not on the arm. The arm still just receives joint targets. {{ className: 'lead' }}
 
 ## Install the skill
 
@@ -18,42 +18,42 @@ This installs `solarian-move` and copies `conf/skills/move.yaml` the first time.
 
 Each pose is keyed by module name, and the template names them `right_arm` and `right_gripper`. Rename those keys to `arm` and `gripper` in both poses. A pose whose keys match no module moves nothing, and no error says so.
 
-`MoveSkill` reads `poses[name]`, sends one `MOVE_J`, and finishes when a timeout elapses. The module drives the path. The skill does not interpolate.
+`MoveSkill` reads `poses[name]`, sends one `MOVE_J`, and finishes when the arm arrives or a timeout elapses. The module drives the path. The skill does not interpolate.
 
-`MOVE_J` is `ArmModule`'s joint move. The arm from Tutorial 2 answers `MOVE_ARM` and replaces `control_step`, so this skill does not reach those servos until the kinematics section removes both. The gripper module already handles `MOVE_J`.
+`MOVE_J` is the same joint move teleop sends, and the gripper module handles it too. The arm converts the pose's −100 to 100 values to radians with the joint limits its `ik_backend` loaded in Tutorial 2, so nothing on the arm changes for a joint pose.
 
 ## A key for home
 
-`1` already opens the gripper. Add a `home` tool beside it, and a `0` branch in the same handler. In `my_robot/controller.py`:
+`0` starts teleop. Import `MoveSkill`, add a `home` tool beside teleop, and add a `1` branch in the same handler:
 
-```python
+```python {{ title: 'my_robot/controller.py' }}
 from solarian_move import MoveSkill
-```
 
-```python
-tools = {
-    "open_gripper": Tool(OpenGripperSkill, {"gripper": "gripper"}),
-    "home": Tool(MoveSkill, {"pose": "home", "arm": "arm", "gripper": "gripper"}),
-}
-```
 
-```python
-        if key == "1":
-            self.target.gripper.gripper.value = 85.0
-            self.start_tool("open_gripper")
-            return
+class MyRobotController(Controller):
+    tools = {
+        "teleop": Tool(JointTeleopSkill, {"arm": "arm", "gripper": "gripper"}),
+        "home": Tool(MoveSkill, {"pose": "home", "arm": "arm", "gripper": "gripper"}),
+    }
+
+    # ...
+
+    @event_handler(EventType.KEY_DOWN)
+    def start_bound_skill(self, event: Event):
+        key = event.data["key"]
         if key == "0":
+            self.start_tool("teleop")
+        elif key == "1":
             self.start_tool("home")
-            return
 ```
 
-The joint keys stay below those two branches. Leave `0` unpressed until the kinematics model is on the arm: a `MOVE_J` with no joint limits raises inside the arm module. Press `1` to see a skill run; that one only commands the gripper. Pressing a key starts the skill again. It does not toggle.
+Restart the controller and press `1`. The arm folds to `home`, and the gripper opens to the width in that pose. `home` commands both modules, so starting it stops teleop. Press `0` and the letter keys jog again, starting from `home`: teleop reads the measured joints when it starts. Pressing `1` again runs the skill again. It does not toggle.
 
 ## Name your own pose
 
-In `conf/skills/move.yaml`, under `poses:`, add a pose you can recognize. These values are mid-travel on the shoulder and a bent elbow, so the hand sits out in front instead of tucked:
+Under `poses:`, add a pose you can recognize. These values are mid-travel on the shoulder and a bent elbow, so the hand sits out in front instead of tucked:
 
-```yaml
+```yaml {{ title: 'conf/skills/move.yaml' }}
     reach:
         arm:
             shoulder_pan: 0.0
@@ -66,91 +66,86 @@ In `conf/skills/move.yaml`, under `poses:`, add a pose you can recognize. These 
             gripper: 40.0
 ```
 
-Add a `2` branch next to the `0` branch. It reuses the `home` tool and overrides its pose:
+Add a `reach` tool next to `home`, the same skill with another pose bound, and a `2` branch next to the `1` branch:
 
-```python
-if key == "2":
-    self.start_tool("home", pose="reach")
-    return
+```python {{ title: 'my_robot/controller.py' }}
+    tools = {
+        "teleop": Tool(JointTeleopSkill, {"arm": "arm", "gripper": "gripper"}),
+        "home": Tool(MoveSkill, {"pose": "home", "arm": "arm", "gripper": "gripper"}),
+        "reach": Tool(MoveSkill, {"pose": "reach", "arm": "arm", "gripper": "gripper"}),
+    }
+
+    # ...
+
+        elif key == "2":
+            self.start_tool("reach")
 ```
 
-Restart the controller so it loads the new key. If `2` raises `KeyError` naming `reach`, the YAML key and the `pose` string disagree, or the controller was started from a directory that is not the project root. The arm still waits for the kinematics model.
+Restart the controller so it loads the new key. Press `2` and the arm reaches. If `2` raises `KeyError` naming `reach`, the YAML key and the `pose` string disagree, or the controller was started from a directory that is not the project root.
 
 ## Inverse kinematics
 
-Joint poses were enough for `home` and `reach`. A policy does not speak in joint angles. It speaks in where the fingertips should be: `x, y, z` and three rotations. Inverse kinematics is the arm module turning that into joints.
+Joint poses were enough for `home` and `reach`. A UMI policy does not speak in joint angles. It speaks in where the fingertips should be: `x, y, z` and three rotations. Other policies can be trained to output joints, but the next chapters run a UMI policy, so the arm needs Cartesian actuators it can write a pose to. Inverse kinematics is the arm module turning that pose into joints.
 
-Replace `my_robot/modules/my_arm_module.py`. `MyActions`, `_handle_move_arm`, and `control_step` have to go. `control_step` is what the loop calls, and `ArmModule`'s version is what samples a `MOVE_J` and writes the servos. Cartesian commands use the same model. The joint limits come from the kinematics backend, which is why this takes over now and not in Tutorial 2.
+The solver is already on the arm: `ik_backend` from Tutorial 2 is a `MinkIK`, and so far only its joint limits were read. What the arm lacks is a place to write a pose. Import `CartesianIKActuator` and add six of them to `MyArmModule`, next to the servos:
 
-```python
-from solarian.core.arm_module import ArmModule
+```python {{ title: 'my_robot/modules/my_arm_module.py' }}
 from solarian.core.ik import CartesianIKActuator, MinkIK
-from solarian_feetech.actuator import FeetechServo
-
-JOINTS = [
-    "shoulder_pan",
-    "shoulder_lift",
-    "elbow_flex",
-    "wrist_flex",
-    "wrist_yaw",
-    "wrist_roll",
-]
 
 
 class MyArmModule(ArmModule):
-    shoulder_pan = FeetechServo(model="sts3250")
-    shoulder_lift = FeetechServo(model="sts3250")
-    elbow_flex = FeetechServo(model="sts3250")
-    wrist_flex = FeetechServo(model="sts3250")
-    wrist_yaw = FeetechServo(model="sts3215")
-    wrist_roll = FeetechServo(model="sts3215")
-
+    # ... the six servos ...
     x = CartesianIKActuator()
     y = CartesianIKActuator()
     z = CartesianIKActuator()
     rx = CartesianIKActuator()
     ry = CartesianIKActuator()
     rz = CartesianIKActuator()
-
-    # The arm MJCF, not the scene. Joint names here are unprefixed.
-    # sim_joint in the YAML stays prefixed, because that is the composed world.
-    ik_backend = MinkIK(
-        mjcf="assets/arm1/arm1.xml",
-        joints=dict(zip(JOINTS, JOINTS)),
-        frame="flange",
-        position_cost=1.0,
-        orientation_cost=1.0,
-    )
 ```
 
-The six `CartesianIKActuator`s are the pose. `frame="flange"` is the wrist site in the arm model. The fingertips are not the flange. They sit a fixed offset beyond it, which the gripper module already measured. Pass that offset when you construct the arm, in `my_robot/robot.py`:
+The six `CartesianIKActuator`s are the pose. Writing them runs the solver against the model `ik_backend` loaded, and the solver writes the joints. `frame="flange"` is the wrist site in the arm model. The fingertips are not the flange. They sit a fixed offset beyond it, which the gripper module already measured. Pass that offset where `MyRobotRobot` constructs the arm:
 
-```python
-arm = MyArmModule(ik_tcp=Gripper1FeetechModule.tcp_from_flange)
+```python {{ title: 'my_robot/robot.py' }}
+class MyRobotRobot(Robot):
+    arm = MyArmModule(ik_tcp=Gripper1FeetechModule.tcp_from_flange)
+    gripper = Gripper1FeetechModule()
 ```
 
-In `conf/modules/arm.yaml`, the module has to interpolate poses, not just hold a position. Add, next to `frequency`:
+The module has to interpolate poses, not just hold a position. Add, next to `frequency`:
 
-```yaml
+```yaml {{ title: 'conf/modules/arm.yaml' }}
 interpolator_type: pose
 max_speed: [0.25, 0.6]    # metres/second, radians/second
 max_accel: [0.5, 3.0]
 ```
 
-And the action schema has to grow the six axes, or a Cartesian command has nowhere to land. In `MyArmAction`:
+And the action schema has to grow the six axes, or a Cartesian command has nowhere to land. Add them to `MyArmAction`, after the joint fields:
 
-```python
-x = ActuatorField(MyRobotRobot.arm.x.pos)
-y = ActuatorField(MyRobotRobot.arm.y.pos)
-z = ActuatorField(MyRobotRobot.arm.z.pos)
-rx = ActuatorField(MyRobotRobot.arm.rx.pos)
-ry = ActuatorField(MyRobotRobot.arm.ry.pos)
-rz = ActuatorField(MyRobotRobot.arm.rz.pos)
+```python {{ title: 'my_robot/action.py' }}
+class MyArmAction(ModuleAction):
+    # ... the six joint fields ...
+    x = ActuatorField(MyRobotRobot.arm.x.pos)
+    y = ActuatorField(MyRobotRobot.arm.y.pos)
+    z = ActuatorField(MyRobotRobot.arm.z.pos)
+    rx = ActuatorField(MyRobotRobot.arm.rx.pos)
+    ry = ActuatorField(MyRobotRobot.arm.ry.pos)
+    rz = ActuatorField(MyRobotRobot.arm.rz.pos)
 ```
 
-Do the same six lines on `MyArmObs`, with `SensorField`. The observation is how anything, including you in a log, reads the pose the kinematics produced.
+The observation is how anything, including you in a log, reads the pose the kinematics produced. Add the same six axes to `MyArmObs`, with `SensorField`:
 
-Restart the robot and the controller. Press `0`. The arm should fold toward the tucked pose in `move.yaml`, and the gripper should open to the width in that pose. Press `2` and the arm reaches. Both poses are joint targets, and `ArmModule` handles `MOVE_J` itself. If the arm stays, `_handle_move_arm` or `control_step` is still on the class. If nothing moves and nothing fails, the pose's keys still say `right_arm`.
+```python {{ title: 'my_robot/observation.py' }}
+class MyArmObs(ModuleObs):
+    # ... the six joint fields ...
+    x = SensorField(MyRobotRobot.arm.x.pos)
+    y = SensorField(MyRobotRobot.arm.y.pos)
+    z = SensorField(MyRobotRobot.arm.z.pos)
+    rx = SensorField(MyRobotRobot.arm.rx.pos)
+    ry = SensorField(MyRobotRobot.arm.ry.pos)
+    rz = SensorField(MyRobotRobot.arm.rz.pos)
+```
+
+**Restart the robot, the controller and the server**. Teleop, `1`, and `2` still work: they are joint moves, and a joint move runs ahead of the pose interpolator. The pose readings now show up in the observation as the arm moves.
 
 The contract you just implemented is the one in [Adding a new arm](/docs/ik#adding-a-new-arm): joint servos, six Cartesian actuators, a `MinkIK` backend, and `interpolator_type: pose`. The reference has the rest of the fields. You have enough for a policy to ask for a hand pose.
 

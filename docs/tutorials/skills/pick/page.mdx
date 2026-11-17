@@ -83,14 +83,13 @@ Add a `pick` tool, and a key:
 ```
 
 ```python
-if key == "4":
-    self.start_tool("pick")
-    return
+        elif key == "4":
+            self.start_tool("pick")
 ```
 
 `config` is the filename in `conf/skills/`, not a full path. Restart the controller. With the server up and the robot in sim, press `4`.
 
-The gripper should open, then the arm should move toward the object in the wrist image, and the fingers should close if the checkpoint's behavior gets that far. Press `0` to preempt it and go home. `start_skill` stops the policy skill because both command the arm.
+The gripper should open, then the arm should move toward the object in the wrist image, and the fingers should close if the checkpoint's behavior gets that far. Press `1` to preempt it and go home. `start_skill` stops the policy skill because both command the arm.
 
 Click-to-track, masks, and a second model that follows a point are how some checkpoints are told *which* object. This chapter does not use them. The checkpoint is one task, and the scene has one object. The reference for targets is the skill config's `targets:` block, when you outgrow a single object.
 

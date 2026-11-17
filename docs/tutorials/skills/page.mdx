@@ -1,12 +1,12 @@
 export const metadata = {
   title: 'Robot skills',
   description:
-    'Add skills beside the keyboard joint nudges: one you write, MoveSkill from a plugin, and a pretrained UMI policy.',
+    'Add skills beside keyboard teleop: MoveSkill from a plugin, and a pretrained UMI policy.',
 }
 
 # Robot skills
 
-Tutorial 2's controller *is* the behavior: every tick it sends a joint target, and a key edits that target. A skill flips that. The controller starts a behavior and gets out of the way. The behavior sends the actions. {{ className: 'lead' }}
+Tutorial 2's controller runs one skill, keyboard teleop, which you wrote yourself. This tutorial adds skills you install: the controller starts a behavior and gets out of the way, and the behavior sends the actions. {{ className: 'lead' }}
 
 You can do this whole tutorial in simulation, right after [Tutorial 2](/docs/tutorials/first-robot). The last chapter is the real arm, and it needs [Tutorial 3](/docs/tutorials/real-robot).
 
@@ -22,10 +22,9 @@ That is the whole stack for the rest of the course. The reference pages are [Ski
 
 ## Chapters
 
-1. [A skill you write](/docs/tutorials/skills/your-own) — open the gripper, from a class in the project.
-2. [Move to a pose](/docs/tutorials/skills/move) — install MoveSkill, name a pose, and give the arm inverse kinematics so a pose can be Cartesian.
-3. [What UMI is](/docs/tutorials/skills/umi) — demonstrations, a wrist camera, a policy.
-4. [A pretrained pick](/docs/tutorials/skills/pick) — one key, one checkpoint, in simulation.
-5. [On the real arm](/docs/tutorials/skills/real-arm) — lens and hand-eye, then the same key.
+1. [Move to a pose](/docs/tutorials/skills/move) — install MoveSkill, name a pose, and give the arm inverse kinematics so a pose can be Cartesian.
+2. [What UMI is](/docs/tutorials/skills/umi) — demonstrations, a wrist camera, a policy.
+3. [A pretrained pick](/docs/tutorials/skills/pick) — one key, one checkpoint, in simulation.
+4. [On the real arm](/docs/tutorials/skills/real-arm) — lens and hand-eye, then the same key.
 
-The letter keys from Tutorial 2 stay. This tutorial adds keys that start a skill: `1` opens the gripper, and later keys run a pose and a policy.
+The letter keys from Tutorial 2 stay with teleop, and `0` still starts it. This tutorial adds keys that start other skills: `1` and `2` move to named poses, and `4` runs a policy. Each of those takes the arm and the gripper from teleop. Press `0` to jog again.

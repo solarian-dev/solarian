@@ -29,7 +29,7 @@ Two windows matter:
 - The **Solarian Sim** window, opened by the robot because of `--view`. You should see the arm standing on the checker floor, at mid-travel. That pose is all zeros.
 - The **Solarian Controller** window. It is mostly empty until the camera exists. It is still where the keys go, so click it before you type.
 
-Press `s` a few times from the controller window. The shoulder should lift. Press `w` and it should come back. Walk the pairs from the [keyboard page](/docs/tutorials/first-robot/keyboard): pan, lift, elbow, then the three wrist joints. The wrist is small on screen. If pan and lift work and the wrist seems dead, move the camera in the sim window (drag to orbit) and look at the flange.
+The controller starts the teleop skill as soon as it runs, and its log says `Started skill 'JointTeleopSkill'`. Press `s` a few times from the controller window. The shoulder should lift. Press `w` and it should come back. Walk the pairs from the [keyboard page](/docs/tutorials/first-robot/keyboard): pan, lift, elbow, then the three wrist joints. The wrist is small on screen. If pan and lift work and the wrist seems dead, move the camera in the sim window (drag to orbit) and look at the flange.
 
 ![The sim window, with the arm at mid-travel](./arm1-sim.png)
 
@@ -43,6 +43,8 @@ The usual cause is a `sim_joint` that does not exist in the composed scene. The 
 
 The second cause is the controller window not having focus. Keys go to whichever window you clicked last. Click the controller, then press `s` again.
 
+If space was pressed, it stopped every skill, teleop included. Press `0` to start teleop again.
+
 The third is a `TypeError` before anything starts, naming `arm` or a joint. The robot attribute, the YAML filename, and the observation and action fields disagree. The [project page](/docs/tutorials/first-robot/project) has the table.
 
 ## If there is no sim window
@@ -51,7 +53,7 @@ First check that the robot command has `--view`. Without it the sim runs headles
 
 ## What you just ran
 
-Same module class, same YAML, same controller as the real arm will use. Simulation swapped the Feetech bus for MuJoCo because you passed `--sim`. Nothing in `my_arm_module.py` mentions MuJoCo. The scene and the `sim_joint` lines are the entire simulation-specific part.
+Same module class, same YAML, same controller and skill as the real arm will use. Simulation swapped the Feetech bus for MuJoCo because you passed `--sim`. Nothing in `my_arm_module.py` mentions MuJoCo. The scene and the `sim_joint` lines are the entire simulation-specific part.
 
 `solarian run-robot` without `--sim` would try to open `/dev/ttyUSB0` instead. Leave that until the arm exists on the desk.
 

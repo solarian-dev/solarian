@@ -1,4 +1,6 @@
-# Solarian
+<p align="center">
+  <img alt="Solarian, open source robotics framework" src="./media/readme/solarian-ultraviolet-black-text-white.svg" width="100%">
+</p>
 
 <div align="center">
 
@@ -9,6 +11,21 @@
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/S7rfmJfpm5)
 
 </div>
+
+**Open-source Python framework to build, simulate, train and deploy AI robots, with open hardware that runs UMI policies on any arm.**
+
+<p align="center">
+  <img src="media/readme/solarian-point-dont-prompt.gif" alt="Click an object and the robot picks it; click a spot and it places it there" width="800">
+</p>
+
+<p align="center"><i>Point, don't prompt: click an object (SAM 2) and a spot (TAPNext), and two UMI policies pick and place it. No teleoperation.</i></p>
+
+<p align="center">
+  <a href="https://solarian.dev">Website</a> ·
+  <a href="https://solarian.dev/docs">Docs</a> ·
+  <a href="https://youtu.be/mJ5frL_mHjM">Video</a> ·
+  <a href="https://www.raulgarreta.com/posts/why-i-built-an-open-source-robotics-dev-framework">Why I built it</a>
+</p>
 
 **Solarian** is an open-source robotics framework designed to build, simulate, teleoperate, train, and deploy robots. From hardware to AI control in one Python stack.
 

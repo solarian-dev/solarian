@@ -88,16 +88,16 @@ The lines that matter:
 - **`ActuatorField(MyRobotRobot.arm.shoulder_pan.pos)`** points at the same data the observation reads. Here it is a target: the controller sets its value, and the module writes it to the servo.
 - **`arm = MyArmAction()`** routes the group. Like the observation, the name has to equal the module's attribute on the robot.
 
-The schema fixes which numbers an action carries. What the module does with them is the **action type**, chosen each time the controller builds an action. The controller in the next chapter sets `MyActions.MOVE_ARM`, the type the arm's `@action_handler` accepts: go to these joint targets.
+The schema fixes which numbers an action carries. What the module does with them is the **action type**, chosen each time an action is built. The next chapter sends `ActionType.MOVE_J`, the joint move `ArmModule` already handles: go to these joint targets.
 
 ## How one command travels
 
 Every piece written so far takes part in a single keypress:
 
-1. The controller builds a `MyRobotAction`, sets `arm.action_type` to `MyActions.MOVE_ARM`, and changes `arm.shoulder_lift.value`.
+1. On the controller, the teleop skill of the next chapter builds an action for `arm` with type `MOVE_J` and a new `shoulder_lift` value.
 2. The relay server forwards it to the robot.
-3. The robot hands the `arm` part to `MyArmModule`, whose `MOVE_ARM` handler keeps the six targets as its goal.
-4. The module's `control_step` writes the goal to the servos, 50 times a second.
+3. The robot hands the `arm` part to `MyArmModule`, whose `MOVE_J` handler plans a path from the current joints to the six targets.
+4. The module's loop writes that path to the servos, 50 times a second.
 5. The servos move. The robot reads their new positions into a `MyRobotObservation` and sends it back.
 
 If a name on either class differs from the robot, the import fails and the message names the field. Fix the name it prints. The [project page](/docs/tutorials/first-robot/project#where-the-name-has-to-match) lists the four places the module name has to match.

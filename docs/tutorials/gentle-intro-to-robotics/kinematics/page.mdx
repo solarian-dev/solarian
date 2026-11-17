@@ -80,7 +80,7 @@ Each time a skill writes the six task coordinates, the arm module reads the join
 
 Every step starts from the joints the arm has now, so the solver returns the answer on the fold the arm is already in. The figure above searches from many starting points to show every answer; Solarian follows the one the arm is on. To switch fold, from elbow up to elbow down, move the arm in joint coordinates first.
 
-In [Tutorial 4](/docs/tutorials/skills/move) you add the solver to the arm module, next to the six task-coordinate actuators:
+The solver goes on the arm module in [Tutorial 2](/docs/tutorials/first-robot/arm), where joint moves already read their limits from its model. [Tutorial 4](/docs/tutorials/skills/move) adds the six task-coordinate actuators next to it:
 
 ```python {{ title: 'my_robot/modules/my_arm_module.py' }}
 from solarian.core.arm_module import ArmModule

@@ -6,7 +6,7 @@ export const metadata = {
 
 # What UMI is
 
-UMI, the Universal Manipulation Interface, is a way to teach a robot a hand skill by demonstrating the skill with a hand-held gripper, then running a model that imitates those demonstrations. The paper and the project site are [umi-gripper.github.io](https://umi-gripper.github.io/). This page is the part you need before the next chapter, not a summary of the paper. {{ className: 'lead' }}
+UMI, the Universal Manipulation Interface, is a way to teach a robot a hand skill by demonstrating the skill with a hand-held gripper, then running a model that imitates those demonstrations. The paper and the project site are <a href="https://umi-gripper.github.io/" target="_blank" rel="noreferrer">umi-gripper.github.io</a>. This page is the part you need before the next chapter, not a summary of the paper. {{ className: 'lead' }}
 
 ![A UMI policy reads the wrist image and outputs a short motion of the hand and gripper](/images/tutorials/umi.svg)
 
@@ -14,11 +14,20 @@ UMI, the Universal Manipulation Interface, is a way to teach a robot a hand skil
 
 Someone holds a gripper, does the task, and the device records what the wrist camera saw and how the hand moved. A demonstration of "pick up the block" is a few dozen seconds of that, called an **episode**. A dataset is many episodes of the same task, including the ones where the hand missed and tried again, within reason.
 
+<figure>
+  <video src="https://umi-gripper.github.io/videos/teaser_data_collection_cup.mp4#t=7" className="w-full rounded-2xl" autoPlay muted playsInline controls />
+  <figcaption>Collecting a cup-arrangement demonstration with the hand-held UMI gripper. From the UMI project.</figcaption>
+</figure>
+
 The gripper in the demonstration and the gripper on the robot are the same shape, with the camera in the same place. The policy never sees a third-person view of the room. It sees the fingers and the object, which is why your sim camera is mounted on the gripper's camera site and not on the ceiling.
 
 ## What the policy outputs
 
 The model does not output a program, and it does not output "pick up the block" as a plan it will follow for a minute. Several times a second it looks at the latest wrist image (and the arm's recent motion) and outputs a short chunk of future motion: where the hand should be, and how open the gripper should be, over the next second or so. The skill sends that chunk to the arm. Then the policy looks again, and the unused tail of the previous chunk is thrown away.
+
+One turn of that loop has three steps. The camera, the gripper and the arm report at different rates and with different delays, so the skill first lines their readings up to the instant the camera frame was taken. The policy turns those readings into a chunk. By the time the chunk reaches the arm, its first steps are already late, so the skill drops those and schedules the rest.
+
+<UmiPipelineFigure />
 
 That loop is why a policy can recover when the block slips. It is also why a wrong camera mount looks like a bad model: every frame is shifted, and every chunk aims at the wrong place.
 

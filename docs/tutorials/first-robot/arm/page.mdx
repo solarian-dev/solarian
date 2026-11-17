@@ -55,16 +55,21 @@ Simulation runs without it, so leave it for the [real robot](/docs/tutorials/rea
 
 ### Declare the joints
 
-The module class declares the six servos and handles one kind of command: a full set of joint targets, under a type this project defines. Replace `my_robot/modules/my_arm_module.py`:
+The module class declares the six servos and the arm's kinematic model. Replace `my_robot/modules/my_arm_module.py`:
 
 ```python {{ title: 'my_robot/modules/my_arm_module.py' }}
-from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.arm_module import ArmModule
+from solarian.core.ik import MinkIK
 from solarian_feetech.actuator import FeetechServo
 
-
-class MyActions(ActionType):
-    MOVE_ARM = ActionType.CUSTOM_START
+JOINTS = [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_yaw",
+    "wrist_roll",
+]
 
 
 class MyArmModule(ArmModule):
@@ -75,31 +80,24 @@ class MyArmModule(ArmModule):
     wrist_yaw = FeetechServo(model="sts3215")
     wrist_roll = FeetechServo(model="sts3215")
 
-    def initialize(self):
-        self._goal = None
-
-    @action_handler(MyActions.MOVE_ARM)
-    def _handle_move_arm(self, action: ModuleAction, t_now: float) -> bool:
-        # The controller streams a full joint target. Hold it and write it
-        # on the module's own tick.
-        self._goal = action.values()
-        return True
-
-    def control_step(self):
-        if self._goal is not None:
-            self.write_actuators(self._goal)
+    # The arm MJCF, not the scene. Joint names here are unprefixed.
+    # sim_joint in the YAML stays prefixed, because that is the composed world.
+    ik_backend = MinkIK(
+        mjcf="assets/arm1/arm1.xml",
+        joints=dict(zip(JOINTS, JOINTS)),
+        frame="flange",
+        position_cost=1.0,
+        orientation_cost=1.0,
+    )
 ```
 
 The lines that matter:
 
-- **`class MyActions(ActionType)`** names the command. Values from `ActionType.CUSTOM_START` up belong to the project. `MOVE_ARM` is the first of them: hold these six joint targets.
-- **`class MyArmModule(ArmModule)`** builds on Solarian's base class for arms. `ArmModule` already handles joint and Cartesian moves. This class adds `MOVE_ARM` for the meantime, and a `control_step` that writes that goal straight to the servos. The loop calls this `control_step`, so the built-in moves wait until Tutorial 4 removes it.
+- **`class MyArmModule(ArmModule)`** builds on Solarian's base class for arms. `ArmModule` already handles joint moves, so the class writes no command handling. Its `MOVE_J` takes six joint targets, plans a smooth path from where the arm is, and writes that path to the servos on the module's own loop. In simulation those servos are MuJoCo joints, and on hardware they are the bus. The class reads the same either way.
 - **`shoulder_pan = FeetechServo(model="sts3250")`** declares one servo. The attribute name is the joint's name in observations, actions, and YAML. The model string picks the Feetech product: STS3250 on the four joints that carry the arm's weight, STS3215 on wrist yaw and roll.
-- **`initialize`** runs once, when the module connects. It starts the module with no goal, so the arm holds still until a command arrives.
-- **`@action_handler(MyActions.MOVE_ARM)`** registers `_handle_move_arm` for that command. The action carries six numbers, one per joint, and the handler keeps them as the current goal. Returning `True` keeps the module running.
-- **`control_step`** runs on the module's own loop, at the rate in its YAML, and writes the goal to the servos. In simulation those servos are MuJoCo joints, and on hardware they are the bus. The class reads the same either way.
+- **`ik_backend = MinkIK(...)`** loads the arm's MuJoCo model, which you copy into the project further down this page. `MOVE_J` takes each joint in the normalized −100 to 100 range, and reads that joint's limits in radians from this model to convert it. `joints` maps each servo to the model joint of the same name. `frame="flange"` is the wrist site, and matters once the arm moves to poses in [Tutorial 4](/docs/tutorials/skills/move).
 
-This module works purely in joint coordinates. Poses and inverse kinematics come in [Tutorial 4](/docs/tutorials/skills).
+This chapter drives the arm in joint coordinates only. The same model also serves inverse kinematics, which Tutorial 4 turns on.
 
 ### Configure the module
 
@@ -164,7 +162,7 @@ actuators:
 
 The lines that matter:
 
-- **`frequency: 50`** is the rate of the module's loop, in hertz: how often `control_step` writes the goal. The controller runs at its own, slower rate, and the two are independent.
+- **`frequency: 50`** is the rate of the module's loop, in hertz: how often the module writes its path to the servos. The controller runs at its own, slower rate, and the two are independent.
 - **`id`** is the servo's address on the Feetech bus. You set those IDs on the real servos in Tutorial 3.
 - **`mode: range_m100_100`** makes every command a normalized number: −100 is one end of the joint's travel, 100 is the other, and 0 is the middle.
 - **`sim_joint`** names the MuJoCo joint this servo drives. The `arm/` in front is the prefix the scene gives the arm, further down this page.
