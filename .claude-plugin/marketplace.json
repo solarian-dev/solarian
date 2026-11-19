@@ -1,5 +1,6 @@
 {
   "name": "solarian",
+  "description": "Coding-agent plugins for the Solarian robotics framework",
   "owner": {
     "name": "Solarian"
   },
