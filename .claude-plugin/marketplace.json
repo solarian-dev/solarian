@@ -1,0 +1,15 @@
+{
+  "name": "solarian",
+  "owner": {
+    "name": "Solarian"
+  },
+  "plugins": [
+    {
+      "name": "solarian",
+      "source": "./integrations/agent-plugin",
+      "description": "Create and work on Solarian robot projects and plugins with the solarian CLI.",
+      "repository": "https://github.com/solarian-dev/solarian",
+      "license": "Apache-2.0"
+    }
+  ]
+}

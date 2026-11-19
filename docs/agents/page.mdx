@@ -1,0 +1,95 @@
+export const metadata = {
+  title: 'Using Solarian with coding agents',
+  description:
+    'How AI coding agents such as Cursor, Claude Code and Codex find Solarian: the bootstrap skill, the AGENTS.md and skills written into every project and plugin, version-matched docs from solarian docs, and llms.txt.',
+}
+
+# Using Solarian with coding agents
+
+A coding agent only knows what it can see: the folder you have open, the skills installed on your machine, and whatever it finds on the web. Solarian puts what an agent needs in each of those places, so a request like "create a Solarian project" or "add a gripper module" lands on the right command and the right abstraction the first time. {{ className: 'lead' }}
+
+## How an agent finds Solarian
+
+<Properties>
+  <Property name="In an empty folder">
+    The <a href="#the-bootstrap-skill">bootstrap skill</a> matches the request and tells the agent to install Solarian and run <code>solarian create-project</code> or <code>solarian create-plugin</code>. Without the skill, the agent relies on a web search, which leads to the README on PyPI and GitHub and to <a href="#docs-for-agents">llms.txt</a>.
+  </Property>
+  <Property name="Inside a project or plugin">
+    The agent reads <code>AGENTS.md</code> at the root (Claude Code reads <code>CLAUDE.md</code>, which imports it) and the skills in <code>.agents/skills/</code> and <code>.claude/skills/</code>.
+  </Property>
+  <Property name="Anywhere Solarian is installed">
+    <code>solarian --help</code> ends with a section for coding agents, and <code>solarian docs</code> prints the docs of the installed version.
+  </Property>
+</Properties>
+
+## The bootstrap skill
+
+Run this once per machine:
+
+```bash
+solarian agent install
+```
+
+It copies a small `solarian` skill into `~/.agents/skills/` (read by Cursor and Codex) and `~/.claude/skills/` (read by Claude Code). The skill's description is always visible to the agent, so it matches a Solarian request in any folder. The skill itself only points at the CLI, so it does not go stale when Solarian changes. Pass `--target agents`, `claude` or `cursor` to install into one place only, and run the command again after upgrading Solarian to refresh it.
+
+The same skill is also packaged as a plugin for Cursor and Claude Code, in the repository's `integrations/agent-plugin` folder. Installing the plugin has the same effect as `solarian agent install`, without needing Python first. In Claude Code:
+
+```bash
+/plugin marketplace add solarian-dev/solarian
+/plugin install solarian@solarian
+```
+
+The plugin carries only this skill. The task skills (adding a module, writing a skill, deploying) come with each project, because they are written for the Solarian version and the package name of that project.
+
+## Files in a project
+
+`solarian create-project` writes these next to `pyproject.toml`:
+
+```text
+my_robot/
+├── AGENTS.md                      # generated: architecture, invariants, commands, plugins
+├── CLAUDE.md                      # generated: @AGENTS.md
+├── .agents/
+│   ├── NOTES.md                   # yours: project notes for agents
+│   ├── solarian-managed.json      # generated: the files Solarian owns, with hashes
+│   └── skills/                    # generated: add-module, add-skill, add-service, ...
+└── .claude/skills/                # generated: the same skills for Claude Code
+```
+
+`AGENTS.md` and the skills belong to Solarian. They are regenerated, so put your own instructions in `.agents/NOTES.md`, which `AGENTS.md` tells the agent to read. `solarian create-plugin` writes the same set into a plugin, with a `plugin-dev` skill instead of the project skills.
+
+### Keeping them current
+
+```bash
+solarian agent sync
+```
+
+`agent sync` rewrites `AGENTS.md`, `CLAUDE.md` and the skills for the installed version of Solarian and the installed plugins, and deletes skills that no longer apply. It refuses to overwrite a generated file you have edited and names it, so you can move your change into `.agents/NOTES.md`; `--force` overwrites it anyway. `solarian install <plugin>` runs it for you, and [`solarian doctor`](/docs/commands#project-commands) reports when the files were written by another Solarian version.
+
+## Shipping agent files in a plugin
+
+A plugin can teach agents how to use it. Put the files under `agent/` in the import package:
+
+```text
+solarian_myarm/
+└── agent/
+    ├── AGENTS.md                  # a short section, added to every project's AGENTS.md
+    └── skills/
+        └── calibrate/SKILL.md     # copied into the project as myarm-calibrate
+```
+
+`agent sync` finds installed plugins through their [entry points](/docs/plugins#entry-point-groups), so a plugin installed with plain `pip install` is picked up too. Its skills are prefixed with the plugin's short name so two plugins cannot collide. Keep the `AGENTS.md` section short: what the plugin provides, the class to import, and the one mistake agents make with it.
+
+## Docs for agents
+
+<Properties>
+  <Property name="solarian docs">
+    The docs of the installed version, offline. <code>solarian docs list</code> lists the pages, <code>solarian docs show skills</code> prints one as markdown, and <code>solarian docs search MOVE_L</code> finds a term. These match the code the agent is editing, which the website, built from the latest source, cannot promise.
+  </Property>
+  <Property name="llms.txt">
+    <a href="https://solarian.dev/llms.txt" target="_blank" rel="noreferrer">solarian.dev/llms.txt</a> indexes every page, and <a href="https://solarian.dev/llms-full.txt" target="_blank" rel="noreferrer">llms-full.txt</a> has all of them in one file.
+  </Property>
+  <Property name="Markdown pages">
+    Every docs page is also served as markdown: add <code>.md</code> to its URL, as in <code>https://solarian.dev/docs/skills.md</code>.
+  </Property>
+</Properties>

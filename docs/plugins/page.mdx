@@ -212,11 +212,16 @@ solarian-feetech/
 ├── .gitignore
 ├── pyproject.toml          # wired with the right entry points
 ├── README.md
+├── AGENTS.md  CLAUDE.md    # generated guide for coding agents working on the plugin
+├── .agents/  .claude/      # NOTES.md and the plugin-dev skill
 └── solarian_feetech/
     ├── __init__.py
     ├── actuator.py         # <ClassPrefix>Servo stub
-    └── bus.py              # <ClassPrefix>Bus stub
+    ├── bus.py              # <ClassPrefix>Bus stub
+    └── agent/AGENTS.md     # added to the AGENTS.md of each project that installs the plugin
 ```
+
+See [Using Solarian with coding agents](/docs/agents#shipping-agent-files-in-a-plugin) for the `agent/` folder.
 
 <Note>
   Re-run `create-plugin` with a different `<type>` and the **same name** to add a component type to an existing plugin. Base files (`pyproject.toml`, `README.md`, `__init__.py`) are never overwritten, and new entry points are merged idempotently — so `create-plugin module feetech` adds a module to `solarian-feetech` without clobbering the actuator you already have. Use `--force` to regenerate the component source stubs.

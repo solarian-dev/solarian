@@ -1,0 +1,16 @@
+{
+  "name": "solarian",
+  "owner": {
+    "name": "Solarian"
+  },
+  "metadata": {
+    "description": "Coding-agent plugins for the Solarian robotics framework"
+  },
+  "plugins": [
+    {
+      "name": "solarian",
+      "source": "integrations/agent-plugin",
+      "description": "Create and work on Solarian robot projects and plugins with the solarian CLI."
+    }
+  ]
+}

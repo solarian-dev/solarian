@@ -27,7 +27,8 @@ class CreatePluginCommand(BaseCommand):
     uses_config = False
     help = 'Scaffold a new Solarian plugin (or add a component type to an existing one)'
     description = """
-    Writes plugins/solarian-<name>/ with the source layout and a pyproject.toml
+    Writes solarian-<name>/ in the current folder with the source layout, an
+    AGENTS.md for coding agents, and a pyproject.toml
     whose entry points advertise the component to Solarian, so installing the
     plugin is all it takes for the CLI and the registries to find it.
 

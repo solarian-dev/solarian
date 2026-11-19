@@ -10,10 +10,11 @@ requires-python = ">=3.10"
 #   pip install -e ".[robot]"        # the machine wired to the robot
 #   pip install -e ".[server]"       # the relay
 #   pip install -e ".[controller]"   # the operator's machine
-#   pip install -e ".[all]"          # everything on one machine
+#   pip install -e ".[all]"          # every role on one machine
+#   pip install -e ".[base]"         # `solarian base`: cloud deploys, training, tracking
 dependencies = [
     "solarian>=0.1.0",
-    # Module plugins are added here by 'solarian add-module'.
+    # Plugins are added here by 'solarian install <plugin>'.
     # You can also add them manually, e.g.:
     #   "solarian-ur5>=0.1.0",
     #   "solarian-feetech>=0.1.0",
@@ -28,11 +29,9 @@ server = []
 # skills), with [hardware] for the devices wired to it, e.g.:
 #   "solarian-dynamixel[hardware]>=0.1.0",
 controller = []
-all = [
-    "${project_name}[robot,server,controller]",
-    # `solarian base`: deploy, train on cloud GPUs and track experiments.
-    "solarian-base>=0.1.0",
-]
+all = ["${project_name}[robot,server,controller]"]
+# `solarian base`: deploy, train on cloud GPUs and track experiments.
+base = ["solarian-base>=0.1.0"]
 
 [build-system]
 requires = ["setuptools>=61.0"]

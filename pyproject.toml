@@ -156,6 +156,10 @@ include = [
     {path = "solarian_build.py", format = "sdist"},
     {path = "solarian/data/**/*.json", format = ["sdist", "wheel"]},
     {path = "solarian/data/**/*.png", format = ["sdist", "wheel"]},
+    # The docs pages, for `solarian docs`. solarian_build copies them into
+    # solarian/_docs during a wheel build.
+    {path = "docs/**/page.mdx", format = "sdist"},
+    {path = "solarian/_docs/**/page.mdx", format = "wheel"},
 ]
 
 [build-system]

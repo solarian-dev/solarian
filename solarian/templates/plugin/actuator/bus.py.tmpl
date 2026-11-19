@@ -58,3 +58,6 @@ class ${class_prefix}Bus(ActuatorBus):
 
     def set_half_turn_homings(self, component_names: list[str]) -> Dict[str, int]:
         raise NotImplementedError
+
+    def drive_to_encoder_center(self, component_names: list[str]) -> Dict[str, int]:
+        raise NotImplementedError

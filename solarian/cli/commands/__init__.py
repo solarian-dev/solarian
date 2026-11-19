@@ -40,6 +40,27 @@ CommandRegistry.register_lazy(
     category="Project",
 )
 CommandRegistry.register_lazy(
+    "agent",
+    module_path=f"{_pkg}.agent",
+    help="Write the AGENTS.md and skills coding agents read, here or for your user",
+    setup_modules=(),
+    category="Project",
+)
+CommandRegistry.register_lazy(
+    "docs",
+    module_path=f"{_pkg}.docs",
+    help="Read the docs of the installed Solarian version as markdown, offline",
+    setup_modules=(),
+    category="Project",
+)
+CommandRegistry.register_lazy(
+    "doctor",
+    module_path=f"{_pkg}.doctor",
+    help="Check this project or plugin for setup mistakes, without running it",
+    setup_modules=(),
+    category="Project",
+)
+CommandRegistry.register_lazy(
     "add-op",
     module_path=f"{_pkg}.add_op",
     help="Write a dataset op stub into this project's <package>/datasets/",

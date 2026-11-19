@@ -23,8 +23,9 @@ build-backend = "setuptools.build_meta"
 include = ["${package_name}*"]
 
 # `solarian install` copies templates/<folder>/<name>.yaml to conf/<folder>/<name>.yaml.
+# `solarian agent sync` adds agent/AGENTS.md and agent/skills to each project's agent files.
 [tool.setuptools.package-data]
-${package_name} = ["templates/*/*.yaml"]
+${package_name} = ["templates/*/*.yaml", "agent/*.md", "agent/skills/*/*"]
 
 # Entry points below are managed by `solarian create-plugin`. Each component
 # type you scaffold adds its class(es) here so Solarian can discover them.

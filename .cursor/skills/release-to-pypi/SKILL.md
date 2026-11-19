@@ -25,7 +25,7 @@ If it does not, follow "Onboarding a new package" first.
 - [ ] 1. Preflight
 - [ ] 2. Pick the version
 - [ ] 3. Check dependencies are released
-- [ ] 4. Bump, build, commit, push
+- [ ] 4. Bump, sync the agent plugin (core), build, commit, push
 - [ ] 5. Create the release
 - [ ] 6. Verify
 ```
@@ -36,6 +36,9 @@ If it does not, follow "Onboarding a new package" first.
 - `git fetch && git status -sb`: not behind `origin/main`.
 - Current published version: `curl -s https://pypi.org/simple/<package>/` and
   read the newest filename.
+- Core only: `python integrations/agent-plugin/sync.py --check`. If it lists
+  files, someone changed `solarian/templates/agent/bootstrap/` without syncing;
+  run the sync now and commit it before the release commit.
 
 **2. Pick the version**
 - Ask the user for the bump (patch / minor / major) unless they named one.
@@ -52,6 +55,19 @@ If it does not, follow "Onboarding a new package" first.
 **4. Bump, build, commit, push**
 - Set `version` in `pyproject.toml`, and `__version__` in the package's
   `__init__.py` if it defines one.
+- Core only: run the agent plugin sync after the bump, every release:
+
+  ```bash
+  python integrations/agent-plugin/sync.py
+  ```
+
+  It writes the new version into `integrations/agent-plugin/.cursor-plugin/plugin.json`
+  and `.claude-plugin/plugin.json` and copies the bootstrap skill into
+  `integrations/agent-plugin/skills/`. Those files go in the release commit:
+  the Cursor and Claude Code marketplaces read them from `main`, and
+  `tests/test_agent_files.py::test_the_marketplace_plugin_matches_the_templates`
+  fails until they match. Plugins have nothing to sync; their `agent/` files ship
+  in the wheel.
 - Build locally as a check. Core uses a custom backend (`solarian_build.py`)
   that compiles atomics on Apple Silicon, so build only the sdist there:
 
@@ -62,7 +78,9 @@ If it does not, follow "Onboarding a new package" first.
   ```
 
   For a plugin with assets, list the wheel (`unzip -l`) and confirm the files
-  in `[tool.setuptools.package-data]` are present.
+  in `[tool.setuptools.package-data]` are present, including
+  `<package>/agent/AGENTS.md` and `agent/skills/*/SKILL.md` when the plugin
+  ships them. Without them `solarian agent sync` finds nothing for the plugin.
 - Commit as `Release vX.Y.Z` and push to `origin main`.
 
 **5. Create the release**
@@ -105,7 +123,8 @@ Report the PyPI URL (`https://pypi.org/project/<package>/X.Y.Z/`) and the run UR
    `cp plugins/solarian-feetech/.github/workflows/publish.yml plugins/solarian-<name>/.github/workflows/`
 2. Check the `pyproject.toml` is publishable: `license`, `readme`, `authors`,
    `LICENSE` and `NOTICE` files present, assets listed in
-   `[tool.setuptools.package-data]`, and every dependency available on PyPI
+   `[tool.setuptools.package-data]` (with `"agent/*.md", "agent/skills/*/*"` if
+   the plugin has an `agent/` folder), and every dependency available on PyPI
    (move unpublished ones such as `solarian-robstride` into an extra).
    README links to repo files should be absolute GitHub URLs; relative ones
    break on the PyPI page.

@@ -73,6 +73,49 @@ solarian install plugins/solarian-gripper1
 solarian install ur5
 ```
 
+### `create-plugin`
+
+```bash
+solarian create-plugin <type> <name> [--force]
+```
+
+Writes `solarian-<name>/` in the current folder: a pip package whose `pyproject.toml` entry points register the component, a stub to fill in, and an `AGENTS.md` for coding agents. `<type>` is `actuator`, `sensor`, `module`, `robot`, `command`, `policy` or `op`. Run it again with another type and the same name to add a second component to the plugin. See [Plugins](/docs/plugins).
+
+```bash
+solarian create-plugin actuator feetech
+solarian create-plugin module feetech    # second component, same plugin
+```
+
+### `doctor`
+
+```bash
+solarian doctor [--json]
+```
+
+Checks the project or plugin in the current folder without importing it. It reports packages or `solarian-*` dependencies that are not installed, `settings.py` entries that name a missing class, robot modules without their `conf/modules/<name>.yaml`, deployment profiles that lack a `${deployment.*}` key the configs read, and agent files that are stale or were edited. Each problem comes with its fix. The command exits 1 when there is an error; `--json` prints the checks for a script or a coding agent.
+
+### `agent`
+
+```bash
+solarian agent sync [--force]
+solarian agent install [--target agents|claude|cursor] [--force]
+```
+
+`sync` regenerates `AGENTS.md`, `CLAUDE.md` and the skills under `.agents/skills` and `.claude/skills` for the installed Solarian and plugins. `create-project`, `create-plugin` and `install` run it for you. `install` copies the bootstrap skill into your user skill folders, so an agent finds Solarian from any folder. See [Using Solarian with coding agents](/docs/agents).
+
+### `docs`
+
+```bash
+solarian docs [list | show <page> | search <term> | path]
+```
+
+Prints the docs that shipped with the installed Solarian as markdown, so they match the code. `list` prints every page's slug, title and summary; `show` prints one page, given its slug, `/docs/<slug>` or a solarian.dev URL; `search` prints the lines that contain a term.
+
+```bash
+solarian docs show skills
+solarian docs search MOVE_L
+```
+
 ### `add-op`
 
 ```bash

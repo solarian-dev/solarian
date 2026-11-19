@@ -449,13 +449,13 @@ def load_deployment_config() -> DictConfig:
     if not os.path.isdir(deployment_dir):
         conf = OmegaConf.create({})
     else:
-        conf = _load_deployment_file(deployment_dir, name)
+        conf = load_deployment_file(deployment_dir, name)
 
     _deployment_cache[key] = conf
     return conf
 
 
-def _load_deployment_file(
+def load_deployment_file(
     deployment_dir: str, name: str, extended_by: tuple[str, ...] = ()
 ) -> DictConfig:
     """One deployment file, merged over whatever it ``extends``.
@@ -495,7 +495,7 @@ def _load_deployment_file(
             f"Deployment '{name}' has {EXTENDS_KEY}: {base_name!r}; expected the "
             f"name of one other deployment."
         )
-    base = _load_deployment_file(deployment_dir, base_name, (*extended_by, name))
+    base = load_deployment_file(deployment_dir, base_name, (*extended_by, name))
     return OmegaConf.merge(base, conf)
 
 

@@ -200,6 +200,10 @@ def main() -> None:
         "available commands:\n"
         + _build_command_list()
         + "\nRun `solarian <command> --help` for that command's arguments and examples.\n"
+        + "\ncoding agents:\n"
+        + "  Inside a project or plugin, read AGENTS.md first. Docs for this version: `solarian docs list`.\n"
+        + "  New project: `solarian create-project <name>`. New plugin: `solarian create-plugin <type> <name>`.\n"
+        + "  Online docs index: https://solarian.dev/llms.txt\n"
     )
 
     parser = argparse.ArgumentParser(

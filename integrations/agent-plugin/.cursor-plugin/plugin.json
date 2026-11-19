@@ -1,0 +1,21 @@
+{
+  "name": "solarian",
+  "displayName": "Solarian",
+  "version": "0.5.0",
+  "description": "Create and work on Solarian robot projects and plugins with the solarian CLI.",
+  "author": {
+    "name": "Solarian"
+  },
+  "homepage": "https://solarian.dev/docs/agents",
+  "repository": "https://github.com/solarian-dev/solarian",
+  "license": "Apache-2.0",
+  "keywords": [
+    "solarian",
+    "robotics",
+    "robot",
+    "manipulation",
+    "teleoperation",
+    "imitation-learning"
+  ],
+  "skills": "./skills/"
+}

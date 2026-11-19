@@ -14,6 +14,7 @@ except ImportError:  # Py 3.9-3.10
     from importlib_resources import files as pkg_files  # type: ignore
 
 import solarian  # this package, used for locating templates
+from solarian.cli.agent_files import summarize, sync_agent_files
 
 
 #: Component types that can be scaffolded into a plugin.
@@ -33,6 +34,7 @@ BASE_FILES: Tuple[FileSpec, ...] = (
     FileSpec(Path("pyproject.toml.tmpl"), "pyproject.toml"),
     FileSpec(Path("README.md.tmpl"), "README.md"),
     FileSpec(Path("__init__.py.tmpl"), "{package_name}/__init__.py"),
+    FileSpec(Path("agent/AGENTS.md.tmpl"), "{package_name}/agent/AGENTS.md"),
 )
 
 
@@ -273,6 +275,9 @@ def scaffold_plugin(
     written += _render_specs(plugin_root, COMPONENT_FILES[plugin_type], ctx, force=force)
 
     _apply_entry_points(plugin_root, plugin_type, ctx)
+    # After the entry points, which AGENTS.md lists. Never forced: --force
+    # regenerates component stubs, not files someone may have edited.
+    written += summarize(sync_agent_files(plugin_root, "plugin").written)
 
     return plugin_root, is_new, written
 
@@ -303,4 +308,6 @@ def _print_plugin_success(
     print(f"  cd {dist_name}")
     print(f"  pip install -e .          # Install the plugin as a package")
     print(f"  # implement the generated {plugin_type} stub(s) in {package_name}/")
+    print()
+    print("Coding agents: read AGENTS.md first; docs for this version via `solarian docs`.")
     print()

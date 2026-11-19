@@ -282,3 +282,8 @@ class InstallCommand(BaseCommand):
                 f"Could not find [project] dependencies in {project / 'pyproject.toml'}. "
                 f"Add {package}>=0.1.0 manually."
             )
+
+        from solarian.cli.agent_files import detect_kind, print_report, sync_agent_files
+
+        if detect_kind(project) == "project":
+            print_report(sync_agent_files(project, "project"))
