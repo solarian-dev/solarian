@@ -36,7 +36,7 @@ If it does not, follow "Onboarding a new package" first.
 - `git fetch && git status -sb`: not behind `origin/main`.
 - Current published version: `curl -s https://pypi.org/simple/<package>/` and
   read the newest filename.
-- Core only: `python integrations/agent-plugin/sync.py --check`. If it lists
+- Core only: `python integrations/sync_agent_plugin.py --check`. If it lists
   files, someone changed `solarian/templates/agent/bootstrap/` without syncing;
   run the sync now and commit it before the release commit.
 
@@ -58,7 +58,7 @@ If it does not, follow "Onboarding a new package" first.
 - Core only: run the agent plugin sync after the bump, every release:
 
   ```bash
-  python integrations/agent-plugin/sync.py
+  python integrations/sync_agent_plugin.py
   ```
 
   It writes the new version into `integrations/agent-plugin/.cursor-plugin/plugin.json`

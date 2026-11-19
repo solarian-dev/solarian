@@ -1,10 +1,12 @@
-"""Copy the bootstrap skill and Solarian's version into this plugin.
+"""Copy the bootstrap skill and Solarian's version into integrations/agent-plugin.
 
 The skill's source is solarian/templates/agent/bootstrap/, the same files
 `solarian agent install` copies. Run this after changing them or bumping the
 version in pyproject.toml; `--check` exits 1 when the plugin is out of date.
+It lives outside the plugin folder because Anthropic's plugin directory rejects
+scripts inside a plugin from an unverified organization.
 
-    python integrations/agent-plugin/sync.py [--check]
+    python integrations/sync_agent_plugin.py [--check]
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import re
 import sys
 from pathlib import Path
 
-PLUGIN = Path(__file__).resolve().parent
+PLUGIN = Path(__file__).resolve().parent / "agent-plugin"
 REPO = PLUGIN.parents[1]
 SOURCE = REPO / "solarian" / "templates" / "agent" / "bootstrap"
 MANIFESTS = (PLUGIN / ".cursor-plugin" / "plugin.json", PLUGIN / ".claude-plugin" / "plugin.json")

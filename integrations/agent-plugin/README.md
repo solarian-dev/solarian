@@ -29,13 +29,16 @@ the repository root. To try the plugin locally, copy this folder to
 .cursor-plugin/plugin.json    # Cursor manifest
 .claude-plugin/plugin.json    # Claude Code manifest
 skills/solarian/SKILL.md      # copied from solarian/templates/agent/bootstrap/
-sync.py
 EVALS.md                      # the discovery evals and their last results
 ```
 
 `skills/` is generated. Edit `solarian/templates/agent/bootstrap/` instead, then run:
 
 ```bash
-python integrations/agent-plugin/sync.py           # copy the skill, set the version
-python integrations/agent-plugin/sync.py --check   # exit 1 if the plugin is out of date
+python integrations/sync_agent_plugin.py           # copy the skill, set the version
+python integrations/sync_agent_plugin.py --check   # exit 1 if the plugin is out of date
 ```
+
+The script sits outside this folder on purpose: Anthropic's plugin directory
+rejects scripts inside a plugin from an unverified organization. Keep this folder
+to Markdown, JSON and the PNG icon.

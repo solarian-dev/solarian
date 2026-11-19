@@ -198,13 +198,22 @@ def test_the_bootstrap_skill_installs_once_and_reports_unchanged(user_dirs):
 
 
 def test_the_marketplace_plugin_matches_the_templates():
-    sync = Path(__file__).resolve().parents[1] / "integrations" / "agent-plugin" / "sync.py"
+    sync = Path(__file__).resolve().parents[1] / "integrations" / "sync_agent_plugin.py"
     if not sync.is_file():
         pytest.skip("not a source checkout")
     spec = importlib.util.spec_from_file_location("agent_plugin_sync", sync)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    assert module.stale() == [], "run python integrations/agent-plugin/sync.py"
+    assert module.stale() == [], "run python integrations/sync_agent_plugin.py"
+
+
+def test_the_marketplace_plugin_holds_no_scripts():
+    # Anthropic's directory blocks scripts in a plugin from an unverified organization.
+    plugin = Path(__file__).resolve().parents[1] / "integrations" / "agent-plugin"
+    if not plugin.is_dir():
+        pytest.skip("not a source checkout")
+    files = [p for p in plugin.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+    assert [p for p in files if p.suffix not in {".md", ".json", ".png"}] == []
 
 
 def test_the_bootstrap_skill_replaces_only_its_own_copy(user_dirs):

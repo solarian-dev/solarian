@@ -32,7 +32,7 @@ pytest tests/                       # or the files for the area you touched
 ## Conventions that tests enforce
 
 - **CLI commands** are registered lazily in `solarian/cli/commands/__init__.py` and subclass `BaseCommand` (`solarian/cli/base.py`). `tests/test_cli_help.py` requires `help`, `description` and `examples` on each, examples that start with `solarian <name>`, every option named in `usage`, and the lazy help string equal to the class's `help`. List a new command in `docs/commands/page.mdx`.
-- **Agent files.** `solarian/templates/agent/` is what every project and plugin gets on its next `solarian agent sync`, so a change there reaches users' repositories. Skills need `name` (the folder name) and `description` frontmatter. After changing `bootstrap/`, run `python integrations/agent-plugin/sync.py`; `tests/test_agent_files.py` fails until the plugin copy matches.
+- **Agent files.** `solarian/templates/agent/` is what every project and plugin gets on its next `solarian agent sync`, so a change there reaches users' repositories. Skills need `name` (the folder name) and `description` frontmatter. After changing `bootstrap/`, run `python integrations/sync_agent_plugin.py`; `tests/test_agent_files.py` fails until the plugin copy matches.
 - **Docs as markdown.** `solarian/cli/docs_pages.py` (`solarian docs`) and `src/lib/docs-markdown.ts` in the solarian-docs repo (`/llms.txt`, `/docs/<page>.md`) convert MDX the same way. Change both together.
 
 ## Skills for this repository

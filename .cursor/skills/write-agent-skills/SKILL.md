@@ -16,7 +16,7 @@ so a mistake ships to every project. `solarian/cli/agent_files.py` does the writ
 | `solarian/templates/agent/skills/project/<name>/` | every project's `.agents/skills/<name>/` and `.claude/skills/<name>/` | Jinja |
 | `solarian/templates/agent/skills/plugin/<name>/` | the same folders in every plugin | Jinja |
 | `solarian/templates/agent/{project,plugin}/AGENTS.md.j2` | `AGENTS.md` (and a `CLAUDE.md` that imports it) | Jinja |
-| `solarian/templates/agent/bootstrap/solarian/` | `~/.agents/skills`, `~/.claude/skills` via `solarian agent install`, and `integrations/agent-plugin/skills/` via `sync.py` | no |
+| `solarian/templates/agent/bootstrap/solarian/` | `~/.agents/skills`, `~/.claude/skills` via `solarian agent install`, and `integrations/agent-plugin/skills/` via `integrations/sync_agent_plugin.py` | no |
 | `solarian/templates/agent/NOTES.md` | `.agents/NOTES.md`, created once, never rewritten | no |
 | a plugin's `<package>/agent/AGENTS.md` | a section of each project's `AGENTS.md`, HTML comments stripped | no |
 | a plugin's `<package>/agent/skills/<name>/` | the project's skill folders as `<short>-<name>` | no |
@@ -74,8 +74,8 @@ an agent find Solarian from an empty folder; rerun the evals in
 After any change under `bootstrap/`:
 
 ```bash
-python integrations/agent-plugin/sync.py           # copy into the marketplace plugin
-python integrations/agent-plugin/sync.py --check   # exit 1 while it is out of date
+python integrations/sync_agent_plugin.py           # copy into the marketplace plugin
+python integrations/sync_agent_plugin.py --check   # exit 1 while it is out of date
 ```
 
 Commit the copy with the change. `test_the_marketplace_plugin_matches_the_templates`
