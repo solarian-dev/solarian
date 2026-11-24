@@ -1,6 +1,6 @@
 [project]
 name = "solarian"
-version = "0.5.0"
+version = "0.6.0"
 description = "A robotics framework for the modern world."
 authors = [
     {name = "Raul Garreta", email = "raul@solarian.dev"}
