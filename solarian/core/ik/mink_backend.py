@@ -132,6 +132,8 @@ class MinkBackend(DifferentialIKBackend):
         # Regularize toward the model's default (home) configuration.
         self.posture_task.set_target_from_configuration(self.configuration)
         self.tasks = [self.frame_task, self.posture_task]
+        # mink.solve_ik rebuilds this on every call when it is not passed in.
+        self._qp_limits = [mink.ConfigurationLimit(self.model)]
 
     # -- DifferentialIKBackend interface -----------------------------------
     def set_q(self, q) -> None:
@@ -150,6 +152,7 @@ class MinkBackend(DifferentialIKBackend):
 
     def solve(self, target_pose, dt: float):
         import mink
+        import qpsolvers
 
         target = np.asarray(target_pose, dtype=float)
         rotation = mink.SO3.exp(target[3:6])
@@ -157,9 +160,14 @@ class MinkBackend(DifferentialIKBackend):
         if self._tcp_se3 is not None:
             transform = transform @ self._tcp_se3.inverse()
         self.frame_task.set_target(transform)
-        return mink.solve_ik(
-            self.configuration, self.tasks, dt, self.solver, self.damping
+        # mink.solve_ik minus its configuration check, which only logs at debug
+        # level when it does not raise.
+        problem = mink.build_ik(
+            self.configuration, self.tasks, dt, self.damping, self._qp_limits
         )
+        dq = qpsolvers.solve_problem(problem, solver=self.solver).x
+        assert dq is not None
+        return dq / dt
 
     def integrate(self, v, dt: float) -> np.ndarray:
         q_next = np.asarray(self.configuration.integrate(v, dt), dtype=float)

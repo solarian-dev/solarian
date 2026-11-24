@@ -1,12 +1,14 @@
 """EE-frame pose helpers."""
 
 import numpy as np
+import pytest
 
 from solarian.core.pose import (
     apply_ee_rotation,
     apply_ee_translation,
     compose_ee_delta,
     quat_to_rotvec,
+    rotation_angle_between,
     rotvec_to_quat,
 )
 
@@ -14,6 +16,12 @@ from solarian.core.pose import (
 def test_rotvec_quat_roundtrip():
     rv = np.array([0.1, -0.2, 0.3])
     np.testing.assert_allclose(quat_to_rotvec(rotvec_to_quat(rv)), rv, atol=1e-9)
+
+
+def test_rotation_angle_between_two_rotvecs_of_a_half_turn_is_zero():
+    # Pointing straight down: the same rotation, rotation vectors 2π apart.
+    assert rotation_angle_between([np.pi, 0.0, 0.0], [-np.pi, 0.0, 0.0]) < 1e-6
+    assert rotation_angle_between([0.0, 0.0, 0.1], [0.0, 0.0, 0.3]) == pytest.approx(0.2)
 
 
 def test_apply_ee_translation_along_tool_x():

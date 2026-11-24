@@ -26,6 +26,7 @@ import numpy as np
 from solarian.core.actuator_bus import ActuatorBus
 from solarian.core.data import Data, PosData
 from solarian.core.ik.base import DifferentialIKBackend
+from solarian.core.pose import rotation_angle_between
 
 import logging
 
@@ -48,6 +49,13 @@ _DEFAULT_DT = 1.0 / 120.0
 # the measured joints is stale (a joint move ran in between, or the arm was
 # pushed), and the joint-speed limit restarts from the measured joints.
 _JOINT_COMMAND_STALE_S = 0.5
+# Radians. IK seeds from the last command while every joint is within this of
+# the measurement: above the sag and lag of an arm that is tracking, below the
+# gap left by a blocked arm or one moved by hand.
+_SEED_MAX_LAG_RAD = 0.2
+# Seconds a joint reading taken for the observation stays good enough to check
+# the seed against, instead of reading the joints again to write.
+_MEASURED_MAX_AGE_S = 0.1
 
 
 class IKActuatorBus(ActuatorBus):
@@ -78,6 +86,12 @@ class IKActuatorBus(ActuatorBus):
         self.max_joint_speed = max_joint_speed
         self._last_q_cmd: np.ndarray | None = None
         self._joint_limit_binding = False
+        self._q_measured: np.ndarray | None = None
+        self._q_measured_at = float("-inf")
+        # The target the last solve converged on and its joints; a tick that
+        # asks for the same pose again (a hold) reuses them.
+        self._solved_target: np.ndarray | None = None
+        self._solved_q: np.ndarray | None = None
         self.joint_components = dict(joint_components)
         self.cartesian_components = dict(cartesian_components)
         super().__init__(
@@ -109,6 +123,7 @@ class IKActuatorBus(ActuatorBus):
         self.ik_iterations = 12
         self.ik_pos_tol = 1e-4  # metres
         self.ik_ori_tol = 1e-3  # radians
+        self.ik_step_tol = 1e-5  # radians, well under any joint's command resolution
 
     # -- connection (delegate to inner bus) --------------------------------
     @staticmethod
@@ -186,14 +201,23 @@ class IKActuatorBus(ActuatorBus):
             return ((bounded - lo) / (hi - lo)) * 100.0
         return rad
 
-    def _read_ik_joint_radians(self) -> np.ndarray:
-        norm = self.inner_bus.read(PosData, self.ik_joint_names, normalize=True)
-        return np.array(
+    def _measure(self, norm: Dict[str, Any]) -> np.ndarray:
+        """IK joints (rad) from a normalized reading that includes them; kept for the next write."""
+        self._q_measured = np.array(
             [self._norm_to_rad(name, float(norm[name])) for name in self.ik_joint_names]
         )
+        self._q_measured_at = time.monotonic()
+        return self._q_measured
 
-    def _current_pose(self) -> np.ndarray:
-        self.backend.set_q(self._read_ik_joint_radians())
+    def _measured_joints(self) -> np.ndarray:
+        if time.monotonic() - self._q_measured_at <= _MEASURED_MAX_AGE_S:
+            return self._q_measured
+        return self._measure(
+            self.inner_bus.read(PosData, self.ik_joint_names, normalize=True)
+        )
+
+    def _fk(self, q: np.ndarray) -> np.ndarray:
+        self.backend.set_q(q)
         return np.asarray(self.backend.get_pose(), dtype=float)
 
     def _tick_dt(self) -> float:
@@ -211,17 +235,24 @@ class IKActuatorBus(ActuatorBus):
         cart_names = [n for n in component_names if n in self.cartesian_components]
 
         result: Dict[str, Any] = {}
-        if joint_names:
-            result.update(self.inner_bus.read(data_type, joint_names, normalize=normalize))
-
         if cart_names and issubclass(data_type, PosData):
-            pose = self._current_pose()
+            # One bus read serves both the joints asked for and the FK.
+            shared = joint_names if normalize else []
+            names = shared + [n for n in self.ik_joint_names if n not in shared]
+            norm = self.inner_bus.read(data_type, names, normalize=True)
+            result.update({n: norm[n] for n in shared})
+            if len(shared) < len(joint_names):
+                result.update(self.inner_bus.read(data_type, joint_names, normalize=normalize))
+            pose = self._fk(self._measure(norm))
             for name in cart_names:
                 result[name] = float(pose[self.cartesian_index[name]])
-        elif cart_names:
-            # Only position (pose) reads are meaningful for Cartesian actuators.
-            for name in cart_names:
-                result[name] = 0.0
+            return result
+
+        if joint_names:
+            result.update(self.inner_bus.read(data_type, joint_names, normalize=normalize))
+        # Only position (pose) reads are meaningful for Cartesian actuators.
+        for name in cart_names:
+            result[name] = 0.0
         return result
 
     def write(self, values: Dict[str, Data], normalize: bool = True):
@@ -239,30 +270,31 @@ class IKActuatorBus(ActuatorBus):
     def _write_cartesian(self, cart_vals: Dict[str, Data]):
         dt = self._tick_dt()
 
-        q_now = self._read_ik_joint_radians()
-        self.backend.set_q(q_now)
-        current_pose = np.asarray(self.backend.get_pose(), dtype=float).copy()
-        target = current_pose.copy()
+        q_now = self._measured_joints()
+        # The measured joints lag the command by the tracking error, most of it
+        # gravity sag on a loaded arm; solving from them makes IK close that gap
+        # again on every tick. The last command already solves the previous
+        # target, so a streamed target is an iteration or two away from it.
+        seed = self._last_q_cmd
+        if seed is None or np.max(np.abs(seed - q_now)) > _SEED_MAX_LAG_RAD:
+            seed = q_now
+        if {self.cartesian_index[name] for name in cart_vals} == set(range(6)):
+            target = np.zeros(6)
+        else:
+            target = self._fk(seed).copy()
         for name, data in cart_vals.items():
             target[self.cartesian_index[name]] = float(data.value)
 
-        # Iterate solve+integrate to drive the model onto the target this tick
-        # (see __init__: ik_iterations). Each pass feeds the integrated joints
-        # back via set_q so the next solve sees the reduced error; we stop early
-        # once within tolerance. The backend's configuration is left at the
-        # converged solution -- fine, since the next tick re-seeds it from the
-        # freshly read joint positions.
-        q_next = q_now
-        for _ in range(max(1, int(self.ik_iterations))):
-            v = self.backend.solve(target, dt)
-            q_next = np.asarray(self.backend.integrate(v, dt), dtype=float)
-            self.backend.set_q(q_next)
-            pose = np.asarray(self.backend.get_pose(), dtype=float)
-            if (
-                np.linalg.norm(pose[:3] - target[:3]) < self.ik_pos_tol
-                and np.linalg.norm(pose[3:] - target[3:]) < self.ik_ori_tol
-            ):
-                break
+        if (
+            seed is self._last_q_cmd
+            and self._solved_target is not None
+            and np.array_equal(target, self._solved_target)
+        ):
+            q_next = self._solved_q
+        else:
+            q_next, converged = self._solve(seed, target, dt)
+            self._solved_target = target if converged else None
+            self._solved_q = q_next
         q_next = self._limit_joint_step(q_now, q_next, dt)
 
         out = {
@@ -272,7 +304,32 @@ class IKActuatorBus(ActuatorBus):
         self.inner_bus.write(out, normalize=True)
 
         if _IK_DEBUG:
-            self._debug_log(cart_vals, current_pose, target, q_now, q_next, dt)
+            self._debug_log(cart_vals, self._fk(q_now), target, q_now, q_next, dt)
+
+    def _solve(self, seed: np.ndarray, target: np.ndarray, dt: float) -> tuple[np.ndarray, bool]:
+        """Joints (rad) for ``target`` from ``seed``, and whether iterating more would change them.
+
+        Iterates solve+integrate within the tick (see ``ik_iterations``), each
+        pass starting from the joints the last one integrated to. It stops at
+        the target, or where the passes stop moving the joints: the posture
+        task holds the solution off the target by up to a few millimetres, so
+        the pose tolerance alone would never end the loop.
+        """
+        self.backend.set_q(seed)
+        q = seed
+        for _ in range(max(1, int(self.ik_iterations))):
+            v = self.backend.solve(target, dt)
+            q_prev, q = q, np.asarray(self.backend.integrate(v, dt), dtype=float)
+            if np.max(np.abs(q - q_prev)) < self.ik_step_tol:
+                return q, True
+            self.backend.set_q(q)
+            pose = np.asarray(self.backend.get_pose(), dtype=float)
+            if (
+                np.linalg.norm(pose[:3] - target[:3]) < self.ik_pos_tol
+                and rotation_angle_between(pose[3:], target[3:]) < self.ik_ori_tol
+            ):
+                return q, True
+        return q, False
 
     def _limit_joint_step(self, q_now: np.ndarray, q_next: np.ndarray, dt: float) -> np.ndarray:
         """``q_next`` with its step scaled so no joint exceeds ``max_joint_speed``.
@@ -284,6 +341,7 @@ class IKActuatorBus(ActuatorBus):
         """
         max_joint_speed = self.max_joint_speed()
         if max_joint_speed is None:
+            self._last_q_cmd = q_next
             return q_next
         base = self._last_q_cmd
         stale = max_joint_speed * _JOINT_COMMAND_STALE_S

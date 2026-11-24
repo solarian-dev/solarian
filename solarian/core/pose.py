@@ -34,6 +34,16 @@ def quat_to_rotvec(q) -> np.ndarray:
     return (q[1:] / sin_half) * theta
 
 
+def rotation_angle_between(a, b) -> float:
+    """Angle (rad) of the rotation from rotation vector ``a`` to ``b``.
+
+    Not ``norm(a - b)``: near a half turn one rotation has two rotation vectors
+    about 2π apart, and a gripper pointing straight down sits right there.
+    """
+    dot = abs(float(np.dot(rotvec_to_quat(a), rotvec_to_quat(b))))
+    return 2.0 * float(np.arccos(min(1.0, dot)))
+
+
 def quat_mul(a, b) -> np.ndarray:
     """Hamilton product of two ``[w, x, y, z]`` quaternions."""
     w1, x1, y1, z1 = np.asarray(a, dtype=float).reshape(4)
