@@ -32,12 +32,20 @@ from typing import Any, Protocol
 
 from solarian.core.execution import ExecutionMode, WorkerExit
 from solarian.utils.configs import ConfigError, config_error_in
+from solarian.utils.general import name_process
 from solarian.utils.precise_sleep import precise_wait
 from solarian.utils.profiling import func_stats, get_stats_snapshot
+from solarian.utils.status_board import StatusBoard
 
 logger = logging.getLogger("runner")
 
 _PARENT_POLL_S = 0.5
+
+#: Seconds between the tick summaries a worker process posts to the status board.
+_TICK_REPORT_S = 1.0
+
+#: A tick that starts this late (ms) counts as late in the status board summary.
+_LATE_MS = 1.0
 
 # Same bound the parent gives a terminated worker: a camera close gives up
 # after 2s.
@@ -60,6 +68,47 @@ def _exit_with_parent(parent_pid: int) -> None:
     # device call or flushing a queue nobody reads never finishes it.
     time.sleep(_ORPHAN_TEARDOWN_S)
     os.kill(os.getpid(), signal.SIGKILL)
+
+
+class _TickStats:
+    """How long each tick worked, and how late it started against its slot.
+
+    A tick that overruns its period makes the ones after it late, and the
+    loop then runs them back to back until it catches up, so lateness is what
+    a motor sees as jitter. Both go into the profiling summary; a worker
+    process also posts the last second of them to the status board.
+    """
+
+    def __init__(self, name: str, report: bool):
+        self._work_timings = func_stats[f"tick work {name}"]
+        self._late_timings = func_stats[f"tick late {name}"]
+        self._label = f"Tick {name} (ms)"
+        self._report = report
+        self._work: list[float] = []
+        self._late_count = 0
+        self._next_report = time.monotonic() + _TICK_REPORT_S
+
+    def add(self, work_s: float, late_s: float, now: float) -> None:
+        work_ms = work_s * 1e3
+        late_ms = max(0.0, late_s * 1e3)
+        self._work_timings.add(work_ms)
+        self._late_timings.add(late_ms)
+        if not self._report:
+            return
+        self._work.append(work_ms)
+        if late_ms > _LATE_MS:
+            self._late_count += 1
+        if now < self._next_report:
+            return
+        self._next_report = now + _TICK_REPORT_S
+        work = sorted(self._work)
+        StatusBoard.set(
+            self._label,
+            f"work p50 {work[len(work) // 2]:.2f} p99 {work[int(len(work) * 0.99)]:.2f} "
+            f"max {work[-1]:.2f}, late {self._late_count}/{len(work)}",
+        )
+        self._work.clear()
+        self._late_count = 0
 
 
 class Runnable(Protocol):
@@ -173,6 +222,7 @@ class Runner(ABC):
             raise SystemExit(128 + signum)
 
         if self.crosses_process_boundary:
+            name_process(self.name)
             # Ctrl+C reaches every process in the terminal's foreground group,
             # so a worker that acts on it unwinds from inside a device read
             # while the parent is still shutting things down in order, and
@@ -198,7 +248,9 @@ class Runner(ABC):
         try:
             target.worker_setup(self.crosses_process_boundary)
 
+            tick_stats = _TickStats(self.name, report=self.crosses_process_boundary)
             t_start = time.monotonic()
+            t_slot = t_start
             idx = 0
             keep_running = True
             while keep_running:
@@ -206,16 +258,20 @@ class Runner(ABC):
                     exit_reason = WorkerExit.STOPPED
                     break
 
+                t_tick = time.monotonic()
                 keep_running = target.worker_tick()
+                t_done = time.monotonic()
 
                 # Ready means "has completed a full cycle", so late failures
                 # during the first tick surface as a crash rather than a hang.
                 if idx == 0:
                     self._set_ready()
                 idx += 1
+                tick_stats.add(t_done - t_tick, t_tick - t_slot, t_done)
 
                 period = 1.0 / max(float(getattr(target, "frequency", 0.0) or 0.0), 1e-9)
-                precise_wait(t_end=t_start + period * idx, time_func=time.monotonic)
+                t_slot = t_start + period * idx
+                precise_wait(t_end=t_slot, time_func=time.monotonic)
         except SystemExit:
             exit_reason = WorkerExit.STOPPED
             raise

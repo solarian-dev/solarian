@@ -31,6 +31,7 @@ import av
 import numpy as np
 
 from solarian.core.recording.timeline import repeats_for
+from solarian.utils.general import name_process
 from solarian.utils.shared_memory.shared_memory_queue import SharedMemoryQueue
 
 logger = logging.getLogger(__name__)
@@ -231,6 +232,7 @@ class VideoWriter(mp.Process):
     # -- encoder side, runs in its own process ------------------------------
 
     def run(self) -> None:
+        name_process(f"rec:{self.camera_name}")
         # Ctrl+C reaches this process too, and an encoder that acts on it
         # abandons a mux mid-episode — the mp4 loses its tail for a stop the
         # operator asked for politely. Episodes end on the command queue.

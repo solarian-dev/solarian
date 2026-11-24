@@ -23,7 +23,7 @@ from solarian.core.observation import Observation, ModuleObs
 from solarian.core.event import Event
 from solarian.core.execution import ExecutionMode, ExecutionPlace, WorkerExit
 from solarian.core.runner import Runner, make_runner
-from solarian.utils import manual_profile, profile, setup_process_logging, get_log_queue
+from solarian.utils import setup_process_logging, get_log_queue
 from solarian.utils.shared_memory.shared_memory_queue import Empty
 from solarian.utils.shared_memory.action_queue import ModuleActionQueue
 from solarian.utils.shared_memory.observation_buffer import ObservationBuffer
@@ -31,8 +31,6 @@ from solarian.utils import get_class
 from solarian.utils.status_board import StatusBoard
 # TODO: remove speed from calibration required
 # CALIBRATION_REQUIRED = [ValueName.POS]
-
-from solarian.utils import profile, manual_profile
 
 import logging
 logger = logging.getLogger(f"module")
@@ -975,7 +973,6 @@ class Module(ABC):
                 )
 
         self.reset()
-        self._t_last_control_step = time.monotonic()
 
     def worker_tick(self) -> bool:
         """One control iteration: drain actions, drive outputs, publish state.
@@ -997,8 +994,6 @@ class Module(ABC):
         except Empty:
             pass
 
-        manual_profile("control_step", time.monotonic() - self._t_last_control_step)
-        self._t_last_control_step = time.monotonic()
         self.control_step()
 
         self.update_observations()

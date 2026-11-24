@@ -21,6 +21,19 @@ def get_class(class_path):
     return getattr(module, class_name)
 
 
+def name_process(name: str) -> None:
+    """Show this process as ``name`` in ``top``, ``htop`` and ``ps -o comm`` on Linux.
+
+    The kernel keeps the first 15 bytes. Threads started afterwards inherit
+    it. Does nothing where there is no ``/proc``.
+    """
+    try:
+        with open("/proc/self/comm", "w") as comm:
+            comm.write(name[:15])
+    except OSError:
+        pass
+
+
 # TODO reimplement
 def busy_wait(seconds):
     if platform.system() == "Darwin":
