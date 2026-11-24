@@ -65,6 +65,32 @@ def isolate_module(scene: SceneConfig, module: str) -> SceneConfig:
     )
 
 
+def scene_without(scene: SceneConfig, modules: set[str]) -> SceneConfig:
+    """``scene`` with ``modules``' attachments removed, and whatever is mounted on them.
+
+    An attachment mated to a site under a removed prefix goes too (a gripper
+    on a removed arm's flange), and so does a camera mounted on one. The
+    module of an attachment removed that way is not in ``modules``; the
+    caller finds it by comparing attachments.
+    """
+    dropped = {a.prefix for a in scene.attachments if a.module in modules and a.prefix}
+    kept = [a for a in scene.attachments if a.module not in modules]
+
+    def under_dropped(name: str | None) -> bool:
+        return bool(name) and any(name.startswith(prefix) for prefix in dropped)
+
+    while True:
+        orphans = [a for a in kept if under_dropped(a.parent_site) or under_dropped(a.parent_body)]
+        if not orphans:
+            break
+        dropped |= {a.prefix for a in orphans if a.prefix}
+        kept = [a for a in kept if a not in orphans]
+    cameras = [
+        c for c in scene.cameras if not (under_dropped(c.site) or under_dropped(c.parent_body))
+    ]
+    return scene.model_copy(update={"attachments": kept, "cameras": cameras})
+
+
 def resolve_mjcf(mjcf: str) -> str:
     """Resolve an MJCF reference to an absolute file path.
 

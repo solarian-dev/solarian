@@ -50,7 +50,15 @@ from solarian.core.ui.base import (
     UISnapshot,
     recording_status,
 )
-from solarian.core.skill import Skill, SkillFailed, SkillStatus, Tool, failure_reason
+from solarian.core.skill import (
+    Skill,
+    SkillFailed,
+    SkillStatus,
+    Tool,
+    failure_reason,
+    refuse_disabled_modules,
+    written_modules,
+)
 from solarian.utils import profile, manual_profile, get_class, StatusBoard
 from solarian.conf import settings
 from solarian.core.data import ImageData, BoundingBoxData, MaskData, PointData
@@ -184,6 +192,16 @@ class Controller(EventHost, ABC):
         self._last_send_ns = time.monotonic_ns()
 
         self.modules = {}
+        #: Controller modules whose yaml says ``enabled: false``.
+        self._controller_disabled: set[str] = set()
+        #: Robot modules left out of the robot's run. Read from the yamls here
+        #: until the robot's first state message says which it really runs.
+        self._robot_disabled: set[str] = set()
+        #: Both of the above: what skills may not write and the UI does not show.
+        self.disabled_modules: set[str] = set()
+        #: Newly disabled by the robot's report, for the control thread to stop
+        #: the skills writing them; the report arrives on the receiver thread.
+        self._disabled_to_stop: set[str] = set()
 
         # Create modules from class-level attributes. Walks the MRO so that
         # modules declared on a base controller -- the keyboard, for one --
@@ -191,7 +209,9 @@ class Controller(EventHost, ABC):
         remote_input = set(self.cfg.remote_input_modules)
         for klass in type(self).__mro__:
             for name, val in klass.__dict__.items():
-                if name in self.modules or not isinstance(val, Module):
+                if name in self.modules or name in self._controller_disabled:
+                    continue
+                if not isinstance(val, Module):
                     continue
                 # A device the UI samples keeps its name and loses its driver:
                 # the consumers read it by name, so swapping the implementation
@@ -201,12 +221,15 @@ class Controller(EventHost, ABC):
                     RemoteInputModule if name in remote_input else val.__class__
                 )
                 module_cfg = self.load_module_config(name, module_class)
+                remote_input.discard(name)
+                if not module_cfg.enabled:
+                    self._controller_disabled.add(name)
+                    continue
                 if module_class is val.__class__:
                     self.modules[name] = val.bind(module_cfg, name)
                 else:
                     self.modules[name] = module_class(module_cfg, name)
                 setattr(self, name, self.modules[name])
-                remote_input.discard(name)
         if remote_input:
             raise ValueError(
                 f"controller.remote_input_modules names {sorted(remote_input)}, "
@@ -256,6 +279,7 @@ class Controller(EventHost, ABC):
         #: is reported once rather than once per observation.
         self._dropped_puts: dict[str, int] = {}
         self._setup_remote_observation_schema()
+        self.disabled_modules = self._controller_disabled | self._robot_disabled
         self._create_observation_buffers()
         self._create_local_observation_buffers()
 
@@ -276,7 +300,11 @@ class Controller(EventHost, ABC):
             return None
         from solarian.core.ai.agent import AgentHarness
 
-        tools = {name: tool for name, tool in self.tools.items() if tool.agent_enabled}
+        tools = {
+            name: tool
+            for name, tool in self.tools.items()
+            if tool.agent_enabled and not written_modules(tool.params) & self.disabled_modules
+        }
         if not tools:
             logger.warning("agent is configured but %s has no agent_enabled tools", type(self).__name__)
         return AgentHarness(host=self, cfg=self.cfg.agent, tools=tools)
@@ -330,9 +358,12 @@ class Controller(EventHost, ABC):
                     f"the first incoming observation"
                 )
                 continue
+            if not module_cfg.enabled:
+                self._robot_disabled.add(name)
             # Schema-only: instantiate for its side-effect of mutating
             # class-level data descriptors.  The instance itself is
-            # discarded.
+            # discarded. Done for a disabled module too, since the robot's
+            # report may yet say it runs.
             attr.bind(module_cfg, name)
 
     def _create_observation_buffers(self) -> None:
@@ -445,6 +476,9 @@ class Controller(EventHost, ABC):
 
         if "recording" in msg.data:
             self.robot_recording = msg.data["recording"]
+
+        if "disabled_modules" in msg.data:
+            self._adopt_robot_disabled(set(msg.data["disabled_modules"]))
 
         if "skill_status" in msg.data:
             recs = msg.data["skill_status"]
@@ -653,6 +687,8 @@ class Controller(EventHost, ABC):
         overlay_map: dict[tuple[str, str], list[str]] = {}
 
         for module_name, module_obs_instance in obs_spec.items():
+            if module_name in self.disabled_modules:
+                continue
             module_obs_cls = type(module_obs_instance)
             sensor_fields = module_obs_cls.get_sensor_fields_spec()
             calculated_fields = module_obs_cls.get_calculated_fields_spec()
@@ -910,11 +946,12 @@ class Controller(EventHost, ABC):
             },
         }
 
-    @staticmethod
-    def _ui_observation_schema() -> dict[str, dict[str, str]]:
-        """``{module: {field: data class}}`` for the declared observation."""
+    def _ui_observation_schema(self) -> dict[str, dict[str, str]]:
+        """``{module: {field: data class}}`` for the declared observation's enabled modules."""
         schema: dict[str, dict[str, str]] = {}
         for module_name, module_obs in Observation.get_module_obs_spec().items():
+            if module_name in self.disabled_modules:
+                continue
             module_obs_cls = type(module_obs)
             fields = {
                 **module_obs_cls.get_sensor_fields_spec(),
@@ -1016,6 +1053,7 @@ class Controller(EventHost, ABC):
                 events = self._drain_events()
                 self._tick_local_modules()
                 self._fan_out_events(events)
+                self._stop_skills_on_disabled_modules()
                 # Here rather than in control_step, which a subclass may
                 # override: the controller's episode must still open.
                 self._open_pending_controller_episode()
@@ -1542,6 +1580,7 @@ class Controller(EventHost, ABC):
                 f"{type(skill).__name__} is defined in __main__, which the "
                 f"{skill.execution_place.value} cannot import; move it into a module"
             )
+        refuse_disabled_modules(skill, self.disabled_modules)
         name = skill.skill_name
         self._log_episode_event("skill_started", skill=name, params=skill.params)
         if not self._agent_dispatching:
@@ -1888,6 +1927,33 @@ class Controller(EventHost, ABC):
             )
         )
         logger.info("Stopping service %s/%s", module, field)
+
+    def _adopt_robot_disabled(self, reported: set[str]) -> None:
+        """Take the robot's word for which of its modules run, over this side's yamls.
+
+        Called on the receiver thread, so skills writing a newly disabled
+        module are left for the control thread to stop.
+        """
+        if reported == self._robot_disabled:
+            return
+        for name in sorted(reported - self._robot_disabled):
+            logger.warning("The robot runs with %s disabled; this controller's yaml has it enabled", name)
+        for name in sorted(self._robot_disabled - reported):
+            logger.warning("The robot runs %s; this controller's yaml has it disabled", name)
+        self._disabled_to_stop |= reported - self._robot_disabled
+        self._robot_disabled = reported
+        self.disabled_modules = self._controller_disabled | reported
+        self._image_field_keys = None
+        self._overlay_field_map = None
+
+    def _stop_skills_on_disabled_modules(self) -> None:
+        """Stop the skills writing a module the robot has just said it does not run."""
+        if not self._disabled_to_stop:
+            return
+        disabled, self._disabled_to_stop = self._disabled_to_stop, set()
+        for name, rec in list(self.running_skills.items()):
+            if rec.modules & disabled:
+                self.stop_skill(name, reason="disabled on the robot")
 
     def _ingest_skill_status_records(self, records) -> None:
         """End remote skills whose robot/server ``skill_status`` rows say they ended.

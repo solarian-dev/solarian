@@ -227,6 +227,10 @@ class ModuleConfig(BaseModel):
     """
     #: Rate of the module's control loop, in Hz.
     frequency: float
+    #: False leaves the module out of this run: not bound, opened, observed or
+    #: commanded. Its declarations in the robot, observation and action stay,
+    #: so code that names it still imports.
+    enabled: bool = True
     #: Most recent observations a reader can get at once, i.e. the history a
     #: skill can see: get_max_k / frequency seconds. Each slot costs a full
     #: observation of shared memory, which for a camera is a whole frame.

@@ -34,7 +34,7 @@ from solarian.conf import settings
 from solarian.core.action import ActionType, ModuleAction, action_handler
 from solarian.core.event import EventHost, event_inbox_for
 from solarian.core.execution import ExecutionMode
-from solarian.core.skill import SkillStatus, failure_reason
+from solarian.core.skill import SkillStatus, failure_reason, refuse_disabled_modules
 from solarian.core.skill_registry import load_skill_class
 
 import logging
@@ -292,6 +292,8 @@ class Robot(EventHost, ABC):
         #: Last time a camera image was put on the wire. Monotonic.
         self._last_preview_image_s = 0.0
         self.action_queues = {}
+        #: Modules an action arrived for with no queue here, warned about once.
+        self._unrouted_action_modules: set[str] = set()
 
         # IMPORTANT: Store the manager so it doesn't get garbage collected
         # (which would clean up all shared memory before subprocess can access it)
@@ -312,15 +314,29 @@ class Robot(EventHost, ABC):
         # This must happen before Observation.zeros() / Action.zeros() so that
         # sensor descriptors (e.g. ImageData on cameras) are configured with
         # the correct shapes from their YAML configs.
+        declared = {
+            name: val
+            for name in self.__class__.__dict__
+            if isinstance(val := getattr(self, name, None), Module)
+        }
+        loaded = {name: self.load_module_config(name, type(val)) for name, val in declared.items()}
+        #: Modules left out of this run: ``enabled: false`` in their yaml, or,
+        #: in sim, mounted on one that is. Reported to the controller with
+        #: every observation, so its own copy of the yamls does not decide.
+        self.disabled_modules: set[str] = {n for n, cfg in loaded.items() if not cfg.enabled}
+        if self.is_sim and self.disabled_modules:
+            self._prune_scene(loaded)
+        if self.disabled_modules:
+            logger.info("Disabled modules: %s", ", ".join(sorted(self.disabled_modules)))
         module_configs: dict[str, tuple[type, Any]] = {}
-        for name in self.__class__.__dict__:
-            val = getattr(self, name, None)
-            if isinstance(val, Module):
-                module_class = val.__class__
-                module_cfg = self.load_module_config(name, module_class)
-                module_configs[name] = (module_class, module_cfg)
-                self._module_map[name] = val.bind(module_cfg, name)
-                setattr(self, name, self._module_map[name])
+        for name, val in declared.items():
+            if name in self.disabled_modules:
+                continue
+            module_class = val.__class__
+            module_cfg = loaded[name]
+            module_configs[name] = (module_class, module_cfg)
+            self._module_map[name] = val.bind(module_cfg, name)
+            setattr(self, name, self._module_map[name])
 
         # Phase 2: Build example observations/actions (now with correct shapes).
         example_observation = Observation.zeros()
@@ -382,6 +398,8 @@ class Robot(EventHost, ABC):
         #: ``START_SKILL`` payloads for skills that arrived while a skill of the
         #: same name was still stopping, launched once the reaper retires it.
         self._deferred_starts: dict[str, dict] = {}
+        #: Why a skill never started, by run id, for its FAILED status row.
+        self._launch_failures: dict[int, str] = {}
         self._init_events()
 
 
@@ -392,6 +410,32 @@ class Robot(EventHost, ABC):
         yaml_path = str(module_config_path(module_name))
         module_cfg = load_config_yaml(yaml_path, module_class.config_class)
         return module_cfg
+
+    def _prune_scene(self, loaded: dict[str, Any]) -> None:
+        """Take the disabled modules out of the sim scene, and the modules that lose their mount.
+
+        A gripper on a disabled arm's flange, or a camera rendering from a
+        mount on it, has nothing left to drive or render, so it is disabled
+        too, with a warning since its own yaml said otherwise.
+        """
+        from solarian.sim.scene import scene_without
+
+        full = type(self).scene
+        self.scene = scene_without(full, self.disabled_modules)
+        kept_attachments = {a.module for a in self.scene.attachments}
+        dropped_cameras = {c.name for c in full.cameras} - {c.name for c in self.scene.cameras}
+        orphans = {
+            a.module for a in full.attachments if a.module not in kept_attachments
+        } - self.disabled_modules
+        for name, cfg in loaded.items():
+            if any(s.sim is not None and s.sim.camera in dropped_cameras for s in cfg.sensors.values()):
+                orphans.add(name)
+        orphans -= self.disabled_modules
+        if orphans:
+            logger.warning(
+                "Disabling %s in sim: mounted on a disabled module", ", ".join(sorted(orphans))
+            )
+            self.disabled_modules |= orphans
 
     def _detect_shared_ports(self) -> dict[str, list[str]]:
         """Return ports that are referenced by two or more modules.
@@ -587,6 +631,9 @@ class Robot(EventHost, ABC):
             "session": session,
         }
         sent_recording = (enabled, active, episode, request, session)
+        # Every message rather than once: a controller that connects or
+        # reconnects later learns at once which of its modules are not here.
+        msg.data["disabled_modules"] = sorted(self.disabled_modules)
 
         # Forward any pending skill status transitions to the controller so
         # that the think process can react to them.  ``drain`` advances a
@@ -727,7 +774,7 @@ class Robot(EventHost, ABC):
             error = skill.get_error()
             if error is not None:
                 return failure_reason(error[1])
-        return ""
+        return self._launch_failures.pop(record.skill_id, "")
 
     def _should_send_observation(self, observation: Observation) -> bool:
         """False when this wake would repeat a message the controller has.
@@ -836,6 +883,7 @@ class Robot(EventHost, ABC):
         way on the robot and another way on the controller would be a worse
         trade than four assignments in the one place that owns the buffers.
         """
+        refuse_disabled_modules(skill, self.disabled_modules)
         skill.observations = self.observation_buffers
         skill.action_queues = self.action_queues
         skill.skills_status_buffer = self.skills_status_buffer
@@ -897,6 +945,14 @@ class Robot(EventHost, ABC):
             )
         except ConfigError as exc:
             logger.error("Could not start skill '%s': %s", name, exc)
+            # Without an ending row the controller would believe it runs.
+            run_id = int(data.get("run_id") or 0)
+            self._launch_failures[run_id] = str(exc)
+            self.skills_status_buffer.put(
+                skill_id=run_id,
+                status=int(SkillStatus.FAILED),
+                timestamp=time.time(),
+            )
             return
         except Exception:
             logger.exception("Could not start skill '%s'", name)
@@ -1498,8 +1554,16 @@ class Robot(EventHost, ABC):
             # commands a robot-side skill writes directly, and recording at
             # the one place both arrive is what keeps the table complete.
             for module_name, module_action in action.items():
-                self.action_queues[module_name].put(module_action)
-                StatusBoard.set(f"{module_name} Action Queue Size", self.action_queues[module_name].qsize())
+                queue = self.action_queues.get(module_name)
+                if queue is None:
+                    # A controller that has not heard which modules are
+                    # disabled yet, or runs an older version, still sends.
+                    if module_name not in self._unrouted_action_modules:
+                        self._unrouted_action_modules.add(module_name)
+                        logger.warning("Dropping actions for module '%s': not running on this robot", module_name)
+                    continue
+                queue.put(module_action)
+                StatusBoard.set(f"{module_name} Action Queue Size", queue.qsize())
         else:
             self._dispatch_action(action, time.monotonic())
 

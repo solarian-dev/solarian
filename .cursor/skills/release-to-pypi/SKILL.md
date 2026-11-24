@@ -50,7 +50,7 @@ If it does not, follow "Onboarding a new package" first.
 - If the change relies on unreleased code in `solarian` or another plugin
   (e.g. `solarian-feetech`), release that package first and raise the lower
   bound in `dependencies` (e.g. `"solarian>=0.3.0"`).
-- `solarian-robstride` is not on PyPI; it stays an optional extra.
+- `solarian-edulite-a3` depends on `solarian-robstride`: release robstride first.
 
 **4. Bump, build, commit, push**
 - Set `version` in `pyproject.toml`, and `__version__` in the package's
@@ -125,7 +125,7 @@ Report the PyPI URL (`https://pypi.org/project/<package>/X.Y.Z/`) and the run UR
    `LICENSE` and `NOTICE` files present, assets listed in
    `[tool.setuptools.package-data]` (with `"agent/*.md", "agent/skills/*/*"` if
    the plugin has an `agent/` folder), and every dependency available on PyPI
-   (move unpublished ones such as `solarian-robstride` into an extra).
+   (move unpublished ones into an extra).
    README links to repo files should be absolute GitHub URLs; relative ones
    break on the PyPI page.
 3. Create the GitHub environment, restricted to `v*` tags:

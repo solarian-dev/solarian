@@ -54,6 +54,23 @@ logger = logging.getLogger(__name__)
 _WRITER_KEYS = ("arm", "gripper")
 
 
+def written_modules(params: Mapping[str, Any]) -> set[str]:
+    """Module names ``params`` binds to writer keys: what a skill built with them commands."""
+    return {params[key] for key in _WRITER_KEYS if isinstance(params.get(key), str)}
+
+
+def refuse_disabled_modules(skill: "Skill", disabled: set[str]) -> None:
+    """Raise when ``skill`` writes a module this run leaves out (``enabled: false``)."""
+    from solarian.utils.configs import ConfigError
+
+    off = sorted(skill.commanded_module_names() & disabled)
+    if off:
+        raise ConfigError(
+            message=f"Not starting {skill.skill_name}: it writes {', '.join(off)}, "
+            f"which this run leaves out (enabled: false in conf/modules/)"
+        )
+
+
 class SkillStatus(IntEnum):
     """Skill lifecycle status codes (stored as int in shared memory)."""
 
@@ -340,11 +357,7 @@ class Skill(ABC):
 
     def commanded_module_names(self) -> set[str]:
         """Module names this skill writes (for occupancy / preemption)."""
-        return {
-            self.params[key]
-            for key in _WRITER_KEYS
-            if isinstance(self.params.get(key), str)
-        }
+        return written_modules(self.params)
 
     # ------------------------------------------------------------------
     # Action / status helpers

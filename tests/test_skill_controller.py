@@ -136,6 +136,12 @@ class TeleopCtrl(Controller):
         self.skill_command_queue = FakeCommandQueue()
         self.skill_status_buffer = None
         self.modules = {}
+        self._controller_disabled = set()
+        self._robot_disabled = set()
+        self.disabled_modules = set()
+        self._disabled_to_stop = set()
+        self._image_field_keys = None
+        self._overlay_field_map = None
         self.observation_buffers = {}
         self.keyboard = self.attach(KeyboardModule, "keyboard")
         self._skill_registry = self._collect_controller_skills()

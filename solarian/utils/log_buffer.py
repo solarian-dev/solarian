@@ -151,6 +151,7 @@ def get_log_queue() -> multiprocessing.Queue:
     global _log_queue
     if _log_queue is None:
         _log_queue = multiprocessing.Queue()
+        _log_queue.cancel_join_thread()
     return _log_queue
 
 
@@ -174,6 +175,11 @@ def setup_process_logging(
         global _log_queue
         _log_queue = log_queue
     log_q = get_log_queue()
+    # Only a running StatusBoard drains this queue. Without one (a test, a
+    # board already stopped) a full pipe would block this process's exit on
+    # joining the feeder thread, so unsent records are dropped instead. The
+    # flag does not survive pickling or a fork, hence per process.
+    log_q.cancel_join_thread()
     logger = logging.getLogger(logger_name)
     logger.setLevel(level)
     if not any(isinstance(h, QueueLogHandler) for h in logger.handlers):

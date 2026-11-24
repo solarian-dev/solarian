@@ -115,6 +115,9 @@ actuators:
   <Property name="frequency" type="float">
     Module control loop rate in Hz. Each module ticks independently at this rate.
   </Property>
+  <Property name="enabled" type="bool">
+    Default <code>true</code>. <code>false</code> leaves the module out of the run. See <a href="#disabling-a-module">Disabling a module</a>.
+  </Property>
   <Property name="get_max_k" type="int">
     Max number of observation samples kept in the shared-memory ring buffer (default 128).
   </Property>
@@ -154,6 +157,26 @@ class ArmModule(Module):
 ```
 
 Solarian validates `conf/modules/arm.yaml` against `ArmConfig` and exposes it as `self.cfg.home_position`, `self.cfg.max_torque`, etc.
+
+### Disabling a module
+
+To run without a module, for example with one arm of a two-arm robot unplugged, set `enabled: false` in its yaml. You don't need to change any code:
+
+```yaml {{ title: 'conf/modules/left_arm.yaml' }}
+enabled: false
+# ... the rest of the file is unchanged ...
+```
+
+The module is still declared on the robot, so `observation.py`, `action.py` and the controller still import. For this run, the module is skipped everywhere it would otherwise be used:
+
+- The robot doesn't connect it, read it, or give it buffers.
+- The controller's UI shows no panel for it.
+- A skill that writes to it doesn't start. If you press its key or the agent calls its tool, the controller logs why. The agent is not offered tools bound to it.
+- In `--sim`, the module is removed from the scene, along with anything mounted on it. A gripper on a disabled arm's flange, or a camera on that gripper, is also disabled for that run.
+
+For a robot module, the yaml on the machine running the robot decides. The robot tells the controller which modules it left out, so a controller whose copy says otherwise follows the robot and logs the difference. To disable a module on one machine only, set the flag from that machine's deployment file, for example `enabled: ${deployment.left_arm_enabled}`. See [Deployments](/docs/project-configs#deployments).
+
+A disabled module can't be calibrated. Set it back to `true` first.
 
 ## The `initialize` method
 

@@ -408,6 +408,8 @@ class StatusBoard:
             self.data = {}
             self._local_q = queue.Queue()
             self._mp_q = multiprocessing.Queue()
+            # Drained only while the UI thread runs; see init_child.
+            self._mp_q.cancel_join_thread()
             self._log_q = get_log_queue()
             self._log_buf = LogBuffer(maxlen=1500)
             self._creator_pid = os.getpid()
@@ -468,6 +470,9 @@ class StatusBoard:
     @classmethod
     def init_child(cls, mp_q: "multiprocessing.Queue"):
         """Register the parent's mp queue so a child process can send updates."""
+        # A parent that stopped draining must not leave this child unable to
+        # exit on a full pipe; the flag is lost in pickling, so set it here.
+        mp_q.cancel_join_thread()
         cls._child_q = mp_q
 
     @classmethod

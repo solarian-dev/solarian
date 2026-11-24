@@ -88,6 +88,9 @@ class FakeRobot(Robot):
         self.observation_buffers = {"arm": object()}
         self.action_queues = {"arm": FakeQueue(), "gripper": FakeQueue()}
         self.skills_status_buffer = None
+        self.disabled_modules = set()
+        self._unrouted_action_modules = set()
+        self._launch_failures = {}
         self._local_skills = {}
         self._stopping_skills = {}
         self._deferred_starts = {}
