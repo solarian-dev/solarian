@@ -1535,7 +1535,7 @@ class Robot(EventHost, ABC):
         Returns:
             Observation: Contains ModuleObs readings organized by module
         """
-        obs_data = {}
+        observation = Observation()
         for module_name, obs_buffer in self.observation_buffers.items():
             # Count first. A sample that lands after this read is sent on
             # the next call; storing the count from after ``get`` would
@@ -1543,9 +1543,11 @@ class Robot(EventHost, ABC):
             count = obs_buffer.count
             if count == 0 or count == self._last_obs_count.get(module_name):
                 continue
-            obs_data[module_name] = obs_buffer.get().to_dict()
+            # Every buffer here is in shared memory, so ``get`` builds a new
+            # ModuleObs that the in-place compress on send cannot share.
+            observation[module_name] = obs_buffer.get()
             self._last_obs_count[module_name] = count
-        return Observation(obs_data)
+        return observation
 
     @profile
     def process_action(self, action: Action):

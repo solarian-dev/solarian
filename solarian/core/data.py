@@ -37,8 +37,11 @@ def encode_jpeg(image: np.ndarray) -> bytes:
         raise RuntimeError("JPEG encoding requires opencv-python (cv2).") from e
 
     if image.ndim == 3 and image.shape[2] == 3:
-        image = image[:, :, ::-1]
-    image = np.ascontiguousarray(image)
+        # cvtColor, not a reversed view copied contiguous: 0.4 ms against 7 ms
+        # for a 1014x760 frame on a Pi 5.
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    else:
+        image = np.ascontiguousarray(image)
     quality = get_image_jpeg_quality()
     if quality is None:
         ok, buf = cv2.imencode(".jpg", image)
@@ -86,6 +89,11 @@ class Data(BaseModel):
     # wire, and None for a Data built standalone rather than as an attribute.
     component_class: ClassVar[type | None] = None
 
+    # Seconds an observation reading of this kind stays current, for
+    # quantities that change far slower than a control tick and cost a bus
+    # round trip to read. None reads it on every tick.
+    refresh_period: ClassVar[float | None] = None
+
     is_compressed: bool = False
     compression_codec: str | None = None
 
@@ -121,7 +129,9 @@ class Data(BaseModel):
         return
 
     def compress(self) -> None:
-        if self.is_compressed:
+        # A plain number crosses the wire as itself: msgpack packs a float in
+        # 9 bytes, pickle+zlib in about 20, and the receiver only decodes bytes.
+        if self.is_compressed or type(self.payload) in (float, int, bool):
             return
         b = self._compress_impl(self.payload)
         self.payload = b
@@ -305,7 +315,7 @@ class ImageData(Data):
             raise RuntimeError("cv2.imdecode() failed")
         # encode_jpeg swapped RGB to BGR for OpenCV. Swap back.
         if img.ndim == 3 and img.shape[2] == 3:
-            img = np.ascontiguousarray(img[:, :, ::-1])
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         return img
 
 
@@ -369,6 +379,9 @@ class PointData(Data):
         return f"point {visibility}%" if visibility >= 50 else f"occluded {visibility}%"
 
 
+_EMPTY_MASK_PNG: dict[tuple[int, ...], bytes] = {}
+
+
 class MaskData(Data):
     """``(H, W)`` uint8 0/1 segmentation of the source image. All zeros = no target."""
 
@@ -391,11 +404,20 @@ class MaskData(Data):
 
         if raw is None:
             return b""
+        mask = np.asarray(raw, dtype=np.uint8)
+        # Until a target is picked the mask is all zeros, at camera rate; the
+        # check costs a thirtieth of the encode on a Pi.
+        empty = not mask.any()
+        if empty and mask.shape in _EMPTY_MASK_PNG:
+            return _EMPTY_MASK_PNG[mask.shape]
         # Lossless and tiny for a binary image; JPEG would blur the edge.
-        ok, buf = cv2.imencode(".png", np.asarray(raw, dtype=np.uint8))
+        ok, buf = cv2.imencode(".png", mask)
         if not ok:
             raise RuntimeError("cv2.imencode('.png', mask) failed")
-        return buf.tobytes()
+        encoded = buf.tobytes()
+        if empty:
+            _EMPTY_MASK_PNG[mask.shape] = encoded
+        return encoded
 
     def _uncompress_impl(self, b: bytes) -> Any:
         import cv2
@@ -420,6 +442,8 @@ class TemperatureData(Data):
     dtype: Type = float
     payload: float = Field(default=0.0, alias="value")
     unit: ClassVar[str | None] = "degC"
+    # A motor heats over tens of seconds.
+    refresh_period: ClassVar[float | None] = 1.0
     # Feetech over-temp cutout is 70 °C; warn well before that.
     mid: ClassVar[Union[float, Tuple[float, float], None]] = 50.0
     high: ClassVar[Union[float, Tuple[float, float], None]] = 60.0

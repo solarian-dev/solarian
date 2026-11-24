@@ -233,13 +233,13 @@ def _render_raw_action_panel(
 def _uncompress_fields_for_display(module) -> None:
     """Decode what the board will actually print, and nothing else.
 
-    An image only ever renders as its shape or its payload size, so
-    decoding one here buys a string the board already knows. On a Pi
-    that JPEG decode, at the refresh rate, costs more than the rest of
+    An image or a mask only ever renders as its shape or its payload
+    size, so decoding one here buys a string the board already knows. On
+    a Pi that decode, at the refresh rate, costs more than the rest of
     the table put together.
     """
     for _, field in module.items():
-        if field.compression_codec == "jpeg":
+        if field.compression_codec in ("jpeg", "png"):
             continue
         field.uncompress()
 

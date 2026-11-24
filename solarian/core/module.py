@@ -269,6 +269,9 @@ class Module(ABC):
         else:
             self._module_obs_cls = None
             self._robot_processors = {}
+        #: Data class -> (monotonic read time, fields) for kinds with a
+        #: ``refresh_period``, reused until that period has passed.
+        self._slow_readings: dict[type, tuple[float, dict]] = {}
 
     def bind(self, cfg, name):
         """Rebuild this class-level placeholder against the module YAML."""
@@ -765,9 +768,18 @@ class Module(ABC):
                 fields_by_data_class[field.data_class] = []
             fields_by_data_class[field.data_class].append((field_name, field.sensor_name, field.data_name))
 
+        now = time.monotonic()
         for data_class, field_list in fields_by_data_class.items():
+            period = data_class.refresh_period
+            if period is not None and data_class in self._slow_readings:
+                read_at, readings = self._slow_readings[data_class]
+                if now - read_at < period:
+                    # Keeps the timestamp of the read, which is when the value held.
+                    data.update(readings)
+                    continue
             sensor_names = [sensor_name for _, sensor_name, _ in field_list]
             sensor_data = self.read_sensors(data_class, sensor_names)
+            readings = {}
             for field_name, sensor_name, _ in field_list:
                 # A bus that reports its own capture time wins: an archived
                 # frame and the observation of it have to name the same
@@ -777,7 +789,10 @@ class Module(ABC):
                         sensor_name, synced_time() - self.cfg.receive_latency
                     )
                 )
-                data[field_name] = sensor_data[sensor_name]
+                readings[field_name] = sensor_data[sensor_name]
+            data.update(readings)
+            if period is not None:
+                self._slow_readings[data_class] = (now, readings)
 
         obs = self._module_obs_cls(data)
         obs = self.enrich_observation(obs)
