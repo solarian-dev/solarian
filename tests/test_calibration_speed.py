@@ -27,6 +27,13 @@ def test_achieved_speed_reports_saturation_not_the_command():
     assert achieved_speed(t, x, 0.0, 0.06) == pytest.approx(0.2, rel=0.02)
 
 
+def test_achieved_speed_resolves_a_move_only_a_few_ticks_long():
+    """At 30 Hz a 53 mm window at 1000 mm/s is 1.6 ticks; rounding the
+    crossings to a tick would read anything from 800 to 1600."""
+    t, x = _move(speed=1.0, limit=10.0, distance=0.066, hz=30.0)
+    assert achieved_speed(t + 0.013, x, 0.0, 0.066) == pytest.approx(1.0, rel=0.01)
+
+
 def test_achieved_speed_handles_a_negative_direction():
     t, x = _move(speed=0.2, limit=1.0, distance=0.06)
     assert achieved_speed(t, -x, 0.0, -0.06) == pytest.approx(0.2, rel=0.02)

@@ -48,6 +48,7 @@ def _arm():
     arm.last_waypoint_time = 0.0
     arm.cfg = SimpleNamespace(
         interpolator_type="pose",
+        max_joint_speed=None,
     )
     captured = {}
     arm.servoL = lambda pose, duration=0.1, t_now=None: captured.update(
@@ -119,10 +120,11 @@ def test_the_module_answers_to_no_pose_name():
     assert captured == {}
 
 
-def test_move_j_with_no_speed_uses_the_module_default():
+def test_move_j_with_no_speed_leaves_the_default_to_move_j():
+    """moveJ resolves the default itself, so it is capped like any other speed."""
     arm, captured = _arm()
     arm._handle_move_j(_Action(JOINTS, action_type=ActionType.MOVE_J), t_now=2.0)
-    assert captured["speed"] == pytest.approx(arm.default_joint_speed)
+    assert captured["speed"] is None
     assert captured["move"] == "J"
     np.testing.assert_allclose(captured["q"], [1, 2, 3, 4, 5, 6])
 
@@ -205,6 +207,7 @@ def _bare_arm() -> ArmModule:
     module.cfg = SimpleNamespace(
         interpolator_type=InterpolatorType.POSE,
         max_speed=[0.25, 0.6],
+        max_joint_speed=None,
     )
     module.interp = None
     module.last_waypoint_time = 0.0
@@ -522,7 +525,7 @@ def _movej_arm(q_now: np.ndarray | None = None) -> ArmModule:
     module.interp = None
     module._joint_interp = None
     module.last_waypoint_time = 0.0
-    module.cfg = SimpleNamespace(max_joint_accel=None)
+    module.cfg = SimpleNamespace(max_joint_accel=None, max_joint_speed=None)
     start = (
         np.zeros(6, dtype=np.float64)
         if q_now is None

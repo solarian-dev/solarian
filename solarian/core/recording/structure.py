@@ -140,11 +140,16 @@ def _component(component) -> dict:
         entry["normalization"] = {
             "mode": cfg.mode,
             "range": list(span),
-            # Radians of real joint travel that span maps onto, and the MJCF
-            # joint it drives, so a normalized reading becomes an angle.
+            # The span covers this MJCF joint's limits in the scene's model,
+            # which is how a normalized reading becomes an angle.
             "joint": cfg.sim_joint,
-            "joint_range": [float(cfg.sim_range_min), float(cfg.sim_range_max)],
         }
+        if cfg.sim_range_min is not None or cfg.sim_range_max is not None:
+            # Either end may be None: that end keeps the model's limit.
+            entry["normalization"]["joint_range_override"] = [
+                cfg.sim_range_min,
+                cfg.sim_range_max,
+            ]
     return entry
 
 

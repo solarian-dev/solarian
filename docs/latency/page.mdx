@@ -154,7 +154,7 @@ The general rule: **an obs latency that is too large makes the robot act on a st
 
 The values Solarian once shipped came from UMI's `example/eval_robots_config.yaml`, which describes a UR5 over RTDE, a WSG gripper, and a GoPro through an Elgato HDMI capture card. **They are a placeholder, not a default.** Nothing about a Feetech serial bus and a Pi CSI camera resembles that rig.
 
-Each command writes its result into `conf/modules/<module>.yaml` as it measures it, so there is nothing to copy by hand. A figure that is not a measurement is not written: a speed the hardware never fell behind is only a lower bound, and a negative latency means the sweep did not track.
+Each command writes its result into `conf/modules/<module>.yaml` as it measures it, so there is nothing to copy by hand. A negative latency means the sweep did not track, and is not written. A speed ramp that reaches its ceiling writes the ceiling, which the hardware has shown it holds. On an arm the ceiling is four times the configured value, so running speed mode again climbs further. On a gripper it is the fastest stroke the module's `frequency` can time, so a higher frequency climbs further.
 
 ### Where to run these
 
@@ -240,6 +240,8 @@ solarian calibrate-gripper      # mode 1 (all), or mode 4 for this alone
 ```
 
 There is no cross-correlation to run here, and no external reference to correlate against. `update_observations` stamps `synced_time()` *after* the read returns, so the reading it stamps was physically true roughly one read-duration earlier. The obs mode times a few hundred reads and reports the mean. It is the only mode that commands no motion.
+
+That holds while a read is a bus transaction. A Robstride bus answers reads from the feedback each motor sends back for the command it was just given, so a read returns in a fraction of a millisecond with a value up to a control tick old. Timing it would report the cache, not the reading. On such a bus, which exposes `read_position_times`, the obs mode ticks the control loop as the module does in service and measures the reading's age at the stamp instead: about half a tick to a tick.
 
 Expect single-digit milliseconds for a Feetech serial round trip. UMI's `0.000124` is not a comparable number: their UR5 pulls the latest sample off a 500 Hz RTDE stream, so their "read" is a memory access, not a bus transaction.
 

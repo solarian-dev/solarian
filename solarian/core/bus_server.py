@@ -14,6 +14,7 @@ the serial I/O itself (~1-2 ms).
 
 from __future__ import annotations
 
+import functools
 import signal
 import time
 import logging
@@ -159,6 +160,10 @@ class BusClient(ArchivesFrames, ComponentBus):
     Archives frames as well, because the port it proxies may be a camera's:
     the bus doing the capture is then in another process, and this is the
     nearest point to it that the recorder can reach.
+
+    Given ``bus_class``, a public method that class has beyond the
+    ``ComponentBus`` interface (a plugin bus's own API) is forwarded too. Its
+    arguments are pickled, so a callable passed to it must be picklable.
     """
 
     def __init__(
@@ -166,10 +171,20 @@ class BusClient(ArchivesFrames, ComponentBus):
         client_conn: Connection,
         port: str,
         components: Dict[str, "Component"],
+        bus_class: type | None = None,
     ):
         super().__init__(port=port, components=components)
         self._conn = client_conn
         self._connected = False
+        self._bus_class = bus_class
+
+    def __getattr__(self, name: str) -> Any:
+        # Read through __dict__: unpickling looks attributes up before
+        # __init__ has run, and self._bus_class would recurse into here.
+        bus_class = self.__dict__.get("_bus_class")
+        if name.startswith("_") or not callable(getattr(bus_class, name, None)):
+            raise AttributeError(f"{type(self).__name__} has no attribute {name!r}")
+        return functools.partial(self._call, name)
 
     def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
         self._conn.send((method, args, kwargs))
@@ -249,6 +264,9 @@ class BusClient(ArchivesFrames, ComponentBus):
 
     def counts_per_revolution(self, name: str):
         return self._call("counts_per_revolution", name)
+
+    def raw_to_radians(self, name: str, raw: float):
+        return self._call("raw_to_radians", name, raw)
 
     def center_offset_in_hardware(self, name: str):
         return self._call("center_offset_in_hardware", name)

@@ -31,11 +31,25 @@ from solarian.utils.trajectory_interpolator import (
 
 logger = logging.getLogger("module")
 
+#: How far above the planned speed the motors' own speed cap sits. Under it the
+#: cap would silently slow planned moves; far over it, it stops nothing.
+SPEED_BACKSTOP_MARGIN = 1.5
+
 
 class ActuatorModule(Module):
     """Module with actuators: torque, calibration sweep, trajectory interpolators."""
 
     kind: str = "actuator"
+
+    def apply_speed_backstop(self) -> None:
+        """Cap the motors' own speed at :data:`SPEED_BACKSTOP_MARGIN` x the planned speed.
+
+        The planner never asks for more than ``max_speed``; the motor cap is what
+        still holds when something upstream is wrong (a far target, lost ticks).
+        Modules whose motors take a speed cap override this and call it from
+        ``initialize``; calibration calls it again whenever it changes the
+        planned speed. The default does nothing, for motors without one.
+        """
 
     def __init__(
         self,

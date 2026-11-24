@@ -6,7 +6,7 @@ See :mod:`solarian.sim.cad` and the docs page "Models from CAD".
 
 Usage:
     solarian cad-import <assembly_dir> [--urdf PATH] [--clean-only]
-                         [--density KG/M3] [--update-yaml PATH]
+                         [--density KG/M3]
 
 ``<assembly_dir>`` holds the downloaded files. The model name is that directory
 with ``_description`` removed (``gripper1_description`` → ``gripper1``)::
@@ -80,7 +80,7 @@ class CadImportCommand(BaseCommand):
     loop closures closing_<name>. The prefix is removed in the MJCF. See the
     'Models from CAD' docs page for the click-by-click export and the full table.
     """
-    usage = "<assembly_dir> [--urdf PATH] [--clean-only] [--density KG/M3] [--update-yaml PATH]"
+    usage = "<assembly_dir> [--urdf PATH] [--clean-only] [--density KG/M3]"
     options = {
         "<assembly_dir>": "Directory holding the URDF and meshes/. "
                           "gripper1_description writes ../gripper1.xml.",
@@ -89,14 +89,11 @@ class CadImportCommand(BaseCommand):
         "--clean-only": "Re-clean the raw MJCF already written. Does not read the URDF.",
         "--density KG/M3": "Mass density in kg/m³ for this run. Overrides config.yaml "
                            "and does not rewrite that file. Default 1400.",
-        "--update-yaml PATH": "Also write the imported joint ranges into this module "
-                              "conf's sim_range_min / sim_range_max.",
     }
     examples = (
         "solarian cad-import assets/gripper1_description",
         "solarian cad-import assets/gripper1_description --urdf ~/Downloads/gripper.zip",
         "solarian cad-import assets/gripper1_description --density 522",
-        "solarian cad-import assets/gripper --update-yaml conf/right_gripper.yaml",
         "solarian cad-import assets/gripper1_description --clean-only",
     )
 
@@ -110,15 +107,11 @@ class CadImportCommand(BaseCommand):
                             help="Re-run only the clean stage on the raw MJCF (does not read the URDF).")
         parser.add_argument("--density", default=None, type=float, metavar="KG/M3",
                             help="Mass density in kg/m³ for inferred link mass (default 1400).")
-        parser.add_argument("--update-yaml", default=None, metavar="PATH",
-                            help="After import, sync MJCF joint ranges into this module conf "
-                                 "(sim_range_min/max) and config.json joint_properties.limits.")
         ns = parser.parse_args(argv)
         self.assembly_dir = ns.assembly_dir
         self.urdf = ns.urdf
         self.clean_only = ns.clean_only
         self.density = ns.density
-        self.update_yaml = ns.update_yaml
         return []
 
     def handle(self, cfg: DictConfig) -> None:
@@ -127,13 +120,12 @@ class CadImportCommand(BaseCommand):
             print("Error: cad-import requires an assembly directory argument")
             print(
                 "Usage: solarian cad-import <assembly_dir> "
-                "[--urdf PATH] [--clean-only] [--density KG/M3] [--update-yaml PATH]"
+                "[--urdf PATH] [--clean-only] [--density KG/M3]"
             )
             sys.exit(1)
 
         clean_only = self.clean_only
         urdf = self.urdf or None
-        update_yaml = self.update_yaml or None
         density = self.density
 
         assembly_path = Path(assembly_dir)
@@ -152,14 +144,11 @@ class CadImportCommand(BaseCommand):
             print("Mode: URDF in the assembly directory")
         if density is not None:
             print(f"Density: {density} kg/m³")
-        if update_yaml:
-            print(f"Update yaml: {update_yaml}")
         print(f"{'='*60}\n")
 
         out_xml = export(
             str(assembly_path),
             clean_only=clean_only,
-            update_yaml=update_yaml,
             urdf=urdf,
             density=density,
         )
@@ -173,15 +162,8 @@ class CadImportCommand(BaseCommand):
             print("  2. config.json joint_properties.*.limits were synced from the MJCF.")
         else:
             print("  2. Joint ranges are the ranges in the MJCF.")
-        if update_yaml:
-            print(
-                "  3. `sim_range_min`/`sim_range_max` were synced too; verify "
-                "attach prefixes / joint names."
-            )
-        else:
-            print(
-                "  3. Fill in `sim_joint` / `sim_range_*` on the module conf, "
-                "or re-run with `--update-yaml conf/<module>.yaml` to sync "
-                "ranges from the MJCF."
-            )
+        print(
+            "  3. Point each actuator's `sim_joint` at its MJCF joint; the sim "
+            "maps the normalized range onto that joint's limits."
+        )
         print("  See the 'Models from CAD' docs page.\n")

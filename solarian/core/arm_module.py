@@ -41,6 +41,9 @@ _REACH_ITERATIONS = 300
 # orbit that is 7-145 passes, landing within 0.01 mm of all 300.
 _REACH_SETTLED_RAD = 1e-5
 _LIMIT_MARGIN_RAD = np.deg2rad(1.0)
+# Points along a moveL path checked against max_joint_speed. The joint rate is
+# taken per segment, so fewer would average a sharp peak away.
+_JOINT_SPEED_SAMPLES = 20
 
 # Latch agreement in raw encoder ticks. STS/SMS are 4096 ticks/turn, so 60
 # is about 5 deg: above tremor between two reads, far below a wrap flip.
@@ -127,6 +130,7 @@ class ArmModule(ActuatorModule):
             joint_components=joint_components,
             cartesian_components=cartesian_components,
             backend=self._resolve_ik_backend(),
+            max_joint_speed=lambda: self.cfg.max_joint_speed,
         )
 
     def _resolve_ik_backend(self):
@@ -411,6 +415,20 @@ class ArmModule(ActuatorModule):
         achieved, blocked, _q = self.reachable_pose(target, q_seed=q_now)
         return float(achieved[axis]) - origin, blocked
 
+    def read_joints(self) -> dict[str, float]:
+        """Measured IK joints in radians by name, in the order ``moveJ`` takes them."""
+        return dict(zip(self._ik_joint_names(), self._read_joints_rad().tolist()))
+
+    def joint_travel(self, index: int, distance: float) -> float:
+        """Signed travel joint *index* has from where it is, toward *distance*,
+        before its model limit (less the margin that counts as at the limit)."""
+        name = self._ik_joint_names()[index]
+        lo, hi = self._joint_limits()[name]
+        q = float(self._read_joints_rad()[index])
+        if distance >= 0.0:
+            return min(distance, max(0.0, hi - _LIMIT_MARGIN_RAD - q))
+        return max(distance, min(0.0, lo + _LIMIT_MARGIN_RAD - q))
+
     def reachable_pose(self, target, q_seed=None) -> tuple[np.ndarray, list[str], np.ndarray]:
         """The pose differential IK actually converges to for *target*, the
         joints at a limit there, and the joint angles it converged to.
@@ -621,16 +639,20 @@ class ArmModule(ActuatorModule):
     def moveJ(
         self,
         q,
-        speed: float = _DEFAULT_JOINT_SPEED,
+        speed: float | None = None,
         acceleration: float | None = None,
         t_now: float | None = None,
     ) -> None:
         """Exclusive joint-space move to ``q`` (radians).
 
-        Stops Cartesian servo (UR ``servoStop`` + ``moveJ``). ``acceleration``
-        (rad/s^2, default ``cfg.max_joint_accel``) ramps the move up and down;
-        without one it runs at constant ``speed``.
+        Stops Cartesian servo (UR ``servoStop`` + ``moveJ``). ``speed`` (rad/s,
+        default ``default_joint_speed``) is capped at ``cfg.max_joint_speed``.
+        ``acceleration`` (rad/s^2, default ``cfg.max_joint_accel``) ramps the
+        move up and down; without one it runs at constant ``speed``.
         """
+        speed = float(self.default_joint_speed if speed is None else speed)
+        if self.cfg.max_joint_speed is not None:
+            speed = min(speed, float(self.cfg.max_joint_speed))
         if acceleration is None:
             acceleration = self.cfg.max_joint_accel
         t = float(t_now if t_now is not None else time.monotonic())
@@ -649,6 +671,7 @@ class ArmModule(ActuatorModule):
             max_joint_speed=float(speed),
             max_joint_acc=acceleration,
         )
+        self.last_waypoint_time = float(self._joint_interp.times[-1])
 
     def moveL(
         self,
@@ -674,17 +697,75 @@ class ArmModule(ActuatorModule):
         self._ensure_pose_interpolator(t)
         assert self.interp is not None
         pose = np.asarray(pose, dtype=np.float64)
+        speeds = self._pose_speed_kwargs(
+            max_pos_speed=float(speed) if speed is not None else None,
+            max_rot_speed=float(rot_speed) if rot_speed is not None else None,
+        )
+        sampling_started = time.monotonic()
+        factor = self._joint_speed_factor(np.asarray(self.interp(t)), pose, **speeds)
+        # Sampling the path through IK takes a while; planned from before it,
+        # the move would start part-way along.
+        t += time.monotonic() - sampling_started
+        if factor < 1.0:
+            logger.info(
+                "Module '%s': moveL slowed to %.0f%% so no joint exceeds "
+                "max_joint_speed %.3g rad/s.",
+                self.name,
+                100.0 * factor,
+                float(self.cfg.max_joint_speed),
+            )
+            speeds = {key: value * factor for key, value in speeds.items()}
         self.interp = self.interp.drive_to_waypoint(
             pose=pose,
             time=t,
             curr_time=t,
-            **self._pose_speed_kwargs(
-                max_pos_speed=float(speed) if speed is not None else None,
-                max_rot_speed=float(rot_speed) if rot_speed is not None else None,
-            ),
+            **speeds,
             **self._pose_accel_kwargs(acceleration, rot_acceleration),
         )
         self.last_waypoint_time = float(self.interp.times[-1])
+
+    def _joint_speed_factor(
+        self, start_pose, target_pose, max_pos_speed: float, max_rot_speed: float
+    ) -> float:
+        """Scale (<= 1) on a straight-line move's speeds that keeps every joint
+        under ``cfg.max_joint_speed``.
+
+        A Cartesian speed reaches the joints through the Jacobian, so near full
+        extension a slow hand can need fast joints. The path is sampled through
+        the IK model, chained from the joints at its start, and the fastest joint at
+        cruise speed sets the scale. Uniform, so the path is unchanged.
+        """
+        cap = self.cfg.max_joint_speed
+        if cap is None or not self._ik_joint_names():
+            return 1.0
+        from scipy.spatial.transform import Rotation, Slerp
+
+        start_pose = np.asarray(start_pose, dtype=np.float64)
+        target_pose = np.asarray(target_pose, dtype=np.float64)
+        distance = float(np.linalg.norm(target_pose[:3] - start_pose[:3]))
+        rotations = Rotation.from_rotvec(np.stack([start_pose[3:6], target_pose[3:6]]))
+        angle = float((rotations[0].inv() * rotations[1]).magnitude())
+        duration = max(distance / max_pos_speed, angle / max_rot_speed)
+        if not np.isfinite(duration) or duration <= 0.0:
+            return 1.0
+
+        steps = _JOINT_SPEED_SAMPLES
+        fractions = np.linspace(0.0, 1.0, steps + 1)
+        orientations = Slerp([0.0, 1.0], rotations)(fractions)
+        # From the joints at the path's start, not the measured ones: the arm
+        # lags its command, and closing that gap is not part of this move.
+        _pose, _blocked, q = self.reachable_pose(start_pose, q_seed=self._read_joints_rad())
+        peak = 0.0
+        for i in range(1, steps + 1):
+            waypoint = np.concatenate([
+                start_pose[:3] + fractions[i] * (target_pose[:3] - start_pose[:3]),
+                orientations[i].as_rotvec(),
+            ])
+            _pose, _blocked, q_next = self.reachable_pose(waypoint, q_seed=q)
+            peak = max(peak, float(np.max(np.abs(q_next - q))))
+            q = q_next
+        peak /= duration / steps
+        return 1.0 if peak <= cap else float(cap) / peak
 
     def stopL(
         self,
@@ -860,10 +941,9 @@ class ArmModule(ActuatorModule):
             self._warn_missing_joints("MOVE_J")
             return True
         q, _ = extracted
-        speed = _float_param(action, "speed")
         self.moveJ(
             q,
-            speed=speed if speed is not None else float(self.default_joint_speed),
+            speed=_float_param(action, "speed"),
             acceleration=_float_param(action, "accel"),
             t_now=t_now,
         )

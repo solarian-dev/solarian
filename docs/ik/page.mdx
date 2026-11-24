@@ -264,7 +264,7 @@ Skills should **not** own a second arm `PoseTrajectoryInterpolator` (that double
 
 ### Robot + scene
 
-Wire the module on the [`Robot`](/docs/robots), expose pose fields on [`Action`](/docs/actions) / [`Observation`](/docs/observations), and attach the MJCF in the [scene](/docs/simulation#attaching-modules) (sim). Real and sim share the same module yaml; only `sim_joint` / `sim_range_*` differ.
+Wire the module on the [`Robot`](/docs/robots), expose pose fields on [`Action`](/docs/actions) / [`Observation`](/docs/observations), and attach the MJCF in the [scene](/docs/simulation#attaching-modules) (sim). Real and sim share the same module yaml; the sim also reads `sim_joint`.
 
 ## Checklist for a new arm
 

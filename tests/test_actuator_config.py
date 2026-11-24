@@ -28,8 +28,6 @@ def test_actuator_config_flattens_legacy_sim_block() -> None:
     )
     assert cfg.model == "sts3215"
     assert cfg.sim_joint == "right/shoulder_pan"
-    assert cfg.sim_range_min == -1.5
-    assert cfg.sim_range_max == 1.5
     assert cfg.sim_drive_mode == 1
     assert not hasattr(cfg, "type")
 
@@ -62,11 +60,9 @@ def test_joint_spec_carries_followers() -> None:
             "id": 1,
             "mode": "range_m100_100",
             "sim_joint": "gripper/left_manifold_to_rail",
-            "sim_range_min": 0,
-            "sim_range_max": 0.0545,
             "sim_drive_mode": 1,
             "sim_followers": [
-                {"joint": "gripper/right_manifold_to_rail", "range_min": -0.0545, "range_max": 0}
+                {"joint": "gripper/right_manifold_to_rail"}
             ],
         }
     )
@@ -76,8 +72,6 @@ def test_joint_spec_carries_followers() -> None:
         {
             "joint": "gripper/right_manifold_to_rail",
             "actuator": "gripper/right_manifold_to_rail",
-            "range_min": -0.0545,
-            "range_max": 0.0,
             "drive_mode": 0,
         }
     ]
@@ -124,8 +118,7 @@ actuators:
     shoulder_pan:
         id: 1
         port: /dev/ttyUSB0
-        sim_range_min: -1.0  # old value
-        sim_range_max: 1.0
+        drive_mode: 1  # old value
     wrist_roll:
         id: 6
         port: /dev/ttyUSB0
@@ -136,7 +129,6 @@ actuators:
         str(path),
         {
             "shoulder_pan": {
-                "sim_range_min": -2.1,
                 "real_range_min": 452,
                 "real_range_max": 3255,
                 "center_offset": 0,
@@ -153,7 +145,7 @@ actuators:
     assert updated == ["shoulder_pan", "wrist_roll"]
     text = path.read_text(encoding="utf-8")
     assert "# keep this comment" in text
-    assert "sim_range_min: -2.1" in text
+    assert "drive_mode: 0" in text
     assert "# old value" in text
     assert "real_range_min: 452" in text
     assert "real_range_max: 3255" in text

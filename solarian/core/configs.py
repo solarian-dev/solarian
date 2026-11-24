@@ -142,14 +142,12 @@ class SimFollower(BaseModel):
 
     URDF exports carry each joint and its limits. They do not carry the mate
     relation that ties two jaws to one servo, so the command is mapped through
-    each joint's own range.
+    each joint's own range in the model.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     joint: str
-    range_min: float
-    range_max: float
     drive_mode: int = 0
 
 
@@ -175,13 +173,15 @@ class ActuatorConfig(ComponentConfig):
     #: or ``degrees``. Overrides the mode the module declares.
     mode: str | None = None
     #: MuJoCo joint this actuator drives when the robot runs with ``--sim``.
+    #: The normalized range maps onto that joint's limits in the model, or
+    #: onto -pi..pi when the joint has none.
     sim_joint: str | None = None
-    #: Joint position (rad) in simulation that the low end of the normalized
-    #: range maps to.
-    sim_range_min: float = -3.141592653589793
-    #: Joint position (rad) in simulation that the high end of the normalized
-    #: range maps to.
-    sim_range_max: float = 3.141592653589793
+    #: Override, in joint units, for the low end of the normalized range.
+    #: Leave unset so the model's limits apply; set it only to remap on purpose,
+    #: e.g. to fit a nonlinear linkage the sim drives linearly.
+    sim_range_min: float | None = None
+    #: Override for the high end. See ``sim_range_min``.
+    sim_range_max: float | None = None
     #: ``1`` inverts the direction in simulation, the counterpart of
     #: ``drive_mode`` on hardware.
     sim_drive_mode: int = 0
@@ -215,10 +215,6 @@ class ActuatorConfig(ComponentConfig):
         if isinstance(sim, dict):
             if data.get("sim_joint") is None and sim.get("joint") is not None:
                 data["sim_joint"] = sim["joint"]
-            if "sim_range_min" not in data and "range_min" in sim:
-                data["sim_range_min"] = sim["range_min"]
-            if "sim_range_max" not in data and "range_max" in sim:
-                data["sim_range_max"] = sim["range_max"]
             if "sim_drive_mode" not in data and "drive_mode" in sim:
                 data["sim_drive_mode"] = sim["drive_mode"]
         return data
@@ -236,8 +232,9 @@ class ModuleConfig(BaseModel):
     #: observation of shared memory, which for a camera is a whole frame.
     get_max_k: int = 32
     #: Seconds the module's worker has to complete its first tick before the
-    #: launch fails.
-    launch_timeout: float = 3.0
+    #: launch fails. A process module connects and runs ``initialize()`` in
+    #: that window, which on a CAN arm takes several seconds.
+    launch_timeout: float = 15.0
     #: Overrides the module class's ``execution_mode``. Lets the same module
     #: run in a process in production and inline in a test or on a small host.
     execution: ExecutionMode | None = None
@@ -279,6 +276,10 @@ class ModuleConfig(BaseModel):
     #: Joint acceleration limit (rad/s^2) for an arm's ``moveJ``; ``max_accel``
     #: is Cartesian there. ``None`` keeps ``moveJ`` at constant speed.
     max_joint_accel: float | None = None
+    #: Joint speed limit (rad/s) on an arm: ``moveJ`` never exceeds it, and
+    #: Cartesian moves are slowed so no joint has to. ``None`` leaves joints
+    #: unlimited and ``moveJ`` at the speed its caller names.
+    max_joint_speed: float | None = None
     #: Seconds between commanding a motion and the hardware performing it.
     #: The mirror of :attr:`receive_latency`: that one moves a timestamp
     #: backwards, this one moves a target time earlier, so a waypoint has to be

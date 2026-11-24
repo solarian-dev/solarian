@@ -45,7 +45,10 @@ max_speed: [0.25, 0.6]    # meaning depends on type (see below)
     Selects <code>PoseTrajectoryInterpolator</code>, <code>ScalarTrajectoryInterpolator</code>, or <code>JointTrajectoryInterpolator</code>. Pose and scalar are fully wired in core <code>Module</code>.
   </Property>
   <Property name="max_speed" type="float | list[float]">
-    Speed limit passed into <code>{'schedule_waypoint'}</code>. Pose: <code>{'[max_pos_m_s, max_rot_rad_s]'}</code>. Scalar: a single rate in action units per second (e.g. mm/s for aperture).
+    Speed limit passed into <code>{'schedule_waypoint'}</code>. Pose: <code>{'[max_pos_m_s, max_rot_rad_s]'}</code>, because a pose has a position and an orientation that change independently. Scalar: a single rate in action units per second (e.g. mm/s for aperture). <code>solarian calibrate-arm</code> and <code>solarian calibrate-gripper</code> measure it.
+  </Property>
+  <Property name="max_joint_speed" type="float | None">
+    Arms only, in rad/s. <code>moveJ</code> never exceeds it, and Cartesian moves are slowed wherever their path would need a faster joint. <code>None</code> (the core default) leaves joints unlimited. <code>solarian calibrate-arm</code> measures it.
   </Property>
   <Property name="frequency" type="float">
     Module control rate — how often the interpolator is sampled and written.

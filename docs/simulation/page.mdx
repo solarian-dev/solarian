@@ -8,7 +8,7 @@ export const metadata = {
 
 Running a robot in simulation is a **switch, not a rewrite**. Take your existing [`Robot`](/docs/robots), give it a `scene`, run `solarian run-robot --sim`, and the framework runs every [Module](/docs/modules) inside a shared MuJoCo world instead of on hardware — same [Observation](/docs/observations)/[Action](/docs/actions) schemas, same transport, same control loop. {{ className: 'lead' }}
 
-There are **no** `SimRobot`, `SimModule`, `SimServo` or `SimCamera` classes. Your real modules, servos, and cameras run unchanged; the only extra input the sim needs is a `scene` describing the environment and how each module's MuJoCo model attaches, plus `sim_joint` / `sim_range_*` on each servo and a `sim:` block on each camera.
+There are **no** `SimRobot`, `SimModule`, `SimServo` or `SimCamera` classes. Your real modules, servos, and cameras run unchanged; the only extra input the sim needs is a `scene` describing the environment and how each module's MuJoCo model attaches, plus `sim_joint` on each servo and a `sim:` block on each camera.
 
 <Note>
   MuJoCo and the other simulation dependencies live in the `[sim]` extra (`mujoco`, `mink`). They are imported lazily inside the sim code paths, so `import solarian` never requires them — only running a robot with `--sim` does. Install with <code>pip install "solarian[sim]"</code>.
@@ -80,14 +80,14 @@ MyRobot(cfg)            # is_sim from --sim; requires `scene`
    ├── connect()        # compose scene → launch MujocoWorldServer →
    │                    #   inject a BusClient proxy per (module, port) →
    │                    #   module.connect()
-   ├── initialize()     # module.initialize() on every module (unchanged)
+   ├── initialize()     # module.initialize() on inline and thread modules (unchanged)
    └── start()          # the world server is the sole "bus server";
                         #   fork module processes, start observation sender,
                         #   run control_loop()
 ```
 
 - **`connect()`** calls `sim_connect(self)`: it composes the scene into one `MjModel`, starts a single [`MujocoWorldServer`](https://github.com/solarian-dev/solarian/blob/main/solarian/sim/mujoco_world.py) that owns the physics, and injects a `BusClient` proxy for every `(module, port)` so each module's I/O is routed to the world instead of a serial port. If `view` is on, a `SimViewer` window process is started too.
-- **`initialize()`** runs each module's `initialize()` against the live world.
+- **`initialize()`** runs each module's `initialize()` against the live world: inline and thread modules here, process modules in their own process once it has forked.
 - **`start()`** registers the world server as the only bus server, then forks the module subprocesses, starts the observation sender thread, and enters the control loop — identical to hardware from here on.
 - **`disconnect()`** tears down the viewer, then the world server (it is listed in `self._bus_servers`) and the base robot.
 
@@ -116,6 +116,9 @@ scene = SceneConfig(
 <Properties>
   <Property name="world_mjcf" type="str | None">
     MJCF for the environment (ground, lights, manipulable objects). If <code>None</code>, a <a href="#the-default-world">minimal ground+light world</a> is generated for you.
+  </Property>
+  <Property name="backdrop" type="bool">
+    Set <code>False</code> to compose onto a bare world, a tiled floor and one light with no sky or props, ignoring <code>world_mjcf</code>. <code>solarian calibrate</code> shows the module it calibrates this way, alone at the origin. Default <code>True</code>.
   </Property>
   <Property name="attachments" type="list[ModuleAttachment]">
     One entry per module MJCF to attach into the world. See <a href="#attaching-modules">Attaching modules</a>.
@@ -224,8 +227,6 @@ actuators:
   shoulder_pan:
     # ... hardware fields ...
     sim_joint: "arm/shoulder_pan"   # matches prefix="arm/"
-    sim_range_min: -1.91986
-    sim_range_max: 1.91986
 ```
 
 ### Mating two frames (site-mate mode)
@@ -305,8 +306,6 @@ actuators:
     id: 1                # hardware fields — ignored in sim
     port: ${actuator_port}
     sim_joint: "arm/shoulder_pan"   # MJCF joint (after the attach prefix)
-    sim_range_min: -1.91986         # radians mapped to the low end of `mode`
-    sim_range_max: 1.91986          # radians mapped to the high end of `mode`
     sim_drive_mode: 0               # 1 to invert direction
 ```
 
@@ -314,31 +313,32 @@ actuators:
   <Property name="sim_joint" type="str | None">
     MJCF joint the servo reads and writes. The MuJoCo actuator name is the same string. <a href="#virtual-servos">Virtual servos</a> omit this field.
   </Property>
-  <Property name="sim_range_min" type="float">
-    Radians mapped to the low end of the servo's normalized command space.
-  </Property>
-  <Property name="sim_range_max" type="float">
-    Radians mapped to the high end.
-  </Property>
   <Property name="sim_drive_mode" type="int">
     Set to <code>1</code> to invert direction (mirrors a flipped hardware servo).
   </Property>
+  <Property name="sim_range_min" type="float | None">
+    Optional override for the low end of the joint travel the normalized range covers, in joint units. Unset uses the joint's limit in the model; leave it unset unless you mean to remap.
+  </Property>
+  <Property name="sim_range_max" type="float | None">
+    Optional override for the high end. See <code>sim_range_min</code>.
+  </Property>
 </Properties>
 
-The world server maps the servo's normalized command space (e.g. `mode: range_m100_100` → `[-100, 100]`) onto `[range_min, range_max]` radians on write, and back on read. A `write` sets the MuJoCo actuator `ctrl` target and a `read` returns the present joint position — so the physics loop tracks targets just like a real servo running its own control loop.
+The world server maps the servo's normalized command space (e.g. `mode: range_m100_100` → `[-100, 100]`) onto the joint's limits in the model (its MJCF `range`) on write, and back on read. A joint without limits spans one turn, −π to π. A `write` sets the MuJoCo actuator `ctrl` target and a `read` returns the present joint position — so the physics loop tracks targets just like a real servo running its own control loop.
 
-<Note>
-  Keep <code>sim_range_min</code>/<code>sim_range_max</code> equal to the joint's actual MJCF limits (<code>jnt_range</code>). A mismatch silently skews every normalized ↔ radian conversion. The arm1 tests assert the YAML ranges match the model, and <a href="#models-from-cad"><code>cad-import --update-yaml</code></a> keeps them in sync.
-</Note>
+Because the limits come from the model, re-importing a CAD model with new limits needs no yaml change. IK and `solarian calibrate` read the same limits, which is what keeps a normalized value the same angle on hardware and in sim.
+
+Set `sim_range_min`/`sim_range_max` only to remap on purpose. The arm1 gripper does: its real linkage opens nonlinearly while the sim jaw is a linear slide, so a range fitted to the measured aperture keeps the sim fingers within 2 mm of a commanded grasp. An override does not follow a re-import of the model, so the sim logs each one at startup beside the model's limits.
 
 ### Virtual servos {{ id: 'virtual-servos' }}
 
 Omit `sim_joint` to make a servo **virtual**: it holds the last commanded value and echoes it back on read, without touching physics. This is useful when your Observation/Action schema has a joint that the chosen MJCF model doesn't physically simulate:
 
 ```yaml
+  wrist_yaw:
+    id: 5
+    port: ${actuator_port}
     # no sim_joint → virtual: echoes the commanded value
-    sim_range_min: -1.57
-    sim_range_max: 1.57
 ```
 
 ## Simulated cameras
@@ -411,7 +411,6 @@ solarian cad-import <assembly_dir>
 solarian cad-import <assembly_dir> --urdf download.zip
 solarian cad-import <assembly_dir> --clean-only
 solarian cad-import <assembly_dir> --density 522
-solarian cad-import <assembly_dir> --update-yaml conf/modules/right_gripper.yaml
 ```
 
 `<assembly_dir>` holds the downloaded files. The model name is that directory with `_description` removed (`gripper1_description` → `gripper1`):
@@ -435,9 +434,6 @@ The command looks for one `*.urdf` in the directory, then in `urdf/` (the ROS pa
   </Property>
   <Property name="--density" type="kg/m³">
     Mass density used to infer link mass from the collision meshes for this run. Overrides <code>config.yaml</code> and does not rewrite it. Default <code>1400</code>.
-  </Property>
-  <Property name="--update-yaml" type="path">
-    After import, also sync joint ranges from the cleaned MJCF into this module conf (<code>sim_range_min</code>/<code>sim_range_max</code>). Matches actuators by key name or by the bare name of <code>sim_joint</code> (attach prefixes like <code>right/</code> are stripped). Actuators without <code>sim_joint</code> / <code>sim_range_min</code> are left alone. <code>config.json</code> <code>joint_properties.*.limits</code> are always rewritten from the MJCF, with or without this flag.
   </Property>
 </Properties>
 
@@ -494,7 +490,7 @@ STL and OBJ are copied into `assets_directory` (default `meshes/`). A visual COL
 A tool TCP is a `frame_tcp` frame on the **gripper** assembly. The importer writes it as a `<site name="tcp">`; IK tracks that site after the gripper is attached. Do not invent a synthetic site in `config.json`.
 
 <Note>
-  Joint limits flow <strong>URDF → MJCF → config.json</strong>. After cleaning, the imported ranges are written into <code>joint_properties.*.limits</code>, and into the module yaml when you pass <code>--update-yaml</code>.
+  Joint limits flow <strong>URDF → MJCF → config.json</strong>. After cleaning, the imported ranges are written into <code>joint_properties.*.limits</code>. Module yamls hold no limits: the sim reads them from the MJCF.
 </Note>
 
 ### The `solarian` block
@@ -540,7 +536,7 @@ solarian cad-import <dir>
    │     ├── set meshdir, non-self-colliding geoms
    │     └── write output_xml
    │
-   └── Sync limits: MJCF → config.json (+ module yaml with --update-yaml)
+   └── Sync limits: MJCF → config.json
 ```
 
 **URDF.** Joints named `dof_<name>` become hinges or slides with a position actuator. `frame_<name>` becomes a site. `fix_<name>` (and any other fixed joint whose child has a mesh) is folded into the parent. `closing_<name>` becomes an equality and is not actuated. A `<mimic>` element becomes an equality and that follower gets no actuator.
@@ -549,7 +545,7 @@ solarian cad-import <dir>
 
 ### Worked example: adding a gripper
 
-The import gives you an MJCF. Wiring it into a robot is the same as for any model: [attach it](#attaching-modules) with a `ModuleAttachment` and map each servo with [`sim_joint` / `sim_range_*`](#simulated-servos). The Solarian Arm 1 gripper is a separate assembly whose jaw mate is named `dof_jaw` in the CAD tool, so the MJCF joint is `jaw`. Its `config.json`:
+The import gives you an MJCF. Wiring it into a robot is the same as for any model: [attach it](#attaching-modules) with a `ModuleAttachment` and map each servo with [`sim_joint`](#simulated-servos). The Solarian Arm 1 gripper is a separate assembly whose jaw mate is named `dof_jaw` in the CAD tool, so the MJCF joint is `jaw`. Its `config.json`:
 
 ```json
 {
@@ -565,10 +561,10 @@ The import gives you an MJCF. Wiring it into a robot is the same as for any mode
 }
 ```
 
-Import it, attach it to the arm's wrist body, and give its servo `sim_joint` / `sim_range_*`:
+Import it, attach it to the arm's wrist body, and give its servo a `sim_joint`:
 
 ```bash
-solarian cad-import assets/gripper1_gripper_description --update-yaml conf/modules/right_gripper.yaml
+solarian cad-import assets/gripper1_gripper_description
 ```
 
 ```python
@@ -593,8 +589,6 @@ actuators:
   gripper:
     id: 7
     sim_joint: "right_gripper/jaw"
-    sim_range_min: 0.0
-    sim_range_max: 0.037
 ```
 
 ### Tips

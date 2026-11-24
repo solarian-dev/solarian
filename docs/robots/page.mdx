@@ -82,13 +82,14 @@ When you run `solarian run-robot`, the framework calls these methods in order:
 Robot(cfg)              # __init__ — discovers modules, builds shared memory
    │
    ├── connect()        # connect every module to its hardware (in the parent)
-   ├── initialize()     # call module.initialize() on every module
-   └── start()          # disconnect parent-side, spawn module processes,
-                        # start observation sender thread, then control_loop
+   ├── initialize()     # module.initialize() on inline and thread modules
+   └── start()          # disconnect parent-side, spawn module processes
+                        # (each initializes itself), start observation
+                        # sender thread, then control_loop
 ```
 
 - **`connect()`** opens hardware buses (USB, serial, sockets, cameras) and runs each module's `connect()`. [Calibration](/docs/modules/calibration) is loaded here — and the interactive sweep starts if the file is missing.
-- **`initialize()`** runs each module's `initialize()` hook. Use this for one-time setup like setting torque, operating mode, or homing.
+- **`initialize()`** runs the `initialize()` hook of each module that runs in the robot's process (inline or on a thread). A process module runs its own hook in its process, right after it reconnects there, so setup a bus holds in memory is not lost with the parent's connection. Use the hook for one-time setup like setting torque, operating mode, or homing.
 - **`start()`** disconnects in the parent process (so each module process can re-open the bus on its own), spawns one OS process per `Module`, starts shared bus servers for any port shared by multiple modules, and finally enters `control_loop()`.
 
 A separate `_observation_sender` thread runs at ~200 Hz, reading the latest observation from each module's shared-memory `ObservationBuffer` and publishing it as a single combined message at `cfg.fps`.

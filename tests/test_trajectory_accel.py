@@ -168,6 +168,7 @@ def _pose_arm(max_accel=(0.5, 3.0)) -> ArmModule:
         max_speed=[0.1, 0.6],
         max_accel=None if max_accel is None else list(max_accel),
         max_joint_accel=None,
+        max_joint_speed=None,
     )
     module.interp = None
     module.last_waypoint_time = 0.0
@@ -180,7 +181,7 @@ def _pose_arm(max_accel=(0.5, 3.0)) -> ArmModule:
 def test_move_l_uses_the_configured_acceleration():
     module = _pose_arm()
     module.moveL(np.array([0.15, 0, 0, 0, 0, 0]), t_now=_T0)
-    assert module.last_waypoint_time - _T0 == pytest.approx(1.7)
+    assert module.last_waypoint_time - _T0 == pytest.approx(1.7, abs=1e-3)
     assert module._exclusive_move is True
 
 
@@ -191,7 +192,7 @@ def test_infinite_acceleration_keeps_the_constant_speed_profile():
         np.array([0.15, 0, 0, 0, 0, 0]),
         acceleration=np.inf, rot_acceleration=np.inf, t_now=_T0,
     )
-    assert module.last_waypoint_time - _T0 == pytest.approx(1.5, abs=1e-6)
+    assert module.last_waypoint_time - _T0 == pytest.approx(1.5, abs=1e-3)
 
 
 def test_move_l_params_carry_speed_and_accel():

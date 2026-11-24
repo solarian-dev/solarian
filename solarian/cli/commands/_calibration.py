@@ -24,6 +24,8 @@ from solarian.utils.precise_sleep import precise_wait
 # Servos need a moment to take up the slack after torque re-engages, before the
 # pose a calibration is built around is read.
 SETTLE_S = 0.5
+# Config fields the motors' own speed cap is derived from.
+_SPEED_FIELDS = ("max_speed", "max_joint_speed")
 
 
 def cfg_float(cfg, key: str, default: float) -> float:
@@ -49,11 +51,14 @@ def save_module_field(module: Module, key: str, value) -> None:
 
     The live config matters within a single run: the latency sweep sizes its
     amplitude off ``max_speed``, so a speed measured a minute ago has to be the
-    one in force by the time the sweep is planned.
+    one in force by the time the sweep is planned. The motors' speed cap
+    follows a new speed for the same reason.
     """
     from solarian.core.module_yaml import patch_top_level_value
 
     setattr(module.cfg, key, value)
+    if key in _SPEED_FIELDS:
+        module.apply_speed_backstop()
     yaml_path = module._module_yaml_path()
     if yaml_path is None:
         print(f"  {key}: {value} — kept in memory, {module.name} has no yaml")
@@ -174,6 +179,8 @@ def pick_module(
 def module_running(module: Module, warning: str, confirm: bool = True):
     """Connect, initialise, and always release the hardware afterwards.
 
+    After a failure the release waits for the user to support the arm.
+
     Set *confirm* false for the inner module of a nested pair, where the outer
     module's prompt already stood in for both and a second one just adds a
     keystroke between the user and the same decision.
@@ -189,6 +196,19 @@ def module_running(module: Module, warning: str, confirm: bool = True):
     try:
         module.initialize()
         yield module
+    except BaseException:
+        # Releasing on the way out drops an arm without brakes, so the motors
+        # that still answer keep holding the last target until a hand is on it.
+        if module.actuators:
+            print(
+                "\nStopped on an error. Torque is left as it was, so the arm holds "
+                "where it is instead of dropping."
+            )
+            try:
+                input("Support the arm, then press Enter to release torque...")
+            except (EOFError, KeyboardInterrupt):
+                pass
+        raise
     finally:
         # Sensor-only modules (cameras) have no torque, and a module whose bus
         # already dropped cannot be relaxed — neither must block the disconnect.
@@ -225,6 +245,29 @@ def run_control_loop(
         iter_idx += 1
         precise_wait(t_end=t_start + dt * iter_idx, time_func=time.monotonic)
     return np.asarray(actual_t), np.asarray(actual_x)
+
+
+@contextmanager
+def speed_limits_lifted(module, **fields):
+    """Raise the module's configured speeds to *fields* for a ramp, then restore them.
+
+    A speed ramp has to command past the configured speed, but some modules
+    treat the config as a ceiling on every caller, and the motors' own cap
+    follows it (:meth:`~solarian.core.actuator_module.ActuatorModule.apply_speed_backstop`).
+    Both are lifted here and both come back on exit, including after a failure.
+    Write the measurement after this exits, so the saved value is the one left
+    in force.
+    """
+    saved = {key: getattr(module.cfg, key) for key in fields}
+    for key, value in fields.items():
+        setattr(module.cfg, key, value)
+    module.apply_speed_backstop()
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            setattr(module.cfg, key, value)
+        module.apply_speed_backstop()
 
 
 @contextmanager
@@ -279,20 +322,29 @@ def achieved_speed(t: np.ndarray, x: np.ndarray, start: float, target: float) ->
 
     The middle of the move only: the ends are acceleration and settling, and
     averaging over them would report something lower than the rate the actuator
-    actually sustains.
+    actually sustains. Each crossing is interpolated between the two samples
+    around it, because a fast move spans only a few control ticks and rounding
+    to a tick would be most of the reading.
     """
     span = target - start
     if t.size < 2 or span == 0.0:
         return 0.0
     progress = (x - start) / span
-    reached = np.flatnonzero(progress >= 0.9)
-    begun = np.flatnonzero(progress >= 0.1)
-    if reached.size == 0 or begun.size == 0:
+
+    def crossing(level: float) -> float | None:
+        after = np.flatnonzero(progress >= level)
+        if after.size == 0:
+            return None
+        i = int(after[0])
+        if i == 0:
+            return float(t[0])
+        p0, p1 = progress[i - 1], progress[i]
+        return float(t[i - 1] + (level - p0) / (p1 - p0) * (t[i] - t[i - 1]))
+
+    begun, reached = crossing(0.1), crossing(0.9)
+    if begun is None or reached is None or reached <= begun:
         return 0.0
-    elapsed = t[reached[0]] - t[begun[0]]
-    if elapsed <= 0.0:
-        return 0.0
-    return abs(0.8 * span) / elapsed
+    return abs(0.8 * span) / (reached - begun)
 
 
 def ramp_to_plateau(

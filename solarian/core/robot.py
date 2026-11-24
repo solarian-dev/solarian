@@ -474,6 +474,7 @@ class Robot(EventHost, ABC):
                     client_conn=pipes[mod_name][1],
                     port=port,
                     components=self.modules[mod_name].module_bus.components_by_port[port],
+                    bus_class=bus_class,
                 )
                 self.modules[mod_name].module_bus.override_port_bus(port, client)
 
@@ -1040,7 +1041,10 @@ class Robot(EventHost, ABC):
 
             module.connect()
 
-            if module.calibration is None and not skip_calibrate:
+            if module.calibration is None:
+                if skip_calibrate:
+                    module.disconnect()
+                    continue
                 module.calibrate()
 
             calibration = module.require_calibration()
@@ -1325,6 +1329,12 @@ class Robot(EventHost, ABC):
         # initialize modules
         logger.info("Initializing modules")
         for module_name, module in self.modules.items():
+            # A process module reconnects in its own process, and what
+            # initialize() set up here would not survive that: the bus state
+            # lives in this process, and a disconnect may disable its motors.
+            # worker_setup() initializes it there instead.
+            if module.execution_mode.crosses_process_boundary:
+                continue
             module.initialize()
         logger.info("Robot initialized")
 

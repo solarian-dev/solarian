@@ -105,8 +105,6 @@ actuators:
     id: 1
     port: ${actuator_port}
     sim_joint: "arm/shoulder_pan"
-    sim_range_min: -1.92
-    sim_range_max: 1.92
   shoulder_lift:
     id: 2
     port: ${actuator_port}
@@ -159,7 +157,7 @@ Solarian validates `conf/modules/arm.yaml` against `ArmConfig` and exposes it as
 
 ## The `initialize` method
 
-`initialize()` runs **once** in the parent process, after `connect()` and before `start()`. Use it for hardware setup that should happen exactly once (setting torque, choosing an operating mode, homing).
+`initialize()` runs **once**, in the process that drives the module, right after that process connects to the hardware. For the default process module that is the module's own process, after `start()` forks it. A module that runs inline or on a thread is initialized in the robot's process, between `connect()` and `start()`. Use it for hardware setup that should happen exactly once (setting torque, choosing an operating mode, homing). Running it where the module runs matters: a bus keeps state in memory, such as a motor's control mode, and reconnecting in a new process starts from a fresh bus that would otherwise never see that setup.
 
 ```python
 class ArmModule(Module):

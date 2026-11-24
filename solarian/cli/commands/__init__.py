@@ -95,7 +95,7 @@ CommandRegistry.register_lazy(
 CommandRegistry.register_lazy(
     "calibrate-arm",
     module_path=f"{_pkg}.calibrate_arm",
-    help="Measure the arm's max_speed and its two latencies, into the module yaml.",
+    help="Measure the arm's max_speed, max_joint_speed and its two latencies, into the module yaml.",
     config_name="robot",
     setup_modules=("robot",),
     category="Robot",

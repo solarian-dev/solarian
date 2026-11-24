@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 
-from solarian.sim.configs import SceneConfig
+from solarian.sim.configs import ModuleAttachment, SceneConfig
 
 
 # Minimal environment used when a scene declares no ``world_mjcf``.
@@ -29,6 +29,40 @@ _DEFAULT_WORLD_MJCF = """
   </worldbody>
 </mujoco>
 """
+
+# Used when a scene sets ``backdrop=False``. ``compose_scene`` adds its floor
+# after framing the scene on the modules.
+_EMPTY_WORLD_MJCF = """
+<mujoco model="sim_world">
+  <compiler angle="radian"/>
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="grid" texture="grid" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+  </asset>
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+  </worldbody>
+</mujoco>
+"""
+
+
+def isolate_module(scene: SceneConfig, module: str) -> SceneConfig:
+    """``scene`` cut down to ``module``'s own model, at the origin of a bare world.
+
+    Whatever the module is mounted on or carries in the full scene is left out,
+    so a site-mated module (a gripper on a flange) stands alone too.
+    """
+    attachment = next((a for a in scene.attachments if a.module == module), None)
+    if attachment is None:
+        raise ValueError(f"Module '{module}' has no attachment in the scene")
+    return SceneConfig(
+        backdrop=False,
+        attachments=[
+            ModuleAttachment(module=module, mjcf=attachment.mjcf, prefix=attachment.prefix)
+        ],
+        show_frames=scene.show_frames,
+        show_cameras=False,
+    )
 
 
 def resolve_mjcf(mjcf: str) -> str:
@@ -191,7 +225,10 @@ def compose_scene(scene: SceneConfig):
     """
     import mujoco
 
-    world = _load_spec(scene.world_mjcf)
+    if scene.backdrop:
+        world = _load_spec(scene.world_mjcf)
+    else:
+        world = mujoco.MjSpec.from_string(_EMPTY_WORLD_MJCF)
 
     for att in scene.attachments:
         child = mujoco.MjSpec.from_file(resolve_mjcf(att.mjcf))
@@ -217,6 +254,16 @@ def compose_scene(scene: SceneConfig):
 
     if scene.gravity is not None:
         world.option.gravity = scene.gravity
+
+    if not scene.backdrop:
+        # The infinite floor would count as a 2 m extent, and the viewer frames
+        # its camera on the extent, so the scene keeps the modules' own.
+        framed = world.compile()
+        world.stat.center = framed.stat.center
+        world.stat.extent = framed.stat.extent
+        world.worldbody.add_geom(
+            name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[0, 0, 0.05], material="grid"
+        )
 
     # Enlarge the offscreen framebuffer so camera and overview renders aren't
     # capped at MuJoCo's 640x480 default (which otherwise fails larger renders).

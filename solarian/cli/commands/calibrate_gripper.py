@@ -44,6 +44,7 @@ from solarian.cli.commands._calibration import (
     report_read_latency,
     run_control_loop,
     save_module_field,
+    speed_limits_lifted,
 )
 from solarian.core.gripper_module import APERTURE_UNIT, GripperModule
 from solarian.utils.latency import get_latency
@@ -69,10 +70,12 @@ _SPEED_TARGET = 0.6
 # Stay off the hard stops: the last tenth of travel at speed is a collision
 # with the end of the rail, and its deceleration is not a speed measurement.
 _STROKE_MARGIN = 0.1
-# Ladder bounds as multiples of the configured max_speed. Starting below it
-# proves the rig measures a known-good speed before anything is pushed.
+# The ladder starts at this multiple of the configured max_speed, which proves
+# the rig measures a known-good speed before anything is pushed.
 _RAMP_START = 0.5
-_RAMP_CEILING = 4.0
+# Control ticks the stroke's 10-90% window must span to be timed. The ramp
+# climbs until the jaws fall behind, or until a stroke is this short.
+_MIN_TIMED_TICKS = 5
 
 
 def _default_amplitude(module: GripperModule, freq: float) -> float:
@@ -112,16 +115,20 @@ def _drive(module: GripperModule, target: float, speed: float):
     return start, t, x
 
 
-def _run_speed(module: GripperModule) -> None:
+def _run_speed(module: GripperModule) -> bool:
+    """Measure and write ``max_speed``; False when the jaws never moved."""
     lo, hi = module.scalar_limits()
     stroke = hi - lo
     near = lo + _STROKE_MARGIN * stroke
     far = hi - _STROKE_MARGIN * stroke
     configured = configured_speed(module)
+    ceiling = 0.8 * (far - near) * float(module.frequency) / _MIN_TIMED_TICKS
 
     print(
-        f"\nSweeping {near:.2f} to {far:.2f} {APERTURE_UNIT} at rising speed. "
-        f"Configured max_speed is {configured:.2f} {APERTURE_UNIT}/s."
+        f"\nSweeping {near:.2f} to {far:.2f} {APERTURE_UNIT} at rising speed "
+        f"until the jaws fall behind. Configured max_speed is {configured:.2f} "
+        f"{APERTURE_UNIT}/s; at {module.frequency:g} Hz a stroke this long can be "
+        f"timed up to {ceiling:.0f} {APERTURE_UNIT}/s."
     )
 
     def attempt(speed: float) -> float:
@@ -131,25 +138,35 @@ def _run_speed(module: GripperModule) -> None:
         start, t, x = _drive(module, far, speed)
         return achieved_speed(t, x, start, far)
 
-    plateau, _, hit_ceiling = ramp_to_plateau(
-        attempt, _RAMP_START * configured, _RAMP_CEILING * configured
-    )
+    with speed_limits_lifted(module, max_speed=ceiling):
+        plateau, _, hit_ceiling = ramp_to_plateau(
+            attempt, min(_RAMP_START * configured, ceiling), ceiling
+        )
 
     print(f"\n=== gripper max_speed ({APERTURE_UNIT}/s) ===")
     print(f"  configured:  {configured:.2f}")
     if hit_ceiling:
         print(
-            f"  measured:    kept up to {plateau:.2f}, the ceiling this command "
-            f"will command ({_RAMP_CEILING:g}x configured)."
+            f"  measured:    kept up to {plateau:.2f}, the fastest a stroke this "
+            f"long can be timed at {module.frequency:g} Hz."
         )
         print(
             "\nThe jaws tracked everything asked of them, so their real limit is "
-            "above this and the figure is a floor, not a measurement. Not "
-            "written. Raise max_speed by hand toward a move you actually need — "
-            "the number's job is to describe the hardware, and there is nothing "
-            "to gain from headroom you never use."
+            "higher still. Written as max_speed, because the jaws have shown "
+            "they hold it. Raise the module's frequency to time faster strokes."
         )
-        return
+        save_module_field(module, "max_speed", round(plateau, 2))
+        return True
+
+    if plateau <= 0.0:
+        print(
+            "  measured:    nothing — the measured aperture never got through "
+            "the move.\n\nThe jaws did not move, or their position was not read "
+            "back. That is a fault to find, not a speed, so nothing was written. "
+            "Check that the motor answers and holds torque, and that no other "
+            "process has its port open."
+        )
+        return False
 
     print(f"  measured:    {plateau:.2f} sustained before falling behind")
     ratio = plateau / configured
@@ -167,6 +184,7 @@ def _run_speed(module: GripperModule) -> None:
             "not have."
         )
     save_module_field(module, "max_speed", round(plateau, 2))
+    return True
 
 
 def _run_action_latency(
@@ -252,10 +270,16 @@ class CalibrateGripperCommand(BaseCommand):
               cross-correlated against the command -> action_latency
       obs     repeated aperture reads are timed -> receive_latency
 
-    Each result is written to conf/<module>.yaml as it is measured. A figure
-    that is not a measurement is not written: a speed the jaws never fell
-    behind is only a lower bound, and a negative latency means the sweep did
-    not track.
+    Each result is written to conf/<module>.yaml as it is measured. The ramp
+    climbs until the jaws fall behind, so the configured max_speed is only where
+    it starts. A stroke spans fewer control ticks the faster it goes; if the jaws
+    keep up to the fastest one the module's frequency can time, that is written
+    as a floor they have shown they hold, and a higher frequency climbs
+    further. A negative latency means the sweep did not track, and is not
+    written.
+
+    While the ramp runs, the motor's own speed cap is lifted with it, and it is
+    set back to follow the new max_speed afterwards.
 
     Run `all` on new hardware, because the order matters. The sinusoid has to
     stay inside max_speed or the interpolator stretches every waypoint and the
@@ -311,8 +335,8 @@ class CalibrateGripperCommand(BaseCommand):
                 f"{freq:.2f} Hz around mid-stroke. Keep clear of the workspace."
             )
         with module_running(module, warning):
-            if mode_idx in (1, 2):
-                _run_speed(module)
+            if mode_idx in (1, 2) and not _run_speed(module):
+                return
             if mode_idx == 2:
                 return
             # Sized after the ramp, so `all` uses the speed just measured

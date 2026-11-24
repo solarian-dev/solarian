@@ -121,43 +121,31 @@ actuators:
     port: ${actuator_port}
     mode: range_m100_100
     sim_joint: "arm/shoulder_pan"
-    sim_range_min: -2.2290
-    sim_range_max: 2.0820
   shoulder_lift:
     id: 2
     port: ${actuator_port}
     mode: range_m100_100
     sim_joint: "arm/shoulder_lift"
-    sim_range_min: -1.7988
-    sim_range_max: 1.7802
   elbow_flex:
     id: 3
     port: ${actuator_port}
     mode: range_m100_100
     sim_joint: "arm/elbow_flex"
-    sim_range_min: -1.7802
-    sim_range_max: 1.5708
   wrist_flex:
     id: 4
     port: ${actuator_port}
     mode: range_m100_100
     sim_joint: "arm/wrist_flex"
-    sim_range_min: -3.1416
-    sim_range_max: 3.1416
   wrist_yaw:
     id: 5
     port: ${actuator_port}
     mode: range_m100_100
     sim_joint: "arm/wrist_yaw"
-    sim_range_min: -3.1416
-    sim_range_max: 3.1416
   wrist_roll:
     id: 6
     port: ${actuator_port}
     mode: range_m100_100
     sim_joint: "arm/wrist_roll"
-    sim_range_min: -3.1416
-    sim_range_max: 3.1416
 ```
 
 The lines that matter:
@@ -165,8 +153,7 @@ The lines that matter:
 - **`frequency: 50`** is the rate of the module's loop, in hertz: how often the module writes its path to the servos. The controller runs at its own, slower rate, and the two are independent.
 - **`id`** is the servo's address on the Feetech bus. You set those IDs on the real servos in Tutorial 3.
 - **`mode: range_m100_100`** makes every command a normalized number: −100 is one end of the joint's travel, 100 is the other, and 0 is the middle.
-- **`sim_joint`** names the MuJoCo joint this servo drives. The `arm/` in front is the prefix the scene gives the arm, further down this page.
-- **`sim_range_min`** and **`sim_range_max`** are that same travel in radians, copied from the model's joint limits. Simulation maps −100…100 onto them. Hardware uses a calibration instead, recorded in Tutorial 3, and ignores the `sim_*` lines.
+- **`sim_joint`** names the MuJoCo joint this servo drives. The `arm/` in front is the prefix the scene gives the arm, further down this page. Simulation maps −100…100 onto that joint's limits in the model. Hardware uses a calibration instead, recorded in Tutorial 3, and ignores `sim_joint`.
 
 ## Add the arm to the robot
 

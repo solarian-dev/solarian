@@ -123,7 +123,7 @@ class IKAlignmentSteps:
         from solarian.sim.mirror import SimMirror
 
         print("\nStarting the sim view (this may take a few seconds)...")
-        mirror = SimMirror(robot)
+        mirror = SimMirror(robot, module.name)
         mirror.start()
         if not mirror.available:
             print(

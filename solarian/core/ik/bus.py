@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 import numpy as np
 
@@ -44,6 +44,10 @@ _IK_DEBUG_PERIOD = 0.2
 _MIN_DT = 1.0 / 250.0
 _MAX_DT = 1.0 / 30.0
 _DEFAULT_DT = 1.0 / 120.0
+# Seconds of travel at max_joint_speed. A last command further than this from
+# the measured joints is stale (a joint move ran in between, or the arm was
+# pushed), and the joint-speed limit restarts from the measured joints.
+_JOINT_COMMAND_STALE_S = 0.5
 
 
 class IKActuatorBus(ActuatorBus):
@@ -59,6 +63,8 @@ class IKActuatorBus(ActuatorBus):
         backend: The differential IK backend. Its
             :attr:`~solarian.core.ik.base.DifferentialIKBackend.joint_actuator_names`
             select and order the subset of joints IK actually controls.
+        max_joint_speed: Returns the rad/s no IK joint is stepped faster than, or
+            ``None``. Read every tick, because calibration changes it mid-session.
     """
 
     def __init__(
@@ -67,7 +73,11 @@ class IKActuatorBus(ActuatorBus):
         joint_components: Dict[str, Any],
         cartesian_components: Dict[str, Any],
         backend: DifferentialIKBackend,
+        max_joint_speed: Callable[[], float | None] = lambda: None,
     ):
+        self.max_joint_speed = max_joint_speed
+        self._last_q_cmd: np.ndarray | None = None
+        self._joint_limit_binding = False
         self.joint_components = dict(joint_components)
         self.cartesian_components = dict(cartesian_components)
         super().__init__(
@@ -222,6 +232,7 @@ class IKActuatorBus(ActuatorBus):
         # IK-controlled arm joints for this tick.
         if joint_vals:
             self.inner_bus.write(joint_vals, normalize=normalize)
+            self._last_q_cmd = None
         if cart_vals:
             self._write_cartesian(cart_vals)
 
@@ -252,6 +263,7 @@ class IKActuatorBus(ActuatorBus):
                 and np.linalg.norm(pose[3:] - target[3:]) < self.ik_ori_tol
             ):
                 break
+        q_next = self._limit_joint_step(q_now, q_next, dt)
 
         out = {
             name: PosData(value=self._rad_to_norm(name, float(rad)))
@@ -261,6 +273,38 @@ class IKActuatorBus(ActuatorBus):
 
         if _IK_DEBUG:
             self._debug_log(cart_vals, current_pose, target, q_now, q_next, dt)
+
+    def _limit_joint_step(self, q_now: np.ndarray, q_next: np.ndarray, dt: float) -> np.ndarray:
+        """``q_next`` with its step scaled so no joint exceeds ``max_joint_speed``.
+
+        The step is taken from the last command, not the measured joints: those
+        lag the command, and stepping from them would hold the arm back by that
+        lag. Every joint is scaled by the same factor, so the motion keeps its
+        direction in joint space and the arm falls behind rather than off the path.
+        """
+        max_joint_speed = self.max_joint_speed()
+        if max_joint_speed is None:
+            return q_next
+        base = self._last_q_cmd
+        stale = max_joint_speed * _JOINT_COMMAND_STALE_S
+        if base is None or np.max(np.abs(base - q_now)) > stale:
+            base = q_now
+        step = q_next - base
+        largest = float(np.max(np.abs(step))) if step.size else 0.0
+        allowed = max_joint_speed * dt
+        binding = largest > allowed
+        if binding:
+            step = step * (allowed / largest)
+            if not self._joint_limit_binding:
+                logger.info(
+                    "IK[%s]: a joint would exceed max_joint_speed %.3g rad/s; "
+                    "the arm follows slower than commanded.",
+                    self.port,
+                    max_joint_speed,
+                )
+        self._joint_limit_binding = binding
+        self._last_q_cmd = base + step
+        return self._last_q_cmd
 
     def _debug_log(self, cart_vals, current_pose, target, q_now, q_next, dt):
         now = time.monotonic()

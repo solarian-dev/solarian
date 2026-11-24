@@ -101,6 +101,9 @@ class SceneConfig(BaseModel):
     #: MJCF for the environment (floor, lights, manipulable objects). If
     #: ``None`` a minimal ground+light world is generated.
     world_mjcf: str | None = None
+    #: ``False`` composes onto a bare world, a tiled floor and one light with no
+    #: sky or props, and ignores ``world_mjcf``.
+    backdrop: bool = True
     attachments: list[ModuleAttachment] = Field(default_factory=list)
     cameras: list[CameraMount] = Field(default_factory=list)
     #: Optional override of the physics timestep (seconds).

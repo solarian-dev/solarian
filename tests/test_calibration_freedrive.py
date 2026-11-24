@@ -98,6 +98,65 @@ def test_free_drive_reads_the_pose_after_the_user_lets_go(monkeypatch, arm):
     assert arm.log.index("read_pose") > len([s for s in arm.log if s.startswith("prompt:")])
 
 
+class _StubModule:
+    calibration = {}
+
+    def __init__(self, actuators):
+        self.actuators = actuators
+        self.log: list[str] = []
+
+    def load_calibration(self):
+        pass
+
+    def get_calibration(self):
+        return {}
+
+    def connect(self, calibration):
+        pass
+
+    def needs_motor_calibration(self):
+        return False
+
+    def initialize(self):
+        pass
+
+    def disable_torque(self):
+        self.log.append("torque_off")
+
+    def disconnect(self):
+        self.log.append("disconnect")
+
+
+def _running(monkeypatch, module, fail: bool):
+    monkeypatch.setattr("builtins.input", lambda prompt="": module.log.append(f"prompt:{prompt[:7]}"))
+    if not fail:
+        with _calibration.module_running(module, "go", confirm=False):
+            pass
+        return
+    with pytest.raises(RuntimeError):
+        with _calibration.module_running(module, "go", confirm=False):
+            raise RuntimeError("motor 6 stopped answering")
+
+
+def test_a_failure_holds_until_the_arm_is_supported(monkeypatch):
+    """Releasing on the way out of a failure drops an arm without brakes."""
+    module = _StubModule(actuators={"shoulder_lift": object()})
+    _running(monkeypatch, module, fail=True)
+    assert module.log == ["prompt:Support", "torque_off", "disconnect"]
+
+
+def test_a_clean_finish_releases_without_asking(monkeypatch):
+    module = _StubModule(actuators={"shoulder_lift": object()})
+    _running(monkeypatch, module, fail=False)
+    assert module.log == ["torque_off", "disconnect"]
+
+
+def test_a_module_with_nothing_to_hold_does_not_ask(monkeypatch):
+    module = _StubModule(actuators={})
+    _running(monkeypatch, module, fail=True)
+    assert module.log == ["torque_off", "disconnect"]
+
+
 def test_returns_to_start_drives_back_to_the_recorded_pose(arm):
     with _calibration.returns_to_start(arm, speed=0.2) as start:
         assert start.tolist() == arm.pose.tolist()

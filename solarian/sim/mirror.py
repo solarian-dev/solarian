@@ -41,8 +41,10 @@ class SimMirror:
     keeps working with prompts only.
     """
 
-    def __init__(self, robot):
+    def __init__(self, robot, module_name: str | None = None):
+        """``module_name`` shows only that module, alone on an empty world."""
         self.robot = robot
+        self.module_name = module_name
         self.available = False
         self._world = None
         self._viewer = None
@@ -65,13 +67,20 @@ class SimMirror:
 
     def _start(self) -> None:
         from solarian.sim.mujoco_world import MujocoWorldServer
+        from solarian.sim.scene import isolate_module
 
+        scene = self.robot.scene
+        modules = self.robot.modules
         specs = collect_component_specs(self.robot)
+        if self.module_name is not None:
+            scene = isolate_module(scene, self.module_name)
+            modules = {self.module_name: modules[self.module_name]}
+            specs = {k: v for k, v in specs.items() if k.startswith(f"{self.module_name}/")}
 
         server_conns: Dict[str, object] = {}
         client_conns: Dict[tuple[str, str], object] = {}
         conn_modules: Dict[str, str] = {}
-        for name, module in self.robot.modules.items():
+        for name, module in modules.items():
             for port in module.module_bus.components_by_port:
                 key = _conn_key(name, port)
                 server_conn, client_conn = Pipe()
@@ -86,11 +95,11 @@ class SimMirror:
             conn_modules["__viewer__"] = ""
 
         self._world = MujocoWorldServer(
-            scene=self.robot.scene,
+            scene=scene,
             component_specs=specs,
             server_conns=server_conns,
             conn_modules=conn_modules,
-            tcp_frames=collect_tcp_frames(self.robot),
+            tcp_frames=collect_tcp_frames(self.robot, scene),
         )
         self._world.start()
         # Drop the parent's copies of the server ends (child owns them now).

@@ -15,6 +15,7 @@ control loop, which is what keeps sim and real transparent.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 import traceback as _tb
@@ -115,6 +116,8 @@ class MujocoWorldServer(Process):
         # "site"/"body"/"geom". Resolved to ids in ``_build``.
         self._tcp_frames = list(tcp_frames or [])
         self._tcp_frame_ids: list[tuple[str, int]] = []
+        # Every other site (CAD frames such as ``flange``), drawn smaller.
+        self._site_frame_ids: list[int] = []
         # {conn_key: module_name} -- lets the server namespace bare component
         # names per connection so identically named components on different
         # modules (e.g. both arms' ``shoulder_pan``) don't collide.
@@ -170,6 +173,7 @@ class MujocoWorldServer(Process):
                 if spec["joint_id"] is not None:
                     spec["qposadr"] = int(self.model.jnt_qposadr[spec["joint_id"]])
                     spec["dofadr"] = int(self.model.jnt_dofadr[spec["joint_id"]])
+                    spec["range_min"], spec["range_max"] = self._servo_range(name, spec)
                 else:
                     self._virtual.setdefault(name, 0.0)
                 bound = []
@@ -186,6 +190,7 @@ class MujocoWorldServer(Process):
                         )
                         continue
                     follower["qposadr"] = int(self.model.jnt_qposadr[follower["joint_id"]])
+                    follower["range_min"], follower["range_max"] = self._joint_range(follower["joint_id"])
                     bound.append(follower)
                 spec["followers"] = bound
             elif spec["kind"] == "camera":
@@ -207,8 +212,36 @@ class MujocoWorldServer(Process):
                 )
                 continue
             self._tcp_frame_ids.append((frame_type, fid))
+        tcp_sites = {fid for frame_type, fid in self._tcp_frame_ids if frame_type == "site"}
+        self._site_frame_ids = [i for i in range(self.model.nsite) if i not in tcp_sites]
 
         mujoco.mj_forward(self.model, self.data)
+
+    def _joint_range(self, joint_id: int) -> tuple[float, float]:
+        """The joint's limits in the model, which the normalized range spans.
+
+        A joint without limits (a wheel, a free roll) gets one turn, -pi..pi.
+        """
+        if not self.model.jnt_limited[joint_id]:
+            return -math.pi, math.pi
+        lo, hi = self.model.jnt_range[joint_id]
+        return float(lo), float(hi)
+
+    def _servo_range(self, name: str, spec: Dict[str, Any]) -> tuple[float, float]:
+        """The model's limits, with either end replaced by the yaml's override."""
+        lo, hi = self._joint_range(spec["joint_id"])
+        override_lo, override_hi = spec["range_override"]
+        if override_lo is None and override_hi is None:
+            return lo, hi
+        range_lo = lo if override_lo is None else float(override_lo)
+        range_hi = hi if override_hi is None else float(override_hi)
+        # Logged because an override outlives a re-import of the model it was
+        # fitted to; the model's limits beside it show when it has gone stale.
+        logger.info(
+            "%s: sim_range %.5g..%.5g overrides joint '%s' limits %.5g..%.5g in the model.",
+            name, range_lo, range_hi, spec["joint"], lo, hi,
+        )
+        return range_lo, range_hi
 
     def _name2id(self, objtype, name):
         import mujoco
@@ -368,7 +401,18 @@ class MujocoWorldServer(Process):
         vis = self.model.vis.global_
         vis.offwidth = max(int(vis.offwidth), width)
         vis.offheight = max(int(vis.offheight), height)
-        return mujoco.Renderer(self.model, height=height, width=width)
+        # A scene may ask for a shadow map larger than this GPU's texture limit
+        # (8192 is fine on a Mac, a Pi 5 stops at 4096), so it shrinks until
+        # the context builds.
+        quality = self.model.vis.quality
+        while True:
+            try:
+                return mujoco.Renderer(self.model, height=height, width=width)
+            except mujoco.FatalError as exc:
+                if "Shadow framebuffer" not in str(exc) or quality.shadowsize <= 1024:
+                    raise
+                quality.shadowsize //= 2
+                logger.warning("Shadow map too large for this GPU; retrying at %d.", quality.shadowsize)
 
     def _distort(self, spec, dist, frame, h, w, src_h, src_w) -> np.ndarray:
         """Warp a pinhole render into a calibrated fisheye-distorted image."""
@@ -464,7 +508,9 @@ class MujocoWorldServer(Process):
     #: Axis length (m) for the world / end-effector triads and arrow width (m).
     _WORLD_AXIS_LEN = 0.15
     _EE_AXIS_LEN = 0.08
+    _SITE_AXIS_LEN = 0.04
     _AXIS_WIDTH = 0.004
+    _SITE_AXIS_WIDTH = 0.002
 
     #: Frustum depth (m) and line/arrow widths (m) for the camera overlays.
     _CAM_FRUSTUM_DEPTH = 0.15
@@ -540,8 +586,17 @@ class MujocoWorldServer(Process):
         scene.ngeom += 1
 
     def _draw_frames(self, scene) -> None:
-        """Append world + TCP axis triads to the render scene."""
+        """Append world, TCP and labelled site axis triads to the render scene."""
         self._add_triad(scene, np.zeros(3), np.eye(3).ravel(), self._WORLD_AXIS_LEN)
+        for sid in self._site_frame_ids:
+            self._add_triad(
+                scene,
+                self.data.site_xpos[sid],
+                self.data.site_xmat[sid],
+                self._SITE_AXIS_LEN,
+                width=self._SITE_AXIS_WIDTH,
+                label=self.model.site(sid).name,
+            )
         for frame_type, fid in self._tcp_frame_ids:
             if frame_type == "site":
                 pos, mat = self.data.site_xpos[fid], self.data.site_xmat[fid]
@@ -551,7 +606,9 @@ class MujocoWorldServer(Process):
                 pos, mat = self.data.xpos[fid], self.data.xmat[fid]
             self._add_triad(scene, pos, mat, self._EE_AXIS_LEN)
 
-    def _add_triad(self, scene, pos, mat, length: float) -> None:
+    def _add_triad(
+        self, scene, pos, mat, length: float, *, width: float | None = None, label: str = ""
+    ) -> None:
         """Draw an RGB (x/y/z) arrow triad at ``pos`` oriented by ``mat`` (3x3)."""
         import mujoco
 
@@ -562,7 +619,7 @@ class MujocoWorldServer(Process):
             (R[:, 1], (0.2, 1.0, 0.2, 1.0)),  # y -> green
             (R[:, 2], (0.3, 0.4, 1.0, 1.0)),  # z -> blue
         )
-        for direction, rgba in axes:
+        for i, (direction, rgba) in enumerate(axes):
             if scene.ngeom >= scene.maxgeom:
                 return
             tip = origin + direction * length
@@ -576,8 +633,10 @@ class MujocoWorldServer(Process):
                 np.asarray(rgba, dtype=np.float32),
             )
             mujoco.mjv_connector(
-                geom, mujoco.mjtGeom.mjGEOM_ARROW, self._AXIS_WIDTH, origin, tip
+                geom, mujoco.mjtGeom.mjGEOM_ARROW, width or self._AXIS_WIDTH, origin, tip
             )
+            if label and i == 0:
+                geom.label = label
             scene.ngeom += 1
 
     def _camera_aspects(self) -> dict[str, float]:
@@ -730,13 +789,6 @@ class MujocoWorldServer(Process):
 
         self._lock = threading.Lock()
         self._stop = threading.Event()
-
-        # GLFW often has no display on a Pi / SSH session; EGL still offscreens.
-        import os
-        import sys
-
-        if sys.platform.startswith("linux") and "MUJOCO_GL" not in os.environ:
-            os.environ["MUJOCO_GL"] = "egl"
 
         try:
             self._build()

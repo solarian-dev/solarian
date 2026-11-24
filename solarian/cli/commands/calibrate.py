@@ -114,11 +114,12 @@ class CalibrateCommand(BaseCommand):
         robot = RobotClass(cfg)
         robot.is_sim = False
         robot.view = True
-        print("\nConnecting to the real robot (hardware)...")
-        robot.connect(skip_calibrate=True)
+        # Only this module's hardware: the sim mirror needs the other modules'
+        # models, not their motors, and a fault on another arm must not block it.
+        print(f"\nConnecting to {module_name} (hardware)...")
         module = robot.modules[module_name]
-        if not module.is_connected:
-            module.connect()
+        module.load_calibration()
+        module.connect(module.calibration)
         try:
             module.calibrate()
             IKAlignmentSteps().run(robot, module, module_name)

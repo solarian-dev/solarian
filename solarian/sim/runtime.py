@@ -49,8 +49,6 @@ def _follower_spec(follower) -> Dict[str, Any]:
     return {
         "joint": follower.joint,
         "actuator": follower.joint,
-        "range_min": float(follower.range_min),
-        "range_max": float(follower.range_max),
         "drive_mode": int(follower.drive_mode or 0),
     }
 
@@ -63,8 +61,7 @@ def _joint_spec(component) -> Dict[str, Any]:
         "joint": joint,
         "actuator": joint,
         "mode": cfg.mode,
-        "range_min": float(cfg.sim_range_min),
-        "range_max": float(cfg.sim_range_max),
+        "range_override": (cfg.sim_range_min, cfg.sim_range_max),
         "drive_mode": int(getattr(cfg, "sim_drive_mode", 0) or 0),
         "followers": [_follower_spec(item) for item in getattr(cfg, "sim_followers", ())],
     }
@@ -129,19 +126,20 @@ def collect_component_specs(robot) -> Dict[str, Dict[str, Any]]:
     return specs
 
 
-def collect_tcp_frames(robot) -> list[tuple[str, str]]:
+def collect_tcp_frames(robot, scene=None) -> list[tuple[str, str]]:
     """Derive TCP frames to visualize from each attached module's IK spec.
 
     For every scene attachment whose module declares an ``ik_backend`` with a
     ``frame`` (e.g. ``MinkIK(frame="tcp")``), the composed site name is
     ``prefix + frame``. If ``frame`` already contains ``/`` it is treated as
     a fully composed name (a tool TCP living on another attachment).
-    Empty if frames are disabled.
+    Empty if frames are disabled. ``scene`` defaults to the robot's.
     """
-    if not getattr(robot.scene, "show_frames", True):
+    scene = scene or robot.scene
+    if not getattr(scene, "show_frames", True):
         return []
     tcp_frames: list[tuple[str, str]] = []
-    for att in robot.scene.attachments:
+    for att in scene.attachments:
         module = robot.modules.get(att.module)
         if module is None:
             continue

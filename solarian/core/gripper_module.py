@@ -45,7 +45,7 @@ class GripperConfig(ModuleConfig):
 
     ``aperture_closed_mm`` / ``aperture_open_mm`` are the physical fingertip
     separation at the two ends of servo travel, and must agree with the motor
-    calibration (``real_range_*``) and the ``sim_range_*`` joint range.
+    calibration (``real_range_*``) and the joint's range in the MJCF.
     ``aperture_table``, once measured, supersedes them.
     """
 

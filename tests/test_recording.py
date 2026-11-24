@@ -253,8 +253,6 @@ def _structure_arm(mjcf="arm1.xml"):
                 model="sts3250",
                 mode="range_m100_100",
                 sim_joint="right/shoulder_pan",
-                sim_range_min=-2.2,
-                sim_range_max=2.1,
             )
         ),
         "x": CartesianIKActuator(ActuatorConfig(port="/dev/null", id=0, mode="raw")),
@@ -273,7 +271,6 @@ def test_a_column_can_be_traced_back_to_the_joint_that_produced_it():
         "mode": "range_m100_100",
         "range": [-100.0, 100.0],
         "joint": "right/shoulder_pan",
-        "joint_range": [-2.2, 2.1],
     }
 
 

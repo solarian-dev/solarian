@@ -953,6 +953,7 @@ class Module(ABC):
             logger.info(f"Module {self.name} process disconnected")
             self.connect(calibration)
             logger.info(f"Module {self.name} process connected")
+            self.initialize()
 
         # Only a robot-side module gets one; a controller-side module shares the
         # host process's offset.

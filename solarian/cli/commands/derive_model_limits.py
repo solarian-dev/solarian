@@ -22,9 +22,8 @@ class DeriveModelLimitsCommand(BaseCommand):
     the servo's resolution, and prints <joint range="lo hi"> lines centered at zero
     to paste into the MJCF.
 
-    Nothing is written: the model is yours to edit. Keep the module yaml's sim
-    range_min / range_max in sync with what you paste, then confirm with
-    `solarian verify-calibration`.
+    Nothing is written: the model is yours to edit. The sim reads its limits
+    from there too, so paste them and confirm with `solarian verify-calibration`.
     """
     params = {
         "module": "Name of the IK module to derive limits for; prompts when omitted.",
@@ -73,8 +72,7 @@ class DeriveModelLimitsCommand(BaseCommand):
         for joint, (lo, hi) in limits.items():
             print(f'  <joint name="{joint}" ... range="{lo:.5f} {hi:.5f}" />')
         print(
-            "\nPaste these into the arm's MJCF <joint range=...> attributes and keep the "
-            "sim `range_min/range_max` in the module yaml in sync. Then run "
+            "\nPaste these into the arm's MJCF <joint range=...> attributes, then run "
             "`solarian verify-calibration` to confirm.\n"
         )
 

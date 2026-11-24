@@ -166,40 +166,8 @@ def _clean(raw_xml: str, out_xml: str, spec: SolarianExportSpec, meshdir: str) -
 
 
 # --------------------------------------------------------------------------- #
-# Sync MJCF joint ranges → module YAML + config.json                          #
+# Sync MJCF joint ranges → config.json                                        #
 # --------------------------------------------------------------------------- #
-
-#: Actuator keys that are never MJCF joints (Cartesian IK components).
-_CARTESIAN_ACTUATORS = frozenset({"x", "y", "z", "rx", "ry", "rz"})
-
-_ACTUATOR_KEY_RE = re.compile(r"^(\s*)([A-Za-z_][\w]*)\s*:\s*(?:#.*)?$")
-_SIM_JOINT_RE = re.compile(
-    r"""^(\s*)joint\s*:\s*["']?([^"'#\n]+?)["']?\s*(?:#.*)?$"""
-)
-_RANGE_MIN_RE = re.compile(r"^(\s*)range_min\s*:\s*[^\n#]*")
-_RANGE_MAX_RE = re.compile(r"^(\s*)range_max\s*:\s*[^\n#]*")
-
-
-def _format_limit(value: float) -> str:
-    """Compact float formatting that matches typical MJCF / yaml limit style."""
-    text = f"{value:.10g}"
-    if text in ("-0", "-0.0"):
-        return "0"
-    return text
-
-
-def _bare_joint_name(joint_ref: str) -> str:
-    """Strip an attach prefix: ``right/shoulder_pan`` → ``shoulder_pan``."""
-    return joint_ref.strip().strip("\"'").rsplit("/", 1)[-1]
-
-
-def _split_newline(raw: str) -> tuple[str, str]:
-    if raw.endswith("\r\n"):
-        return raw[:-2], "\r\n"
-    if raw.endswith("\n"):
-        return raw[:-1], "\n"
-    return raw, ""
-
 
 _JOINT_TAG_RE = re.compile(r"<joint\b([^>]*)/?>", re.IGNORECASE)
 _ATTR_NAME_RE = re.compile(r"""\bname\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
@@ -230,22 +198,6 @@ def read_joint_ranges(mjcf_path: str) -> dict[str, tuple[float, float]]:
             continue
         ranges[name_m.group(1)] = (float(parts[0]), float(parts[1]))
     return ranges
-
-
-def _discover_yaml_actuator_joints(lines: list[str]) -> dict[str, str]:
-    """Map actuator key → bare MJCF joint name for actuators with sim ranges."""
-    from solarian.core.module_yaml import discover_actuator_sim_joints
-
-    return discover_actuator_sim_joints(lines)
-
-
-def sync_module_yaml(
-    yaml_path: str, ranges: dict[str, tuple[float, float]]
-) -> list[str]:
-    """Surgically update ``sim_range_min`` / ``sim_range_max`` in a module yaml."""
-    from solarian.core.module_yaml import sync_sim_ranges
-
-    return sync_sim_ranges(yaml_path, ranges)
 
 
 def sync_joint_properties(
@@ -279,51 +231,6 @@ def sync_joint_properties(
         json.dump(config, f, indent=4)
         f.write("\n")
     return updated
-
-
-def sync_limits_from_mjcf(
-    mjcf_path: str,
-    *,
-    config_path: str | None = None,
-    yaml_path: str | None = None,
-) -> dict[str, list[str]]:
-    """Sync MJCF joint ranges into config.json (when it exists) and a module yaml.
-
-    ``joint_properties.*.limits`` are rewritten from the MJCF so they mirror the
-    URDF joint limits that produced the import. When ``yaml_path`` is set,
-    ``sim_range_min`` / ``sim_range_max`` are updated too.
-
-    Returns ``{"yaml": [...], "config": [...], "unmatched_mjcf": [...],
-    "unmatched_yaml": [...]}`` for the caller to print a summary.
-    """
-    ranges = read_joint_ranges(mjcf_path)
-    config_updated = sync_joint_properties(config_path, ranges) if config_path else []
-    yaml_updated: list[str] = []
-    unmatched_mjcf: list[str] = []
-    unmatched_yaml: list[str] = []
-
-    if yaml_path is not None:
-        yaml_updated = sync_module_yaml(yaml_path, ranges)
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            lines = f.read().splitlines(keepends=True)
-        actuator_joints = _discover_yaml_actuator_joints(lines)
-        yaml_target_joints = set(actuator_joints.values())
-
-        unmatched_mjcf = sorted(name for name in ranges if name not in yaml_target_joints)
-        unmatched_yaml = sorted(
-            actuator
-            for actuator, joint in actuator_joints.items()
-            if joint not in ranges
-            and joint not in _CARTESIAN_ACTUATORS
-            and actuator not in _CARTESIAN_ACTUATORS
-        )
-
-    return {
-        "yaml": yaml_updated,
-        "config": config_updated,
-        "unmatched_mjcf": unmatched_mjcf,
-        "unmatched_yaml": unmatched_yaml,
-    }
 
 
 # --------------------------------------------------------------------------- #
@@ -458,7 +365,6 @@ def export(
     assembly_dir: str,
     *,
     clean_only: bool = False,
-    update_yaml: str | None = None,
     urdf: str | None = None,
     density: float | None = None,
 ) -> str:
@@ -477,9 +383,7 @@ def export(
     download is not already laid out in ``assembly_dir``.
 
     When ``config.json`` exists, MJCF joint ranges are written back into its
-    ``joint_properties``. With ``update_yaml`` set to a module conf path
-    (e.g. ``conf/right_arm.yaml``), those same ranges are also written into
-    that yaml's ``sim_range_min`` / ``sim_range_max``.
+    ``joint_properties``.
     """
     if clean_only and urdf:
         raise ValueError("--clean-only does not read a URDF; pass only one of them.")
@@ -514,33 +418,13 @@ def export(
     _clean(raw_xml, out_xml, spec, meshdir)
 
     config_path = os.path.join(os.path.abspath(assembly_dir), "config.json")
-    yaml_path = None
-    if update_yaml:
-        yaml_path = os.path.abspath(update_yaml)
-        if not os.path.isfile(yaml_path):
-            raise FileNotFoundError(f"--update-yaml path not found: {yaml_path}")
-
-    if os.path.isfile(config_path) or yaml_path:
-        result = sync_limits_from_mjcf(
-            out_xml,
-            config_path=config_path if os.path.isfile(config_path) else None,
-            yaml_path=yaml_path,
-        )
+    if os.path.isfile(config_path):
+        updated = sync_joint_properties(config_path, read_joint_ranges(out_xml))
         print(f"* Synced joint limits from {out_xml}")
-        if os.path.isfile(config_path):
-            if result["config"]:
-                print(f"  config.json joint_properties: {', '.join(result['config'])}")
-            else:
-                print("  config.json joint_properties: no matching entries updated")
-    if yaml_path:
-        if result["yaml"]:
-            print(f"  yaml ({yaml_path}): {', '.join(result['yaml'])}")
+        if updated:
+            print(f"  config.json joint_properties: {', '.join(updated)}")
         else:
-            print(f"  yaml ({yaml_path}): no matching actuators updated")
-        for name in result["unmatched_mjcf"]:
-            print(f"  warning: MJCF joint {name!r} has no matching yaml actuator")
-        for name in result["unmatched_yaml"]:
-            print(f"  warning: yaml actuator {name!r} has no MJCF joint range")
+            print("  config.json joint_properties: no matching entries updated")
 
     return out_xml
 
