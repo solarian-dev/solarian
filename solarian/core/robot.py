@@ -53,6 +53,11 @@ _STATE_SNDHWM = 16
 # Both are judged in seconds, so checking at 20 Hz is already generous.
 _SUPERVISION_PERIOD_S = 0.05
 
+# How long the control loop waits for an action before it drains module events
+# and ticks inline modules anyway. Each turn reads every module's event queue,
+# so 1 ms turns cost about 14% of a Pi 5 core; an action still wakes it at once.
+_IDLE_POLL_MS = 5
+
 # A camera child blocked in one capture (1.5s on a Pi CSI camera) still has to
 # notice the stop and finish its driver's close, which gives up after 2s.
 _MODULE_STOP_JOIN_S = 5.0
@@ -830,11 +835,11 @@ class Robot(EventHost, ABC):
 
         next_supervision = 0.0
         while self.running:
-            # This loop turns over ~1000 times a second so an action is
-            # picked up the moment it lands. Health and link checks answer
-            # questions measured in seconds, and each one polls a pipe per
-            # module, so running them every turn is thousands of syscalls a
-            # second buying nothing.
+            # An action wakes the poll below the moment it lands; otherwise
+            # the loop turns over every _IDLE_POLL_MS. Health and link checks
+            # answer questions measured in seconds, and each one polls a pipe
+            # per module, so running them every turn is thousands of syscalls
+            # a second buying nothing.
             now = time.monotonic()
             if now >= next_supervision:
                 next_supervision = now + _SUPERVISION_PERIOD_S
@@ -850,7 +855,7 @@ class Robot(EventHost, ABC):
             self._tick_local_modules()
             self._fan_out_events(events)
 
-            if poller.poll(timeout=1):
+            if poller.poll(timeout=_IDLE_POLL_MS):
                 for action in self.get_actions():
                     StatusBoard.set("Action", action)
                     self.process_action(action)

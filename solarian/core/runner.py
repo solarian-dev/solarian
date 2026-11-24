@@ -22,6 +22,7 @@ import logging
 import multiprocessing
 import os
 import signal
+import sys
 import threading
 import time
 import traceback as _tb
@@ -46,6 +47,11 @@ _TICK_REPORT_S = 1.0
 
 #: A tick that starts this late (ms) counts as late in the status board summary.
 _LATE_MS = 1.0
+
+#: Seconds of each wait spent spinning rather than asleep. Linux wakes a
+#: sleeper within about 60 us of its deadline (Pi 5), a sliver of a tick,
+#: while a millisecond spin is a tenth of a core per 90 Hz worker.
+_SPIN_S = 0.0 if sys.platform == "linux" else 0.001
 
 # Same bound the parent gives a terminated worker: a camera close gives up
 # after 2s.
@@ -73,9 +79,8 @@ def _exit_with_parent(parent_pid: int) -> None:
 class _TickStats:
     """How long each tick worked, and how late it started against its slot.
 
-    A tick that overruns its period makes the ones after it late, and the
-    loop then runs them back to back until it catches up, so lateness is what
-    a motor sees as jitter. Both go into the profiling summary; a worker
+    A tick that overruns its period makes the next one late, so lateness is
+    what a motor sees as jitter. Both go into the profiling summary; a worker
     process also posts the last second of them to the status board.
     """
 
@@ -271,7 +276,13 @@ class Runner(ABC):
 
                 period = 1.0 / max(float(getattr(target, "frequency", 0.0) or 0.0), 1e-9)
                 t_slot = t_start + period * idx
-                precise_wait(t_end=t_slot, time_func=time.monotonic)
+                if t_done - t_slot > period:
+                    # More than a period behind: drop the slots already gone.
+                    # Running them back to back pins the process at full CPU
+                    # and only adds lateness that the next overrun extends.
+                    idx += int((t_done - t_slot) / period)
+                    t_slot = t_start + period * idx
+                precise_wait(t_end=t_slot, slack_time=_SPIN_S, time_func=time.monotonic)
         except SystemExit:
             exit_reason = WorkerExit.STOPPED
             raise
