@@ -1,6 +1,6 @@
 {
   "name": "solarian",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Create and work on Solarian robot projects and plugins with the solarian CLI.",
   "author": {
     "name": "Solarian",
