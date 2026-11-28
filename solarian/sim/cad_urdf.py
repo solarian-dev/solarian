@@ -76,8 +76,14 @@ def write_raw_mjcf(
     """
     assembly = Path(assembly_dir).resolve()
     if urdf_path is not None and Path(urdf_path).suffix.lower() == ".zip":
-        _extract_zip(Path(urdf_path), assembly)
-        urdf_file = _find_urdf(assembly)
+        unpacked = _extract_zip(Path(urdf_path), assembly)
+        if len(unpacked) != 1:
+            raise FileNotFoundError(
+                f"{urdf_path} holds {len(unpacked)} URDF files"
+                + (f" ({', '.join(str(p.relative_to(assembly)) for p in unpacked)})" if unpacked else "")
+                + f"; pass --urdf with one of them under {assembly}."
+            )
+        urdf_file = unpacked[0]
     elif urdf_path is not None:
         urdf_file = Path(urdf_path).resolve()
         if not urdf_file.is_file():
@@ -122,17 +128,27 @@ def _raw_xml_path(assembly: Path, config: dict) -> str:
     return str(assembly / f"{output_filename}.xml")
 
 
-def _extract_zip(zip_path: Path, dest: Path) -> None:
+def _extract_zip(zip_path: Path, dest: Path) -> list[Path]:
+    """Unpack ``zip_path`` into ``dest`` and return the URDF files it contained."""
     if not zip_path.is_file():
         raise FileNotFoundError(f"URDF zip not found: {zip_path}")
     root = dest.resolve()
+    urdfs = []
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
             target = (dest / info.filename).resolve()
             if target != root and root not in target.parents:
                 raise ValueError(f"zip entry escapes the assembly directory: {info.filename}")
+            if (
+                not info.is_dir()
+                and target.suffix.lower() == ".urdf"
+                and not info.filename.startswith("__MACOSX/")
+                and not target.name.startswith("._")
+            ):
+                urdfs.append(target)
         zf.extractall(dest)
     print(f"* Unpacked {zip_path} into {dest}")
+    return sorted(urdfs)
 
 
 def _find_urdf(assembly: Path) -> Path:

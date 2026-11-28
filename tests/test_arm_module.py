@@ -161,6 +161,22 @@ def test_move_l_ee_composes_then_move_l():
     np.testing.assert_allclose(captured["pose"], expected)
 
 
+def test_move_l_ee_composes_on_the_commanded_pose_not_the_sagged_one():
+    """Jogs taken from the measured pose add its sag each time, so w then s drifts."""
+    arm, captured = _arm()
+    commanded = np.array([0.0, -0.3, 0.2, 0.0, 0.0, 0.0])
+    arm._read_current_pose = lambda: commanded - np.array([0, 0, 0.004, 0, 0, 0])
+    arm.interp = lambda t: commanded
+    delta = {n: _Field(0.0) for n in ["x", "y", "rx", "ry", "rz"]}
+    for dz in (0.05, -0.05):
+        arm._handle_move_l(
+            _Action({**delta, "z": _Field(dz)}, params={"frame": "ee"}, action_type=ActionType.MOVE_L),
+            t_now=2.0,
+        )
+        commanded = captured["pose"]
+    np.testing.assert_allclose(captured["pose"], [0.0, -0.3, 0.2, 0, 0, 0], atol=1e-12)
+
+
 def test_a_policy_chunk_survives_the_drain():
     """Timestamped waypoints each name their own moment, so all are kept."""
     arm, _ = _arm()

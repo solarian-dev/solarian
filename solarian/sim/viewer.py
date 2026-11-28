@@ -21,6 +21,7 @@ Interaction:
     * ``W`` ``A`` ``S`` ``D``   -> pan
     * ``1``..``5``              -> front / back / left / right / top presets
     * ``R`` (or ``0``)          -> reset camera to the default framing
+    * ``F``                     -> toggle the coordinate-frame triads
     * ``H`` / ``?``             -> toggle the on-screen help overlay
     * on-screen buttons         -> same actions via mouse
     * ``ESC`` or closing        -> close the viewer (the sim keeps running)
@@ -71,6 +72,7 @@ HELP_LINES = [
     "W A S D          pan",
     "1 2 3 4 5        front/back/left/right/top",
     "R  (or 0)        reset view",
+    "F                toggle frames",
     "H  /  ?          toggle this help",
     "ENTER / Y N      answer an on-screen prompt",
     "ESC              close viewer",
@@ -144,6 +146,7 @@ class SimViewer(Process):
             "x": 0,
             "y": 0,
             "show_help": False,
+            "show_frames": bool(cam.get("show_frames", False)),
             "prompt": None,
             "hud": None,
         }
@@ -185,8 +188,12 @@ class SimViewer(Process):
                 else:
                     _pan(state, dx, dy)
             elif event == cv2.EVENT_MOUSEWHEEL:
-                delta = cv2.getMouseWheelDelta(flags) if hasattr(cv2, "getMouseWheelDelta") else flags
-                state["distance"] *= ZOOM_IN if delta > 0 else ZOOM_OUT
+                # Win32/GTK pack the step into the (signed) high word of
+                # ``flags``; the Cocoa backend leaves it empty and passes the
+                # step as ``y``. Not every cv2 build exposes getMouseWheelDelta.
+                delta = (flags >> 16) or y
+                if delta:
+                    state["distance"] *= ZOOM_IN if delta > 0 else ZOOM_OUT
 
         try:
             cv2.namedWindow(self._title, cv2.WINDOW_AUTOSIZE)
@@ -197,7 +204,7 @@ class SimViewer(Process):
 
         logger.info(
             "Sim viewer window opened (drag/arrows orbit, WASD pan, scroll zoom, "
-            "1-5 presets, R reset, H help, ESC close)."
+            "1-5 presets, R reset, F frames, H help, ESC close)."
         )
         period = 1.0 / 30.0
         try:
@@ -210,6 +217,7 @@ class SimViewer(Process):
                     "elevation": state["elevation"],
                     "distance": state["distance"],
                     "lookat": [float(v) for v in state["lookat"]],
+                    "show_frames": state["show_frames"],
                 }
                 try:
                     frame = self._rpc("render_overview", cam_req)
@@ -330,6 +338,8 @@ def _handle_key(code: int, state: dict, apply_action) -> bool:
         _pan(state, -PAN_STEP, 0)
     elif key in (ord("r"), ord("R"), ord("0")):
         apply_action("reset")
+    elif key in (ord("f"), ord("F")):
+        state["show_frames"] = not state["show_frames"]
     elif key in (ord("h"), ord("H"), ord("?")):
         apply_action("help")
     elif key == ord("1"):

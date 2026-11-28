@@ -272,8 +272,8 @@ class Controller(EventHost, ABC):
         # Build observation buffers eagerly — same pattern as Robot.__init__.
         # We import the Robot class via ``settings.ROBOT_CLASS`` and
         # instantiate its modules (schema-only, no hardware connections) so
-        # that class-level data descriptors (e.g. ``OpenCVCamera.rgb_image.shape``)
-        # are populated before we call ``Observation.zeros()``.
+        # that each camera's image shape is bound before we call
+        # ``Observation.zeros()``.
         self.observation_buffers: dict[str, ObservationBuffer] = {}
         #: Puts refused per module since the last one that succeeded, so a burst
         #: is reported once rather than once per observation.
@@ -326,14 +326,14 @@ class Controller(EventHost, ABC):
         return module_cfg
 
     def _setup_remote_observation_schema(self) -> None:
-        """Instantiate the Robot's modules schema-only so that class-level
-        data descriptors are populated with correct shapes.
+        """Instantiate the Robot's modules schema-only so that the shapes
+        their configs decide are bound.
 
         The Controller does not own the remote Robot's modules, but it needs
         to know their observation schemas to create matching shared-memory
-        buffers.  Instantiating a module with its YAML config populates
-        class-level descriptors such as ``OpenCVCamera.rgb_image.shape`` —
-        which is all that ``Observation.zeros()`` needs downstream.
+        buffers.  Instantiating a module with its YAML config binds each
+        camera's image shape under its own module name, which is all that
+        ``Observation.zeros()`` needs downstream.
 
         No hardware is opened here; ``Module.connect()`` is never called.
         """
@@ -360,9 +360,8 @@ class Controller(EventHost, ABC):
                 continue
             if not module_cfg.enabled:
                 self._robot_disabled.add(name)
-            # Schema-only: instantiate for its side-effect of mutating
-            # class-level data descriptors.  The instance itself is
-            # discarded. Done for a disabled module too, since the robot's
+            # Schema-only: instantiate for its side-effect of binding its
+            # cameras' image shapes. The instance itself is discarded. Done for a disabled module too, since the robot's
             # report may yet say it runs.
             attr.bind(module_cfg, name)
 

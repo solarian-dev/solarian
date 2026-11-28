@@ -1,5 +1,5 @@
 import numpy as np
-from .data import Data, ImageData, MaskData, threshold_level as _threshold_level
+from .data import Data, ImageData, MaskData, shape_at, threshold_level as _threshold_level
 from .execution import ExecutionPlace
 
 
@@ -72,7 +72,16 @@ class SensorField:
 
     @property
     def shape(self):
-        return self.source.shape
+        return shape_at(self._path, self.source.shape)
+
+    def zeros(self) -> Data:
+        """The reading before the first one arrives, sized for shared memory."""
+        shape = self.shape
+        if shape is None or shape == self.source.shape:
+            return self.source.duplicate()
+        return self.source.duplicate(
+            {"shape": shape, "payload": np.zeros(shape, dtype=self.source.dtype)}
+        )
 
     @property
     def value(self):
@@ -125,6 +134,8 @@ class CalculatedField:
                 "`execution_place:` key names one"
             )
         self.inputs = inputs
+        # Read now: a Data's path is rewritten by every access to it.
+        self._input_paths = [data.path for data in inputs]
         self.processor = processor
         self.output = output
         self.conf = conf
@@ -182,9 +193,16 @@ class CalculatedField:
         segments, which a camera only knows once its config is bound.
         """
         if isinstance(self.output, MaskData) and self.output.shape is None:
-            image = next((i for i in self.inputs if isinstance(i, ImageData)), None)
-            if image is not None and image.shape is not None:
-                return MaskData(shape=tuple(image.shape[:2]))
+            image_shape = next(
+                (
+                    shape_at(path, data.shape)
+                    for data, path in zip(self.inputs, self._input_paths)
+                    if isinstance(data, ImageData)
+                ),
+                None,
+            )
+            if image_shape is not None:
+                return MaskData(shape=tuple(image_shape[:2]))
         return self.output.zeros()
         
 
@@ -249,7 +267,8 @@ class ModuleObs:
                 )
 
             if key in sensor_fields_spec:
-                self._fields[key] = sensor_fields_spec[key].source.duplicate(data[key])
+                spec = sensor_fields_spec[key]
+                self._fields[key] = spec.source.duplicate({"shape": spec.shape, **data[key]})
             elif key in calculated_fields_spec:
                 self._fields[key] = calculated_fields_spec[key].output.duplicate(data[key])
 
@@ -316,7 +335,7 @@ class ModuleObs:
         cls = cls._resolve_class()
         data = {}
         for name, sf_spec in cls.get_sensor_fields_spec().items():
-            data[name] = sf_spec.source.duplicate().to_dict()
+            data[name] = sf_spec.zeros().to_dict()
         for name, cf_spec in cls.get_calculated_fields_spec().items():
             data[name] = cf_spec.zeros().to_dict()
         return cls(data)

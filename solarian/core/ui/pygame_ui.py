@@ -70,8 +70,11 @@ class PygameUI:
         recording = snapshot.recording or None
         if recording is not None:
             self._targets = dict(recording["targets"])
+        sections = snapshot.sections
+        if snapshot.telemetry:
+            sections = [("status", list(snapshot.telemetry.items())), *sections]
         self._gui.render(
-            sections=snapshot.sections,
+            sections=sections,
             images=[
                 (image.label, image.data, image.bboxes, image.masks, image.bbox_texts)
                 for image in snapshot.images

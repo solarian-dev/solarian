@@ -20,7 +20,7 @@ solarian --deployment lab calibrate-umi-camera
 
 It walks you through a printed checkerboard, fits a fisheye model, and writes a remap file that the camera YAML then points at. The remap is what makes this sensor's image look like the GoPro image the policy was trained on. A policy shown raw IMX477 frames will reach for an object that is not where the pixels say it is.
 
-The prompts are the procedure. Print the board at 100 percent, not fit-to-page. When the command finishes, `conf/modules/wrist_camera.yaml` should reference the new remap. Do not delete that block.
+The prompts are the procedure. Print the board at 100 percent, not fit-to-page. At the end the command opens an overlay against UMI's reference image, where you trace the finger pads to aim the camera. Open the gripper to about 80 mm first: the pads move in the frame as the jaws open, so a different opening reads as a tilted camera. When the command finishes, `conf/modules/wrist_camera.yaml` should reference the new remap. Do not delete that block.
 
 ## Hand-eye
 

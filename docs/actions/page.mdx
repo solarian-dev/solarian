@@ -169,7 +169,7 @@ Inside a `MODULE_ACTION`, each module's entry carries its own type, naming the m
     Rotational limit for <code>MOVE_L</code>, in rad/s.
   </Property>
   <Property name="frame" type="str = 'world'">
-    On <code>MOVE_L</code>, <code>{'"ee"'}</code> composes the Cartesian payload as a delta in the current end-effector frame before moving.
+    On <code>MOVE_L</code>, <code>{'"ee"'}</code> composes the Cartesian payload as a delta in the current end-effector frame before moving. The delta starts from the commanded pose while a Cartesian move is driving the arm, so repeated jogs do not add up the arm's tracking error. With no Cartesian move in progress, it starts from the measured pose.
   </Property>
 </Properties>
 

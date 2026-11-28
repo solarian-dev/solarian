@@ -245,6 +245,22 @@ class Data(BaseModel):
 
 
 
+#: Shapes that bound components report for their ``Data``, by
+#: ``(module, component, data)`` path. A descriptor belongs to its component
+#: class and so is shared by every instance: two cameras of one class at
+#: different resolutions can only be told apart by path.
+_bound_shapes: dict[tuple[str, str, str], tuple[int, ...]] = {}
+
+
+def bind_shape(path: tuple[str, str, str], shape: tuple[int, ...]) -> None:
+    _bound_shapes[path] = tuple(shape)
+
+
+def shape_at(path: tuple[str, str, str] | None, default: tuple[int, ...] | None) -> tuple[int, ...] | None:
+    """The shape bound at *path*, else *default* (the descriptor's own)."""
+    return _bound_shapes.get(path, default)
+
+
 class PosData(Data):
     dtype: Type = float
     payload: float = Field(default=0.0, alias="value")

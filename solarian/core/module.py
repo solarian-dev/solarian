@@ -14,7 +14,7 @@ from solarian.core.joint import Joint
 from solarian.core.actuator import Actuator, merge_actuator_config
 from solarian.core.sensor import Sensor
 from solarian.core.servo import Servo
-from solarian.core.data import Data, TimestampData
+from solarian.core.data import Data, TimestampData, bind_shape
 from solarian.core.clock_sync import synced_time, sync_with_server, get_offset
 from solarian.core.module_bus import ModuleBus
 from solarian.core.action import Action, ActionType, ModuleAction, action_handler
@@ -252,6 +252,10 @@ class Module(ABC):
                 sensor_class = value.__class__
                 self.sensors[name] = sensor_class(self.cfg.sensors[name])
                 setattr(self, name, self.sensors[name])
+
+        for sensor_name, sensor in self.sensors.items():
+            for data_name, shape in sensor.data_shapes().items():
+                bind_shape((self.name, sensor_name, data_name), shape)
 
         self._log_queue = get_log_queue()
 
@@ -621,8 +625,18 @@ class Module(ABC):
         return self._runner
 
     def start(self, wait=True):
-        """Hand this module to its runner (process, thread, or inline host)."""
-        self.runner.start(wait=wait)
+        """Hand this module to its runner (process, thread, or inline host).
+
+        With ``wait=False`` it returns once the worker is launched; call
+        :meth:`start_wait` before relying on it.
+        """
+        self.runner.start(wait=False)
+        if wait:
+            self.start_wait()
+
+    def start_wait(self):
+        """Block until the worker completes its first tick, or raise."""
+        self.runner.start_wait()
         if self.verbose:
             logger.info(
                 f"[Module] {self.name} started ({self.execution_mode.value})"

@@ -904,10 +904,16 @@ class ArmModule(ActuatorModule):
             return True
         pose, _ = extracted
         if str(action.params.get("frame") or "world") == "ee":
-            try:
-                current = self._read_current_pose()
-            except Exception:  # noqa: BLE001
-                current = np.zeros(6, dtype=np.float64)
+            # From the commanded pose, which the move starts from anyway: the
+            # measured one is off it by sag and IK bias, and a delta taken
+            # from there carries that error into every jog after it.
+            if self.interp is not None:
+                current = np.asarray(self.interp(t_now), dtype=np.float64)
+            else:
+                try:
+                    current = self._read_current_pose()
+                except Exception:  # noqa: BLE001
+                    current = np.zeros(6, dtype=np.float64)
             pose = compose_ee_delta(current, pose)
         self.moveL(
             pose,

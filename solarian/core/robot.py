@@ -1439,12 +1439,17 @@ class Robot(EventHost, ABC):
 
             self._open_recorder()
 
+            # Launched together and only then awaited: each worker spends
+            # seconds importing and opening its device before its first tick,
+            # and nothing in one module's startup waits on another's.
             for module_name, module in self.modules.items():
                 # The whole connection, not just host and port: with CURVE on,
                 # the clock port refuses a plaintext peer like every other relay
                 # socket, so a forked module needs the keys too.
                 module._clock_sync_connection = self.cfg.connection
-                module.start()
+                module.start(wait=False)
+            for module in self.modules.values():
+                module.start_wait()
 
             # Safe to become multithreaded now that children have forked.
             self._init_sockets()

@@ -133,6 +133,10 @@ solarian dataset ops                 # lists it, with source project:arm1/datase
 
 These commands run on the robot machine. They import the modules listed under <code>setup_modules=("robot", "observation", "action")</code>.
 
+Every calibration command below opens its module in-process, not through the robot's action queues. Run it on the machine the device is wired to, with `run-robot` stopped, because a serial bus or a CSI camera can be open in one process only. The exception is `calibrate-camera-latency role=display`, which only draws on a screen. Each command writes what it measures into the module's own yaml, `conf/modules/<module>.yaml`.
+
+The examples calibrate the Solarian Arm 1 project from the [real robot tutorial](/docs/tutorials/real-robot): the Feetech arm `right_arm`, the gripper `right_gripper` on the same bus, and the wrist camera `right_wrist_camera`, a Raspberry Pi camera from `solarian-picamera`. All three are wired to the Pi, so every command runs there with `-d pi`. Calibrate them in the order of the sections below. The arm comes first because the camera's last step moves the arm and trusts its joint calibration.
+
 ### `run-robot`
 
 ```bash
@@ -143,7 +147,63 @@ solarian run-robot --sim --view
 
 Loads `conf/robot.yaml`, instantiates your `Robot` subclass, spawns one process per `Module`, and starts the action receiver / observation publisher. See [Robots](/docs/robots). `--sim` runs the same robot in MuJoCo, in the `scene` its class declares, and `--view` adds a window that draws it; see [Simulation](/docs/simulation).
 
-### `calibrate`
+### Arm calibration
+
+A new arm goes through these commands once, in this order. Afterwards, repeat only the step whose fact changed: `calibrate` after replacing a servo, and `calibrate-arm` after the arm's load or the module's `frequency` changes.
+
+Example: `right_arm`, six Feetech servos on `/dev/ttyACM0`.
+
+1. **Prepare each servo before it goes into the arm.** Connect one servo at a time to the bus adapter. Pick Feetech, the port and the servo, give it the ID its joint has in `conf/modules/right_arm.yaml`, and let the command park the shaft at mid-encoder. Fit the horn with the joint at mid-travel.
+
+   ```bash
+   solarian calibrate-servo
+   ```
+
+2. **Provision the assembled arm.** With every servo on the bus and the arm powered, pick `right_arm`. The module's `setup()` writes the IDs, baud rate and operating modes it needs onto the servos.
+
+   ```bash
+   solarian -d pi setup-module
+   ```
+
+3. **Record the joint limits, the home pose and the sim direction.** Pick `right_arm`. Move each joint through its full travel with torque off, match the sim's zero pose, then answer Y or N as each highlighted joint moves. This writes `real_range_min`, `real_range_max`, `center_offset` and `drive_mode` for every joint.
+
+   ```bash
+   solarian -d pi calibrate
+   ```
+
+4. **Check the spans against the model.** Every joint should print PASS. In the live mirror that opens afterwards, move the real arm and watch the sim follow it.
+
+   ```bash
+   solarian -d pi verify-calibration module=right_arm
+   ```
+
+5. **Measure speed and latency.** Pick `right_arm` and mode `all`. Free-drive the arm to each pose it asks for, then keep the volume clear while it ramps and sweeps. This writes `max_speed`, `max_joint_speed`, `action_latency` and `receive_latency`. A skill that moves the arm in Cartesian space needs these numbers; joint teleop does not.
+
+   ```bash
+   solarian -d pi calibrate-arm
+   ```
+
+The arm's calibration now lives in `conf/modules/right_arm.yaml`, and `run-robot` writes it onto the servos each time it connects. `write-robot-calibration` pushes it without starting the robot, and `derive-model-limits` is for whoever maintains the arm's MuJoCo model.
+
+#### `calibrate-servo`
+
+```bash
+solarian calibrate-servo
+```
+
+Prepares one servo for use, before it is a module component: pick the brand, the port and the servo, then set its ID, reset the comms and position registers, and park the shaft at mid-encoder so you can fit the horn with the mechanism at mid-travel. Needs no project and no config.
+
+Do this on every new servo. A horn fitted at an arbitrary shaft angle can put the `0/4095` encoder seam inside the joint's travel, which [Calibration](/docs/modules/calibration) has to reject — the servo cannot be commanded across the seam. The brand menu lists every installed actuator bus plugin; a brand whose plugin has no scanning support says so instead of failing.
+
+#### `setup-module`
+
+```bash
+solarian setup-module
+```
+
+Lists the modules your `Robot` and `Controller` declare, connects the one you pick, and runs its `setup()` hook: the one-off provisioning a module plugin needs before the hardware can be used, such as writing actuator IDs, baud rates and operating modes. It writes to the device, not to the yaml. Run it once per new piece of hardware, before `calibrate`.
+
+#### `calibrate`
 
 ```bash
 solarian calibrate
@@ -151,7 +211,15 @@ solarian calibrate
 
 Interactive bring-up for one module. Four steps on an IK arm: **Step 1: Joint limits**, **Step 2: Home position** (match the static model-q=0 sim), **Step 3: Sim mapping** (highlighted joint, Y/N), **Output**. The live mirror then stays open with on-screen nrm / rad numbers so you can check the mapping. Answer ENTER / Y / N in the sim window. Grippers stop after Step 1 plus one physical closed pose. See [Calibration](/docs/modules/calibration).
 
-### `calibrate-arm`
+#### `verify-calibration`
+
+```bash
+solarian verify-calibration module=<attr>
+```
+
+Compares each joint's calibrated span (in radians) to the IK model's `jnt_range` and prints a per-joint PASS/FAIL table. On an arm it then opens the live sim mirror so you can move the real arm and confirm the sim tracks. See [Calibration](/docs/modules/calibration).
+
+#### `calibrate-arm`
 
 ```bash
 solarian calibrate-arm [axis=z] [amplitude=0.02] [freq=1.25] [poses=3] [distance=0.06]
@@ -176,7 +244,55 @@ The moves deliberately run above the configured limits — that is the only way 
 
 Action mode asks for one more placement, then verifies the model can travel the full amplitude both ways from that pose and aborts naming the joint in the way, because an out-of-reach sweep comes back clipped and the clip is what gets measured. The arm returns to where it was when the command started, including when the run aborts partway. See [Latency & Synchronization](/docs/latency) for what each number corrects and why.
 
-### `calibrate-gripper`
+#### `write-robot-calibration`
+
+```bash
+solarian write-robot-calibration
+```
+
+Writes the calibration values listed in your YAML into the actuators / sensors themselves (e.g. servo offsets stored on the device EEPROM). Re-pushes an existing [calibration](/docs/modules/calibration) file without re-sweeping.
+
+#### `derive-model-limits`
+
+```bash
+solarian derive-model-limits module=<attr> [sweep=true]
+```
+
+Prints MJCF-ready joint `range="lo hi"` values (radians) derived from the real arm's mechanical limits — from the existing calibration, or a guided live sweep with `sweep=true`. For model authors keeping `jnt_range` equal to the real hard-stops. See [Calibration](/docs/modules/calibration).
+
+### Gripper calibration
+
+A gripper needs three facts: the servo's travel, how far the jaws actually open at each point of it, and how fast and how late they respond.
+
+Example: `right_gripper`, one Feetech servo on the same bus as `right_arm`.
+
+1. **Record the travel and the closed pose.** Pick `right_gripper`. Open and close the jaws by hand through their full travel, then hold the fingers together and confirm. A gripper skips the arm's home and direction steps.
+
+   ```bash
+   solarian -d pi calibrate
+   ```
+
+2. **Measure the opening against a ruler.** Pick `right_gripper` and accept the default number of stops. At each stop, measure the gap between the fingertips and type it in millimetres. The pairs are saved as `aperture_table`, so a commanded opening of 40 means 40 mm.
+
+   ```bash
+   solarian -d pi calibrate-gripper-ranges
+   ```
+
+3. **Measure speed and latency.** Pick `right_gripper` and mode `all`. Keep fingers out of the jaws while it strokes. This writes `max_speed`, `action_latency` and `receive_latency`.
+
+   ```bash
+   solarian -d pi calibrate-gripper
+   ```
+
+#### `calibrate-gripper-ranges`
+
+```bash
+solarian calibrate-gripper-ranges
+```
+
+Sweeps the servo across its normalized range and asks you for a ruler reading (mm) at each stop, then writes the pairs to `aperture_table` in the module yaml (UMI `calibrate_gripper_ranges`). That table is what `GripperModule` interpolates to turn a commanded aperture into a servo value. Without it the module assumes the opening is a straight line between `aperture_closed_mm` and `aperture_open_mm`, which a parallel gripper's linkage does not follow.
+
+#### `calibrate-gripper`
 
 ```bash
 solarian calibrate-gripper [amplitude=8] [freq=1.25]
@@ -188,15 +304,49 @@ The gripper's speed is a genuine hardware constant: one prismatic degree of free
 
 Getting this order wrong is not hypothetical. UMI swept the full stroke at about 1 Hz, which peaks at 300 mm/s — fine for the WSG50 they ran, twice what a 150 mm/s gripper can follow. Run that sweep against the smaller gripper and every waypoint is stretched, the jaws crawl, and the cross-correlation returns a lag with no physical meaning. The sweep now sizes itself from `max_speed` and refuses an explicit `amplitude`/`freq` pair that would exceed it.
 
-### `calibrate-gripper-ranges`
+### Camera calibration
+
+A camera that a [UMI](/docs/tutorials/skills/umi) policy reads needs three calibrations: its lens, its delay, and where the fingertips sit in its frame. A camera that you only watch needs none of them.
+
+Example: `right_wrist_camera`, an IMX477 with a fisheye lens on the Pi's CSI connector 0. The windows these commands open need a display on the Pi, or an `ssh -Y` session.
+
+1. **Find the camera.** Check that the Pi camera is listed, and note its index.
+
+   ```bash
+   solarian -d pi list-cameras
+   ```
+
+2. **Calibrate the lens onto GoPro optics.** Print the <a href="https://github.com/opencv/opencv/blob/master/doc/pattern.png" target="_blank" rel="noreferrer">OpenCV 9x6 checkerboard</a> flat on stiff card. Pick the camera's index, then hold the board in front of it in at least 8 different positions and tilts. The command saves `conf/calibrations/right_wrist_camera_gopro_remap.json` and sets `optical_remap` in the camera's yaml. Then it opens an overlay against UMI's reference image, which is how you aim the camera on its mount. Open the gripper to about 80 mm before tracing the finger pads, since the pads' place in the frame moves with the opening. Run it again with `overlay_only=true` whenever you re-aim the camera.
+
+   ```bash
+   solarian -d pi calibrate-umi-camera camera_yaml=right_wrist_camera
+   ```
+
+3. **Measure the camera's delay.** Start the relay with `run-server` if it is not running, since both sides sync their clocks to it. Show the QR code on the Mac's monitor, and point the camera at that monitor from the Pi. Pick `right_wrist_camera`, and set `monitor_hz` to the monitor's refresh rate. The result corrects `receive_latency` rather than replacing it, so run the capture again until the residual it reports is close to zero.
+
+   ```bash {{ title: 'On the Mac' }}
+   solarian -d pi calibrate-camera-latency role=display monitor_hz=60
+   ```
+
+   ```bash {{ title: 'On the Pi' }}
+   solarian -d pi calibrate-camera-latency role=capture monitor_hz=60
+   ```
+
+4. **Measure where the fingertips sit in the camera frame.** Print UMI's <a href="https://umi-gripper.github.io/share/table_marker.pdf" target="_blank" rel="noreferrer">table marker</a> at 100 percent, tape it flat in reach of the arm, and measure the black square: pass `marker=<mm>` if it is not 160 mm. Pick `right_wrist_camera`, set one pose by hand with the tag in view, and let the arm orbit the tag. The result is saved to `conf/calibrations/right_wrist_camera_hand_eye.json`. The command prints a rotation to paste into the arm's `ik_tcp`, and a translation that tells you how far to move the camera mount.
+
+   ```bash
+   solarian -d pi calibrate-hand-eye arm=right_arm
+   ```
+
+#### `calibrate-umi-camera`
 
 ```bash
-solarian calibrate-gripper-ranges
+solarian calibrate-umi-camera [camera_yaml=<module>] [overlay_only=true] [images=<dir>]
 ```
 
-Sweeps the servo across its normalized range and asks you for a ruler reading (mm) at each stop, then writes the pairs to `aperture_table` in the module yaml (UMI `calibrate_gripper_ranges`). That table is what `GripperModule` interpolates to turn a commanded aperture into a servo value. Without it the module assumes the opening is a straight line between `aperture_closed_mm` and `aperture_open_mm`, which a parallel gripper's linkage does not follow.
+From the `solarian-umi` plugin. Fits a fisheye model to checkerboard captures from a connected camera and remaps it onto the GoPro Hero 10 with Max Lens Mod that UMI policies were trained on. It writes `conf/calibrations/<module>_gopro_remap.json`, points the camera yaml's `optical_remap` at it, and sets the yaml's `resize_width` and `resize_height` to 640x360. Then a live overlay against UMI's reference image shows whether the fingers, holders and screws land where a policy expects them. Hold the gripper at an opening of about 80 mm while you trace the overlay, because the solved rotation would otherwise absorb a difference in jaw width as camera tilt. `camera_yaml` names the camera to write into. Without it, the command writes into the camera of `conf/skills/umi.yaml`, so name it when the project has more than one camera. `overlay_only=true` skips straight to the overlay, and `images=` reuses an earlier capture. It does not need `run-server` or `run-robot`, and both must be stopped because they hold the camera.
 
-### `calibrate-camera-latency`
+#### `calibrate-camera-latency`
 
 ```bash
 # on the machine with a monitor
@@ -208,49 +358,13 @@ solarian calibrate-camera-latency role=capture monitor_hz=60 [n_frames=120] [plo
 
 Measures the camera's `receive_latency` with UMI's QR-timestamp method, and writes it to the camera module's yaml: one role fills a screen with a QR code encoding the instant it was drawn, the other films it and subtracts. `monitor_hz` is required on `capture`, where display refresh enters the arithmetic, and optional on `display`, where it only paces the redraw. Both roles sync to the relay clock, so the screen and the camera can be on different machines — which is the better setup, though both can share one machine if the robot has a screen. See [Latency & Synchronization](/docs/latency).
 
-All four `calibrate-*` commands above talk to the module in-process (same as `solarian calibrate`), not through the robot's action queues. Run them on the machine the device is wired to, with `run-robot` stopped — the only exception is `calibrate-camera-latency role=display`, which just draws on a screen and belongs on the machine with the monitor. See [Latency & Synchronization](/docs/latency).
-
-### `setup-module`
+#### `calibrate-hand-eye`
 
 ```bash
-solarian setup-module module_name=<attr>
+solarian calibrate-hand-eye [arm=<module>] [marker=160] [tag=13] [mode=auto|manual] [joints=fit]
 ```
 
-Interactive helper for setting up a hardware module — assigning servo IDs, picking a port, and writing the resulting values into `conf/modules/<attr>.yaml`.
-
-### `calibrate-servo`
-
-```bash
-solarian calibrate-servo
-```
-
-Prepares one servo for use, before it is a module component: pick the brand, the port and the servo, then set its ID, reset the comms and position registers, and park the shaft at mid-encoder so you can fit the horn with the mechanism at mid-travel. Needs no project and no config.
-
-Do this on every new servo. A horn fitted at an arbitrary shaft angle can put the `0/4095` encoder seam inside the joint's travel, which [Calibration](/docs/modules/calibration) has to reject — the servo cannot be commanded across the seam. The brand menu lists every installed actuator bus plugin; a brand whose plugin has no scanning support says so instead of failing.
-
-### `write-robot-calibration`
-
-```bash
-solarian write-robot-calibration
-```
-
-Writes the calibration values listed in your YAML into the actuators / sensors themselves (e.g. servo offsets stored on the device EEPROM). Re-pushes an existing [calibration](/docs/modules/calibration) file without re-sweeping.
-
-### `verify-calibration`
-
-```bash
-solarian verify-calibration module=<attr>
-```
-
-Compares each joint's calibrated span (in radians) to the IK model's `jnt_range` and prints a per-joint PASS/FAIL table. On an arm it then opens the live sim mirror so you can move the real arm and confirm the sim tracks. See [Calibration](/docs/modules/calibration).
-
-### `derive-model-limits`
-
-```bash
-solarian derive-model-limits module=<attr> [sweep=true]
-```
-
-Prints MJCF-ready joint `range="lo hi"` values (radians) derived from the real arm's mechanical limits — from the existing calibration, or a guided live sweep with `sweep=true`. For model authors keeping `jnt_range` equal to the real hard-stops. See [Calibration](/docs/modules/calibration).
+Measures the rigid transform from the wrist camera to the fingertips, which a UMI policy assumes and can never observe. Tape UMI's table marker flat and leave it there: it is the fixed world frame of the solve. In `mode=auto` (the default) you set one anchor pose by hand and the arm orbits the tag by itself. `mode=manual` has you pose every sample. `marker` is the measured side of the black square in mm and sets the scale of the answer. The result is saved to `conf/calibrations/<camera>_hand_eye.json`. It splits into a rotation, printed as a quaternion for the arm's `ik_tcp`, and a translation, which no config can absorb and which is an instruction for the camera mount. `joints=fit` also measures the arm's joint zeros from the same sweep. Needs an arm with an `ik_tcp`, and a camera that `calibrate-umi-camera` has already calibrated.
 
 ## Controller commands
 
@@ -280,14 +394,6 @@ solarian write-controller-calibration
 
 Writes the calibration values from YAML into the controller hardware.
 
-### `run-service`
-
-```bash
-solarian run-service <conf_or_service> [--checkpoint PATH] [--host HOST] [--port PORT] [server args...]
-```
-
-Runs a [service](/docs/services): a tracker, a depth model, or a [policy](/docs/policies) server. Name a conf in `conf/services/` or `conf/skills/` with a `server:` block to run the server it describes, with its checkpoint, port and args, or name an installed service to run it with your own. `--checkpoint`, `--host` and `--port` override the conf, and every other argument goes to the server after the conf's `args`. So `solarian run-service bbox_tracker` starts the SAM 2 tracker `conf/services/bbox_tracker.yaml` calls, `solarian run-service umi_target --checkpoint models/pick/checkpoints/latest.ckpt` the diffusion policy `conf/skills/umi_target.yaml` drives, and `solarian run-service sam2-tracker --model small` the tracker with your arguments. An unknown name lists the installed services. To serve on Solarian Base's GPUs instead, see [Services, Policies & Models](/docs/solarian-base/endpoints).
-
 ### `run-server`
 
 ```bash
@@ -295,6 +401,18 @@ solarian run-server
 ```
 
 Starts a [`RelayServer`](/docs/servers) using `conf/server.yaml`. Run this on the relay machine — typically a small box on the same network as both the robot and the controller.
+
+## Services commands
+
+A [service](/docs/services) is a model that skills call over HTTP, such as a tracker, a depth model or a policy server. Run it on the machine with the GPU, which need not be the robot or the controller.
+
+### `run-service`
+
+```bash
+solarian run-service <conf_or_service> [--checkpoint PATH] [--host HOST] [--port PORT] [server args...]
+```
+
+Runs a [service](/docs/services): a tracker, a depth model, or a [policy](/docs/policies) server. Name a conf in `conf/services/` or `conf/skills/` with a `server:` block to run the server it describes, with its checkpoint, port and args, or name an installed service to run it with your own. `--checkpoint`, `--host` and `--port` override the conf, and every other argument goes to the server after the conf's `args`. So `solarian run-service bbox_tracker` starts the SAM 2 tracker `conf/services/bbox_tracker.yaml` calls, `solarian run-service umi_target --checkpoint models/pick/checkpoints/latest.ckpt` the diffusion policy `conf/skills/umi_target.yaml` drives, and `solarian run-service sam2-tracker --model small` the tracker with your arguments. An unknown name lists the installed services. To serve on Solarian Base's GPUs instead, see [Services, Policies & Models](/docs/solarian-base/endpoints).
 
 ## Recording commands
 

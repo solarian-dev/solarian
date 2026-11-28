@@ -455,6 +455,7 @@ class MujocoWorldServer(Process):
             "elevation": float(cam.elevation),
             "distance": float(cam.distance),
             "lookat": [float(x) for x in cam.lookat],
+            "show_frames": bool(self._scene.show_frames),
         }
 
     def render_overview(self, module: str, cam: Dict[str, Any]) -> np.ndarray:
@@ -489,7 +490,7 @@ class MujocoWorldServer(Process):
             with self._lock:
                 renderer.update_scene(self.data, camera=camera)
                 try:
-                    if self._scene.show_frames:
+                    if cam.get("show_frames", self._scene.show_frames):
                         self._draw_frames(renderer.scene)
                     if self._scene.show_cameras:
                         self._draw_camera_frustums(renderer.scene)

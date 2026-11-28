@@ -59,6 +59,10 @@ class Component(ABC):
         self.name = None
         self.parent = None
 
+    def data_shapes(self) -> dict[str, tuple[int, ...]]:
+        """Shapes of this instance's data points that its config decides, by name."""
+        return {}
+
     def needs_setup(self) -> bool:
         """Check if the component needs setup. Override in subclasses."""
         return False

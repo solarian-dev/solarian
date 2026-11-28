@@ -210,6 +210,54 @@ def test_a_shapeless_mask_is_sized_like_its_image(camera_obs_cls):
     assert camera_obs_cls.zeros()["target_mask"].value.shape == (6, 8)
 
 
+def _at(data, path):
+    data.path = path
+    return data
+
+
+def test_two_cameras_of_one_class_keep_their_own_image_sizes():
+    """Both cameras read one class-level descriptor; only the path separates them."""
+    from solarian.core.configs import CameraConfig
+    from solarian.core.data import bind_shape
+    from solarian.core.opencv_camera import OpenCVCamera
+
+    previous = ModuleObs._active_subclass
+    shared = ImageData()
+    right = ("right_cam", "camera", "rgb_image")
+    left = ("left_cam", "camera", "rgb_image")
+    for path, (w, h) in ((right, (1014, 760)), (left, (640, 360))):
+        cfg = CameraConfig(port="0", fps=30, width=2028, height=1520, resize_width=w, resize_height=h)
+        bind_shape(path, OpenCVCamera(cfg).data_shapes()["rgb_image"])
+
+    class _TwoCameraObs(ModuleObs):
+        right_rgb = SensorField(_at(shared, right))
+        right_mask = CalculatedField(
+            inputs=[shared],
+            processor=object,
+            output=MaskData(),
+            execution_place=ExecutionPlace.ROBOT,
+        )
+        left_rgb = SensorField(_at(shared, left))
+
+    try:
+        zeros = _TwoCameraObs.zeros()
+        assert zeros["right_rgb"].value.shape == (760, 1014, 3)
+        assert zeros["left_rgb"].value.shape == (360, 640, 3)
+        assert zeros["right_mask"].value.shape == (760, 1014)
+
+        frame = np.zeros((760, 1014, 3), dtype=np.uint8)
+        obs = _TwoCameraObs(
+            {
+                "right_rgb": {"value": frame, "timestamp": 0.0},
+                "left_rgb": {"value": np.zeros((360, 640, 3), dtype=np.uint8), "timestamp": 0.0},
+                "right_mask": {"value": np.zeros((760, 1014), dtype=np.uint8), "timestamp": 0.0},
+            }
+        )
+        assert obs["right_rgb"].value is frame
+    finally:
+        ModuleObs._active_subclass = previous
+
+
 @needs_shared_memory
 def test_a_none_mask_reads_back_empty_not_a_lap_old_mask(camera_obs_cls):
     mask = np.ones((6, 8), dtype=np.uint8)

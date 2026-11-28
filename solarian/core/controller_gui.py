@@ -942,11 +942,12 @@ class ControllerGUI:
         value_y = y + (self._line_h - self.small_mono.get_linesize()) // 2
         gap = max(8, self._pad // 2)
         val_color = color or (_DIM if dim else _TEXT)
-        if value_w >= width:
-            self._blit(value_s, x, value_y, val_color, self.small_mono, _PANEL_BG, width)
-            return
+        # A value too long for the row is clipped rather than its label, which
+        # keeps at least half the row: without it the value cannot be read.
+        label_w = self.title_font.size(str(field))[0]
+        value_w = min(value_w, max(0, width - min(label_w, width // 2) - gap))
         self._blit(str(field), x, y, _DIM, self.title_font, _PANEL_BG, width - value_w - gap)
-        self._blit(value_s, x + width - value_w, value_y, val_color, self.small_mono, _PANEL_BG)
+        self._blit(value_s, x + width - value_w, value_y, val_color, self.small_mono, _PANEL_BG, value_w)
 
     def _draw_recording_panel(self, x, y, width, recording: dict, viewport_h: int) -> int:
         """Which sides record the next episode, as two switches.

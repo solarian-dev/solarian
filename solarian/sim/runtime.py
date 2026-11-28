@@ -133,11 +133,9 @@ def collect_tcp_frames(robot, scene=None) -> list[tuple[str, str]]:
     ``frame`` (e.g. ``MinkIK(frame="tcp")``), the composed site name is
     ``prefix + frame``. If ``frame`` already contains ``/`` it is treated as
     a fully composed name (a tool TCP living on another attachment).
-    Empty if frames are disabled. ``scene`` defaults to the robot's.
+    ``scene`` defaults to the robot's.
     """
     scene = scene or robot.scene
-    if not getattr(scene, "show_frames", True):
-        return []
     tcp_frames: list[tuple[str, str]] = []
     for att in scene.attachments:
         module = robot.modules.get(att.module)
